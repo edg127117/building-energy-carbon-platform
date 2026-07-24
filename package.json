@@ -1,0 +1,9 @@
+{
+  "devDependencies": {
+    "pdf-parse": "^2.4.5",
+    "pdfjs-dist": "^4.0.379"
+  },
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}

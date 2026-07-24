@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
+    username: sa
+    password:
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-test.sql
+      data-locations: classpath:data-test.sql
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+features:
+  control-enabled: false
+
+# 自动化测试直接调用聚合方法；关闭后台恢复，避免测试上下文访问真实TDengine。
+aggregation:
+  recovery-enabled: false
+  scan-initial-delay-ms: 3600000

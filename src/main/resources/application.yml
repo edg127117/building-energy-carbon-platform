@@ -1,0 +1,121 @@
+server:
+  port: 8081
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: iot-platform
+  # 排除 Redisson 自动配置，改用 Lettuce（原生 Redis 无密码时 Redisson 无法连接）
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+  # 虚拟线程开启 (JDK 21 特性，极大提升 IoT 高并发能力)
+  threads:
+    virtual:
+      enabled: true
+
+  # MySQL 配置
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/iot_platform?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=Asia/Shanghai
+    username: ${MYSQL_USER:root}
+    password: ${MYSQL_PASSWORD:change-me}
+    hikari:
+      maximum-pool-size: 30
+      minimum-idle: 5
+      connection-timeout: 5000
+      connection-init-sql: SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci
+
+  # Redis 缓存层配置（冻结书 D-010：仅用于缓存，不参与数据写入热路径）
+  data:
+    redis:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      database: ${REDIS_DB:0}
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 16       # 最大连接数（单实例 16 足够）
+          max-idle: 8          # 最大空闲连接
+          min-idle: 2          # 最小空闲连接
+          max-wait: 2000ms     # 获取连接最大等待时间
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  global-config:
+    db-config:
+      id-type: auto # 主键自增策略
+  configuration:
+    map-underscore-to-camel-case: true # 下划线转驼峰
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl # 打印 SQL 日志方便调试
+
+# EMQX 配置
+mqtt:
+  broker-url: ${MQTT_BROKER_URL:tcp://127.0.0.1:1883}
+  client-id: ${MQTT_CLIENT_ID:platform-backend-01}
+  username: ${MQTT_USER:admin}
+  password: ${MQTT_PASSWORD:change-me}
+  # 本期只接收19个真实测点；需要演示虚拟设备控制回执时再显式改为 true。
+  demo-simulator-enabled: false
+  topics:
+    # 接收硬件上报的测点数据
+    upstream: device/data/up
+
+# TDengine 配置 (使用 RESTful 端口 6041)
+tdengine:
+  url: jdbc:TAOS-RS://${TDENGINE_HOST:127.0.0.1}:${TDENGINE_PORT:6041}
+  username: ${TDENGINE_USER:root}
+  password: ${TDENGINE_PASSWORD:taosdata}
+  database: iot_telemetry
+  stableName: st_electric_data
+  st-raw-event: st_raw_event
+
+# HVAC事件时间分钟聚合：窗口始终为一分钟，30秒仅是正常网络延迟的等待时间。
+aggregation:
+  finalization-delay-seconds: 30
+  catch-up-minutes: 10
+  scan-delay-ms: 10000
+  scan-initial-delay-ms: 10000
+  # 最近10分钟只在启动和低频补漏时检查，不再参与每10秒正常聚合。
+  recovery-enabled: true
+  recovery-delay-ms: 600000
+
+# pointCode 是该来源系统下的别名；来源命名空间只由后端可信配置确定。
+ingestion:
+  source-system: ${INGESTION_SOURCE_SYSTEM:MQTT_FREEZE_V1}
+  point-config-refresh-ms: ${POINT_CONFIG_REFRESH_MS:60000}
+
+# 只清理逐条原始事件；分钟汇总和后续COP指标长期保留。
+data-retention:
+  raw-event-days: 90
+  cleanup-enabled: true
+  cleanup-cron: "0 30 3 * * ?"
+
+logging:
+  level:
+    com.platform: debug
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,threaddump
+  metrics:
+    export:
+      simple:
+        enabled: true
+
+# Redisson 分布式锁：本期预留，默认关闭（多实例部署时开启）
+redisson:
+  enabled: false               # 改为 true 启用 Redisson
+
+security:
+  jwt:
+    secret: ${JWT_SECRET:iot-platform-demo-jwt-secret-please-change-32-bytes-min}
+    expire-seconds: ${JWT_EXPIRE_SECONDS:86400}
+
+features:
+  # 冻结书 D-001：本期只采集、只计算，不开放控制
+  control-enabled: false

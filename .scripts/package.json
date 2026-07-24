@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "mqtt": "^5.15.1",
+    "pptxgenjs": "^4.0.1"
+  }
+}
