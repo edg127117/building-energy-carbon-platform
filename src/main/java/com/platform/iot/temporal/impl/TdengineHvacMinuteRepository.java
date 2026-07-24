@@ -2,12 +2,15 @@ package com.platform.iot.temporal.impl;
 
 import com.platform.config.TdengineProperties;
 import com.platform.iot.temporal.HvacMinuteRepository;
+import com.platform.iot.temporal.model.HvacMinuteQueryRow;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -15,6 +18,7 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * TDengine 正式分钟汇总仓储。
@@ -45,6 +49,51 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                         + quote(new Timestamp(minuteStart).toString()),
                 String.class);
         return new LinkedHashSet<>(pointIds);
+    }
+
+    @Override
+    public List<HvacMinuteQueryRow> findLatestByPointIds(List<String> pointIds) {
+        if (pointIds.isEmpty()) {
+            return List.of();
+        }
+        String stable = stable();
+        String sql = """
+                SELECT point_id,
+                       ts AS bucket_time,
+                       avg_val AS average_value,
+                       min_val AS minimum_value,
+                       max_val AS maximum_value,
+                       sample_count,
+                       data_quality
+                FROM %s
+                WHERE point_id IN (%s)
+                PARTITION BY point_id
+                ORDER BY ts DESC
+                LIMIT 1
+                """.formatted(stable, pointIdIn(pointIds));
+        return template.query(sql, this::mapQueryRow);
+    }
+
+    @Override
+    public List<HvacMinuteQueryRow> findHistory(
+            List<String> pointIds,
+            long fromInclusive,
+            long toExclusive,
+            int resolutionMinutes) {
+        if (pointIds.isEmpty()) {
+            return List.of();
+        }
+        String interval = switch (resolutionMinutes) {
+            case 1 -> null;
+            case 5 -> "5m";
+            case 30 -> "30m";
+            default -> throw new IllegalArgumentException("分辨率只允许 1、5、30 分钟");
+        };
+        String sql = interval == null
+                ? rawHistorySql(pointIds, fromInclusive, toExclusive)
+                : downsampledHistorySql(
+                        pointIds, fromInclusive, toExclusive, interval);
+        return template.query(sql, this::mapQueryRow);
     }
 
     @Override
@@ -102,6 +151,74 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     private String qualifiedChild(String pointId) {
         return safe(properties.getDatabase()) + "."
                 + safe(properties.getStRawMinute() + "_" + pointId);
+    }
+
+    private String rawHistorySql(
+            List<String> pointIds, long fromInclusive, long toExclusive) {
+        return """
+                SELECT point_id,
+                       ts AS bucket_time,
+                       avg_val AS average_value,
+                       min_val AS minimum_value,
+                       max_val AS maximum_value,
+                       sample_count,
+                       data_quality
+                FROM %s
+                WHERE point_id IN (%s) AND %s
+                ORDER BY point_id,ts
+                """.formatted(
+                stable(), pointIdIn(pointIds), timeRange(fromInclusive, toExclusive));
+    }
+
+    private String downsampledHistorySql(
+            List<String> pointIds,
+            long fromInclusive,
+            long toExclusive,
+            String interval) {
+        return """
+                SELECT point_id,
+                       _wstart AS bucket_time,
+                       SUM(avg_val*sample_count)/SUM(sample_count) AS average_value,
+                       MIN(min_val) AS minimum_value,
+                       MAX(max_val) AS maximum_value,
+                       SUM(sample_count) AS sample_count,
+                       MAX(data_quality) AS data_quality
+                FROM %s
+                WHERE point_id IN (%s) AND %s
+                PARTITION BY point_id
+                INTERVAL(%s)
+                ORDER BY point_id,_wstart
+                """.formatted(
+                stable(),
+                pointIdIn(pointIds),
+                timeRange(fromInclusive, toExclusive),
+                interval);
+    }
+
+    private HvacMinuteQueryRow mapQueryRow(ResultSet resultSet, int rowNumber)
+            throws SQLException {
+        return new HvacMinuteQueryRow(
+                resultSet.getString("point_id"),
+                resultSet.getTimestamp("bucket_time").getTime(),
+                resultSet.getDouble("average_value"),
+                resultSet.getDouble("minimum_value"),
+                resultSet.getDouble("maximum_value"),
+                resultSet.getLong("sample_count"),
+                resultSet.getInt("data_quality"));
+    }
+
+    private String stable() {
+        return safe(properties.getDatabase()) + "."
+                + safe(properties.getStRawMinute());
+    }
+
+    private String pointIdIn(List<String> pointIds) {
+        return pointIds.stream().map(this::quote).collect(Collectors.joining(","));
+    }
+
+    private String timeRange(long fromInclusive, long toExclusive) {
+        return "ts>=" + quote(new Timestamp(fromInclusive).toString())
+                + " AND ts<" + quote(new Timestamp(toExclusive).toString());
     }
 
     private String safe(String value) {
