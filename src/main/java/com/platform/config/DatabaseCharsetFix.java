@@ -12,9 +12,13 @@ import org.springframework.stereotype.Component;
  * 原因：docker-compose 首次创建 iot_platform 库时可能使用了非 utf8mb4 的默认字符集，
  * 即使容器命令里加了 --character-set-server=utf8mb4，已存在的库不会自动变更。
  * 这个组件在应用启动时执行一次 ALTER DATABASE，确保后续写入的中文不变成乱码。
+ *
+ * <p>配置 {@code database.charset-fix.enabled=false} 时，这个组件不会创建，
+ * 因此也不会执行 ALTER DATABASE。自动化测试会关闭它，避免测试修改真实数据库。</p>
  */
 @Component
 @Slf4j
+// 默认开启以保留原来的生产行为；测试配置会把它关闭。
 @ConditionalOnProperty(
         prefix = "database.charset-fix",
         name = "enabled",
@@ -25,6 +29,7 @@ public class DatabaseCharsetFix {
     private final JdbcTemplate jdbcTemplate;
 
     public DatabaseCharsetFix(
+            // 必须明确使用 MySQL；如果误用 taosJdbcTemplate，这条 MySQL SQL 会发给 TDengine。
             @Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }

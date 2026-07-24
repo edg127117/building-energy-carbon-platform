@@ -17,11 +17,12 @@ mybatis-plus:
 features:
   control-enabled: false
 
-# 普通测试不执行启动期数据库 DDL，也不连接本机 TDengine。
+# 测试使用 H2，不允许字符集修复程序向真实 MySQL 执行 ALTER DATABASE。
 database:
   charset-fix:
     enabled: false
 
+# 测试不运行 TDengine 的启动初始化任务，因此不会自动建库、建表。
 tdengine:
   initialization-enabled: false
 

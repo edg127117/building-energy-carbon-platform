@@ -39,8 +39,12 @@ public class MysqlConfig {
     }
 
     /**
-     * 显式创建 MySQL JdbcTemplate，避免项目存在 TDengine JdbcTemplate 时
-     * Spring 根据类型自动注入到错误的数据源。
+     * 显式创建 MySQL 专用的 JdbcTemplate。
+     *
+     * <p>项目里同时存在 MySQL 和 TDengine 两个 JdbcTemplate。如果不指定名称，
+     * Spring 可能不知道该注入哪一个。这里用 {@code @Qualifier("dataSource")}
+     * 把它固定到 MySQL，并用 {@code @Primary} 表示：普通业务没有特别指定时，
+     * 默认使用这个 MySQL JdbcTemplate。</p>
      */
     @Primary
     @Bean(name = "mysqlJdbcTemplate")
