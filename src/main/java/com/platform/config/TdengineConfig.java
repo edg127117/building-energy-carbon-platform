@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,6 +40,10 @@ public class TdengineConfig {
         config.setPassword(properties.getPassword());
         config.setDriverClassName("com.taosdata.jdbc.rs.RestfulDriver");
         config.setMaximumPoolSize(20);
+        // 启动时不预先创建空闲连接；只有业务真正查询 TDengine 时才申请连接。
+        config.setMinimumIdle(0);
+        // TDengine 暂时不可用时仍允许应用先启动，避免创建连接池阶段直接失败。
+        config.setInitializationFailTimeout(-1);
         config.setConnectionTimeout(30000);
         // 可选：连接池名称，方便后期使用 Prometheus 监控时定位排查
         config.setPoolName("TDengine-HikariPool");
@@ -54,8 +59,17 @@ public class TdengineConfig {
      * 指数退避重试机制 (应对 Docker 启动竞态条件)
      * 在 Docker Compose 环境下，Spring Boot 启动速度远快于 TDengine 数据库。
      * 如果直连会报错崩溃。这里引入了 RetryTemplate，采用“指数退避”算法（等1秒、2秒、4秒...最大30秒），
+     *
+     * <p>{@code tdengine.initialization-enabled=false} 时不会创建这个启动任务，
+     * 也就不会在应用启动阶段连接 TDengine、建库或建表。普通自动化测试会关闭它。</p>
      */
     @Bean
+    // 默认开启以保留生产初始化流程；测试环境通过配置关闭。
+    @ConditionalOnProperty(
+            prefix = "tdengine",
+            name = "initialization-enabled",
+            havingValue = "true",
+            matchIfMissing = true)
     public CommandLineRunner initTaosDb(@Qualifier("taosJdbcTemplate") JdbcTemplate template) {
         return args -> {
             try {
