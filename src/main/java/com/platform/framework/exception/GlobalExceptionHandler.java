@@ -54,6 +54,8 @@ public class GlobalExceptionHandler {
             case 404 -> HttpStatus.NOT_FOUND;
             case 409 -> HttpStatus.CONFLICT;
             case 500 -> HttpStatus.INTERNAL_SERVER_ERROR;
+            // HVAC 查询在 TDengine/JDBC 暂不可用时使用业务码 503，
+            // 映射为标准服务不可用状态，同时保留 Service 提供的脱敏错误文案。
             case 503 -> HttpStatus.SERVICE_UNAVAILABLE;
             default -> HttpStatus.BAD_REQUEST;
         };

@@ -21,7 +21,11 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * TDengine 正式分钟汇总仓储。
+ * 使用 TDengine 实现 HVAC 正式分钟汇总的读写仓储。
+ *
+ * <p>查询 API 只读取已经冻结的 {@code st_raw_minute} 数据，不回查逐条原始事件。
+ * 数据库名和超级表名作为标识符进行白名单校验；测点 ID 作为 SQL 值进行转义，
+ * 防止把外部值误当成 TDengine 标识符拼接。</p>
  */
 @Slf4j
 @Repository
@@ -57,6 +61,8 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
             return List.of();
         }
         String stable = stable();
+        // PARTITION BY 先按 point_id 分区，随后每个分区各取时间倒序第一条；
+        // 因此 LIMIT 1 表示“每个测点一条”，不是整批查询全局只返回一条。
         String sql = """
                 SELECT point_id,
                        ts AS bucket_time,
@@ -87,6 +93,8 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
             case 1 -> null;
             case 5 -> "5m";
             case 30 -> "30m";
+            // 分辨率由 Service 根据查询跨度选择；Repository 再做一次白名单校验，
+            // 避免任意字符串进入 INTERVAL 子句。
             default -> throw new IllegalArgumentException("分辨率只允许 1、5、30 分钟");
         };
         String sql = interval == null
@@ -155,6 +163,7 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
 
     private String rawHistorySql(
             List<String> pointIds, long fromInclusive, long toExclusive) {
+        // 1 分钟查询直接返回已经冻结的分钟行，不进行二次聚合。
         return """
                 SELECT point_id,
                        ts AS bucket_time,
@@ -175,6 +184,8 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
             long fromInclusive,
             long toExclusive,
             String interval) {
+        // 窗口平均值按原始样本数加权，避免把样本量不同的分钟等权处理；
+        // MAX(data_quality) 取窗口内最差质量等级，防止降采样掩盖异常数据。
         return """
                 SELECT point_id,
                        _wstart AS bucket_time,
@@ -197,6 +208,7 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
 
     private HvacMinuteQueryRow mapQueryRow(ResultSet resultSet, int rowNumber)
             throws SQLException {
+        // 两类查询统一使用这些列别名，使上层无需区分原始分钟与降采样窗口。
         return new HvacMinuteQueryRow(
                 resultSet.getString("point_id"),
                 resultSet.getTimestamp("bucket_time").getTime(),
@@ -213,15 +225,18 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     }
 
     private String pointIdIn(List<String> pointIds) {
+        // pointId 是 SQL 值而非表名，逐个使用 quote 转义后再组成 IN 列表。
         return pointIds.stream().map(this::quote).collect(Collectors.joining(","));
     }
 
     private String timeRange(long fromInclusive, long toExclusive) {
+        // 统一使用半开区间，连续查询相邻时间段时不会重复返回边界分钟。
         return "ts>=" + quote(new Timestamp(fromInclusive).toString())
                 + " AND ts<" + quote(new Timestamp(toExclusive).toString());
     }
 
     private String safe(String value) {
+        // 数据库名和超级表名不能使用 JDBC 参数占位符，因此只允许安全标识符字符。
         if (value == null || !SAFE_IDENTIFIER.matcher(value).matches()) {
             throw new IllegalArgumentException("非法TDengine标识符: " + value);
         }
