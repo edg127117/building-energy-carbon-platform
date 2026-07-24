@@ -5,6 +5,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -39,6 +40,8 @@ public class TdengineConfig {
         config.setPassword(properties.getPassword());
         config.setDriverClassName("com.taosdata.jdbc.rs.RestfulDriver");
         config.setMaximumPoolSize(20);
+        config.setMinimumIdle(0);
+        config.setInitializationFailTimeout(-1);
         config.setConnectionTimeout(30000);
         // 可选：连接池名称，方便后期使用 Prometheus 监控时定位排查
         config.setPoolName("TDengine-HikariPool");
@@ -56,6 +59,11 @@ public class TdengineConfig {
      * 如果直连会报错崩溃。这里引入了 RetryTemplate，采用“指数退避”算法（等1秒、2秒、4秒...最大30秒），
      */
     @Bean
+    @ConditionalOnProperty(
+            prefix = "tdengine",
+            name = "initialization-enabled",
+            havingValue = "true",
+            matchIfMissing = true)
     public CommandLineRunner initTaosDb(@Qualifier("taosJdbcTemplate") JdbcTemplate template) {
         return args -> {
             try {

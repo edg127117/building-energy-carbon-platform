@@ -65,12 +65,18 @@ mqtt:
 
 # TDengine 配置 (使用 RESTful 端口 6041)
 tdengine:
+  initialization-enabled: true
   url: jdbc:TAOS-RS://${TDENGINE_HOST:127.0.0.1}:${TDENGINE_PORT:6041}
   username: ${TDENGINE_USER:root}
   password: ${TDENGINE_PASSWORD:taosdata}
   database: iot_telemetry
   stableName: st_electric_data
   st-raw-event: st_raw_event
+
+# MySQL 字符集启动修复；测试环境关闭，生产默认保留现有行为。
+database:
+  charset-fix:
+    enabled: true
 
 # HVAC事件时间分钟聚合：窗口始终为一分钟，30秒仅是正常网络延迟的等待时间。
 aggregation:

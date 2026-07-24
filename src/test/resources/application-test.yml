@@ -17,6 +17,14 @@ mybatis-plus:
 features:
   control-enabled: false
 
+# 普通测试不执行启动期数据库 DDL，也不连接本机 TDengine。
+database:
+  charset-fix:
+    enabled: false
+
+tdengine:
+  initialization-enabled: false
+
 # 自动化测试直接调用聚合方法；关闭后台恢复，避免测试上下文访问真实TDengine。
 aggregation:
   recovery-enabled: false

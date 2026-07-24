@@ -3,9 +3,11 @@ package com.platform.config;
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.jdbc.DataSourceBuilder;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import javax.sql.DataSource;
 
@@ -34,5 +36,16 @@ public class MysqlConfig {
     @Bean(name = "dataSource")
     public DataSource dataSource(DataSourceProperties properties) {
         return properties.initializeDataSourceBuilder().build();
+    }
+
+    /**
+     * 显式创建 MySQL JdbcTemplate，避免项目存在 TDengine JdbcTemplate 时
+     * Spring 根据类型自动注入到错误的数据源。
+     */
+    @Primary
+    @Bean(name = "mysqlJdbcTemplate")
+    public JdbcTemplate mysqlJdbcTemplate(
+            @Qualifier("dataSource") DataSource dataSource) {
+        return new JdbcTemplate(dataSource);
     }
 }
