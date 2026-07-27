@@ -73,6 +73,18 @@ class ChillerCopFormulaTest {
     }
 
     @Test
+    void reportsAllMissingInputsInStableOrderWhenEmpty() {
+        FormulaCalculation result = formula.calculate(inputs());
+
+        assertThat(result.status()).isEqualTo(FormulaCalculation.Status.MISSING_INPUT);
+        assertThat(result.missingInputs()).containsExactly(
+                FormulaKeys.CHILLER_T_IN, FormulaKeys.CHILLER_T_OUT,
+                FormulaKeys.CHILLER_FLOW, FormulaKeys.CHILLER_PPE,
+                FormulaKeys.CHILLER_VOLTAGE, FormulaKeys.CHILLER_CURRENT,
+                FormulaKeys.CHILLER_PF);
+    }
+
+    @Test
     void reportsMissingFallbackPowerKey() {
         FormulaCalculation result = formula.calculate(inputs(
                 point(FormulaKeys.CHILLER_T_IN, 12.0, 0),
@@ -91,10 +103,28 @@ class ChillerCopFormulaTest {
                 .isEqualTo("CHILLER_TEMPERATURE_DIFFERENCE_NON_POSITIVE");
         assertThat(formula.calculate(fallback(1.1)).reasonCode())
                 .isEqualTo("CHILLER_POWER_FACTOR_OUT_OF_RANGE");
+        assertThat(formula.calculate(fallback(0.0)).reasonCode())
+                .isEqualTo("CHILLER_POWER_FACTOR_OUT_OF_RANGE");
+        assertThat(formula.calculate(fallback(-0.1)).reasonCode())
+                .isEqualTo("CHILLER_POWER_FACTOR_OUT_OF_RANGE");
         assertThat(formula.calculate(direct(12.0, 7.0, Double.NaN, 100.0)).status())
                 .isEqualTo(FormulaCalculation.Status.INVALID_INPUT);
         assertThat(formula.calculate(direct(12.0, 7.0, 100.0, Double.POSITIVE_INFINITY)).status())
                 .isEqualTo(FormulaCalculation.Status.INVALID_INPUT);
+    }
+
+    @Test
+    void rejectsOverflowedFallbackPowerBeforeDivision() {
+        FormulaCalculation result = formula.calculate(inputs(
+                point(FormulaKeys.CHILLER_T_IN, 12.0, 0),
+                point(FormulaKeys.CHILLER_T_OUT, 7.0, 0),
+                point(FormulaKeys.CHILLER_FLOW, 100.0, 0),
+                point(FormulaKeys.CHILLER_VOLTAGE, Double.MAX_VALUE, 0),
+                point(FormulaKeys.CHILLER_CURRENT, Double.MAX_VALUE, 0),
+                point(FormulaKeys.CHILLER_PF, 1.0, 0)));
+
+        assertThat(result.status()).isEqualTo(FormulaCalculation.Status.INVALID_INPUT);
+        assertThat(result.reasonCode()).isEqualTo("CHILLER_POWER_NON_FINITE");
     }
 
     @Test

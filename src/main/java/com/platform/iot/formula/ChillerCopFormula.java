@@ -92,6 +92,9 @@ public final class ChillerCopFormula implements IndicatorFormula {
                     * SQRT_THREE / 1000.0;
             powerStep = "NI_ELECTRICAL";
         }
+        if (!Double.isFinite(inputPower)) {
+            return invalid("CHILLER_POWER_NON_FINITE", used);
+        }
 
         double coolingCapacity = flow.value() * WATER_DENSITY * WATER_SPECIFIC_HEAT
                 * (tIn.value() - tOut.value()) / 3600.0;
