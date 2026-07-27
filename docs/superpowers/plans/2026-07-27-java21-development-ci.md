@@ -13,6 +13,7 @@
 - Java 版本范围固定为 `[21,22)`；拒绝 Java 17、Java 22 和其他未经验证的主版本。
 - Maven 版本范围固定为 `[3.9.9,4.0.0)`；Wrapper 固定下载 Maven 3.9.9。
 - Maven 3.9.9 ZIP 的 SHA-256 固定为 `4ec3f26fb1a692473aea0235c300bd20f0f9fe741947c82c1234cefd76ac3a3c`。
+- Maven Wrapper 3.3.4 JAR 的 SHA-256 固定为 `4e2fbf6554bc8a4702cdfdd3bef464f423393d784ddbb037216320ce55d5e4e1`。
 - 普通 CI 不启动或连接真实 MySQL、TDengine、MQTT、Redis 或第三方接口。
 - 不修改业务代码、数据库结构、前端代码、前端依赖、Vitest 或前端 CI。
 - 本地检查脚本只读，不修改注册表、用户环境变量或系统环境变量。
@@ -26,6 +27,7 @@
 - Create: `.java-version`
 - Create: `mvnw`
 - Create: `mvnw.cmd`
+- Create: `.mvn/wrapper/maven-wrapper.jar`
 - Create: `.mvn/wrapper/maven-wrapper.properties`
 - Modify: `pom.xml`
 
@@ -51,30 +53,37 @@ False
 Select-String 不返回匹配项
 ```
 
-- [ ] **Step 2: 使用官方 Wrapper Plugin 生成 only-script Wrapper**
+- [ ] **Step 2: 使用官方 Wrapper Plugin 生成 bin Wrapper**
 
 Run:
 
 ```powershell
 mvn org.apache.maven.plugins:maven-wrapper-plugin:3.3.4:wrapper `
-  -Dtype=only-script `
-  -Dmaven=3.9.9 `
-  -DdistributionSha256Sum=4ec3f26fb1a692473aea0235c300bd20f0f9fe741947c82c1234cefd76ac3a3c
+  '-Dtype=bin' `
+  '-Dmaven=3.9.9' `
+  '-DdistributionSha256Sum=4ec3f26fb1a692473aea0235c300bd20f0f9fe741947c82c1234cefd76ac3a3c'
 ```
 
 Expected:
 
 ```text
 BUILD SUCCESS
-mvnw、mvnw.cmd 和 .mvn/wrapper/maven-wrapper.properties 已生成
+mvnw、mvnw.cmd、maven-wrapper.jar 和 maven-wrapper.properties 已生成
 ```
 
 生成后的 `.mvn/wrapper/maven-wrapper.properties` 必须包含：
 
 ```properties
+wrapperVersion=3.3.4
+distributionType=bin
 distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip
 distributionSha256Sum=4ec3f26fb1a692473aea0235c300bd20f0f9fe741947c82c1234cefd76ac3a3c
+wrapperUrl=https://repo.maven.apache.org/maven2/org/apache/maven/wrapper/maven-wrapper/3.3.4/maven-wrapper-3.3.4.jar
+wrapperSha256Sum=4e2fbf6554bc8a4702cdfdd3bef464f423393d784ddbb037216320ce55d5e4e1
 ```
+
+使用 `bin` 类型是为了避开Wrapper 3.3.4 `only-script` 在Windows PowerShell 5中读取
+普通 `.m2` 目录空 `Target` 时的启动错误；仓库只提交63 KB启动JAR，不提交Maven安装包。
 
 - [ ] **Step 3: 声明仓库 Java 版本**
 
@@ -166,7 +175,7 @@ RequireJavaVersion 失败
 Run:
 
 ```powershell
-git add -- .java-version mvnw mvnw.cmd .mvn/wrapper/maven-wrapper.properties pom.xml
+git add -- .java-version mvnw mvnw.cmd .mvn/wrapper/maven-wrapper.jar .mvn/wrapper/maven-wrapper.properties pom.xml
 git update-index --chmod=+x mvnw
 git diff --cached --name-only
 git diff --cached --check

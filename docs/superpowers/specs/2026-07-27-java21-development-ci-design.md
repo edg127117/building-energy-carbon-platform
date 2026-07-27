@@ -57,6 +57,7 @@
 ```text
 mvnw
 mvnw.cmd
+.mvn/wrapper/maven-wrapper.jar
 .mvn/wrapper/maven-wrapper.properties
 ```
 
@@ -72,7 +73,10 @@ Linux和GitHub Actions统一执行：
 ./mvnw verify
 ```
 
-Wrapper使用官方Apache Maven二进制分发地址，并配置对应SHA-256校验值，避免下载内容被静默替换。不提交额外的Maven二进制安装包。
+Wrapper使用官方 `bin` 启动类型，提交63 KB的官方启动JAR，但不提交Maven安装包。之所以不使用
+`only-script`，是因为Wrapper 3.3.4的Windows PowerShell 5脚本会对普通非符号链接的
+`.m2`目录访问空 `Target`，导致启动阶段失败。Wrapper JAR和Apache Maven分发包都配置
+对应SHA-256校验值，避免下载内容被静默替换。
 
 ### Maven版本门禁
 
