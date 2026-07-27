@@ -15,7 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 /** HVAC 公式指标的内部只读 API。 */
 @RestController
-@RequestMapping("/api/hvac")
+@RequestMapping("/hvac")
 @ConditionalOnProperty(
         prefix = "formula", name = "enabled",
         havingValue = "true", matchIfMissing = true)

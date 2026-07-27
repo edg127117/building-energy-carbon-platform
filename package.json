@@ -4,6 +4,7 @@
     "pdfjs-dist": "^4.0.379"
   },
   "dependencies": {
+    "mqtt": "^5.15.1",
     "playwright": "^1.61.1"
   }
 }

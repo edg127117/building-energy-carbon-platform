@@ -19,6 +19,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.util.List;
 
@@ -73,16 +74,16 @@ class HvacIndicatorControllerFlowTest {
 
     @Test
     void allThreeEndpointsRequireAuthentication() throws Exception {
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/buildings/BLD001/indicators/latest"))
                 .andExpect(status().isUnauthorized());
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/history",
                         INDICATOR_ID)
                         .param("from", Long.toString(MINUTE))
                         .param("to", Long.toString(MINUTE + 60_000L)))
                 .andExpect(status().isUnauthorized());
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/calculations/{minuteStart}",
                         INDICATOR_ID, MINUTE))
                 .andExpect(status().isUnauthorized());
@@ -91,7 +92,7 @@ class HvacIndicatorControllerFlowTest {
     @Test
     void ownerManagerAndAdminCanUseAllThreeEndpoints() throws Exception {
         for (String token : List.of(ownerToken, managerToken, adminToken)) {
-            mockMvc.perform(get(
+            mockMvc.perform(apiGet(
                             "/api/hvac/buildings/BLD001/indicators/latest")
                             .header(auth(), bearer(token)))
                     .andExpect(status().isOk())
@@ -100,7 +101,7 @@ class HvacIndicatorControllerFlowTest {
                     .andExpect(jsonPath("$.data.indicators.length()").value(4))
                     .andExpect(jsonPath("$.data.indicators[0].status").exists());
 
-            mockMvc.perform(get(
+            mockMvc.perform(apiGet(
                             "/api/hvac/indicators/{indicatorId}/history",
                             INDICATOR_ID)
                             .header(auth(), bearer(token))
@@ -111,7 +112,7 @@ class HvacIndicatorControllerFlowTest {
                             .value(INDICATOR_ID))
                     .andExpect(jsonPath("$.data.records.length()").value(0));
 
-            mockMvc.perform(get(
+            mockMvc.perform(apiGet(
                             "/api/hvac/indicators/{indicatorId}/calculations/{minuteStart}",
                             INDICATOR_ID, MINUTE)
                             .header(auth(), bearer(token)))
@@ -124,18 +125,18 @@ class HvacIndicatorControllerFlowTest {
 
     @Test
     void outOfScopeBuildingRoleIsForbiddenOnAllThreeEndpoints() throws Exception {
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/buildings/BLD001/indicators/latest")
                         .header(auth(), bearer(outsideOwnerToken)))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/history",
                         INDICATOR_ID)
                         .header(auth(), bearer(outsideOwnerToken))
                         .param("from", Long.toString(MINUTE))
                         .param("to", Long.toString(MINUTE + 60_000L)))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/calculations/{minuteStart}",
                         INDICATOR_ID, MINUTE)
                         .header(auth(), bearer(outsideOwnerToken)))
@@ -144,18 +145,18 @@ class HvacIndicatorControllerFlowTest {
 
     @Test
     void thirdPartyIsForbiddenOnAllThreeInternalEndpoints() throws Exception {
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/buildings/BLD001/indicators/latest")
                         .header(auth(), bearer(thirdPartyToken)))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/history",
                         INDICATOR_ID)
                         .header(auth(), bearer(thirdPartyToken))
                         .param("from", Long.toString(MINUTE))
                         .param("to", Long.toString(MINUTE + 60_000L)))
                 .andExpect(status().isForbidden());
-        mockMvc.perform(get(
+        mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/calculations/{minuteStart}",
                         INDICATOR_ID, MINUTE)
                         .header(auth(), bearer(thirdPartyToken)))
@@ -201,5 +202,10 @@ class HvacIndicatorControllerFlowTest {
 
     private String bearer(String token) {
         return "Bearer " + token;
+    }
+
+    private MockHttpServletRequestBuilder apiGet(
+            String uriTemplate, Object... uriVariables) {
+        return get(uriTemplate, uriVariables).contextPath("/api");
     }
 }

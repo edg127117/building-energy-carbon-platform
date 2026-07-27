@@ -179,3 +179,158 @@ HVAC 与上面的电表宽表报文共用 `device/data/up`，但采用“单测�
 4. `ts` 使用设备采集时间，`received_time` 单独记录服务器接收时间。
 5. 同一 `point_id + ts` 重复且数值相同视为幂等；冲突数值以最后收到值为准并记录告警。
 6. 每个自然分钟按设备采集时间计算平均值，同时保存最小值、最大值、样本数和最差质量。
+
+## HVAC 19 测点公式链路冒烟
+
+以下步骤验证 MQTT 接入、分钟冻结、四个公式、TDengine、Redis、
+WebSocket 和只读 API 的完整链路。命令在项目根目录执行，要求本机已有
+Java 21、Maven、Node.js 20+、Docker Engine 和 Docker Compose 插件。
+
+默认本地配置如下：
+
+| 服务 | 地址/凭据 |
+|---|---|
+| 后端 API | `http://127.0.0.1:8081/api` |
+| MQTT | `tcp://127.0.0.1:1883`，`admin/change-me` |
+| MySQL | `127.0.0.1:3306`，`root/change-me` |
+| TDengine REST | `127.0.0.1:6041`，`root/taosdata` |
+| Redis | `127.0.0.1:6379`，无密码 |
+
+`MQTT_BROKER_URL`、`MQTT_USER`、`MQTT_PASSWORD` 等环境变量可以覆盖默认值。
+模拟器和后端使用同一套 MQTT 环境变量。
+
+### 1. 启动并发布完整 19 测点
+
+首次检出代码或依赖锁文件变化后先安装 Node.js 依赖：
+
+```powershell
+npm ci
+```
+
+启动基础设施：
+
+```powershell
+docker compose -f src/env/docker-compose.yml up -d
+```
+
+全新的 MySQL 数据卷只会自动执行 `01-init-tables.sql`、
+`02-init-10000-devices.sql` 和 `03-init-hvac-schema.sql`。`05` 是旧 MySQL
+模型的一次性手工迁移，`06` 是旧 TDengine 模型的一次性手工迁移，均须先备份
+并按文件头说明执行。TDengine 当前表结构由后端 `TdengineConfig` 在启动时创建
+或补齐，不能把 TDengine SQL 交给 MySQL 初始化器执行。
+
+在第二个终端启动后端：
+
+```powershell
+mvn spring-boot:run
+```
+
+待后端启动完成后，在第三个终端发布数据：
+
+```powershell
+node .scripts/simulate-hvac-19-points.mjs
+```
+
+脚本默认每 10 秒发布一轮，持续 70 秒，共 7 轮。每轮包含 19 个外部别名，
+且同一轮的 19 条报文共享一个设备时间戳。连接失败、发布失败或未知的省略测点
+都会使脚本以非零状态退出。
+
+结果在对应的设备采集自然分钟结束后，再经过配置项
+`aggregation.finalization-delay-seconds=30` 的冻结等待才出现。模拟器结束后
+最多再等待 90 秒，即可覆盖最后一轮所在分钟的关闭和冻结：
+
+```powershell
+Start-Sleep -Seconds 90
+```
+
+### 2. 核对 TDengine 和 Redis
+
+查询最新四个成功指标：
+
+```powershell
+docker exec iot-tdengine taos -s "SELECT indicator_code, ts, val, data_quality, formula_version FROM iot_telemetry.st_indicator_minute ORDER BY ts DESC LIMIT 4;"
+```
+
+同一个完整分钟的期望值为：
+
+```text
+WCR_COP     ≈ 5.805556   data_quality=0  formula_version=WCR_COP_V1
+TOWER_EFF   = 50.000000  data_quality=0  formula_version=TOWER_EFF_V1
+PUMP_EFF    ≈ 58.277778  data_quality=0  formula_version=PUMP_EFF_V1
+AHU_POW_EFF ≈ 0.462963   data_quality=0  formula_version=AHU_POW_EFF_V1
+```
+
+核对四个 Redis 最新状态键：
+
+```powershell
+docker exec iot-redis redis-cli --scan --pattern "iot:indicator:latest:*"
+```
+
+Redis 最新指标的 TTL 是 120 秒。如果键已经过期，可重新运行模拟器，或直接用
+下面的最新指标 API；该 API 会从 TDengine 回退读取。
+
+### 3. 调用三个只读 API
+
+三个接口均需要 JWT。全新本地库内置管理员为 `admin/123456`：
+
+```powershell
+$login = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8081/api/auth/login" `
+  -ContentType "application/json" `
+  -Body '{"username":"admin","password":"123456"}'
+$headers = @{ Authorization = "Bearer $($login.data.token)" }
+
+$latest = Invoke-RestMethod -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/hvac/buildings/BLD001/indicators/latest"
+$latest.data.indicators | Format-Table
+
+$minuteStart = ($latest.data.indicators |
+  Where-Object indicatorId -eq "INDICATOR_WCR_COP_B1").minuteStart
+$minuteEnd = $minuteStart + 60000
+
+Invoke-RestMethod -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/hvac/indicators/INDICATOR_WCR_COP_B1/history?from=$minuteStart&to=$minuteEnd"
+
+Invoke-RestMethod -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/hvac/indicators/INDICATOR_WCR_COP_B1/calculations/$minuteStart"
+```
+
+最新值接口应返回四个 `SUCCESS` 指标；历史接口应返回指定分钟的 COP；计算详情
+应包含公式输入、分步计算、质量和公式版本。
+
+### 4. 验证缺少水泵功率的失败分钟
+
+先进入一个没有完整脚本数据的新自然分钟，避免上一轮 `PUMP1_Power` 样本混入
+本次分钟，然后通过环境变量省略该外部别名：
+
+```powershell
+Start-Sleep -Seconds (61 - (Get-Date).Second)
+$env:HVAC_OMIT_POINT = "PUMP1_Power"
+try {
+  node .scripts/simulate-hvac-19-points.mjs
+} finally {
+  Remove-Item Env:HVAC_OMIT_POINT -ErrorAction SilentlyContinue
+}
+Start-Sleep -Seconds 90
+```
+
+查询最新水泵异常：
+
+```powershell
+docker exec iot-tdengine taos -s "SELECT indicator_code, ts, calc_status, reason_code, missing_inputs, formula_version FROM iot_telemetry.st_formula_calc_exception WHERE indicator_code='PUMP_EFF' ORDER BY ts DESC LIMIT 1;"
+docker exec iot-redis redis-cli GET "iot:indicator:latest:INDICATOR_PUMP_EFF_B1"
+```
+
+验证结果应满足：
+
+1. 异常分钟没有 `PUMP_EFF` 成功行；
+2. `st_formula_calc_exception` 有 `calc_status=MISSING_INPUT`，缺失项包含
+   `Pc/PPE`；
+3. Redis 水泵状态为 `MISSING_INPUT` 且 `value=null`；
+4. 预先连接 `ws://127.0.0.1:8081/api/ws/dashboard` 的客户端收到
+   `type=HVAC_INDICATOR` 的相同缺失状态；
+5. 同一分钟的 `WCR_COP`、`TOWER_EFF`、`AHU_POW_EFF` 仍成功。
+
+可用异常记录的 `ts` 再查询
+`iot_telemetry.st_indicator_minute`，确认该时间没有 `PUMP_EFF`，而另外三个指标
+均存在。不要用默认值补齐缺失功率；缺失必须保持可见并可审计。
