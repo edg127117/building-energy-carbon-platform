@@ -21,6 +21,21 @@
 `C:\Program Files\Common Files\Oracle\Java\javapath` 之前。其他开发机应使用自己的
 JDK 21安装路径，不需要采用相同盘符。
 
+当前开发机可以在“以管理员身份运行”的PowerShell中执行：
+
+```powershell
+$jdk21Entry = 'F:\jdk21\bin'
+$oracleEntry = 'C:\Program Files\Common Files\Oracle\Java\javapath'
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$remainingEntries = $machinePath -split ';' |
+    Where-Object { $_ -and $_ -ne $jdk21Entry -and $_ -ne $oracleEntry }
+$newEntries = @($jdk21Entry, $oracleEntry) + $remainingEntries
+[Environment]::SetEnvironmentVariable('Path', ($newEntries -join ';'), 'Machine')
+```
+
+该命令只把两个已存在的Java入口移到PATH开头，不改变其他条目的相对顺序。执行后必须
+重新打开终端、IDE和Codex；非管理员PowerShell会收到注册表访问被拒绝，不会完成修改。
+
 ## 验证
 
 执行：
