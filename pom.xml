@@ -183,6 +183,19 @@
           </execution>
         </executions>
       </plugin>
+      <!--
+        TDengine SQL 使用本地时间格式表达毫秒时间戳。测试进程固定为项目约定的
+        Asia/Shanghai，避免开发机和 GitHub Ubuntu 的默认时区不同导致断言漂移。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <user.timezone>Asia/Shanghai</user.timezone>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
