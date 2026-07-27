@@ -147,4 +147,3 @@ if ($failures.Count -gt 0) {
 
 Write-Host 'Java 21、javac 和 Maven Wrapper 环境一致。'
 exit 0
-
