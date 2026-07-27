@@ -1,6 +1,7 @@
 package com.platform.iot.formula;
 
 import com.platform.cache.IndicatorLatestCacheService;
+import com.platform.config.FormulaProperties;
 import com.platform.hvac.model.entity.BizIndicator;
 import com.platform.iot.aggregation.HvacMinuteBatchFrozenEvent;
 import com.platform.iot.formula.model.FormulaCalculation;
@@ -11,19 +12,27 @@ import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
+import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -61,6 +70,33 @@ class HvacFormulaEngineTest {
                 "onMinuteFrozen", HvacMinuteBatchFrozenEvent.class);
         assertThat(listener.getAnnotation(EventListener.class)).isNotNull();
         assertThat(listener.getAnnotation(Async.class)).isNull();
+
+        Constructor<HvacFormulaEngine> productionConstructor =
+                HvacFormulaEngine.class.getConstructor(
+                        IndicatorConfigProvider.class,
+                        HvacMinuteRepository.class,
+                        IndicatorMinuteRepository.class,
+                        IndicatorLatestCacheService.class,
+                        IndicatorRealtimePublisher.class,
+                        FormulaProperties.class);
+        assertThat(productionConstructor.getAnnotation(Autowired.class)).isNotNull();
+    }
+
+    @Test
+    void springContextStartsWithExplicitProductionConstructor() {
+        new ApplicationContextRunner()
+                .withPropertyValues("formula.enabled=true")
+                .withBean(IndicatorConfigProvider.class, () -> configProvider)
+                .withBean(HvacMinuteRepository.class, () -> minuteRepository)
+                .withBean(IndicatorMinuteRepository.class, () -> indicatorRepository)
+                .withBean(IndicatorLatestCacheService.class, () -> cache)
+                .withBean(IndicatorRealtimePublisher.class, () -> publisher)
+                .withBean(FormulaProperties.class, FormulaProperties::new)
+                .withUserConfiguration(HvacFormulaEngine.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(HvacFormulaEngine.class);
+                });
     }
 
     @Test
@@ -92,6 +128,58 @@ class HvacFormulaEngineTest {
     }
 
     @Test
+    void productionEngineCalculatesAllFourIndicatorsFromNormalEventPayload() {
+        BizIndicator chiller = indicator("I1", "WCR_COP", "BLD001", "CHILLER");
+        BizIndicator tower = indicator("I2", "TOWER_EFF", "BLD001", "TOWER");
+        BizIndicator pump = indicator("I3", "PUMP_EFF", "BLD001", "PUMP");
+        BizIndicator ahu = indicator("I4", "AHU_POW_EFF", "BLD001", "AHU");
+        when(configProvider.findAllActive())
+                .thenReturn(List.of(chiller, tower, pump, ahu));
+        when(cache.setIfNotOlder(any())).thenReturn(true);
+
+        List<RawMinuteAggregate> aggregates = List.of(
+                point("C1", "CHILLER", "MAIN", "TWin", 12.0),
+                point("C2", "CHILLER", "MAIN", "TWout", 7.0),
+                point("C3", "CHILLER", "MAIN", "GW", 36.0),
+                point("C4", "CHILLER", "MAIN", "PPE", 100.0),
+                point("T1", "TOWER", "CT", "TWin", 35.0),
+                point("T2", "TOWER", "CT", "TWout", 30.0),
+                point("T3", "TOWER", "CT", "TWB", 25.0),
+                point("P1", "PUMP", "Pc", "GW", 1.0),
+                point("P2", "PUMP", "Pc", "Pout", 200_000.0),
+                point("P3", "PUMP", "Pc", "Pin", 100_000.0),
+                point("P4", "PUMP", "Pc", "Z", 0.0),
+                point("P5", "PUMP", "Pc", "PPE", 100.0),
+                point("A1", "AHU", "MAIN", "TotalPress", 1_000.0),
+                point("A2", "AHU", "MAIN", "EtaT", 80.0));
+
+        new HvacFormulaEngine(
+                configProvider, minuteRepository, indicatorRepository, cache,
+                publisher, new FormulaProperties())
+                .onMinuteFrozen(new HvacMinuteBatchFrozenEvent(
+                        MINUTE, FINALIZED_AT, false, aggregates));
+
+        ArgumentCaptor<List<IndicatorMinuteResult>> rows = listCaptor();
+        ArgumentCaptor<IndicatorLatestState> states =
+                ArgumentCaptor.forClass(IndicatorLatestState.class);
+        verify(indicatorRepository).saveSuccesses(rows.capture());
+        verify(indicatorRepository, never()).saveExceptions(any());
+        verify(cache, org.mockito.Mockito.times(4)).setIfNotOlder(states.capture());
+        verify(publisher, org.mockito.Mockito.times(4)).publish(any());
+        verify(minuteRepository, never()).findByMinute(any(Long.class), any());
+        assertThat(rows.getValue())
+                .hasSize(4)
+                .extracting(IndicatorMinuteResult::indicatorCode)
+                .containsExactly("WCR_COP", "TOWER_EFF", "PUMP_EFF", "AHU_POW_EFF");
+        assertThat(rows.getValue())
+                .extracting(IndicatorMinuteResult::minuteStart)
+                .containsOnly(MINUTE);
+        assertThat(states.getAllValues())
+                .hasSize(4)
+                .allSatisfy(state -> assertThat(state.minuteStart()).isEqualTo(MINUTE));
+    }
+
+    @Test
     void recoveryEventRequeriesCompleteMinuteForPayloadBuildingIds() {
         RawMinuteAggregate triggerOne = aggregate("P1", "BLD001");
         RawMinuteAggregate triggerTwo = aggregate("P2", "BLD002");
@@ -115,6 +203,32 @@ class HvacFormulaEngineTest {
     }
 
     @Test
+    void recoveryWithNoRowsStillPersistsMissingInputForPayloadBuilding() {
+        RawMinuteAggregate trigger = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001");
+        when(minuteRepository.findByMinute(MINUTE, Set.of("BLD001")))
+                .thenReturn(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+
+        new HvacFormulaEngine(
+                configProvider, minuteRepository, indicatorRepository, cache,
+                publisher, new FormulaProperties())
+                .onMinuteFrozen(new HvacMinuteBatchFrozenEvent(
+                        MINUTE, FINALIZED_AT, true, List.of(trigger)));
+
+        ArgumentCaptor<List<FormulaCalculationException>> failures = listCaptor();
+        verify(minuteRepository).findByMinute(MINUTE, Set.of("BLD001"));
+        verify(indicatorRepository, never()).saveSuccesses(any());
+        verify(indicatorRepository).saveExceptions(failures.capture());
+        assertThat(failures.getValue()).singleElement().satisfies(row -> {
+            assertThat(row.indicatorId()).isEqualTo("I1");
+            assertThat(row.minuteStart()).isEqualTo(MINUTE);
+            assertThat(row.status()).isEqualTo(FormulaCalculation.Status.MISSING_INPUT);
+            assertThat(row.reasonCode()).isEqualTo("CHILLER_INPUT_MISSING");
+        });
+    }
+
+    @Test
     void selectsOnlyActiveIndicatorsForAffectedBuildings() {
         RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
         BizIndicator affected = indicator("I1", "WCR_COP", "BLD001");
@@ -131,6 +245,30 @@ class HvacFormulaEngineTest {
 
         verify(assembler).assemble(affected, MINUTE, List.of(aggregate));
         verify(assembler, never()).assemble(eq(unaffected), eq(MINUTE), any());
+    }
+
+    @Test
+    void packageCalculationEntryPointFiltersRequestedIndicatorIds() {
+        RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
+        BizIndicator excluded = indicator("I1", "PUMP_EFF", "BLD001");
+        BizIndicator requested = indicator("I2", "WCR_COP", "BLD001");
+        IndicatorFormula excludedFormula = formula("PUMP_EFF", "PUMP_V1");
+        IndicatorFormula requestedFormula = formula("WCR_COP", "COP_V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(excluded, requested));
+        when(assembler.assemble(requested, MINUTE, List.of(aggregate))).thenReturn(inputs);
+        when(requestedFormula.calculate(inputs))
+                .thenReturn(success("WCR_COP", "COP_V1", 5.5));
+
+        engine(List.of(excludedFormula, requestedFormula)).calculateAndPersist(
+                MINUTE, FINALIZED_AT, List.of(aggregate), Set.of("I2"));
+
+        ArgumentCaptor<List<IndicatorMinuteResult>> rows = listCaptor();
+        verify(indicatorRepository).saveSuccesses(rows.capture());
+        verify(assembler, never()).assemble(eq(excluded), eq(MINUTE), any());
+        assertThat(rows.getValue()).singleElement()
+                .extracting(IndicatorMinuteResult::indicatorId)
+                .isEqualTo("I2");
     }
 
     @Test
@@ -274,6 +412,90 @@ class HvacFormulaEngineTest {
         });
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("malformedCalculations")
+    void invalidCalculationContractBecomesEngineErrorWithoutStoppingOtherIndicators(
+            String ignoredDescription,
+            FormulaCalculation malformedCalculation) {
+        RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
+        BizIndicator malformed = indicator("I1", "PUMP_EFF", "BLD001");
+        BizIndicator valid = indicator("I2", "WCR_COP", "BLD001");
+        IndicatorFormula malformedFormula = formula("PUMP_EFF", "PUMP_V1");
+        IndicatorFormula validFormula = formula("WCR_COP", "COP_V1");
+        FormulaInputs malformedInputs = new FormulaInputs(List.of());
+        FormulaInputs validInputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(malformed, valid));
+        when(assembler.assemble(malformed, MINUTE, List.of(aggregate)))
+                .thenReturn(malformedInputs);
+        when(assembler.assemble(valid, MINUTE, List.of(aggregate)))
+                .thenReturn(validInputs);
+        when(malformedFormula.calculate(malformedInputs)).thenReturn(malformedCalculation);
+        when(validFormula.calculate(validInputs))
+                .thenReturn(success("WCR_COP", "COP_V1", 5.5));
+
+        engine(List.of(malformedFormula, validFormula)).onMinuteFrozen(
+                new HvacMinuteBatchFrozenEvent(
+                        MINUTE, FINALIZED_AT, false, List.of(aggregate)));
+
+        ArgumentCaptor<List<IndicatorMinuteResult>> successes = listCaptor();
+        ArgumentCaptor<List<FormulaCalculationException>> failures = listCaptor();
+        verify(indicatorRepository).saveSuccesses(successes.capture());
+        verify(indicatorRepository).saveExceptions(failures.capture());
+        assertThat(successes.getValue()).extracting(IndicatorMinuteResult::indicatorId)
+                .containsExactly("I2");
+        assertThat(failures.getValue()).singleElement().satisfies(row -> {
+            assertThat(row.status()).isEqualTo(FormulaCalculation.Status.ENGINE_ERROR);
+            assertThat(row.reasonCode()).isEqualTo("FORMULA_ENGINE_ERROR");
+            assertThat(row.formulaVersion()).isEqualTo("PUMP_V1");
+        });
+    }
+
+    private static Stream<Arguments> malformedCalculations() {
+        return Stream.of(
+                arguments("null status",
+                        calculation(null, "PUMP_EFF", "PUMP_V1",
+                                null, null, "MALFORMED")),
+                arguments("blank indicator code",
+                        calculation(FormulaCalculation.Status.SUCCESS, " ", "PUMP_V1",
+                                1.0, 0, null)),
+                arguments("mismatched indicator code",
+                        calculation(FormulaCalculation.Status.SUCCESS, "OTHER", "PUMP_V1",
+                                1.0, 0, null)),
+                arguments("blank formula version",
+                        calculation(FormulaCalculation.Status.SUCCESS, "PUMP_EFF", " ",
+                                1.0, 0, null)),
+                arguments("mismatched formula version",
+                        calculation(FormulaCalculation.Status.SUCCESS, "PUMP_EFF", "PUMP_V2",
+                                1.0, 0, null)),
+                arguments("non-finite success value",
+                        calculation(FormulaCalculation.Status.SUCCESS, "PUMP_EFF", "PUMP_V1",
+                                Double.NaN, 0, null)),
+                arguments("missing success quality",
+                        calculation(FormulaCalculation.Status.SUCCESS, "PUMP_EFF", "PUMP_V1",
+                                1.0, null, null)),
+                arguments("negative success quality",
+                        calculation(FormulaCalculation.Status.SUCCESS, "PUMP_EFF", "PUMP_V1",
+                                1.0, -1, null)),
+                arguments("success quality above two",
+                        calculation(FormulaCalculation.Status.SUCCESS, "PUMP_EFF", "PUMP_V1",
+                                1.0, 3, null)),
+                arguments("blank failure reason",
+                        calculation(FormulaCalculation.Status.INVALID_INPUT,
+                                "PUMP_EFF", "PUMP_V1", null, null, " ")));
+    }
+
+    private static FormulaCalculation calculation(
+            FormulaCalculation.Status status,
+            String indicatorCode,
+            String version,
+            Double value,
+            Integer quality,
+            String reason) {
+        return new FormulaCalculation(
+                status, indicatorCode, version, value, quality,
+                List.of(), List.of(), reason, List.of());
+    }
+
     private HvacFormulaEngine engine(List<IndicatorFormula> formulas) {
         return new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
@@ -301,12 +523,17 @@ class HvacFormulaEngineTest {
     }
 
     private static BizIndicator indicator(String id, String code, String buildingId) {
+        return indicator(id, code, buildingId, "EQUIP001");
+    }
+
+    private static BizIndicator indicator(
+            String id, String code, String buildingId, String equipId) {
         BizIndicator indicator = new BizIndicator();
         indicator.setIndicatorId(id);
         indicator.setIndicatorCode(code);
         indicator.setBuildingId(buildingId);
         indicator.setSystemGroupId("GROUP001");
-        indicator.setEquipId("EQUIP001");
+        indicator.setEquipId(equipId);
         indicator.setStatus(1);
         return indicator;
     }
@@ -316,6 +543,18 @@ class HvacFormulaEngineTest {
                 pointId, pointId, buildingId, "GROUP001", "EQUIP001", "EQUIP001",
                 "WCR", "MAIN", "GW", 1, MINUTE, 100.0, 100.0, 100.0,
                 1, 0, MINUTE, MINUTE, FINALIZED_AT);
+    }
+
+    private static RawMinuteAggregate point(
+            String pointId,
+            String equipId,
+            String componentCode,
+            String suffixCode,
+            double value) {
+        return new RawMinuteAggregate(
+                pointId, pointId, "BLD001", "GROUP001", equipId, equipId,
+                "EQUIPMENT", componentCode, suffixCode, 1, MINUTE,
+                value, value, value, 1, 0, MINUTE, MINUTE, FINALIZED_AT);
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})

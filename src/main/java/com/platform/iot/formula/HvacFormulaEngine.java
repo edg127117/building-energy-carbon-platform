@@ -13,6 +13,7 @@ import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -46,6 +47,7 @@ public class HvacFormulaEngine {
     private final FormulaInputAssembler assembler;
     private final Map<String, IndicatorFormula> formulas;
 
+    @Autowired
     public HvacFormulaEngine(
             IndicatorConfigProvider configProvider,
             HvacMinuteRepository minuteRepository,
@@ -89,27 +91,42 @@ public class HvacFormulaEngine {
         List<RawMinuteAggregate> inputs = event.recovery()
                 ? minuteRepository.findByMinute(event.minuteStart(), buildingIds)
                 : event.aggregates();
-        calculateAndPersist(event.minuteStart(), event.finalizedAt(), inputs);
+        calculateAndPersist(
+                event.minuteStart(), event.finalizedAt(), inputs, buildingIds, null);
+    }
+
+    void calculateAndPersist(
+            long minuteStart,
+            long calculatedAt,
+            List<RawMinuteAggregate> aggregates,
+            Set<String> onlyIndicatorIds) {
+        Set<String> affectedBuildings = aggregates.stream()
+                .map(RawMinuteAggregate::buildingId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        calculateAndPersist(
+                minuteStart, calculatedAt, aggregates,
+                affectedBuildings, onlyIndicatorIds);
     }
 
     private void calculateAndPersist(
             long minuteStart,
             long calculatedAt,
-            List<RawMinuteAggregate> aggregates) {
-        Set<String> affectedBuildings = aggregates.stream()
-                .map(RawMinuteAggregate::buildingId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+            List<RawMinuteAggregate> aggregates,
+            Set<String> affectedBuildings,
+            Set<String> onlyIndicatorIds) {
         List<BizIndicator> indicators = configProvider.findAllActive().stream()
                 .filter(indicator -> affectedBuildings.contains(indicator.getBuildingId()))
+                .filter(indicator -> onlyIndicatorIds == null
+                        || onlyIndicatorIds.contains(indicator.getIndicatorId()))
                 .toList();
 
         List<CalculatedSuccess> successes = new ArrayList<>();
         List<CalculatedFailure> failures = new ArrayList<>();
         for (BizIndicator indicator : indicators) {
-            IndicatorFormula formula = formulas.get(indicator.getIndicatorCode());
             String formulaVersion = UNKNOWN_FORMULA_VERSION;
             try {
+                IndicatorFormula formula = formulas.get(indicator.getIndicatorCode());
                 if (formula == null) {
                     FormulaCalculation calculation = failureCalculation(
                             indicator.getIndicatorCode(), formulaVersion,
@@ -122,6 +139,7 @@ public class HvacFormulaEngine {
                 FormulaInputs inputs = assembler.assemble(indicator, minuteStart, aggregates);
                 FormulaCalculation calculation = Objects.requireNonNull(
                         formula.calculate(inputs), "formula calculation");
+                validateCalculation(indicator, formula, formulaVersion, calculation);
                 if (calculation.status() == FormulaCalculation.Status.SUCCESS) {
                     successes.add(new CalculatedSuccess(
                             successRow(indicator, minuteStart, calculatedAt, calculation),
@@ -149,6 +167,55 @@ public class HvacFormulaEngine {
                     failures.stream().map(CalculatedFailure::row).toList());
             failures.forEach(failure -> notifyLatest(failure.state()));
         }
+    }
+
+    private void validateCalculation(
+            BizIndicator indicator,
+            IndicatorFormula formula,
+            String expectedFormulaVersion,
+            FormulaCalculation calculation) {
+        FormulaCalculation.Status status = Objects.requireNonNull(
+                calculation.status(), "formula calculation.status");
+        String calculationCode = requireText(
+                calculation.indicatorCode(), "formula calculation.indicatorCode");
+        String indicatorCode = requireText(
+                indicator.getIndicatorCode(), "indicator.indicatorCode");
+        String strategyCode = requireText(
+                formula.indicatorCode(), "formula.indicatorCode");
+        if (!calculationCode.equals(indicatorCode)
+                || !calculationCode.equals(strategyCode)) {
+            throw new IllegalArgumentException("Formula calculation indicatorCode mismatch");
+        }
+
+        String calculationVersion = requireText(
+                calculation.formulaVersion(), "formula calculation.formulaVersion");
+        if (!calculationVersion.equals(expectedFormulaVersion)) {
+            throw new IllegalArgumentException("Formula calculation version mismatch");
+        }
+
+        if (status == FormulaCalculation.Status.SUCCESS) {
+            Double value = Objects.requireNonNull(
+                    calculation.value(), "successful formula value");
+            if (!Double.isFinite(value)) {
+                throw new IllegalArgumentException("Successful formula value must be finite");
+            }
+            Integer quality = Objects.requireNonNull(
+                    calculation.dataQuality(), "successful formula quality");
+            if (quality < 0 || quality > 2) {
+                throw new IllegalArgumentException(
+                        "Successful formula quality must be between 0 and 2");
+            }
+        } else {
+            requireText(
+                    calculation.reasonCode(), "failed formula calculation.reasonCode");
+        }
+    }
+
+    private String requireText(String value, String name) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(name + " must not be blank");
+        }
+        return value;
     }
 
     private void notifyLatest(IndicatorLatestState state) {
@@ -244,12 +311,13 @@ public class HvacFormulaEngine {
         Map<String, IndicatorFormula> indexed = new LinkedHashMap<>();
         for (IndicatorFormula formula : formulaStrategies) {
             Objects.requireNonNull(formula, "formula");
+            String indicatorCode = requireText(
+                    formula.indicatorCode(), "formula.indicatorCode");
             IndicatorFormula duplicate = indexed.putIfAbsent(
-                    Objects.requireNonNull(formula.indicatorCode(), "formula.indicatorCode"),
-                    formula);
+                    indicatorCode, formula);
             if (duplicate != null) {
                 throw new IllegalArgumentException(
-                        "Duplicate formula strategy: " + formula.indicatorCode());
+                        "Duplicate formula strategy: " + indicatorCode);
             }
         }
         return Map.copyOf(indexed);
