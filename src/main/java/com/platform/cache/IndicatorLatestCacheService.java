@@ -45,7 +45,7 @@ public class IndicatorLatestCacheService {
         }
     }
 
-    public boolean setIfNotOlder(IndicatorLatestState state) {
+    public synchronized boolean setIfNotOlder(IndicatorLatestState state) {
         String key = key(state.indicatorId());
         try {
             String payload = redis.opsForValue().get(key);
@@ -62,8 +62,8 @@ public class IndicatorLatestCacheService {
                 }
             }
 
-            // This compare/set pair is safe only for a single application instance.
-            // Multi-instance deployments must use a Lua script or Redisson lock.
+            // Local synchronization serializes compare/set within this application instance.
+            // Multi-instance deployments must use Redis Lua/CAS or a Redisson lock.
             redis.opsForValue().set(
                     key, objectMapper.writeValueAsString(state), TTL);
             return true;

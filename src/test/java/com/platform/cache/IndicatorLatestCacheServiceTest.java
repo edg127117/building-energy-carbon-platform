@@ -10,6 +10,7 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
+import java.lang.reflect.Modifier;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -63,6 +64,15 @@ class IndicatorLatestCacheServiceTest {
         ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
         verify(valueOps).set(eq(KEY), json.capture(), eq(Duration.ofSeconds(120)));
         assertThat(json.getValue()).contains("\"indicatorId\":\"IND001\"");
+    }
+
+    @Test
+    void serializesCompareAndSetWithinOneApplicationInstance() throws Exception {
+        int modifiers = IndicatorLatestCacheService.class
+                .getMethod("setIfNotOlder", IndicatorLatestState.class)
+                .getModifiers();
+
+        assertThat(Modifier.isSynchronized(modifiers)).isTrue();
     }
 
     @Test
