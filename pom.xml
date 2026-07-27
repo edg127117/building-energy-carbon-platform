@@ -154,6 +154,35 @@
   </dependencies>
   <build>
     <plugins>
+      <!--
+        在编译和测试前统一校验开发环境，避免 JAVA_HOME、PATH 和 CI
+        分别使用不同的 Java 或 Maven 版本，导致本地通过而流水线失败。
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.6.3</version>
+        <executions>
+          <execution>
+            <id>enforce-build-toolchain</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireJavaVersion>
+                  <version>[21,22)</version>
+                  <message>本项目必须使用 Java 21。请检查 JAVA_HOME 和 PATH 后重新执行构建。</message>
+                </requireJavaVersion>
+                <requireMavenVersion>
+                  <version>[3.9.9,4.0.0)</version>
+                  <message>本项目必须使用 Maven 3.9.9；请通过 mvnw 或 mvnw.cmd 执行构建。</message>
+                </requireMavenVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
       <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
