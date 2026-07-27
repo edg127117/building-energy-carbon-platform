@@ -13,9 +13,9 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -125,7 +125,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         String sql = successSelect()
                 + " WHERE indicator_id IN (" + values(indicatorIds) + ")"
                 + " PARTITION BY indicator_id ORDER BY ts DESC LIMIT 1";
-        return template.query(sql, this::mapSuccess);
+        return template.query(sql, this::mapSuccess).stream()
+                .sorted(Comparator.comparing(IndicatorMinuteResult::indicatorId))
+                .toList();
     }
 
     @Override
@@ -136,7 +138,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         String sql = exceptionSelect()
                 + " WHERE indicator_id IN (" + values(indicatorIds) + ")"
                 + " PARTITION BY indicator_id ORDER BY ts DESC,calculated_at DESC LIMIT 1";
-        return template.query(sql, this::mapException);
+        return template.query(sql, this::mapException).stream()
+                .sorted(Comparator.comparing(FormulaCalculationException::indicatorId))
+                .toList();
     }
 
     @Override
@@ -241,7 +245,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     }
 
     private String number(double value) {
-        return String.format(Locale.ROOT, "%.12f", value);
+        return Double.toString(value);
     }
 
     private String joinMissingInputs(List<String> missingInputs) {

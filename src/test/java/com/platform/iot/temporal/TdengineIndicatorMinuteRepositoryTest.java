@@ -73,6 +73,20 @@ class TdengineIndicatorMinuteRepositoryTest {
     }
 
     @Test
+    void preservesSmallFiniteIndicatorValuesWithoutRoundingToZero() {
+        repository.saveSuccesses(List.of(new IndicatorMinuteResult(
+                "INDICATOR_WCR_COP_B1", "WCR_COP", "BLD001", "GROUP001",
+                "EQUIP_WCR_B1", MINUTE, 1.0e-13, 1,
+                "WCR_COP_V1", MINUTE + 90_000L)));
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(template).execute(sqlCaptor.capture());
+        assertThat(sqlCaptor.getValue())
+                .contains("1.0E-13")
+                .doesNotContain("0.000000000000");
+    }
+
+    @Test
     void rejectsNonFiniteValuesBeforeCallingTdengine() {
         IndicatorMinuteResult invalid = new IndicatorMinuteResult(
                 "INDICATOR_WCR_COP_B1", "WCR_COP", "BLD001", "GROUP001",
@@ -131,6 +145,34 @@ class TdengineIndicatorMinuteRepositoryTest {
         verify(template, times(2)).query(sqlCaptor.capture(), any(org.springframework.jdbc.core.RowMapper.class));
         assertThat(sqlCaptor.getAllValues().get(0)).contains("st_indicator_minute").doesNotContain("st_formula_calc_exception");
         assertThat(sqlCaptor.getAllValues().get(1)).contains("st_formula_calc_exception").doesNotContain("st_indicator_minute");
+    }
+
+    @Test
+    void latestResultsAreSortedDeterministicallyByIndicatorId() {
+        IndicatorMinuteResult successA = new IndicatorMinuteResult(
+                "INDICATOR_A", "A", "BLD001", null, null,
+                MINUTE, 1.0, 1, "A_V1", MINUTE);
+        IndicatorMinuteResult successB = new IndicatorMinuteResult(
+                "INDICATOR_B", "B", "BLD001", null, null,
+                MINUTE, 2.0, 1, "B_V1", MINUTE);
+        FormulaCalculationException exceptionA = new FormulaCalculationException(
+                "INDICATOR_A", "A", "BLD001", null, null,
+                MINUTE, FormulaCalculation.Status.MISSING_INPUT,
+                "MISSING_A", List.of("A.INPUT"), "A_V1", MINUTE);
+        FormulaCalculationException exceptionB = new FormulaCalculationException(
+                "INDICATOR_B", "B", "BLD001", null, null,
+                MINUTE, FormulaCalculation.Status.INVALID_INPUT,
+                "INVALID_B", List.of(), "B_V1", MINUTE);
+        when(template.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class)))
+                .thenReturn(List.of(successB, successA))
+                .thenReturn(List.of(exceptionB, exceptionA));
+
+        assertThat(repository.findLatestSuccesses(List.of("INDICATOR_B", "INDICATOR_A")))
+                .extracting(IndicatorMinuteResult::indicatorId)
+                .containsExactly("INDICATOR_A", "INDICATOR_B");
+        assertThat(repository.findLatestExceptions(List.of("INDICATOR_B", "INDICATOR_A")))
+                .extracting(FormulaCalculationException::indicatorId)
+                .containsExactly("INDICATOR_A", "INDICATOR_B");
     }
 
     @Test

@@ -1,8 +1,11 @@
 -- ============================================================================
--- TDengine 公式引擎结果存储增量迁移（一次性、只增不删）
+-- TDengine 公式引擎结果存储人工一次性迁移（只增不删）
 --
--- 应用启动时 TdengineConfig 会先 DESCRIBE 并只添加缺失字段；本脚本供受控环境
--- 在确认字段缺失后逐条执行，已存在的字段不得重复执行对应 ALTER。
+-- 本脚本不由 fresh install 执行；fresh install 使用 04-init-tdengine-hvac.sql。
+-- 人工执行前必须先 DESCRIBE `iot_telemetry`.`st_indicator_minute`，并且只运行
+-- 对应缺失列的 ALTER 语句；已经存在的列不得重复执行 ALTER。
+-- 应用自动幂等升级由 TdengineConfig.ensureFields 承担，它会先 DESCRIBE
+-- 并仅添加缺失字段。
 -- ============================================================================
 USE `iot_telemetry`;
 
