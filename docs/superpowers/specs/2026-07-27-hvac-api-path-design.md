@@ -40,7 +40,9 @@ HVAC 模块在 Spring MVC 内部的业务路由；外部统一前缀继续由全
 
 保留原有认证、角色、建筑数据范围、参数校验、404 和 TDengine 503 测试。
 新增回归断言：已认证用户请求 `/api/api/hvac/**` 时返回 404，确保错误路径没有
-被兼容映射继续暴露。
+被兼容映射继续暴露。Spring MVC 6 会将未匹配路径包装为
+`NoResourceFoundException`，因此全局异常处理需要把该异常明确映射为 404，
+避免错误路径落入通用 500 兜底。
 
 完成定向测试后执行 `mvnw verify`，确认全部后端测试和打包通过。
 
@@ -50,6 +52,7 @@ HVAC 模块在 Spring MVC 内部的业务路由；外部统一前缀继续由全
 
 - `HvacQueryController` 的类级路径映射及相关用途注释；
 - `HvacQueryControllerFlowTest` 的 context path 模拟和重复路径回归测试；
+- `GlobalExceptionHandler` 对不存在请求路径的 404 响应；
 - 本设计文档与后续实施计划。
 
 不修改 Service、Repository、数据库结构、权限规则、前端请求封装、Nginx 配置

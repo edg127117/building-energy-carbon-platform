@@ -18,6 +18,7 @@ import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
 import java.util.List;
 
@@ -70,14 +71,23 @@ class HvacQueryControllerFlowTest {
 
     @Test
     void snapshotRequiresAuthentication() throws Exception {
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/snapshot"))
+        mockMvc.perform(hvacGet("/BLD001/snapshot"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void duplicatedApiPrefixIsNotExposed() throws Exception {
+        mockMvc.perform(get("/api/api/hvac/buildings/BLD001/snapshot")
+                        .contextPath("/api")
+                        .header(auth(), bearer(adminToken)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value(404));
     }
 
     @Test
     void allowedRolesCanReadAuthorizedBuilding() throws Exception {
         for (String token : List.of(adminToken, ownerToken, managerToken)) {
-            mockMvc.perform(get("/api/hvac/buildings/BLD001/snapshot")
+            mockMvc.perform(hvacGet("/BLD001/snapshot")
                             .header(auth(), bearer(token)))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.success").value(true))
@@ -89,14 +99,14 @@ class HvacQueryControllerFlowTest {
 
     @Test
     void buildingRoleCannotReadOutsideScope() throws Exception {
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/snapshot")
+        mockMvc.perform(hvacGet("/BLD001/snapshot")
                         .header(auth(), bearer(outsideOwnerToken)))
                 .andExpect(status().isForbidden());
     }
 
     @Test
     void thirdPartyCannotUseInternalHvacApi() throws Exception {
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/snapshot")
+        mockMvc.perform(hvacGet("/BLD001/snapshot")
                         .header(auth(), bearer(thirdPartyToken)))
                 .andExpect(status().isForbidden());
     }
@@ -110,7 +120,7 @@ class HvacQueryControllerFlowTest {
                         row("POINT001", FROM, 12.3),
                         row("POINT002", FROM + 300_000L, 13.4)));
 
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/history")
+        mockMvc.perform(hvacGet("/BLD001/history")
                         .header(auth(), bearer(ownerToken))
                         .param("pointIds", "POINT002,POINT001")
                         .param("from", Long.toString(FROM))
@@ -127,7 +137,7 @@ class HvacQueryControllerFlowTest {
 
     @Test
     void historyRejectsBadPointCountAndTimeRange() throws Exception {
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/history")
+        mockMvc.perform(hvacGet("/BLD001/history")
                         .header(auth(), bearer(adminToken))
                         .param("pointIds",
                                 "POINT001,POINT002,POINT003,POINT004,POINT005,"
@@ -137,7 +147,7 @@ class HvacQueryControllerFlowTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
 
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/history")
+        mockMvc.perform(hvacGet("/BLD001/history")
                         .header(auth(), bearer(adminToken))
                         .param("pointIds", "POINT001")
                         .param("from", Long.toString(FROM))
@@ -145,7 +155,7 @@ class HvacQueryControllerFlowTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(400));
 
-        mockMvc.perform(get("/api/hvac/buildings/BLD001/history")
+        mockMvc.perform(hvacGet("/BLD001/history")
                         .header(auth(), bearer(adminToken))
                         .param("pointIds", "POINT001")
                         .param("from", "not-a-millisecond-timestamp")
@@ -156,7 +166,7 @@ class HvacQueryControllerFlowTest {
 
     @Test
     void missingBuildingReturns404() throws Exception {
-        mockMvc.perform(get("/api/hvac/buildings/UNKNOWN/snapshot")
+        mockMvc.perform(hvacGet("/UNKNOWN/snapshot")
                         .header(auth(), bearer(adminToken)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value(404));
@@ -169,7 +179,7 @@ class HvacQueryControllerFlowTest {
                         "jdbc:TAOS sql secret"));
 
         MvcResult result = mockMvc.perform(
-                        get("/api/hvac/buildings/BLD001/history")
+                        hvacGet("/BLD001/history")
                                 .header(auth(), bearer(adminToken))
                                 .param("pointIds", "POINT001")
                                 .param("from", Long.toString(FROM))
@@ -219,6 +229,11 @@ class HvacQueryControllerFlowTest {
         return new HvacMinuteQueryRow(
                 pointId, time, average, average - 0.5, average + 0.5,
                 30L, 0);
+    }
+
+    private MockHttpServletRequestBuilder hvacGet(String path) {
+        // 外部 URI 包含 /api，contextPath 会在进入 Controller 映射前被 Spring MVC 剥离。
+        return get("/api/hvac/buildings" + path).contextPath("/api");
     }
 
     private String auth() {

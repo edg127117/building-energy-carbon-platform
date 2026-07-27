@@ -22,6 +22,7 @@
 **Files:**
 - Modify: `src/test/java/com/platform/HvacQueryControllerFlowTest.java`
 - Modify: `src/main/java/com/platform/hvac/controller/HvacQueryController.java`
+- Modify: `src/main/java/com/platform/framework/exception/GlobalExceptionHandler.java`
 
 **Interfaces:**
 - Consumes: Spring Boot 全局配置 `server.servlet.context-path=/api`
@@ -29,7 +30,7 @@
 - Produces: `GET /api/hvac/buildings/{buildingId}/history`
 - Removes: `/api/api/hvac/**`
 
-- [ ] **Step 1: 先把流程测试改成真实服务器的 context path 语义**
+- [x] **Step 1: 先把流程测试改成真实服务器的 context path 语义**
 
 在 `HvacQueryControllerFlowTest` 增加导入：
 
@@ -73,7 +74,7 @@ void duplicatedApiPrefixIsNotExposed() throws Exception {
 }
 ```
 
-- [ ] **Step 2: 运行定向测试，确认旧 Controller 映射无法满足新契约**
+- [x] **Step 2: 运行定向测试，确认旧 Controller 映射无法满足新契约**
 
 Run:
 
@@ -87,7 +88,7 @@ Expected: FAIL。正确的 `/api/hvac/**` 请求在剥离 context path 后变成
 `/hvac/**`，而旧 Controller 仍映射 `/api/hvac/**`；重复路径测试也会发现旧路径
 仍然可访问。
 
-- [ ] **Step 3: 最小修改 Controller 内部映射**
+- [x] **Step 3: 最小修改 Controller 内部映射**
 
 把 `HvacQueryController` 的类级映射改为：
 
@@ -115,7 +116,23 @@ public class HvacQueryController {
  */
 ```
 
-- [ ] **Step 4: 运行 HVAC Controller 定向测试**
+在 `GlobalExceptionHandler` 中增加 `NoResourceFoundException` 的精确处理，
+确保已废弃路径不会落入通用 500 兜底：
+
+```java
+@ExceptionHandler(NoResourceFoundException.class)
+@ResponseStatus(HttpStatus.NOT_FOUND)
+public Map<String, Object> handleNoResourceFoundException(NoResourceFoundException e) {
+    log.info("请求路径不存在: method={}, path={}", e.getHttpMethod(), e.getResourcePath());
+    Map<String, Object> response = new HashMap<>();
+    response.put("code", 404);
+    response.put("msg", "请求路径不存在");
+    response.put("success", false);
+    return response;
+}
+```
+
+- [x] **Step 4: 运行 HVAC Controller 定向测试**
 
 Run:
 
@@ -125,10 +142,10 @@ $env:Path="$env:JAVA_HOME\bin;$env:Path"
 .\mvnw.cmd --batch-mode --no-transfer-progress -Dtest=HvacQueryControllerFlowTest test
 ```
 
-Expected: `Tests run: 10, Failures: 0, Errors: 0, Skipped: 0`，包含正确路径、
+Expected: `Tests run: 9, Failures: 0, Errors: 0, Skipped: 0`，包含正确路径、
 权限规则、参数校验、404、503 和重复 `/api` 路径回归。
 
-- [ ] **Step 5: 执行完整后端回归和打包**
+- [x] **Step 5: 执行完整后端回归和打包**
 
 Run:
 
@@ -148,14 +165,14 @@ Run:
 ```powershell
 git diff --check
 git status --short
-git add -- src/main/java/com/platform/hvac/controller/HvacQueryController.java src/test/java/com/platform/HvacQueryControllerFlowTest.java docs/superpowers/plans/2026-07-27-hvac-api-path.md
+git add -- src/main/java/com/platform/hvac/controller/HvacQueryController.java src/main/java/com/platform/framework/exception/GlobalExceptionHandler.java src/test/java/com/platform/HvacQueryControllerFlowTest.java docs/superpowers/specs/2026-07-27-hvac-api-path-design.md docs/superpowers/plans/2026-07-27-hvac-api-path.md
 git diff --cached --name-only
 git diff --cached --check
 git commit -m "fix(hvac): remove duplicated API path prefix"
 ```
 
-Expected: 暂存区只包含 Controller、对应流程测试和本实施计划；提交成功且没有
-空白错误。
+Expected: 暂存区只包含 Controller、异常处理、对应流程测试和设计计划文档；
+提交成功且没有空白错误。
 
 - [ ] **Step 7: 推送任务分支并检查 GitHub CI**
 

@@ -12,10 +12,17 @@ import org.springframework.web.method.annotation.MethodArgumentTypeMismatchExcep
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * 将 Controller 和 Spring MVC 异常转换为稳定、脱敏的 JSON 响应。
+ *
+ * <p>已知的认证、权限、参数、业务和路径不存在异常分别返回对应 HTTP 状态；
+ * 只有无法分类的异常才进入 500 兜底，避免把普通 404 误报为系统故障。</p>
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -81,6 +88,24 @@ public class GlobalExceptionHandler {
         response.put("success", false);
         return response;
     }
+
+    /**
+     * 请求没有匹配到 Controller 或静态资源时返回 404。
+     *
+     * <p>Spring MVC 6 会把未匹配路径包装成该异常；若直接落入通用异常兜底，
+     * 已废弃的接口路径会被误报为服务器内部故障。</p>
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public Map<String, Object> handleNoResourceFoundException(NoResourceFoundException e) {
+        log.info("请求路径不存在: method={}, path={}", e.getHttpMethod(), e.getResourcePath());
+        Map<String, Object> response = new HashMap<>();
+        response.put("code", 404);
+        response.put("msg", "请求路径不存在");
+        response.put("success", false);
+        return response;
+    }
+
     /**
      * 3. 拦截所有未知的致命报错 (NullPointer, 数据库宕机等)
      */
