@@ -37,4 +37,4 @@ formula:
   indicator-config-refresh-ms: 60000
   recovery-enabled: false
   recovery-minutes: 10
-  recovery-delay-ms: 600000
+  recovery-delay-ms: 3600000
