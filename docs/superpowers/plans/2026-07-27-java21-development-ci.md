@@ -243,9 +243,34 @@ function Invoke-VersionCommand {
     )
 
     try {
-        $output = (& $Executable @Arguments 2>&1 | Out-String).Trim()
-        if ($LASTEXITCODE -ne 0) {
-            throw "$Label 返回退出码 $LASTEXITCODE"
+        # Windows PowerShell 5 会把 java -version 写到 stderr 的正常内容包装成错误记录。
+        # 使用 Process 分别读取 stdout 和 stderr，可以保留原始版本文本并可靠取得退出码。
+        $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+        if ([System.IO.Path]::GetExtension($Executable) -eq '.cmd') {
+            $startInfo.FileName = $env:ComSpec
+            $startInfo.Arguments = '/d /s /c ""' + $Executable + '" ' + ($Arguments -join ' ') + '"'
+        } else {
+            $startInfo.FileName = $Executable
+            $startInfo.Arguments = $Arguments -join ' '
+        }
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+        [void]$process.Start()
+        $standardOutput = $process.StandardOutput.ReadToEnd()
+        $standardError = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+
+        $output = (($standardOutput, $standardError) |
+            Where-Object { $_ } |
+            ForEach-Object { $_.Trim() }) -join [Environment]::NewLine
+
+        if ($process.ExitCode -ne 0) {
+            throw "$Label 返回退出码 $($process.ExitCode)"
         }
         Write-Host "[$Label]"
         Write-Host $output
@@ -289,10 +314,12 @@ if (-not $env:JAVA_HOME) {
     }
 }
 
-$pathJava = (Get-Command java -CommandType Application -ErrorAction SilentlyContinue).Source
-if (-not $pathJava) {
+$pathJavaCommand = @(Get-Command java -CommandType Application -ErrorAction SilentlyContinue) |
+    Select-Object -First 1
+if (-not $pathJavaCommand) {
     $failures.Add('PATH 中找不到 java。')
 } else {
+    $pathJava = $pathJavaCommand.Source
     Write-Host "[PATH java] $pathJava"
     $pathJavaOutput = Invoke-VersionCommand `
         -Label 'PATH java version' `
@@ -304,10 +331,12 @@ if (-not $pathJava) {
         -Pattern 'version "21(?:[.\-"]|$)'
 }
 
-$pathJavac = (Get-Command javac -CommandType Application -ErrorAction SilentlyContinue).Source
-if (-not $pathJavac) {
+$pathJavacCommand = @(Get-Command javac -CommandType Application -ErrorAction SilentlyContinue) |
+    Select-Object -First 1
+if (-not $pathJavacCommand) {
     $failures.Add('PATH 中找不到 javac。')
 } else {
+    $pathJavac = $pathJavacCommand.Source
     Write-Host "[PATH javac] $pathJavac"
     $pathJavacOutput = Invoke-VersionCommand `
         -Label 'PATH javac version' `
@@ -343,6 +372,8 @@ if ($failures.Count -gt 0) {
 Write-Host 'Java 21、javac 和 Maven Wrapper 环境一致。'
 exit 0
 ```
+
+该脚本包含中文提示，文件编码必须为带BOM的UTF-8，确保Windows PowerShell 5按UTF-8解析。
 
 - [ ] **Step 3: 验证脚本能发现当前旧 PATH**
 
