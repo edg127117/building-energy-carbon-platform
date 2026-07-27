@@ -121,5 +121,18 @@ VALUES
 ('ALIAS019', 'BLD001', 'MQTT_FREEZE_V1', 'DBO_RH', 'POINT019', 1),
 ('ALIAS020', 'BLD002', 'MQTT_FREEZE_V1', 'WCR1_TWin', 'POINT020', 1);
 
+INSERT INTO biz_indicator
+(indicator_id, building_id, indicator_code, scope_type, scope_id,
+ equip_id, system_group_id, status)
+VALUES
+('INDICATOR_WCR_COP_B1','BLD001','WCR_COP','EQUIPMENT',
+ 'EQUIP_WCR_B1','EQUIP_WCR_B1','GROUP001',1),
+('INDICATOR_TOWER_EFF_B1','BLD001','TOWER_EFF','EQUIPMENT',
+ 'EQUIP_TOWER_B1','EQUIP_TOWER_B1','GROUP001',1),
+('INDICATOR_PUMP_EFF_B1','BLD001','PUMP_EFF','EQUIPMENT',
+ 'EQUIP_PUMP_B1','EQUIP_PUMP_B1','GROUP001',1),
+('INDICATOR_AHU_EFF_B1','BLD001','AHU_POW_EFF','EQUIPMENT',
+ 'EQUIP_AHU_B1','EQUIP_AHU_B1','GROUP001',1);
+
 INSERT INTO iot_device (device_id, device_name, device_type, location, building_id)
 VALUES ('meter-001', '1号车间总电表', 1, '1栋配电房', 'BLD001');

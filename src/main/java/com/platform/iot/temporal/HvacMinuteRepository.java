@@ -30,6 +30,16 @@ public interface HvacMinuteRepository {
     Set<String> findExistingPointIds(long minuteStart);
 
     /**
+     * 读取指定建筑在一个完整分钟内已经冻结的全部测点聚合。
+     *
+     * @param minuteStart 目标分钟起始时间（Unix 毫秒）
+     * @param buildingIds 已完成访问范围校验的建筑 ID
+     * @return 按建筑和测点排序的完整分钟聚合
+     */
+    List<RawMinuteAggregate> findByMinute(
+            long minuteStart, Set<String> buildingIds);
+
+    /**
      * 批量读取多个测点各自最新的一条冻结分钟数据。
      *
      * <p>返回值只包含实际存在分钟数据的测点；配置存在但没有数据的测点，
