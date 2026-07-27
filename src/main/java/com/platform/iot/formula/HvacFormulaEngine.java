@@ -2,6 +2,7 @@ package com.platform.iot.formula;
 
 import com.platform.cache.IndicatorLatestCacheService;
 import com.platform.config.FormulaProperties;
+import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.model.entity.BizIndicator;
 import com.platform.iot.aggregation.HvacMinuteBatchFrozenEvent;
 import com.platform.iot.formula.model.FormulaCalculation;
@@ -107,6 +108,34 @@ public class HvacFormulaEngine {
         calculateAndPersist(
                 minuteStart, calculatedAt, aggregates,
                 affectedBuildings, onlyIndicatorIds);
+    }
+
+    /**
+     * 使用指标成功行中持久化的精确公式版本重建计算过程。
+     *
+     * <p>历史结果绝不能静默切换到当前的其他公式版本；不支持的代码或版本由
+     * 查询 API 以 409 明确告知调用方。</p>
+     */
+    public FormulaCalculation explain(
+            BizIndicator indicator,
+            long minuteStart,
+            List<RawMinuteAggregate> aggregates,
+            String formulaVersion) {
+        Objects.requireNonNull(indicator, "indicator");
+        Objects.requireNonNull(aggregates, "aggregates");
+        IndicatorFormula formula = formulas.get(indicator.getIndicatorCode());
+        if (formula == null
+                || formulaVersion == null
+                || formulaVersion.isBlank()
+                || !Objects.equals(formula.formulaVersion(), formulaVersion)) {
+            throw new BusinessException(409, "公式版本不受当前服务支持");
+        }
+        FormulaInputs inputs = assembler.assemble(
+                indicator, minuteStart, aggregates);
+        FormulaCalculation calculation = Objects.requireNonNull(
+                formula.calculate(inputs), "formula calculation");
+        validateCalculation(indicator, formula, formulaVersion, calculation);
+        return calculation;
     }
 
     private void calculateAndPersist(

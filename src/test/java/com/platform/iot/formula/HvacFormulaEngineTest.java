@@ -2,7 +2,10 @@ package com.platform.iot.formula;
 
 import com.platform.cache.IndicatorLatestCacheService;
 import com.platform.config.FormulaProperties;
+import com.platform.framework.exception.BusinessException;
+import com.platform.hvac.controller.HvacIndicatorController;
 import com.platform.hvac.model.entity.BizIndicator;
+import com.platform.hvac.service.HvacIndicatorQueryService;
 import com.platform.iot.aggregation.HvacMinuteBatchFrozenEvent;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
@@ -100,6 +103,22 @@ class HvacFormulaEngineTest {
     }
 
     @Test
+    void formulaDisabledContextOmitsEngineQueryServiceAndController() {
+        new ApplicationContextRunner()
+                .withPropertyValues("formula.enabled=false")
+                .withUserConfiguration(
+                        HvacFormulaEngine.class,
+                        HvacIndicatorQueryService.class,
+                        HvacIndicatorController.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(HvacFormulaEngine.class);
+                    assertThat(context).doesNotHaveBean(HvacIndicatorQueryService.class);
+                    assertThat(context).doesNotHaveBean(HvacIndicatorController.class);
+                });
+    }
+
+    @Test
     void rejectsDuplicateIndicatorCodesAtConstruction() {
         IndicatorFormula first = formula("WCR_COP", "V1");
         IndicatorFormula duplicate = formula("WCR_COP", "V2");
@@ -107,6 +126,43 @@ class HvacFormulaEngineTest {
         assertThatThrownBy(() -> engine(List.of(first, duplicate)))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("WCR_COP");
+    }
+
+    @Test
+    void explainRequiresExactPersistedFormulaVersionBeforeAssemblingInputs() {
+        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001");
+        IndicatorFormula formula = formula("WCR_COP", "WCR_COP_V1");
+
+        assertThatThrownBy(() -> engine(List.of(formula)).explain(
+                indicator, MINUTE, List.of(aggregate("P1", "BLD001")),
+                "WCR_COP_V0"))
+                .isInstanceOfSatisfying(BusinessException.class, error -> {
+                    assertThat(error.getCode()).isEqualTo(409);
+                    assertThat(error.getMessage())
+                            .isEqualTo("公式版本不受当前服务支持");
+                });
+
+        verifyNoInteractions(assembler);
+        verify(formula, never()).calculate(any());
+    }
+
+    @Test
+    void explainUsesExactCodeVersionAndReturnsCalculationProcess() {
+        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001");
+        RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
+        IndicatorFormula formula = formula("WCR_COP", "WCR_COP_V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        FormulaCalculation expected = success("WCR_COP", "WCR_COP_V1", 4.2);
+        when(assembler.assemble(indicator, MINUTE, List.of(aggregate)))
+                .thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(expected);
+
+        FormulaCalculation actual = engine(List.of(formula)).explain(
+                indicator, MINUTE, List.of(aggregate), "WCR_COP_V1");
+
+        assertThat(actual).isSameAs(expected);
+        verify(assembler).assemble(indicator, MINUTE, List.of(aggregate));
+        verify(formula).calculate(inputs);
     }
 
     @Test
