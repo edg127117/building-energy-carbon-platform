@@ -89,6 +89,14 @@ aggregation:
   recovery-enabled: true
   recovery-delay-ms: 600000
 
+formula:
+  enabled: true
+  atmospheric-pressure-kpa: ${HVAC_ATMOSPHERIC_PRESSURE_KPA:101.325}
+  indicator-config-refresh-ms: 60000
+  recovery-enabled: true
+  recovery-minutes: 10
+  recovery-delay-ms: 600000
+
 # pointCode 是该来源系统下的别名；来源命名空间只由后端可信配置确定。
 ingestion:
   source-system: ${INGESTION_SOURCE_SYSTEM:MQTT_FREEZE_V1}

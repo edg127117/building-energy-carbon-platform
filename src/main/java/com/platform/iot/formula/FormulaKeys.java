@@ -9,6 +9,11 @@ public final class FormulaKeys {
     public static final String CHILLER_VOLTAGE = "MAIN/Voltage";
     public static final String CHILLER_CURRENT = "MAIN/Current";
     public static final String CHILLER_PF = "MAIN/PF";
+    public static final String TOWER_T_IN = "CT/TWin";
+    public static final String TOWER_T_OUT = "CT/TWout";
+    public static final String TOWER_TWB = "CT/TWB";
+    public static final String OUTDOOR_TDB = "DBO/TDB";
+    public static final String OUTDOOR_RH = "RHO/RH";
     public static final String PUMP_FLOW = "Pc/GW";
     public static final String PUMP_P_OUT = "Pc/Pout";
     public static final String PUMP_P_IN = "Pc/Pin";

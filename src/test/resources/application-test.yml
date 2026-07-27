@@ -30,3 +30,11 @@ tdengine:
 aggregation:
   recovery-enabled: false
   scan-initial-delay-ms: 3600000
+
+formula:
+  enabled: true
+  atmospheric-pressure-kpa: 101.325
+  indicator-config-refresh-ms: 60000
+  recovery-enabled: false
+  recovery-minutes: 10
+  recovery-delay-ms: 600000
