@@ -16,13 +16,17 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * HVAC 冻结分钟数据的只读 HTTP 入口。
  *
+ * <p>这里仅声明模块内部路径 {@code /hvac/buildings}；对外统一的
+ * {@code /api} 前缀由 {@code server.servlet.context-path} 提供，避免形成
+ * {@code /api/api} 重复路径。</p>
+ *
  * <p>Controller 只负责接收请求参数、提取当前登录用户身份并包装统一响应；
  * 建筑范围、测点归属、时间跨度和 TDengine 异常转换统一由
  * {@link HvacQueryService} 处理。角色注解是第一层入口限制，Service 中的建筑范围
  * 校验是第二层数据权限限制。</p>
  */
 @RestController
-@RequestMapping("/api/hvac/buildings")
+@RequestMapping("/hvac/buildings")
 @RequiredArgsConstructor
 public class HvacQueryController {
 
