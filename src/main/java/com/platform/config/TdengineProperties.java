@@ -26,4 +26,7 @@ public class TdengineProperties {
 
     /** 性能指标计算结果超级表（设计书 §2.2） */
     private String stIndicatorMinute = "st_indicator_minute";
+
+    /** 公式计算失败审计超级表。 */
+    private String stFormulaCalcException = "st_formula_calc_exception";
 }
