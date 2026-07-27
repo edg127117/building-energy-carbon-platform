@@ -6,6 +6,13 @@ import com.platform.iot.formula.model.FormulaCalculation.Step;
 
 import java.util.List;
 
+/**
+ * 计算 AHU 风机单位风量功率指标，对应设计公式 5-7。
+ *
+ * <p>输入总效率在测点中以百分数保存，参与计算前必须除以 100；如果直接把
+ * 百分数代入，结果会缩小 100 倍。该策略只做纯计算和输入校验，不访问数据库
+ * 或缓存，失败时返回可审计状态而不是补默认值。</p>
+ */
 public final class AhuPowerEfficiencyFormula implements IndicatorFormula {
 
     private static final String CODE = "AHU_POW_EFF";

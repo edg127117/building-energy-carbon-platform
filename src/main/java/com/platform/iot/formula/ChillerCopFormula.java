@@ -8,6 +8,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 计算冷水机组制冷量和 COP，对应设计公式 5-1、5-2。
+ *
+ * <p>机组实测输入功率 PPE 存在时必须优先使用；只有 PPE 完全缺失时才允许
+ * 通过三相电压、电流和功率因数估算。PPE 已上报但数值非法时不能静默切换
+ * 估算值，否则会掩盖现场数据质量问题。</p>
+ */
 public final class ChillerCopFormula implements IndicatorFormula {
 
     private static final double WATER_DENSITY = 1000.0;
@@ -65,6 +72,7 @@ public final class ChillerCopFormula implements IndicatorFormula {
         double inputPower;
         String powerStep;
         if (ppe.isPresent()) {
+            // 实测功率是主数据源；主值非法必须暴露，不能用估算值把异常覆盖掉。
             Input directPower = ppe.orElseThrow();
             used.add(directPower);
             if (!Double.isFinite(directPower.value())) {
@@ -76,6 +84,7 @@ public final class ChillerCopFormula implements IndicatorFormula {
             inputPower = directPower.value();
             powerStep = "NI_PPE";
         } else {
+            // 仅在 PPE 没有任何分钟值时使用三相电参数，避免同一分钟混用两种口径。
             used.add(voltage);
             used.add(current);
             used.add(powerFactor);

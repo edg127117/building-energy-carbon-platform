@@ -13,6 +13,13 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.util.Optional;
 
+/**
+ * 在 Redis 中保存每个指标的最新计算状态，供最新值 API 快速读取。
+ *
+ * <p>缓存不是历史真相来源：读取、反序列化或写入失败时统一降级为未命中，
+ * 调用方应回查 TDengine。缓存同时保存成功和失败状态，使缺失输入不会继续
+ * 向前端展示上一分钟的旧成功值。</p>
+ */
 @Service
 public class IndicatorLatestCacheService {
 
@@ -30,6 +37,11 @@ public class IndicatorLatestCacheService {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 读取指标最新状态。
+     *
+     * @return Redis 不可用、内容损坏或键不存在时返回空，由查询服务回退 TDengine
+     */
     public Optional<IndicatorLatestState> get(String indicatorId) {
         try {
             String payload = redis.opsForValue().get(key(indicatorId));
@@ -45,6 +57,13 @@ public class IndicatorLatestCacheService {
         }
     }
 
+    /**
+     * 仅当状态分钟不早于缓存时更新，并返回是否应继续推送 WebSocket。
+     *
+     * <p>同一分钟已经成功时拒绝后到的失败状态，避免补算重试把正确值覆盖。
+     * 当前同步只保证单实例比较和写入原子顺序；多实例部署必须改用 Redis
+     * Lua/CAS 或分布式锁。</p>
+     */
     public synchronized boolean setIfNotOlder(IndicatorLatestState state) {
         String key = key(state.indicatorId());
         try {
@@ -62,8 +81,7 @@ public class IndicatorLatestCacheService {
                 }
             }
 
-            // Local synchronization serializes compare/set within this application instance.
-            // Multi-instance deployments must use Redis Lua/CAS or a Redisson lock.
+            // 单实例内串行化比较和写入；多实例必须改用 Redis Lua/CAS 或 Redisson 锁。
             redis.opsForValue().set(
                     key, objectMapper.writeValueAsString(state), TTL);
             return true;

@@ -7,6 +7,13 @@ import com.platform.iot.formula.model.FormulaCalculation.Step;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 计算冷冻水泵扬程和效率，对应设计公式 5-6、5-5。
+ *
+ * <p>流量使用水泵组件自身的 {@code Pc/GW}，输入功率使用 {@code Pc/PPE}；
+ * 两者不能与冷水机组主机的 GW、PPE 混用。任一输入缺失或不符合物理边界时
+ * 返回失败结果，不自动套用额定值或上一分钟数据。</p>
+ */
 public final class PumpEfficiencyFormula implements IndicatorFormula {
 
     private static final double WATER_DENSITY = 1000.0;

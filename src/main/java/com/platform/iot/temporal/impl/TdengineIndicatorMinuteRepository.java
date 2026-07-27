@@ -21,6 +21,13 @@ import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+/**
+ * 使用专用 TDengine {@link JdbcTemplate} 持久化和查询公式分钟结果。
+ *
+ * <p>每个指标实例使用独立子表，来源分钟作为主时间戳，因此同一分钟补算会
+ * 覆盖而不是追加重复成功值。成功表服务趋势查询，异常表保留缺失项和失败原因；
+ * 本类只负责时序数据访问，不参与公式选择、权限判断或缓存更新。</p>
+ */
 @Repository
 public class TdengineIndicatorMinuteRepository implements IndicatorMinuteRepository {
 
@@ -30,6 +37,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     private final TdengineProperties properties;
 
     public TdengineIndicatorMinuteRepository(
+            // 必须显式选择 TDengine 数据源，避免多数据源环境误用 MySQL。
             @Qualifier("taosJdbcTemplate") JdbcTemplate template,
             TdengineProperties properties) {
         this.template = template;
@@ -41,6 +49,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         if (results.isEmpty()) {
             return;
         }
+        // 使用一条 TDengine INSERT 写入多个子表，降低每分钟多指标的网络往返。
         String stable = indicatorStable();
         StringBuilder sql = new StringBuilder("INSERT INTO ");
         for (IndicatorMinuteResult result : results) {
@@ -70,6 +79,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         if (exceptions.isEmpty()) {
             return;
         }
+        // 异常与成功结果分表，失败重试不会污染用于趋势图的成功序列。
         String stable = exceptionStable();
         StringBuilder sql = new StringBuilder("INSERT INTO ");
         for (FormulaCalculationException exception : exceptions) {

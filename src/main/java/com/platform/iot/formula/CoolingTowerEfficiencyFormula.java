@@ -9,6 +9,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+/**
+ * 计算冷却塔效率，对应设计公式 5-4。
+ *
+ * <p>现场湿球温度 TWB 是主输入；只有 TWB 缺失时，才使用建筑级室外干球温度
+ * 和相对湿度按配置的大气压换算湿球温度。主输入非法不会触发换算兜底，
+ * 从而保证传感器异常能够进入公式异常审计。</p>
+ */
 public final class CoolingTowerEfficiencyFormula implements IndicatorFormula {
 
     private static final String CODE = "TOWER_EFF";
@@ -66,6 +73,7 @@ public final class CoolingTowerEfficiencyFormula implements IndicatorFormula {
         double wetBulb;
         Step wetBulbStep;
         if (directWetBulb.isPresent()) {
+            // 直接湿球温度优先，避免实测值与气象换算值在同一分钟混用。
             Input direct = directWetBulb.orElseThrow();
             used.add(direct);
             if (!Double.isFinite(direct.value())) {
@@ -74,6 +82,7 @@ public final class CoolingTowerEfficiencyFormula implements IndicatorFormula {
             wetBulb = direct.value();
             wetBulbStep = new Step("TWB_DIRECT", "TWB", wetBulb, "C");
         } else {
+            // 仅缺少 TWB 时才根据 TDB、RH 和大气压换算，不使用历史值或默认值。
             used.add(dryBulb);
             used.add(relativeHumidity);
             if (!Double.isFinite(dryBulb.value())) {

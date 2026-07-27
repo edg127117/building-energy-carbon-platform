@@ -73,7 +73,12 @@ public class HvacIndicatorQueryService {
         this.formulaEngine = formulaEngine;
     }
 
-    /** 返回建筑全部活动指标的最新一次计算状态。 */
+    /**
+     * 返回建筑全部活动指标的最新一次计算状态。
+     *
+     * <p>先逐指标读取 Redis，未命中或缓存身份不匹配的部分再批量查询 TDengine。
+     * 缓存仅用于加速，不能替代 MySQL 的活动配置范围或 TDengine 的历史真相。</p>
+     */
     public HvacIndicatorDtos.LatestResponse latest(
             String buildingId, Long userId, Set<String> roles) {
         checkBuildingAccess(buildingId, userId, roles);
@@ -123,7 +128,12 @@ public class HvacIndicatorQueryService {
                 buildingId, System.currentTimeMillis(), response);
     }
 
-    /** 查询单一指标在半开区间 {@code [from,to)} 内的成功趋势。 */
+    /**
+     * 查询单一指标在半开区间 {@code [from,to)} 内的成功趋势。
+     *
+     * <p>必须同时提供起止毫秒时间戳，跨度最多 31 天；缺参、逆序或超长返回
+     * 400，避免无界扫描 TDengine。</p>
+     */
     public HvacIndicatorDtos.HistoryResponse history(
             String indicatorId,
             Long from,
@@ -154,7 +164,13 @@ public class HvacIndicatorQueryService {
                 records);
     }
 
-    /** 返回指定来源分钟的成功公式过程或失败审计。 */
+    /**
+     * 返回指定来源分钟的成功公式过程或失败审计。
+     *
+     * <p>最新分钟可以直接使用 Redis 中的输入和步骤；历史成功结果必须读取同
+     * 一分钟源数据并按其持久化公式版本重放。同一分钟既有旧异常又有补算成功
+     * 时，以成功结果为最终状态。</p>
+     */
     public HvacIndicatorDtos.CalculationDetail detail(
             String indicatorId,
             long minuteStart,
@@ -305,6 +321,7 @@ public class HvacIndicatorQueryService {
             BizIndicator indicator,
             IndicatorMinuteResult success,
             FormulaCalculationException exception) {
+        // 同一分钟的成功表示补算已修复旧异常，不能再向前端暴露失败状态。
         if (success != null && exception != null
                 && success.minuteStart() == exception.minuteStart()) {
             return fromSuccess(indicator, success);
@@ -475,6 +492,7 @@ public class HvacIndicatorQueryService {
         try {
             return query.get();
         } catch (DataAccessException exception) {
+            // 不把 JDBC 地址、SQL 或凭据细节返回给调用方，统一映射为可重试的 503。
             throw new BusinessException(
                     503, "HVAC 指标时序数据暂不可用，请稍后重试");
         }

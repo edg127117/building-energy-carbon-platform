@@ -1,5 +1,12 @@
 package com.platform.iot.formula;
 
+/**
+ * 公式引擎使用的标准测点语义键。
+ *
+ * <p>键来自设备组件或环境族与后缀的组合，不是 MQTT 外部别名。例如水泵
+ * {@code Pc/GW} 与冷机主机 {@code MAIN/GW} 必须保持不同，防止同名物理量
+ * 在跨设备计算时被错误复用。</p>
+ */
 public final class FormulaKeys {
 
     public static final String CHILLER_T_IN = "MAIN/TWin";

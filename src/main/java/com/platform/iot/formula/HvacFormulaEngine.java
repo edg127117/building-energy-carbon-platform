@@ -29,6 +29,14 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+/**
+ * HVAC 冻结分钟到指标结果的核心编排器。
+ *
+ * <p>它位于分钟聚合事件与 TDengine 指标仓储之间：选择活动指标、组装输入、
+ * 调用纯公式、持久化成功或失败审计，然后以最佳努力更新 Redis 和 WebSocket。
+ * 正常冻结事件直接使用事件快照，避免重复查询；恢复事件必须回查完整分钟，
+ * 防止只用部分补写测点计算出错误结果。</p>
+ */
 @Component
 @ConditionalOnProperty(
         prefix = "formula", name = "enabled",
@@ -83,6 +91,12 @@ public class HvacFormulaEngine {
         this.formulas = indexFormulas(formulas);
     }
 
+    /**
+     * 消费原始分钟已成功落库后的冻结事件。
+     *
+     * <p>只有上游持久化完成才会进入这里，因此指标不会领先于源分钟。恢复事件
+     * 可能只携带本次补写的测点，必须从 TDengine 重新读取该分钟完整输入。</p>
+     */
     @EventListener
     public void onMinuteFrozen(HvacMinuteBatchFrozenEvent event) {
         Set<String> buildingIds = event.aggregates().stream()
@@ -186,6 +200,7 @@ public class HvacFormulaEngine {
             }
         }
 
+        // TDengine 是指标真相来源；只有批量写入成功后，才允许刷新最新状态。
         if (!successes.isEmpty()) {
             indicatorRepository.saveSuccesses(
                     successes.stream().map(CalculatedSuccess::row).toList());
@@ -248,6 +263,7 @@ public class HvacFormulaEngine {
     }
 
     private void notifyLatest(IndicatorLatestState state) {
+        // 缓存拒绝旧分钟后也不推送，避免前端被补算结果回拨到更早状态。
         if (cache.setIfNotOlder(state)) {
             publisher.publish(state);
         }

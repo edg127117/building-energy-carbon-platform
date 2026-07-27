@@ -17,11 +17,11 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * MySQL-backed immutable snapshot of active formula indicators.
+ * 从 MySQL 加载活动指标，并向公式模块提供不可变内存快照。
  *
- * <p>A refresh builds a complete ID-indexed snapshot before atomically replacing
- * the volatile reference. If MySQL is unavailable, readers continue using the
- * last complete snapshot.</p>
+ * <p>每次刷新先构建完整的新快照，再原子替换 {@code volatile} 引用；如果
+ * MySQL 暂时不可用，读取方继续使用上一份完整配置。这样不会把刷新到一半的
+ * 指标集合暴露给分钟计算，也不会因短暂配置库故障中断已有指标。</p>
  */
 @Slf4j
 @Component
@@ -31,11 +31,17 @@ public class MySqlIndicatorConfigProvider implements IndicatorConfigProvider {
     private final BizIndicatorMapper indicatorMapper;
     private volatile Map<String, BizIndicator> activeById = Map.of();
 
+    /** 应用启动时建立首份指标快照；失败时保留空快照，由后续定时刷新恢复。 */
     @PostConstruct
     public void initialize() {
         refreshAll();
     }
 
+    /**
+     * 定时刷新全部活动指标。
+     *
+     * <p>刷新失败只降级到上一完整快照，不抛出异常拖垮调度线程。</p>
+     */
     @Scheduled(fixedDelayString = "${formula.indicator-config-refresh-ms:60000}")
     public void refreshAll() {
         try {

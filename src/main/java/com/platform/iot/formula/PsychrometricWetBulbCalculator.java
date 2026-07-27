@@ -1,5 +1,12 @@
 package com.platform.iot.formula;
 
+/**
+ * 根据干球温度、相对湿度和大气压换算湿球温度。
+ *
+ * <p>该算法仅在冷却塔缺少直接湿球测点时使用，并按 ASHRAE 湿空气关系式
+ * 通过二分法求解露点和湿球温度。算法保持无外部依赖，便于用固定气象输入
+ * 重放历史计算；不收敛或超出物理范围时必须抛错，不能返回猜测值。</p>
+ */
 public final class PsychrometricWetBulbCalculator {
 
     private static final double MIN_TEMPERATURE_C = -100.0;
@@ -8,6 +15,15 @@ public final class PsychrometricWetBulbCalculator {
     private static final double TOLERANCE_C = 0.001;
     private static final int MAX_ITERATIONS = 100;
 
+    /**
+     * 计算给定环境条件下的湿球温度。
+     *
+     * @param dryBulbC 干球温度，单位 ℃
+     * @param relativeHumidityPercent 相对湿度，范围 {@code (0,100]}
+     * @param pressureKpa 大气压力，单位 kPa
+     * @return 湿球温度，单位 ℃
+     * @throws IllegalArgumentException 输入无效、超出支持范围或迭代不收敛
+     */
     public double calculate(double dryBulbC, double relativeHumidityPercent,
             double pressureKpa) {
         validate(dryBulbC, relativeHumidityPercent, pressureKpa);
