@@ -126,12 +126,13 @@ public class TdengineConfig {
         // 3. 自动创建 HVAC 逐条事件和分钟汇总结构，并兼容已经存在的旧分钟表。
         initializeHvacSchema(template);
 
-        // 4. 自动建性能指标超级表 st_indicator_minute（设计书 §2.2）
-        initStIndicatorMinute(template);
+        // 4. 自动创建公式成功结果和异常审计结构，并迁移旧指标表。
+        initializeFormulaSchema(template);
 
-        log.info("✅ TDengine 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}]",
+        log.info("✅ TDengine 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}]",
                 database, stableName, properties.getStRawEvent(),
-                properties.getStRawMinute(), properties.getStIndicatorMinute());
+                properties.getStRawMinute(), properties.getStIndicatorMinute(),
+                properties.getStFormulaCalcException());
 
         // 验证所有超级表
         verifyInitialization(template, database, stableName);
@@ -142,6 +143,7 @@ public class TdengineConfig {
         String indicatorMinute = properties.getStIndicatorMinute();
         verifyInitialization(template, database, rawMinute);
         verifyInitialization(template, database, indicatorMinute);
+        verifyInitialization(template, database, properties.getStFormulaCalcException());
     }
 
     /**
@@ -277,22 +279,59 @@ public class TdengineConfig {
     }
 
     /**
-     * 初始化 st_indicator_minute 超级表（COP 指标分钟数据）
+     * 初始化公式成功结果和异常审计超级表。
+     *
+     * <p>该方法保持包可见，自动化测试可以直接核验生成的 SQL。</p>
      */
+    void initializeFormulaSchema(JdbcTemplate template) {
+        initStIndicatorMinute(template);
+        initStFormulaCalcException(template);
+    }
+
     private void initStIndicatorMinute(JdbcTemplate template) {
         String db = properties.getDatabase();
         String stable = properties.getStIndicatorMinute();
         String createIndicator = String.format(
                 "CREATE STABLE IF NOT EXISTS %s.%s (" +
-                        "ts TIMESTAMP, " +
-                        "val DOUBLE" +
-                        ") TAGS (indicator_id NCHAR(32), indicator_code NCHAR(100), " +
-                        "building_id NCHAR(32), system_group_id NCHAR(32), equip_id NCHAR(32));",
+                        "ts TIMESTAMP NOT NULL, " +
+                        "val DOUBLE NOT NULL, " +
+                        "data_quality TINYINT NOT NULL, " +
+                        "formula_version NCHAR(32) NOT NULL, " +
+                        "calculated_at TIMESTAMP NOT NULL" +
+                        ") TAGS (indicator_id NCHAR(32) NOT NULL, " +
+                        "indicator_code NCHAR(100) NOT NULL, " +
+                        "building_id NCHAR(32) NOT NULL, " +
+                        "system_group_id NCHAR(32), equip_id NCHAR(32));",
                 db, stable
         );
         template.execute(createIndicator);
-        ensureFields(template, db + "." + stable, Map.of(),
+        Map<String, String> requiredColumns = new LinkedHashMap<>();
+        requiredColumns.put("data_quality", "TINYINT");
+        requiredColumns.put("formula_version", "NCHAR(32)");
+        requiredColumns.put("calculated_at", "TIMESTAMP");
+        ensureFields(template, db + "." + stable, requiredColumns,
                 Map.of("indicator_id", "NCHAR(32)"));
+        log.info("超级表 [{}] 已创建/已存在", stable);
+    }
+
+    private void initStFormulaCalcException(JdbcTemplate template) {
+        String db = properties.getDatabase();
+        String stable = properties.getStFormulaCalcException();
+        String createException = String.format(
+                "CREATE STABLE IF NOT EXISTS %s.%s (" +
+                        "ts TIMESTAMP NOT NULL, " +
+                        "calc_status NCHAR(32) NOT NULL, " +
+                        "reason_code NCHAR(64) NOT NULL, " +
+                        "missing_inputs NCHAR(512), " +
+                        "formula_version NCHAR(32) NOT NULL, " +
+                        "calculated_at TIMESTAMP NOT NULL" +
+                        ") TAGS (indicator_id NCHAR(32) NOT NULL, " +
+                        "indicator_code NCHAR(100) NOT NULL, " +
+                        "building_id NCHAR(32) NOT NULL, " +
+                        "system_group_id NCHAR(32), equip_id NCHAR(32));",
+                db, stable
+        );
+        template.execute(createException);
         log.info("超级表 [{}] 已创建/已存在", stable);
     }
 

@@ -89,6 +89,20 @@ aggregation:
   recovery-enabled: true
   recovery-delay-ms: 600000
 
+formula:
+  # false 时不创建公式引擎、指标查询 API 和补算任务；测试可据此停止公式业务链路。
+  enabled: true
+  # 缺少实测湿球温度时，使用该大气压将室外干球温度和相对湿度换算为湿球温度。
+  atmospheric-pressure-kpa: ${HVAC_ATMOSPHERIC_PRESSURE_KPA:101.325}
+  # 活动指标来自 MySQL，本地快照按此间隔整体替换；刷新失败继续使用上一完整快照。
+  indicator-config-refresh-ms: 60000
+  # false 时停止启动补算和定时补算，但不影响新冻结分钟的正常公式计算。
+  recovery-enabled: true
+  # 每轮只检查最近若干个已经越过冻结边界的分钟，避免无界扫描历史数据。
+  recovery-minutes: 10
+  # 指标补算是低频兜底，不参与每分钟正常计算热路径。
+  recovery-delay-ms: 600000
+
 # pointCode 是该来源系统下的别名；来源命名空间只由后端可信配置确定。
 ingestion:
   source-system: ${INGESTION_SOURCE_SYSTEM:MQTT_FREEZE_V1}

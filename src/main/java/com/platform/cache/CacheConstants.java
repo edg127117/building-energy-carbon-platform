@@ -15,8 +15,8 @@ public final class CacheConstants {
     /** 设备在线状态：iot:device:status:{deviceId} → 0/1/2 */
     public static final String DEVICE_STATUS = PREFIX + "device:status:";
 
-    // ──────────── COP 最新值缓存 ────────────
-    /** COP 指标最新值：iot:indicator:latest:{indicatorCode}:{deviceId} → value */
+    // ──────────── 指标最新状态缓存 ────────────
+    /** 指标最新状态：iot:indicator:latest:{indicatorId} → JSON */
     public static final String INDICATOR_LATEST = PREFIX + "indicator:latest:";
 
     // ──────────── Token 缓存 ────────────

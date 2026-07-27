@@ -42,4 +42,35 @@ class TdengineHvacSchemaTest {
                 "add column finalized_at", "add tag building_id",
                 "add tag point_id", "add tag family_code");
     }
+
+    @Test
+    void createsFormulaResultAndExceptionSchemasAndMigratesIndicatorColumns() {
+        TdengineProperties properties = new TdengineProperties();
+        properties.setDatabase("iot_telemetry");
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        when(template.queryForList(startsWith("DESCRIBE")))
+                .thenReturn(List.of(
+                        Map.of("field", "ts"),
+                        Map.of("field", "val"),
+                        Map.of("field", "indicator_id")
+                ));
+        TdengineConfig config = new TdengineConfig(properties);
+
+        config.initializeFormulaSchema(template);
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(sqlCaptor.capture());
+        String allSql = String.join("\n", sqlCaptor.getAllValues()).toLowerCase();
+        assertThat(allSql).contains(
+                "st_indicator_minute",
+                "data_quality", "formula_version", "calculated_at",
+                "st_formula_calc_exception",
+                "calc_status", "reason_code", "missing_inputs",
+                "indicator_id", "indicator_code", "building_id",
+                "system_group_id", "equip_id");
+        assertThat(allSql).contains(
+                "add column data_quality tinyint",
+                "add column formula_version nchar(32)",
+                "add column calculated_at timestamp");
+    }
 }

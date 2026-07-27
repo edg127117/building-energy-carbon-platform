@@ -14,7 +14,11 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./mysql-data:/var/lib/mysql      # 数据持久化，重启不丢数据
-      - ./init:/docker-entrypoint-initdb.d # 自动执行该目录下的 sql 初始化表结构
+      # 仅自动执行全新 MySQL 所需脚本；04/06/07 属于 TDengine，
+      # 05 属于旧库手工迁移，均不能交给 MySQL 首次启动自动执行。
+      - ./init/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
+      - ./init/02-init-10000-devices.sql:/docker-entrypoint-initdb.d/02-init-10000-devices.sql:ro
+      - ./init/03-init-hvac-schema.sql:/docker-entrypoint-initdb.d/03-init-hvac-schema.sql:ro
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
 
   # 2. MQTT 消息接入中枢 (接收电表数据)
@@ -43,3 +47,14 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./taos-data:/var/lib/taos        # 时序数据持久化
+
+  # 4. 最新指标状态缓存
+  redis:
+    image: redis:7.2-alpine
+    container_name: iot-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./redis-data:/data

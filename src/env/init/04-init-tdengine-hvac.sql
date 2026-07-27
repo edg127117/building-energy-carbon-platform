@@ -55,8 +55,26 @@ CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_raw_minute` (
 
 -- 性能指标实例同样按内部 indicator_id 分子表，支持不同建筑重复使用 WCR_COP。
 CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_indicator_minute` (
-    `ts`  TIMESTAMP NOT NULL,
-    `val` DOUBLE NOT NULL
+    `ts`              TIMESTAMP NOT NULL,
+    `val`             DOUBLE NOT NULL,
+    `data_quality`    TINYINT NOT NULL,
+    `formula_version` NCHAR(32) NOT NULL,
+    `calculated_at`   TIMESTAMP NOT NULL
+) TAGS (
+    `indicator_id`    NCHAR(32) NOT NULL,
+    `indicator_code`  NCHAR(100) NOT NULL,
+    `building_id`     NCHAR(32) NOT NULL,
+    `system_group_id` NCHAR(32),
+    `equip_id`        NCHAR(32)
+);
+
+CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_formula_calc_exception` (
+    `ts`              TIMESTAMP NOT NULL,
+    `calc_status`     NCHAR(32) NOT NULL,
+    `reason_code`     NCHAR(64) NOT NULL,
+    `missing_inputs`  NCHAR(512),
+    `formula_version` NCHAR(32) NOT NULL,
+    `calculated_at`   TIMESTAMP NOT NULL
 ) TAGS (
     `indicator_id`    NCHAR(32) NOT NULL,
     `indicator_code`  NCHAR(100) NOT NULL,

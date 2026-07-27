@@ -56,6 +56,28 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     }
 
     @Override
+    public List<RawMinuteAggregate> findByMinute(
+            long minuteStart, Set<String> buildingIds) {
+        if (buildingIds.isEmpty()) {
+            return List.of();
+        }
+        String sql = """
+                SELECT point_id, point_code, building_id, system_group_id, equip_id,
+                       equip_code, family_code, component_code, suffix_code, is_for_calc,
+                       ts, avg_val, min_val, max_val, sample_count, data_quality,
+                       first_received_time, last_received_time, finalized_at
+                FROM %s
+                WHERE ts = %s
+                  AND building_id IN (%s)
+                ORDER BY building_id, point_id
+                """.formatted(
+                stable(),
+                quote(new Timestamp(minuteStart).toString()),
+                buildingIdIn(buildingIds));
+        return template.query(sql, this::mapAggregate);
+    }
+
+    @Override
     public List<HvacMinuteQueryRow> findLatestByPointIds(List<String> pointIds) {
         if (pointIds.isEmpty()) {
             return List.of();
@@ -219,6 +241,30 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                 resultSet.getInt("data_quality"));
     }
 
+    private RawMinuteAggregate mapAggregate(ResultSet resultSet, int rowNumber)
+            throws SQLException {
+        return new RawMinuteAggregate(
+                resultSet.getString("point_id"),
+                resultSet.getString("point_code"),
+                resultSet.getString("building_id"),
+                resultSet.getString("system_group_id"),
+                resultSet.getString("equip_id"),
+                resultSet.getString("equip_code"),
+                resultSet.getString("family_code"),
+                resultSet.getString("component_code"),
+                resultSet.getString("suffix_code"),
+                resultSet.getInt("is_for_calc"),
+                resultSet.getTimestamp("ts").getTime(),
+                resultSet.getDouble("avg_val"),
+                resultSet.getDouble("min_val"),
+                resultSet.getDouble("max_val"),
+                resultSet.getInt("sample_count"),
+                resultSet.getInt("data_quality"),
+                resultSet.getTimestamp("first_received_time").getTime(),
+                resultSet.getTimestamp("last_received_time").getTime(),
+                resultSet.getTimestamp("finalized_at").getTime());
+    }
+
     private String stable() {
         return safe(properties.getDatabase()) + "."
                 + safe(properties.getStRawMinute());
@@ -227,6 +273,13 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     private String pointIdIn(List<String> pointIds) {
         // pointId 是 SQL 值而非表名，逐个使用 quote 转义后再组成 IN 列表。
         return pointIds.stream().map(this::quote).collect(Collectors.joining(","));
+    }
+
+    private String buildingIdIn(Set<String> buildingIds) {
+        return buildingIds.stream()
+                .sorted()
+                .map(this::quote)
+                .collect(Collectors.joining(","));
     }
 
     private String timeRange(long fromInclusive, long toExclusive) {
