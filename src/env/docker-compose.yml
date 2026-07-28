@@ -7,7 +7,7 @@ services:
     container_name: iot-mysql
     restart: always
     ports:
-      - "3306:3306"
+      - "${MYSQL_PORT:-3306}:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-change-me} # 与后端环境变量保持一致
       MYSQL_DATABASE: iot_platform       # 启动时自动创建此数据库
@@ -34,6 +34,8 @@ services:
       EMQX_DASHBOARD__DEFAULT_USERNAME: admin
       EMQX_DASHBOARD__DEFAULT_PASSWORD: ${MQTT_PASSWORD:-change-me} # 与后端环境变量保持一致
       TZ: Asia/Shanghai
+    volumes:
+      - ./emqx-acl.conf:/opt/emqx/etc/acl.conf:ro
 
   # 3. 时序数据底座 (存放极高频的电表电压电流)
   tdengine:
@@ -54,7 +56,7 @@ services:
     container_name: iot-redis
     restart: always
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - ./redis-data:/data

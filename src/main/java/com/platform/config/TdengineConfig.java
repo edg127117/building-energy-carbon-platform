@@ -293,14 +293,14 @@ public class TdengineConfig {
         String stable = properties.getStIndicatorMinute();
         String createIndicator = String.format(
                 "CREATE STABLE IF NOT EXISTS %s.%s (" +
-                        "ts TIMESTAMP NOT NULL, " +
-                        "val DOUBLE NOT NULL, " +
-                        "data_quality TINYINT NOT NULL, " +
-                        "formula_version NCHAR(32) NOT NULL, " +
-                        "calculated_at TIMESTAMP NOT NULL" +
-                        ") TAGS (indicator_id NCHAR(32) NOT NULL, " +
-                        "indicator_code NCHAR(100) NOT NULL, " +
-                        "building_id NCHAR(32) NOT NULL, " +
+                        "ts TIMESTAMP, " +
+                        "val DOUBLE, " +
+                        "data_quality TINYINT, " +
+                        "formula_version NCHAR(32), " +
+                        "calculated_at TIMESTAMP" +
+                        ") TAGS (indicator_id NCHAR(32), " +
+                        "indicator_code NCHAR(100), " +
+                        "building_id NCHAR(32), " +
                         "system_group_id NCHAR(32), equip_id NCHAR(32));",
                 db, stable
         );
@@ -319,15 +319,15 @@ public class TdengineConfig {
         String stable = properties.getStFormulaCalcException();
         String createException = String.format(
                 "CREATE STABLE IF NOT EXISTS %s.%s (" +
-                        "ts TIMESTAMP NOT NULL, " +
-                        "calc_status NCHAR(32) NOT NULL, " +
-                        "reason_code NCHAR(64) NOT NULL, " +
+                        "ts TIMESTAMP, " +
+                        "calc_status NCHAR(32), " +
+                        "reason_code NCHAR(64), " +
                         "missing_inputs NCHAR(512), " +
-                        "formula_version NCHAR(32) NOT NULL, " +
-                        "calculated_at TIMESTAMP NOT NULL" +
-                        ") TAGS (indicator_id NCHAR(32) NOT NULL, " +
-                        "indicator_code NCHAR(100) NOT NULL, " +
-                        "building_id NCHAR(32) NOT NULL, " +
+                        "formula_version NCHAR(32), " +
+                        "calculated_at TIMESTAMP" +
+                        ") TAGS (indicator_id NCHAR(32), " +
+                        "indicator_code NCHAR(100), " +
+                        "building_id NCHAR(32), " +
                         "system_group_id NCHAR(32), equip_id NCHAR(32));",
                 db, stable
         );

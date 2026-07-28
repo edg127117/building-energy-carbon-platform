@@ -196,6 +196,17 @@ Java 21、Maven、Node.js 20+、Docker Engine 和 Docker Compose 插件。
 | TDengine REST | `127.0.0.1:6041`，`root/taosdata` |
 | Redis | `127.0.0.1:6379`，无密码 |
 
+本机已有 MySQL 或 Redis 时，可在启动 Compose 和后端前设置相同的端口变量。
+例如 MySQL 使用 `13306`、Redis 使用 `16379`：
+
+```powershell
+$env:MYSQL_PORT = "13306"
+$env:REDIS_PORT = "16379"
+```
+
+Compose 只改变宿主机发布端口；容器内部仍使用标准端口。后端读取同名变量，
+因此不需要另外修改 `application.yml`。
+
 `MQTT_BROKER_URL`、`MQTT_USER`、`MQTT_PASSWORD` 等环境变量可以覆盖默认值。
 模拟器和后端使用同一套 MQTT 环境变量。
 

@@ -77,6 +77,15 @@ CREATE TABLE IF NOT EXISTS `iot_device`(
     INDEX `idx_type_status` (`device_type`,`status`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备台账表';
 
+CREATE TABLE IF NOT EXISTS `iot_device_status_log` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+    `device_id` VARCHAR(64) NOT NULL COMMENT '设备物理编号',
+    `status` TINYINT NOT NULL COMMENT '变更后状态：0-离线,1-在线',
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '状态变更时间',
+    PRIMARY KEY (`id`),
+    INDEX `idx_device_status_time` (`device_id`, `create_time`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备上下线轨迹日志';
+
 -- 插入一台测试电表
 INSERT INTO `iot_device` (`device_id`, `device_name`, `device_type`, `location`)
 SELECT 'meter-001', '1号车间总电表', 1, '1栋配电房'

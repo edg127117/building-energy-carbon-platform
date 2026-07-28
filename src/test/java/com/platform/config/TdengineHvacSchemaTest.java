@@ -72,5 +72,6 @@ class TdengineHvacSchemaTest {
                 "add column data_quality tinyint",
                 "add column formula_version nchar(32)",
                 "add column calculated_at timestamp");
+        assertThat(allSql).doesNotContain("not null");
     }
 }
