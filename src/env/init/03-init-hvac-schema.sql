@@ -362,19 +362,30 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `co
                                                                                                                     (241, 240,  '菜单管理',    'C', '/system/menu/list',         'system/MenuList',   'menu',    1),
                                                                                                                     (242, 240,  '数据建模',    'C', '/system/generator',         'system/Generator',  'code',    2);
 
--- ============================================================================
--- 7. sys_role 追加 data_scope 字段（非破坏式，不动原有列）
--- 冻结书 C.4：预留多建筑数据范围权限
--- ============================================================================
--- 兼容已经初始化过的数据库：CREATE TABLE IF NOT EXISTS 不会自动补充新列。
-ALTER TABLE `sys_user`
-    ADD COLUMN IF NOT EXISTS `del_flag` TINYINT NOT NULL DEFAULT 0 COMMENT '逻辑删除：0-正常，1-删除';
+-- MySQL 不支持 ADD COLUMN IF NOT EXISTS，使用 information_schema 保护增量升级。
+SET @ddl = IF(
+    EXISTS(SELECT 1 FROM information_schema.columns
+           WHERE table_schema=DATABASE() AND table_name='sys_user' AND column_name='del_flag'),
+    'SELECT 1',
+    'ALTER TABLE `sys_user` ADD COLUMN `del_flag` TINYINT NOT NULL DEFAULT 0 COMMENT ''逻辑删除：0-正常，1-删除'''
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-ALTER TABLE `sys_role`
-    ADD COLUMN IF NOT EXISTS `data_scope` VARCHAR(16) DEFAULT 'ALL' COMMENT '数据范围：ALL-全部, BUILDING-按建筑, SELF-仅自己';
+SET @ddl = IF(
+    EXISTS(SELECT 1 FROM information_schema.columns
+           WHERE table_schema=DATABASE() AND table_name='sys_role' AND column_name='data_scope'),
+    'SELECT 1',
+    'ALTER TABLE `sys_role` ADD COLUMN `data_scope` VARCHAR(16) DEFAULT ''ALL'' COMMENT ''数据范围：ALL-全部, BUILDING-按建筑, SELF-仅自己'''
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-ALTER TABLE `iot_device`
-    ADD COLUMN IF NOT EXISTS `building_id` VARCHAR(32) DEFAULT NULL COMMENT '所属建筑';
+SET @ddl = IF(
+    EXISTS(SELECT 1 FROM information_schema.columns
+           WHERE table_schema=DATABASE() AND table_name='iot_device' AND column_name='building_id'),
+    'SELECT 1',
+    'ALTER TABLE `iot_device` ADD COLUMN `building_id` VARCHAR(32) DEFAULT NULL COMMENT ''所属建筑'''
+);
+PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
 -- ============================================================================
 -- 8. 向现有角色表追加四类角色（冻结书 9.1）

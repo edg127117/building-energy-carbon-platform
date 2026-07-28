@@ -25,16 +25,16 @@ ALTER STABLE `iot_telemetry`.`st_indicator_minute`
     ADD COLUMN `calculated_at` TIMESTAMP;
 
 CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_formula_calc_exception` (
-    `ts`              TIMESTAMP NOT NULL,
-    `calc_status`     NCHAR(32) NOT NULL,
-    `reason_code`     NCHAR(64) NOT NULL,
+    `ts`              TIMESTAMP,
+    `calc_status`     NCHAR(32),
+    `reason_code`     NCHAR(64),
     `missing_inputs`  NCHAR(512),
-    `formula_version` NCHAR(32) NOT NULL,
-    `calculated_at`   TIMESTAMP NOT NULL
+    `formula_version` NCHAR(32),
+    `calculated_at`   TIMESTAMP
 ) TAGS (
-    `indicator_id`    NCHAR(32) NOT NULL,
-    `indicator_code`  NCHAR(100) NOT NULL,
-    `building_id`     NCHAR(32) NOT NULL,
+    `indicator_id`    NCHAR(32),
+    `indicator_code`  NCHAR(100),
+    `building_id`     NCHAR(32),
     `system_group_id` NCHAR(32),
     `equip_id`        NCHAR(32)
 );
