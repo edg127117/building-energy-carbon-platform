@@ -134,7 +134,7 @@ class TdengineIndicatorMinuteRepositoryTest {
     }
 
     @Test
-    void latestSuccessAndExceptionUseSeparateStableQueries() {
+    void latestSuccessAndExceptionUseLastRowPerCompleteIndicatorIdentity() {
         when(template.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class)))
                 .thenReturn(List.of());
 
@@ -142,9 +142,44 @@ class TdengineIndicatorMinuteRepositoryTest {
         repository.findLatestExceptions(List.of("INDICATOR_B", "INDICATOR_A"));
 
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
-        verify(template, times(2)).query(sqlCaptor.capture(), any(org.springframework.jdbc.core.RowMapper.class));
-        assertThat(sqlCaptor.getAllValues().get(0)).contains("st_indicator_minute").doesNotContain("st_formula_calc_exception");
-        assertThat(sqlCaptor.getAllValues().get(1)).contains("st_formula_calc_exception").doesNotContain("st_indicator_minute");
+        verify(template, times(2)).query(
+                sqlCaptor.capture(),
+                any(org.springframework.jdbc.core.RowMapper.class));
+        String successSql = sqlCaptor.getAllValues().get(0);
+        String exceptionSql = sqlCaptor.getAllValues().get(1);
+        String identityPartition = "PARTITION BY indicator_id,indicator_code,"
+                + "building_id,system_group_id,equip_id";
+
+        assertThat(successSql)
+                .contains("st_indicator_minute")
+                .doesNotContain("st_formula_calc_exception")
+                .contains(
+                        "LAST_ROW(ts) AS ts",
+                        "LAST_ROW(val) AS val",
+                        "LAST_ROW(data_quality) AS data_quality",
+                        "LAST_ROW(formula_version) AS formula_version",
+                        "LAST_ROW(calculated_at) AS calculated_at",
+                        identityPartition)
+                .doesNotContain("ORDER BY ts DESC LIMIT 1");
+        assertThat(exceptionSql)
+                .contains("st_formula_calc_exception")
+                .doesNotContain("FROM iot_telemetry.st_indicator_minute")
+                .contains(
+                        "LAST_ROW(ts) AS ts",
+                        "LAST_ROW(calc_status) AS calc_status",
+                        "LAST_ROW(reason_code) AS reason_code",
+                        "LAST_ROW(missing_inputs) AS missing_inputs",
+                        "LAST_ROW(formula_version) AS formula_version",
+                        "LAST_ROW(calculated_at) AS calculated_at",
+                        identityPartition)
+                .doesNotContain("ORDER BY ts DESC");
+    }
+
+    @Test
+    void emptyLatestIndicatorIdsDoNotTouchTdengine() {
+        assertThat(repository.findLatestSuccesses(List.of())).isEmpty();
+        assertThat(repository.findLatestExceptions(List.of())).isEmpty();
+        verifyNoInteractions(template);
     }
 
     @Test

@@ -132,9 +132,11 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         if (indicatorIds.isEmpty()) {
             return List.of();
         }
-        String sql = successSelect()
+        // TDengine 3.2.3 对超级表分区后再排序截断可能只返回一个分区；
+        // LAST_ROW 按完整指标身份取值；正常数据中指标 ID 与该身份一一对应。
+        String sql = latestSuccessSelect()
                 + " WHERE indicator_id IN (" + values(indicatorIds) + ")"
-                + " PARTITION BY indicator_id ORDER BY ts DESC LIMIT 1";
+                + latestIdentityPartition();
         return template.query(sql, this::mapSuccess).stream()
                 .sorted(Comparator.comparing(IndicatorMinuteResult::indicatorId))
                 .toList();
@@ -145,9 +147,10 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         if (indicatorIds.isEmpty()) {
             return List.of();
         }
-        String sql = exceptionSelect()
+        // 异常表必须使用与成功表相同的取最新规则，否则 Redis 过期后仍可能漏掉失败指标。
+        String sql = latestExceptionSelect()
                 + " WHERE indicator_id IN (" + values(indicatorIds) + ")"
-                + " PARTITION BY indicator_id ORDER BY ts DESC,calculated_at DESC LIMIT 1";
+                + latestIdentityPartition();
         return template.query(sql, this::mapException).stream()
                 .sorted(Comparator.comparing(FormulaCalculationException::indicatorId))
                 .toList();
@@ -219,6 +222,28 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return "SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,"
                 + "ts,calc_status,reason_code,missing_inputs,formula_version,calculated_at FROM "
                 + exceptionStable();
+    }
+
+    private String latestSuccessSelect() {
+        return "SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,"
+                + "LAST_ROW(ts) AS ts,LAST_ROW(val) AS val,"
+                + "LAST_ROW(data_quality) AS data_quality,"
+                + "LAST_ROW(formula_version) AS formula_version,"
+                + "LAST_ROW(calculated_at) AS calculated_at FROM " + indicatorStable();
+    }
+
+    private String latestExceptionSelect() {
+        return "SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,"
+                + "LAST_ROW(ts) AS ts,LAST_ROW(calc_status) AS calc_status,"
+                + "LAST_ROW(reason_code) AS reason_code,"
+                + "LAST_ROW(missing_inputs) AS missing_inputs,"
+                + "LAST_ROW(formula_version) AS formula_version,"
+                + "LAST_ROW(calculated_at) AS calculated_at FROM " + exceptionStable();
+    }
+
+    private String latestIdentityPartition() {
+        return " PARTITION BY indicator_id,indicator_code,building_id,"
+                + "system_group_id,equip_id";
     }
 
     private String indicatorStable() {

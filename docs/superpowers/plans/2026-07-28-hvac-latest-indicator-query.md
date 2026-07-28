@@ -111,7 +111,7 @@ public List<IndicatorMinuteResult> findLatestSuccesses(List<String> indicatorIds
         return List.of();
     }
     // TDengine 3.2.3 对超级表分区后再排序截断可能只返回一个分区；
-    // LAST_ROW 按完整指标身份取值，保证批量请求中每个指标最多返回一行。
+    // LAST_ROW 按完整指标身份取值；正常数据中指标 ID 与该身份一一对应。
     String sql = latestSuccessSelect()
             + " WHERE indicator_id IN (" + values(indicatorIds) + ")"
             + latestIdentityPartition();
@@ -361,7 +361,7 @@ Expected: one WCR history row and a successful calculation detail with three ste
 In a separate terminal, run:
 
 ```powershell
-node -e "const ws=new WebSocket('ws://127.0.0.1:8081/api/ws/dashboard');const timeout=setTimeout(()=>{console.error('WEBSOCKET_TIMEOUT');process.exit(1)},240000);ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.type==='HVAC_INDICATOR'&&m.data?.indicatorCode==='PUMP_EFF'&&m.data?.status==='MISSING_INPUT'){console.log(e.data);clearTimeout(timeout);ws.close();process.exit(0)}};ws.onerror=e=>{console.error(e);clearTimeout(timeout);process.exit(1)}"
+node -e "const ws=new WebSocket('ws://127.0.0.1:8081/api/ws/dashboard');const timeout=setTimeout(()=>{console.error('WEBSOCKET_TIMEOUT');process.exit(1)},240000);ws.onmessage=e=>{const m=JSON.parse(e.data),d=m.data;if(m.type==='HVAC_INDICATOR'&&d?.indicatorCode==='PUMP_EFF'&&d?.status==='MISSING_INPUT'){if(d.value!==null||d.reasonCode!=='PUMP_INPUT_MISSING'||!d.missingInputs?.includes('Pc/PPE'))process.exit(1);console.log(e.data);clearTimeout(timeout);ws.close();process.exit(0)}};ws.onerror=e=>{console.error(e);clearTimeout(timeout);process.exit(1)}"
 ```
 
 Expected: the listener remains connected and exits successfully only after receiving the missing pump state.
@@ -372,62 +372,87 @@ In another terminal, run:
 
 ```powershell
 Start-Sleep -Seconds (61 - (Get-Date).Second)
+$hadOldOmitPoint = Test-Path Env:HVAC_OMIT_POINT
+$oldOmitPoint = $env:HVAC_OMIT_POINT
 $env:HVAC_OMIT_POINT = "PUMP1_Power"
 try {
   node .scripts/simulate-hvac-19-points.mjs
 } finally {
-  Remove-Item Env:HVAC_OMIT_POINT -ErrorAction SilentlyContinue
+  if ($hadOldOmitPoint) {
+    $env:HVAC_OMIT_POINT = $oldOmitPoint
+  } else {
+    Remove-Item Env:HVAC_OMIT_POINT -ErrorAction SilentlyContinue
+  }
 }
 Start-Sleep -Seconds 90
 ```
 
 Expected: the simulator publishes 18 points per round, the minute freezes, and the WebSocket listener prints a `PUMP_EFF/MISSING_INPUT` message before its timeout.
 
-- [ ] **Step 3: Verify the persisted exception and successful sibling formulas**
+- [ ] **Step 3: Force the exception through TDengine fallback**
 
 Run:
 
 ```powershell
-docker exec iot-tdengine taos -s "SELECT indicator_code,ts,calc_status,reason_code,missing_inputs,formula_version FROM iot_telemetry.st_formula_calc_exception WHERE indicator_code='PUMP_EFF' ORDER BY ts DESC LIMIT 1;"
-docker exec iot-tdengine taos -s "SELECT indicator_code,ts,val,data_quality,formula_version FROM iot_telemetry.st_indicator_minute ORDER BY ts DESC LIMIT 4;"
+$keys = @(
+  "iot:indicator:latest:INDICATOR_WCR_COP_B1",
+  "iot:indicator:latest:INDICATOR_TOWER_EFF_B1",
+  "iot:indicator:latest:INDICATOR_PUMP_EFF_B1",
+  "iot:indicator:latest:INDICATOR_AHU_EFF_B1"
+)
+docker exec iot-redis redis-cli DEL @keys
+if (($keys | ForEach-Object {
+      [int](docker exec iot-redis redis-cli EXISTS $_)
+    } | Measure-Object -Sum).Sum -ne 0) {
+  throw "Latest indicator cache was not fully removed"
+}
+$login = Invoke-RestMethod -Method Post `
+  -Uri "http://127.0.0.1:8081/api/auth/login" `
+  -ContentType "application/json" `
+  -Body '{"username":"admin","password":"123456"}'
+$headers = @{ Authorization = "Bearer $($login.data.token)" }
+$latestAfterFailure = Invoke-RestMethod -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/hvac/buildings/BLD001/indicators/latest"
+$items = @($latestAfterFailure.data.indicators)
+$pump = @($items | Where-Object indicatorCode -eq "PUMP_EFF")
+if ($items.Count -ne 4
+    -or $pump.Count -ne 1
+    -or $pump[0].status -ne "MISSING_INPUT"
+    -or $pump[0].value -ne $null
+    -or $pump[0].reasonCode -ne "PUMP_INPUT_MISSING"
+    -or $pump[0].missingInputs -notcontains "Pc/PPE") {
+  throw "Expected one persisted pump exception from TDengine fallback"
+}
+$siblings = @($items | Where-Object indicatorCode -ne "PUMP_EFF")
+if ((Compare-Object @("AHU_POW_EFF","TOWER_EFF","WCR_COP") `
+      @($siblings.indicatorCode | Sort-Object))
+    -or @($siblings | Where-Object status -ne "SUCCESS").Count -ne 0
+    -or @($items.minuteStart | Sort-Object -Unique).Count -ne 1) {
+  throw "Sibling formula status or source minute is inconsistent"
+}
+```
+
+Expected: water pump is `MISSING_INPUT` with `value=null`, reason
+`PUMP_INPUT_MISSING`, and missing input `Pc/PPE`; the other three indicators are
+`SUCCESS`, and all four states use the same source minute.
+
+- [ ] **Step 4: Verify the persisted exception and successful sibling formulas**
+
+Run:
+
+```powershell
+$minuteStart = [long]$pump[0].minuteStart
+docker exec iot-tdengine taos -s "SELECT indicator_code,ts,calc_status,reason_code,missing_inputs,formula_version FROM iot_telemetry.st_formula_calc_exception WHERE ts=$minuteStart ORDER BY indicator_code;"
+docker exec iot-tdengine taos -s "SELECT indicator_code,ts,val,data_quality,formula_version FROM iot_telemetry.st_indicator_minute WHERE ts=$minuteStart ORDER BY indicator_code;"
 ```
 
 Expected:
 
-- pump exception status is `MISSING_INPUT`;
-- reason is `PUMP_INPUT_MISSING`;
-- `missing_inputs` contains `Pc/PPE`;
-- the same minute has no successful `PUMP_EFF` row;
-- WCR, tower, and AHU succeed for that minute.
-
-- [ ] **Step 4: Force the exception through TDengine fallback**
-
-Run:
-
-```powershell
-docker exec iot-redis redis-cli DEL `
-  "iot:indicator:latest:INDICATOR_WCR_COP_B1" `
-  "iot:indicator:latest:INDICATOR_TOWER_EFF_B1" `
-  "iot:indicator:latest:INDICATOR_PUMP_EFF_B1" `
-  "iot:indicator:latest:INDICATOR_AHU_EFF_B1"
-$latestAfterFailure = Invoke-RestMethod -Headers $headers `
-  -Uri "http://127.0.0.1:8081/api/hvac/buildings/BLD001/indicators/latest"
-$pump = $latestAfterFailure.data.indicators |
-  Where-Object indicatorCode -eq "PUMP_EFF"
-if ($pump.status -ne "MISSING_INPUT"
-    -or $pump.value -ne $null
-    -or $pump.missingInputs -notcontains "Pc/PPE") {
-  throw "Expected persisted pump exception from TDengine fallback"
-}
-if (@($latestAfterFailure.data.indicators |
-    Where-Object {
-      $_.indicatorCode -ne "PUMP_EFF" -and $_.status -ne "SUCCESS"
-    }).Count -ne 0) {
-  throw "A sibling formula did not remain successful"
-}
-```
-
-Expected: water pump is `MISSING_INPUT` with `value=null` and `Pc/PPE`; the other three indicators are `SUCCESS`.
+- exception table contains exactly one `PUMP_EFF/MISSING_INPUT` row for that
+  minute, with reason `PUMP_INPUT_MISSING` and `Pc/PPE`;
+- success table contains exactly three rows for the same minute:
+  `WCR_COP`、`TOWER_EFF`、`AHU_POW_EFF`;
+- success table contains no `PUMP_EFF` row for that minute.
 
 ---
 
