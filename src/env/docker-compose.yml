@@ -14,8 +14,9 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./mysql-data:/var/lib/mysql      # 数据持久化，重启不丢数据
-      # 仅自动执行全新 MySQL 所需脚本；04/06/07 属于 TDengine，
-      # 05 属于旧库手工迁移，均不能交给 MySQL 首次启动自动执行。
+      # 仅自动执行全新 MySQL 所需脚本。已有数据卷不会重跑 init 目录。
+      # 04/06/07/09 属于 TDengine，05/08/10 属于旧库手工迁移；
+      # 这些脚本都不能挂入 MySQL 首次启动目录。
       - ./init/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
       - ./init/02-init-10000-devices.sql:/docker-entrypoint-initdb.d/02-init-10000-devices.sql:ro
       - ./init/03-init-hvac-schema.sql:/docker-entrypoint-initdb.d/03-init-hvac-schema.sql:ro
