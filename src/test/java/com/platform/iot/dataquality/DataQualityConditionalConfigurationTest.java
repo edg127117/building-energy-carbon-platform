@@ -79,6 +79,48 @@ class DataQualityConditionalConfigurationTest {
         verify(publisher).publishEvent(any(HvacMinuteQualityReadyEvent.class));
     }
 
+    @Test
+    void disabledDataQualityRegistersNoRecoveryOrReconciliationScheduler() {
+        new ApplicationContextRunner()
+                .withPropertyValues(
+                        "data-quality.enabled=false",
+                        "data-quality.reconciliation-enabled=true")
+                .withBean(DataQualityRecoveryService.class,
+                        () -> mock(DataQualityRecoveryService.class))
+                .withBean(FillTaskReconciliationService.class,
+                        () -> mock(FillTaskReconciliationService.class))
+                .withUserConfiguration(
+                        DataQualityRecoveryScheduler.class,
+                        FillTaskReconciliationScheduler.class)
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecoveryScheduler.class);
+                    assertThat(context).doesNotHaveBean(
+                            FillTaskReconciliationScheduler.class);
+                });
+    }
+
+    @Test
+    void disabledReconciliationKeepsRecoveryButOmitsClosingScheduler() {
+        new ApplicationContextRunner()
+                .withPropertyValues(
+                        "data-quality.enabled=true",
+                        "data-quality.reconciliation-enabled=false")
+                .withBean(DataQualityRecoveryService.class,
+                        () -> mock(DataQualityRecoveryService.class))
+                .withBean(FillTaskReconciliationService.class,
+                        () -> mock(FillTaskReconciliationService.class))
+                .withUserConfiguration(
+                        DataQualityRecoveryScheduler.class,
+                        FillTaskReconciliationScheduler.class)
+                .run(context -> {
+                    assertThat(context).hasSingleBean(
+                            DataQualityRecoveryScheduler.class);
+                    assertThat(context).doesNotHaveBean(
+                            FillTaskReconciliationScheduler.class);
+                });
+    }
+
     private RawMinuteAggregate aggregate() {
         return new RawMinuteAggregate(
                 "P1", "P1", "B1", "G1", "E1", "E1",

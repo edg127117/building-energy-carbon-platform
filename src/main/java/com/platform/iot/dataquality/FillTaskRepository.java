@@ -1,9 +1,12 @@
 package com.platform.iot.dataquality;
 
 import com.platform.iot.dataquality.model.TaskReconciliation;
+import com.platform.iot.dataquality.model.FillApplyStatus;
 import com.platform.iot.dataquality.model.entity.BizDataQualityFillTask;
 
 import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -30,6 +33,35 @@ public interface FillTaskRepository {
     void incrementReplacedCount(String taskId, int increment);
 
     void recordFailure(String taskId, long minuteStart, String error);
+
+    List<BizDataQualityFillTask> findRetryable(
+            LocalDateTime updatedBefore, int limit);
+
+    List<String> findInvalidSourceRetryableTaskIds(
+            LocalDateTime updatedBefore, int limit);
+
+    List<BizDataQualityFillTask> findWaitingInterpolationTasks(
+            LocalDateTime updatedBefore, int limit);
+
+    List<BizDataQualityFillTask> findTypicalTasksToClose(
+            LocalDateTime hourEndedBefore, int limit);
+
+    /**
+     * 查找已写入 Q1 但 MySQL 收口中断的任务。
+     */
+    List<BizDataQualityFillTask> findInterpolationTasksToClose(
+            LocalDateTime updatedBefore, int limit);
+
+    void incrementRetry(String taskId);
+
+    void recordRetryError(String taskId, String error);
+
+    void markRetryRecovered(
+            String taskId,
+            FillApplyStatus applyStatus,
+            int ownReplacementIncrement);
+
+    void recordReplacements(Map<String, Integer> countsByOldTaskId);
 
     void reconcile(TaskReconciliation result);
 

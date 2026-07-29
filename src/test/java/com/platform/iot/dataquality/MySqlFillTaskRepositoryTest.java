@@ -20,6 +20,7 @@ import org.springframework.dao.DuplicateKeyException;
 import java.time.LocalDateTime;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -233,6 +234,40 @@ class MySqlFillTaskRepositoryTest {
                 .noneMatch(field ->
                         JdbcTemplate.class.isAssignableFrom(field.getType())))
                 .isTrue();
+    }
+
+    @Test
+    void readsBoundedQueuesAndUpdatesRetryState() {
+        LocalDateTime before = LocalDateTime.of(2026, 7, 29, 12, 0);
+        when(mapper.selectRetryable(before, 100)).thenReturn(List.of());
+        when(mapper.selectInvalidSourceRetryableTaskIds(before, 20))
+                .thenReturn(List.of("BAD"));
+        when(mapper.selectWaitingInterpolationTasks(before, 40))
+                .thenReturn(List.of());
+        when(mapper.selectTypicalTasksToClose(before, 100)).thenReturn(List.of());
+        when(mapper.selectInterpolationTasksToClose(before, 100))
+                .thenReturn(List.of());
+        when(mapper.incrementRetryAtomic("TASK001")).thenReturn(1);
+        when(mapper.recordRetryErrorAtomic("TASK001", "retry failed"))
+                .thenReturn(1);
+        when(mapper.markRetryRecoveredAtomic(
+                "TASK001", FillApplyStatus.APPLIED, 0)).thenReturn(1);
+        when(mapper.incrementReplacedCountAtomic("OLD", 2)).thenReturn(1);
+
+        assertThat(repository.findRetryable(before, 100)).isEmpty();
+        assertThat(repository.findInvalidSourceRetryableTaskIds(before, 20))
+                .containsExactly("BAD");
+        assertThat(repository.findWaitingInterpolationTasks(before, 40))
+                .isEmpty();
+        assertThat(repository.findTypicalTasksToClose(before, 100)).isEmpty();
+        assertThat(repository.findInterpolationTasksToClose(before, 100)).isEmpty();
+        repository.incrementRetry("TASK001");
+        repository.recordRetryError("TASK001", "retry failed");
+        repository.markRetryRecovered(
+                "TASK001", FillApplyStatus.APPLIED, 0);
+        repository.recordReplacements(Map.of("OLD", 2));
+
+        verify(mapper).incrementReplacedCountAtomic("OLD", 2);
     }
 
     private BizDataQualityFillTask typicalCandidate() {

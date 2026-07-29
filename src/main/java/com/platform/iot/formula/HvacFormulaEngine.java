@@ -173,6 +173,19 @@ public class HvacFormulaEngine {
         return calculation;
     }
 
+    /**
+     * 复用公式引擎的依赖口径定位受影响指标。
+     *
+     * <p>迟到 Q0 补偿用该结果检查 calculatedAt 水位，避免因为同建筑无关指标
+     * 缺失而重复发布修正 READY。</p>
+     */
+    public Set<String> resolveAffectedIndicatorIds(
+            Collection<BizIndicator> activeIndicators,
+            Set<String> affectedPointIds) {
+        return dependencyResolver.resolve(
+                activeIndicators, affectedPointIds, formulas.values());
+    }
+
     private void calculateAndPersist(
             long minuteStart,
             long calculatedAt,

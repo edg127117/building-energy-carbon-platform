@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * MySQL 补全任务的数据访问接口。
@@ -76,7 +77,9 @@ public interface BizDataQualityFillTaskMapper
     @Update("""
             UPDATE biz_data_quality_fill_task
             SET replaced_count = LEAST(
-                    minute_count, replaced_count + #{increment}),
+                    TIMESTAMPDIFF(MINUTE, start_minute, end_minute),
+                    replaced_count + #{increment}),
+                closed_at = NULL,
                 update_time = CURRENT_TIMESTAMP(3)
             WHERE task_id = #{taskId}
               AND apply_status <> 'VOIDED'
@@ -104,6 +107,123 @@ public interface BizDataQualityFillTaskMapper
             @Param("failedMinutesJson") String failedMinutesJson,
             @Param("failedCount") int failedCount,
             @Param("lastError") String lastError);
+
+    /**
+     * 失败队列按 update_time 退避，只取固定批量，避免坏任务造成无界扫描。
+     */
+    @Select("""
+            SELECT *
+            FROM biz_data_quality_fill_task
+            WHERE apply_status = 'FAILED'
+              AND update_time <= #{updatedBefore}
+              AND source_type IN ('TYPICAL_VALUE', 'INTERPOLATION')
+            ORDER BY update_time, task_id
+            LIMIT #{limit}
+            """)
+    List<BizDataQualityFillTask> selectRetryable(
+            @Param("updatedBefore") LocalDateTime updatedBefore,
+            @Param("limit") int limit);
+
+    /**
+     * 只返回 task_id，避免未知枚举字符串在 MyBatis 实体映射阶段中断整批恢复。
+     */
+    @Select("""
+            SELECT task_id
+            FROM biz_data_quality_fill_task
+            WHERE apply_status = 'FAILED'
+              AND update_time <= #{updatedBefore}
+              AND (
+                  source_type IS NULL
+                  OR source_type NOT IN ('TYPICAL_VALUE', 'INTERPOLATION')
+              )
+            ORDER BY update_time, task_id
+            LIMIT #{limit}
+            """)
+    List<String> selectInvalidSourceRetryableTaskIds(
+            @Param("updatedBefore") LocalDateTime updatedBefore,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT *
+            FROM biz_data_quality_fill_task
+            WHERE source_type = 'INTERPOLATION'
+              AND apply_status = 'WAITING'
+              AND closed_at IS NULL
+              AND update_time <= #{updatedBefore}
+            ORDER BY update_time, task_id
+            LIMIT #{limit}
+            """)
+    List<BizDataQualityFillTask> selectWaitingInterpolationTasks(
+            @Param("updatedBefore") LocalDateTime updatedBefore,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT *
+            FROM biz_data_quality_fill_task
+            WHERE source_type = 'TYPICAL_VALUE'
+              AND end_minute <= #{hourEndedBefore}
+              AND closed_at IS NULL
+              AND apply_status IN ('WAITING', 'APPLIED', 'FAILED', 'REPLACED')
+            ORDER BY end_minute, task_id
+            LIMIT #{limit}
+            """)
+    List<BizDataQualityFillTask> selectTypicalTasksToClose(
+            @Param("hourEndedBefore") LocalDateTime hourEndedBefore,
+            @Param("limit") int limit);
+
+    @Select("""
+            SELECT *
+            FROM biz_data_quality_fill_task
+            WHERE source_type = 'INTERPOLATION'
+              AND apply_status IN ('APPLIED', 'REPLACED')
+              AND closed_at IS NULL
+              AND update_time <= #{updatedBefore}
+            ORDER BY update_time, task_id
+            LIMIT #{limit}
+            """)
+    List<BizDataQualityFillTask> selectInterpolationTasksToClose(
+            @Param("updatedBefore") LocalDateTime updatedBefore,
+            @Param("limit") int limit);
+
+    @Update("""
+            UPDATE biz_data_quality_fill_task
+            SET retry_count = retry_count + 1,
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE task_id = #{taskId}
+              AND apply_status = 'FAILED'
+            """)
+    int incrementRetryAtomic(@Param("taskId") String taskId);
+
+    @Update("""
+            UPDATE biz_data_quality_fill_task
+            SET apply_status = 'FAILED',
+                last_error = #{lastError},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE task_id = #{taskId}
+              AND apply_status = 'FAILED'
+            """)
+    int recordRetryErrorAtomic(
+            @Param("taskId") String taskId,
+            @Param("lastError") String lastError);
+
+    @Update("""
+            UPDATE biz_data_quality_fill_task
+            SET apply_status = #{applyStatus},
+                failed_count = 0,
+                failed_minutes_json = NULL,
+                last_error = NULL,
+                replaced_count = LEAST(
+                    TIMESTAMPDIFF(MINUTE, start_minute, end_minute),
+                    replaced_count + #{ownReplacementIncrement}),
+                closed_at = NULL,
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE task_id = #{taskId}
+              AND apply_status IN ('FAILED', 'WAITING')
+            """)
+    int markRetryRecoveredAtomic(
+            @Param("taskId") String taskId,
+            @Param("applyStatus") FillApplyStatus applyStatus,
+            @Param("ownReplacementIncrement") int ownReplacementIncrement);
 
     /**
      * 按 TDengine 实际结果一次性收口计数和典型值应用区间。

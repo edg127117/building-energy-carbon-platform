@@ -5,6 +5,7 @@ import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -49,4 +50,10 @@ public interface IndicatorMinuteRepository {
     /** 返回时间窗口内已成功的指标分钟键，供缺口恢复一次性判断。 */
     Set<IndicatorMinuteKey> findSuccessfulKeys(
             List<String> indicatorIds, long fromInclusive, long toExclusive);
+
+    /**
+     * 批量读取精确指标分钟键在成功表或异常表中的最新尝试时间。
+     */
+    Map<IndicatorMinuteKey, Long> findLatestAttemptAt(
+            Set<IndicatorMinuteKey> keys);
 }

@@ -15,7 +15,9 @@ import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -196,6 +198,43 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                 new IndicatorMinuteKey(
                         resultSet.getString("indicator_id"),
                         resultSet.getTimestamp("ts").getTime())));
+    }
+
+    @Override
+    public Map<IndicatorMinuteKey, Long> findLatestAttemptAt(
+            Set<IndicatorMinuteKey> keys) {
+        if (keys.isEmpty()) {
+            return Map.of();
+        }
+        String predicates = keys.stream()
+                .sorted(Comparator
+                        .comparing(IndicatorMinuteKey::indicatorId)
+                        .thenComparingLong(IndicatorMinuteKey::minuteStart))
+                .map(key -> "(indicator_id=" + quote(key.indicatorId())
+                        + " AND ts=" + timestamp(key.minuteStart()) + ")")
+                .collect(Collectors.joining(" OR "));
+        Map<IndicatorMinuteKey, Long> calculatedAt = new LinkedHashMap<>();
+        collectAttemptTimes(indicatorStable(), predicates, calculatedAt);
+        collectAttemptTimes(exceptionStable(), predicates, calculatedAt);
+        return Map.copyOf(calculatedAt);
+    }
+
+    private void collectAttemptTimes(
+            String stable,
+            String predicates,
+            Map<IndicatorMinuteKey, Long> calculatedAt) {
+        String sql = "SELECT indicator_id,ts,calculated_at FROM "
+                + stable + " WHERE " + predicates
+                + " ORDER BY indicator_id,ts";
+        template.query(sql, resultSet -> {
+            IndicatorMinuteKey key = new IndicatorMinuteKey(
+                    resultSet.getString("indicator_id"),
+                    resultSet.getTimestamp("ts").getTime());
+            calculatedAt.merge(
+                    key,
+                    resultSet.getTimestamp("calculated_at").getTime(),
+                    Math::max);
+        });
     }
 
     private IndicatorMinuteResult mapSuccess(ResultSet resultSet, int rowNumber)

@@ -2,6 +2,8 @@ package com.platform.iot.temporal.impl;
 
 import com.platform.config.TdengineProperties;
 import com.platform.iot.temporal.HvacRawEventRepository;
+import com.platform.iot.temporal.model.LateRawMinuteEvidence;
+import com.platform.iot.temporal.model.PointMinuteKey;
 import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import lombok.RequiredArgsConstructor;
@@ -11,6 +13,8 @@ import org.springframework.stereotype.Repository;
 
 import java.sql.Timestamp;
 import java.util.List;
+import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -121,6 +125,102 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + " AND ts < " + quote(new Timestamp(endExclusive).toString())
                 + (includeLate ? "" : " AND late_flag=0");
         return template.queryForList(sql).stream().map(this::mapEvent).toList();
+    }
+
+    @Override
+    public List<LateRawMinuteEvidence> findLateMinuteEvidence(
+            long startInclusive,
+            long endExclusive,
+            Long afterMinuteStart,
+            String afterPointId,
+            int limit) {
+        if (limit <= 0 || limit > 100) {
+            throw new IllegalArgumentException("limit 必须在 1 到 100 之间");
+        }
+        String stable = safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(properties.getStRawEvent());
+        // late_flag、分钟分组和 LIMIT 都在 TDengine 执行，避免把 24 小时原始样本
+        // 全量拉回 JVM 后再过滤。恢复使用本轮 now 作为接收水位，不对 TIMESTAMP
+        // 执行 MAX，从而兼容项目使用的 TDengine 3.2.3。
+        if ((afterMinuteStart == null) != (afterPointId == null)) {
+            throw new IllegalArgumentException(
+                    "迟到证据游标的分钟和测点必须同时提供");
+        }
+        if (afterPointId != null && afterPointId.isBlank()) {
+            throw new IllegalArgumentException("afterPointId 不能为空白");
+        }
+        String seek = afterMinuteStart == null ? "" : """
+                  WHERE minute_start > %s
+                     OR (minute_start = %s AND point_id > %s)
+                """.formatted(
+                quote(new Timestamp(afterMinuteStart).toString()),
+                quote(new Timestamp(afterMinuteStart).toString()),
+                quote(afterPointId));
+        // 外层 seek 游标让每轮 LIMIT 100 可以持续前进；扫描到末尾后服务会安全回绕。
+        String sql = """
+                SELECT point_id, building_id, minute_start
+                FROM (
+                    SELECT point_id, FIRST(building_id) AS building_id,
+                           _wstart AS minute_start
+                    FROM %s
+                    WHERE ts >= %s
+                      AND ts < %s
+                      AND late_flag = 1
+                    PARTITION BY point_id
+                    INTERVAL(1m)
+                ) grouped_late
+                %s
+                ORDER BY minute_start, point_id
+                LIMIT %d
+                """.formatted(
+                stable,
+                quote(new Timestamp(startInclusive).toString()),
+                quote(new Timestamp(endExclusive).toString()),
+                seek,
+                limit);
+        return template.queryForList(sql).stream()
+                .map(row -> new LateRawMinuteEvidence(
+                        text(row, "point_id"),
+                        text(row, "building_id"),
+                        timestamp(row, "minute_start").getTime()))
+                .toList();
+    }
+
+    @Override
+    public Set<PointMinuteKey> findLateEvidenceKeys(
+            Collection<PointMinuteKey> candidates) {
+        if (candidates.isEmpty()) {
+            return Set.of();
+        }
+        if (candidates.size() > 100) {
+            throw new IllegalArgumentException("迟到证据核验每批不能超过 100 个分钟");
+        }
+        String stable = safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(properties.getStRawEvent());
+        String predicates = candidates.stream()
+                .distinct()
+                .map(key -> "(point_id=" + quote(key.pointId())
+                        + " AND ts >= "
+                        + quote(new Timestamp(key.minuteStart()).toString())
+                        + " AND ts < "
+                        + quote(new Timestamp(
+                        key.minuteStart() + 60_000L).toString()) + ")")
+                .collect(java.util.stream.Collectors.joining(" OR "));
+        String sql = """
+                SELECT point_id, _wstart AS minute_start
+                FROM %s
+                WHERE late_flag = 1
+                  AND (%s)
+                PARTITION BY point_id
+                INTERVAL(1m)
+                ORDER BY minute_start, point_id
+                """.formatted(stable, predicates);
+        Set<PointMinuteKey> keys = new LinkedHashSet<>();
+        template.queryForList(sql).forEach(row -> keys.add(
+                new PointMinuteKey(
+                        text(row, "point_id"),
+                        timestamp(row, "minute_start").getTime())));
+        return Set.copyOf(keys);
     }
 
     @Override

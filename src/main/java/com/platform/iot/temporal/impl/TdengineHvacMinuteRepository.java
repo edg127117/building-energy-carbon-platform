@@ -193,6 +193,62 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     }
 
     @Override
+    public List<RawMinuteAggregate> findByQualityTaskId(
+            String qualityTaskId,
+            String pointId,
+            long fromInclusive,
+            long toExclusive,
+            int limit) {
+        if (limit <= 0 || limit > 61) {
+            throw new IllegalArgumentException("任务分钟查询 limit 必须在 1 到 61 之间");
+        }
+        String sql = aggregateSelect()
+                + " WHERE quality_task_id=" + quote(qualityTaskId)
+                + " AND point_id=" + quote(pointId)
+                + " AND " + timeRange(fromInclusive, toExclusive)
+                + " ORDER BY ts LIMIT " + limit;
+        return template.query(sql, this::mapAggregate);
+    }
+
+    @Override
+    public List<RawMinuteAggregate> findLateRealMinutes(
+            long fromInclusive,
+            long toExclusive,
+            Long afterMinuteStart,
+            String afterPointId,
+            int normalFinalizationDelaySeconds,
+            int limit) {
+        if (normalFinalizationDelaySeconds < 0) {
+            throw new IllegalArgumentException(
+                    "normalFinalizationDelaySeconds 不能为负数");
+        }
+        if (limit <= 0 || limit > 100) {
+            throw new IllegalArgumentException("limit 必须在 1 到 100 之间");
+        }
+        if ((afterMinuteStart == null) != (afterPointId == null)) {
+            throw new IllegalArgumentException(
+                    "迟到 Q0 游标的分钟和测点必须同时提供");
+        }
+        long normalBoundarySeconds = Math.addExact(
+                60L, normalFinalizationDelaySeconds);
+        String seek = afterMinuteStart == null ? "" :
+                " AND (ts > "
+                        + quote(new Timestamp(afterMinuteStart).toString())
+                        + " OR (ts = "
+                        + quote(new Timestamp(afterMinuteStart).toString())
+                        + " AND point_id > " + quote(afterPointId) + "))";
+        // 正式 Q0 使用独立 seek 游标扫描；业务服务随后批量核验精确 point+minute
+        // 确实存在 raw late 证据，避免把普通停机恢复误判为迟到修正。
+        String sql = aggregateSelect()
+                + " WHERE " + timeRange(fromInclusive, toExclusive)
+                + " AND data_quality=0"
+                + " AND finalized_at > ts + " + normalBoundarySeconds + "s"
+                + seek
+                + " ORDER BY ts,point_id LIMIT " + limit;
+        return template.query(sql, this::mapAggregate);
+    }
+
+    @Override
     public void deleteIfOwnedByTask(
             String pointId, long minuteStart, String taskId) {
         MinuteQualityLockRegistry.MinuteKey key =

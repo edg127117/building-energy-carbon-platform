@@ -45,6 +45,29 @@ public interface HvacMinuteRepository {
     List<RawMinuteAggregate> findByQualityTaskId(String qualityTaskId);
 
     /**
+     * 在任务声明的点位和半开区间内有界读取来源分钟，供小时收口核对。
+     */
+    List<RawMinuteAggregate> findByQualityTaskId(
+            String qualityTaskId,
+            String pointId,
+            long fromInclusive,
+            long toExclusive,
+            int limit);
+
+    /**
+     * 在 TDengine 侧筛选自动修正窗口内晚于正常冻结边界的 Q0 分钟。
+     *
+     * @param normalFinalizationDelaySeconds 分钟结束后的正常冻结等待秒数
+     */
+    List<RawMinuteAggregate> findLateRealMinutes(
+            long fromInclusive,
+            long toExclusive,
+            Long afterMinuteStart,
+            String afterPointId,
+            int normalFinalizationDelaySeconds,
+            int limit);
+
+    /**
      * 仅在分钟仍由指定补全任务持有时删除，避免作废旧任务误删升级后的数据。
      */
     void deleteIfOwnedByTask(String pointId, long minuteStart, String taskId);

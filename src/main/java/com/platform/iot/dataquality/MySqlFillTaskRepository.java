@@ -158,6 +158,107 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         }
     }
 
+    @Override
+    public List<BizDataQualityFillTask> findRetryable(
+            LocalDateTime updatedBefore, int limit) {
+        Objects.requireNonNull(updatedBefore, "updatedBefore 不能为空");
+        requireLimit(limit);
+        // 恢复服务必须自己解码并隔离坏证据；这里不能因一条损坏 JSON
+        // 中断同批其余任务的读取。
+        return List.copyOf(mapper.selectRetryable(updatedBefore, limit));
+    }
+
+    @Override
+    public List<String> findInvalidSourceRetryableTaskIds(
+            LocalDateTime updatedBefore, int limit) {
+        Objects.requireNonNull(updatedBefore, "updatedBefore 不能为空");
+        requireLimit(limit);
+        return List.copyOf(
+                mapper.selectInvalidSourceRetryableTaskIds(
+                        updatedBefore, limit));
+    }
+
+    @Override
+    public List<BizDataQualityFillTask> findWaitingInterpolationTasks(
+            LocalDateTime updatedBefore, int limit) {
+        Objects.requireNonNull(updatedBefore, "updatedBefore 不能为空");
+        requireLimit(limit);
+        return List.copyOf(
+                mapper.selectWaitingInterpolationTasks(
+                        updatedBefore, limit));
+    }
+
+    @Override
+    public List<BizDataQualityFillTask> findTypicalTasksToClose(
+            LocalDateTime hourEndedBefore, int limit) {
+        Objects.requireNonNull(hourEndedBefore, "hourEndedBefore 不能为空");
+        requireLimit(limit);
+        return List.copyOf(
+                mapper.selectTypicalTasksToClose(hourEndedBefore, limit));
+    }
+
+    @Override
+    public List<BizDataQualityFillTask> findInterpolationTasksToClose(
+            LocalDateTime updatedBefore, int limit) {
+        Objects.requireNonNull(updatedBefore, "updatedBefore 不能为空");
+        requireLimit(limit);
+        return List.copyOf(
+                mapper.selectInterpolationTasksToClose(updatedBefore, limit));
+    }
+
+    @Override
+    public void incrementRetry(String taskId) {
+        requireText(taskId, "taskId");
+        if (mapper.incrementRetryAtomic(taskId) != 1) {
+            throw new IllegalStateException(
+                    "补全任务已不处于可重试状态: " + taskId);
+        }
+    }
+
+    @Override
+    public void recordRetryError(String taskId, String error) {
+        requireText(taskId, "taskId");
+        String normalized = normalizeError(error);
+        if (mapper.recordRetryErrorAtomic(taskId, normalized) != 1) {
+            throw new IllegalStateException(
+                    "补全任务重试错误记录失败: " + taskId);
+        }
+    }
+
+    @Override
+    public void markRetryRecovered(
+            String taskId,
+            FillApplyStatus applyStatus,
+            int ownReplacementIncrement) {
+        requireText(taskId, "taskId");
+        if (applyStatus != FillApplyStatus.APPLIED
+                && applyStatus != FillApplyStatus.REPLACED) {
+            throw new IllegalArgumentException(
+                    "重试完成状态只能是 APPLIED 或 REPLACED");
+        }
+        if (ownReplacementIncrement < 0) {
+            throw new IllegalArgumentException(
+                    "ownReplacementIncrement 不能为负数");
+        }
+        if (mapper.markRetryRecoveredAtomic(
+                taskId, applyStatus, ownReplacementIncrement) != 1) {
+            throw new IllegalStateException(
+                    "补全任务重试完成状态更新失败: " + taskId);
+        }
+    }
+
+    @Override
+    public void recordReplacements(
+            Map<String, Integer> countsByOldTaskId) {
+        Objects.requireNonNull(countsByOldTaskId, "countsByOldTaskId");
+        countsByOldTaskId.forEach((taskId, count) -> {
+            if (count == null || count <= 0) {
+                throw new IllegalArgumentException("替换计数必须大于 0");
+            }
+            incrementReplacedCount(taskId, count);
+        });
+    }
+
     /**
      * 只有典型值小时任务包含可变的应用区间；插值证据的两个真实端点不可改写。
      */
@@ -398,6 +499,12 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
 
     private int defaultZero(Integer value) {
         return value == null ? 0 : value;
+    }
+
+    private void requireLimit(int limit) {
+        if (limit <= 0 || limit > 100) {
+            throw new IllegalArgumentException("limit 必须在 1 到 100 之间");
+        }
     }
 
     private void requireMinuteAligned(long minuteStart) {

@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -420,6 +421,39 @@ class InterpolationFillServiceTest {
                 any(HvacMinuteQualityReadyEvent.class));
         verify(fillTaskRepository, never()).recordFailure(
                 any(), anyLong(), any());
+    }
+
+    @Test
+    void readyFailureRecordsTaskFailureBeforeAnyAppliedOrClosedState() {
+        PointRuntimeConfig point = point(
+                "P1", "ONLINE", "ANALOG", 1,
+                BigDecimal.ZERO, new BigDecimal("100"));
+        long leftMinute = RIGHT_MINUTE - 2 * MINUTE_MILLIS;
+        RawMinuteAggregate right = real(point, RIGHT_MINUTE, 20.0);
+        when(pointConfigProvider.findAll()).thenReturn(List.of(point));
+        when(minuteRepository.findRange(
+                Set.of("P1"),
+                RIGHT_MINUTE - 6 * MINUTE_MILLIS,
+                RIGHT_MINUTE + MINUTE_MILLIS))
+                .thenReturn(List.of(
+                        real(point, leftMinute, 10.0), right));
+        stubTask("TASK-READY-FAIL");
+        when(minuteRepository.saveAllWithQualityPriority(anyList(), isNull()))
+                .thenAnswer(invocation -> writeResults(
+                        invocation.getArgument(0)));
+        org.mockito.Mockito.doThrow(
+                        new IllegalStateException("formula unavailable"))
+                .when(eventPublisher)
+                .publishEvent(any(HvacMinuteQualityReadyEvent.class));
+
+        service.fillFromRightEndpoints(List.of(right), FINALIZED_AT);
+
+        verify(fillTaskRepository).recordFailure(
+                "TASK-READY-FAIL",
+                leftMinute + MINUTE_MILLIS,
+                "formula unavailable");
+        verify(fillTaskRepository, never()).markFirstApplied(anyString());
+        verify(fillTaskRepository, never()).reconcile(any());
     }
 
     @Test

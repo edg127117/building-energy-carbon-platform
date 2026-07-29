@@ -99,7 +99,7 @@ public class LateRealMinuteCorrectionService {
     @EventListener
     public void onLateRealEventStored(HvacLateRealEventStoredEvent event) {
         try {
-            correct(event);
+            recoverStoredEvent(event);
         } catch (RuntimeException exception) {
             meterRegistry.counter(
                     "iot.hvac.late_real.correction_failed").increment();
@@ -108,6 +108,16 @@ public class LateRealMinuteCorrectionService {
                     event == null ? null : event.minuteStart(),
                     exception);
         }
+    }
+
+    /**
+     * 由低频补偿同步重放一条已落盘迟到证据。
+     *
+     * <p>同步入口保证 Q0 重聚合完成后再扫描下游指标水位；它复用实时事件完全相同
+     * 的幂等锁和证据校验，不创建额外补全任务。</p>
+     */
+    public void recoverStoredEvent(HvacLateRealEventStoredEvent event) {
+        correct(event);
     }
 
     private void correct(HvacLateRealEventStoredEvent event) {

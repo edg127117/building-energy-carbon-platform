@@ -292,6 +292,36 @@ class TdengineHvacMinuteRepositoryTest {
 
     @Test
     @SuppressWarnings("unchecked")
+    void scopesTaskClosingQueryAndLateQ0CandidatesInTdengine() {
+        when(template.query(anyString(), any(RowMapper.class)))
+                .thenReturn(List.of());
+
+        repository.findByQualityTaskId(
+                "TASK'01", "POINT'01", MINUTE, MINUTE + 3_600_000L, 61);
+        repository.findLateRealMinutes(
+                MINUTE,
+                MINUTE + 3_600_000L,
+                MINUTE,
+                "POINT'00",
+                30,
+                100);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template, times(2)).query(sql.capture(), any(RowMapper.class));
+        assertThat(sql.getAllValues().get(0))
+                .contains("quality_task_id='TASK''01'")
+                .contains("point_id='POINT''01'")
+                .contains("ts>=", "ts<", "LIMIT 61");
+        assertThat(sql.getAllValues().get(1))
+                .contains("point_id > 'POINT''00'")
+                .contains("data_quality=0")
+                .contains("finalized_at > ts + 90s")
+                .contains("ORDER BY ts,point_id")
+                .contains("LIMIT 100");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
     void deletesOnlyMinuteStillOwnedByTask() {
         when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of(
                 generatedAggregateAt(

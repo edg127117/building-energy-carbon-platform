@@ -245,7 +245,20 @@ public class InterpolationFillService {
             return;
         }
 
+        try {
+            // READY 属于本次 Q1 应用成功条件。若同步公式链路失败，任务必须保持
+            // FAILED，后续恢复才能依据 persisted finalizedAt 精确补发。
+            for (int index = 0; index < results.size(); index++) {
+                if (isActualWrite(results.get(index).outcome())) {
+                    publishReady(generated.get(index), finalizedAt);
+                }
+            }
+        } catch (RuntimeException exception) {
+            recordFailures(taskId, generated, exception);
+            return;
+        }
         markFirstAppliedBestEffort(taskId, results);
+        recordReplacedTasksBestEffort(results);
         try {
             reconcile(taskId, generated.size(), results, finalizedAt);
         } catch (RuntimeException exception) {
@@ -253,10 +266,34 @@ public class InterpolationFillService {
             log.error("质量1分钟已写入，但补全任务收口失败，等待跨库补偿: taskId={}",
                     taskId, exception);
         }
-        for (int index = 0; index < results.size(); index++) {
-            if (isActualWrite(results.get(index).outcome())) {
-                publishReady(generated.get(index), finalizedAt);
-            }
+    }
+
+    /**
+     * Q1 升级 Q2 后，按写入结果中的旧 taskId 聚合更新 MySQL。
+     *
+     * <p>不能依赖 Q2 的 minuteCount 作为上限，因为小时热路径首次写入时该计数
+     * 仍为 0；最终准确值仍由小时收口按 TDengine 事实重建。</p>
+     */
+    private void recordReplacedTasksBestEffort(
+            List<MinuteQualityWriteResult> results) {
+        Map<String, Integer> replacements = new LinkedHashMap<>();
+        results.stream()
+                .filter(result -> isActualWrite(result.outcome()))
+                .map(MinuteQualityWriteResult::previousTaskId)
+                .filter(taskId -> taskId != null && !taskId.isBlank())
+                .forEach(taskId ->
+                        replacements.merge(taskId, 1, Integer::sum));
+        if (replacements.isEmpty()) {
+            return;
+        }
+        try {
+            fillTaskRepository.recordReplacements(replacements);
+        } catch (RuntimeException exception) {
+            // TDengine 升级已经成功，不能因审计计数失败撤销 Q1 或压掉 READY；
+            // 当前精简模型不在 TD 保留 previousTaskId，后续小时收口无法反推这次
+            // 替换，故必须明确记录日志，交由异常审计入口人工修正旧任务计数。
+            log.error("质量1已升级分钟，但旧任务替换计数更新失败: taskIds={}",
+                    replacements.keySet(), exception);
         }
     }
 
