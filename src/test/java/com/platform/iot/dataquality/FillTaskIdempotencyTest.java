@@ -69,6 +69,78 @@ class FillTaskIdempotencyTest {
     }
 
     @Test
+    void recalculationQ1UsesAJobScopedNamespaceWithoutChangingStandardQ1() {
+        String manual = FillTaskIdempotency.recalculationQ1(
+                " JOB001 ", " POINT001 ",
+                MINUTE, MINUTE + 180_000L, " linear-v1 ");
+
+        assertThat(manual)
+                .isEqualTo(
+                        "RECALC_Q1:JOB001:POINT001:1800000:1980000:linear-v1")
+                .isNotEqualTo(FillTaskIdempotency.q1(
+                        "POINT001", MINUTE, MINUTE + 180_000L, "linear-v1"));
+        assertThat(FillTaskIdempotency.recalculationQ1(
+                "JOB002", "POINT001",
+                MINUTE, MINUTE + 180_000L, "linear-v1"))
+                .isNotEqualTo(manual);
+    }
+
+    @Test
+    void recalculationQ2UsesAJobScopedNamespaceWithoutChangingStandardQ2() {
+        String manual = FillTaskIdempotency.recalculationQ2(
+                " JOB001 ", " POINT001 ", " CONFIG001 ", 3, HOUR);
+
+        assertThat(manual)
+                .isEqualTo(
+                        "RECALC_Q2:JOB001:POINT001:CONFIG001:3:3600000")
+                .isNotEqualTo(FillTaskIdempotency.q2(
+                        "POINT001", "CONFIG001", 3, HOUR));
+        assertThat(FillTaskIdempotency.recalculationQ2(
+                "JOB002", "POINT001", "CONFIG001", 3, HOUR))
+                .isNotEqualTo(manual);
+    }
+
+    @Test
+    void recalculationKeysRejectInvalidIdentifiersVersionsTimesAndLengths() {
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        " ", "POINT001",
+                        MINUTE, MINUTE + 60_000L, "linear-v1"));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        "JOB001", " ", MINUTE, MINUTE + 60_000L, "linear-v1"));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        "JOB001", "POINT001", MINUTE, MINUTE + 60_000L, " "));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        "JOB001", "POINT001",
+                        MINUTE + 1L, MINUTE + 60_000L, "linear-v1"));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        "JOB001", "POINT001",
+                        MINUTE, MINUTE + 60_001L, "linear-v1"));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        "JOB001", "POINT001",
+                        MINUTE + 60_000L, MINUTE, "linear-v1"));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ2(
+                        "JOB001", "POINT001", " ", 1, HOUR));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ2(
+                        "JOB001", "POINT001", "CONFIG001", 0, HOUR));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ2(
+                        "JOB001", "POINT001", "CONFIG001", 1,
+                        HOUR + 60_000L));
+        assertThatIllegalArgumentException().isThrownBy(() ->
+                FillTaskIdempotency.recalculationQ1(
+                        "J".repeat(100), "P".repeat(32),
+                        MINUTE, MINUTE + 60_000L, "A".repeat(32)));
+    }
+
+    @Test
     void rejectsBlankIdentifiersMisalignedTimesAndOversizedKeys() {
         assertThatIllegalArgumentException().isThrownBy(() ->
                 FillTaskIdempotency.q1(" ", MINUTE, MINUTE + 60_000L, "v1"));

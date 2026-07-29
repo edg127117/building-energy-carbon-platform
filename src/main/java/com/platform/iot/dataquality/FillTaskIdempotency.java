@@ -51,6 +51,59 @@ public final class FillTaskIdempotency {
                 + ":" + typicalConfigVersion + ":" + hourStart);
     }
 
+    /**
+     * 生成人工重算批次内的质量 1 子任务键。
+     *
+     * <p>jobId 使人工重算与自动插值使用不同命名空间，同一分块重试仍会复用原子任务，
+     * 但不会误命中已经作废的标准 Q1 任务。</p>
+     */
+    public static String recalculationQ1(
+            String jobId,
+            String pointId,
+            long leftMinute,
+            long rightMinute,
+            String algorithmVersion) {
+        String normalizedJobId = requireIdentifier(jobId, "jobId");
+        String normalizedPointId = requireIdentifier(pointId, "pointId");
+        String normalizedAlgorithmVersion =
+                requireIdentifier(algorithmVersion, "algorithmVersion");
+        requireMinuteAligned(leftMinute, "leftMinute");
+        requireMinuteAligned(rightMinute, "rightMinute");
+        if (rightMinute <= leftMinute) {
+            throw new IllegalArgumentException("rightMinute 必须晚于 leftMinute");
+        }
+        return verifyLength("RECALC_Q1:" + normalizedJobId + ":"
+                + normalizedPointId + ":" + leftMinute + ":" + rightMinute
+                + ":" + normalizedAlgorithmVersion);
+    }
+
+    /**
+     * 生成人工重算批次内的质量 2 子任务键。
+     *
+     * <p>配置版本和自然小时共同冻结典型值来源，jobId 则保证不同人工批次各自保留
+     * 独立、可追溯的补全任务。</p>
+     */
+    public static String recalculationQ2(
+            String jobId,
+            String pointId,
+            String typicalConfigId,
+            int typicalConfigVersion,
+            long hourStart) {
+        String normalizedJobId = requireIdentifier(jobId, "jobId");
+        String normalizedPointId = requireIdentifier(pointId, "pointId");
+        String normalizedConfigId =
+                requireIdentifier(typicalConfigId, "typicalConfigId");
+        if (typicalConfigVersion <= 0) {
+            throw new IllegalArgumentException("typicalConfigVersion 必须大于 0");
+        }
+        if (Math.floorMod(hourStart, HOUR_MILLIS) != 0L) {
+            throw new IllegalArgumentException("hourStart 必须对齐到自然小时");
+        }
+        return verifyLength("RECALC_Q2:" + normalizedJobId + ":"
+                + normalizedPointId + ":" + normalizedConfigId + ":"
+                + typicalConfigVersion + ":" + hourStart);
+    }
+
     public static String regeneration(
             String oldTaskId,
             String pointId,
