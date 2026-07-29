@@ -52,6 +52,10 @@ public class BizDataQualityFillTask implements Serializable {
     private String voidReason;
     private LocalDateTime voidAt;
     private String supersedesTaskId;
+    /**
+     * 仅人工重算产生的 Q1/Q2 子任务填写；自动补全任务保持为空，避免进入分钟热路径。
+     */
+    private String recalcJobId;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

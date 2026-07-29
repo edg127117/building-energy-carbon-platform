@@ -10,8 +10,9 @@ import org.springframework.validation.annotation.Validated;
 /**
  * HVAC 分钟数据质量补全的集中配置。
  *
- * <p>该配置控制质量 1 插值、质量 2 典型值、迟到真实数据修正和后台补偿任务。
- * 测试环境可整体关闭补全及收口，避免普通自动化测试连接真实外部资源。</p>
+ * <p>该配置控制质量 1 插值、质量 2 典型值、迟到真实数据修正、后台补偿和人工
+ * 重算任务。测试环境可分别关闭补全、收口及重算执行器，避免普通自动化测试连接
+ * 真实外部资源。</p>
  */
 @Data
 @Component
@@ -40,6 +41,17 @@ public class DataQualityProperties {
 
     /** 是否启用小时批次收口和跨库状态核对。 */
     private boolean reconciliationEnabled = true;
+
+    /** 是否注册人工重算专属接口、Service 和执行器；关闭后保留已有审计数据。 */
+    private boolean recalculationEnabled = true;
+
+    /** 人工重算执行器两轮扫描间隔，单位毫秒。 */
+    @Min(1)
+    private long recalculationScanDelayMs = 10_000L;
+
+    /** RUNNING 批次超过该时间未更新后允许其他实例重新领取。 */
+    @Min(1)
+    private long recalculationStaleMs = 120_000L;
 
     /**
      * 线性插值只处理有两个质量 0 端点的短缺口，不能串联使用生成数据。

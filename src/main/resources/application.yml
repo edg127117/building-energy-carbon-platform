@@ -104,6 +104,12 @@ data-quality:
   retry-delay-ms: 600000
   # true 时在自然小时结束后核对 TDengine 实际行并一次性收口批次，避免分钟热路径写放大。
   reconciliation-enabled: true
+  # 关闭时不注册人工重算接口、Service 和执行器，但不删除已有审计数据。
+  recalculation-enabled: true
+  # 人工重算每轮只领取有界批次，避免持续轮询占用 MySQL。
+  recalculation-scan-delay-ms: 10000
+  # RUNNING 批次超过该水位未更新后可被重新领取，用于服务重启和实例故障恢复。
+  recalculation-stale-ms: 120000
 
 formula:
   # false 时不创建公式引擎、指标查询 API 和补算任务；测试可据此停止公式业务链路。

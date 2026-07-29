@@ -360,6 +360,7 @@ CREATE TABLE biz_data_quality_fill_task (
   void_reason VARCHAR(500),
   void_at TIMESTAMP(3),
   supersedes_task_id VARCHAR(32),
+  recalc_job_id VARCHAR(32),
   create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
   update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
   CONSTRAINT chk_fill_quality CHECK (data_quality IN (1, 2)),
@@ -372,3 +373,43 @@ CREATE INDEX idx_fill_point_range
   ON biz_data_quality_fill_task (point_id, start_minute, end_minute);
 CREATE INDEX idx_fill_status_update
   ON biz_data_quality_fill_task (apply_status, update_time);
+CREATE INDEX idx_fill_recalc_job
+  ON biz_data_quality_fill_task (recalc_job_id, task_id);
+
+-- H2 使用 TEXT 模拟 MySQL JSON；普通测试只验证管理数据，不连接真实 MySQL。
+CREATE TABLE biz_data_quality_recalc_job (
+  job_id VARCHAR(32) PRIMARY KEY,
+  idempotency_key VARCHAR(160) NOT NULL,
+  job_type VARCHAR(30) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  point_ids_json TEXT NOT NULL,
+  from_minute TIMESTAMP(3) NOT NULL,
+  to_minute TIMESTAMP(3) NOT NULL,
+  supersedes_task_id VARCHAR(32),
+  reason VARCHAR(500) NOT NULL,
+  operator_id BIGINT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  phase VARCHAR(20) NOT NULL,
+  cursor_minute TIMESTAMP(3) NOT NULL,
+  void_target_minutes_json TEXT,
+  q0_count INT DEFAULT 0 NOT NULL,
+  q1_count INT DEFAULT 0 NOT NULL,
+  q2_count INT DEFAULT 0 NOT NULL,
+  missing_count INT DEFAULT 0 NOT NULL,
+  voided_count INT DEFAULT 0 NOT NULL,
+  replaced_count INT DEFAULT 0 NOT NULL,
+  last_error VARCHAR(1000),
+  started_at TIMESTAMP(3),
+  finished_at TIMESTAMP(3),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_recalc_idempotency UNIQUE (idempotency_key)
+);
+
+CREATE INDEX idx_recalc_status_cursor
+  ON biz_data_quality_recalc_job (status, update_time, job_id);
+CREATE INDEX idx_recalc_building_range
+  ON biz_data_quality_recalc_job
+  (building_id, status, from_minute, to_minute);
+CREATE INDEX idx_recalc_supersedes
+  ON biz_data_quality_recalc_job (supersedes_task_id, create_time);

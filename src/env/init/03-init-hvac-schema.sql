@@ -549,6 +549,7 @@ CREATE TABLE IF NOT EXISTS `biz_data_quality_fill_task` (
     `void_reason` VARCHAR(500) DEFAULT NULL,
     `void_at` DATETIME(3) DEFAULT NULL,
     `supersedes_task_id` VARCHAR(32) DEFAULT NULL,
+    `recalc_job_id` VARCHAR(32) DEFAULT NULL,
     `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
     `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
         ON UPDATE CURRENT_TIMESTAMP(3),
@@ -559,5 +560,43 @@ CREATE TABLE IF NOT EXISTS `biz_data_quality_fill_task` (
         (`building_id`, `start_minute`, `end_minute`),
     KEY `idx_fill_point_range`
         (`point_id`, `start_minute`, `end_minute`),
-    KEY `idx_fill_status_update` (`apply_status`, `update_time`)
+    KEY `idx_fill_status_update` (`apply_status`, `update_time`),
+    KEY `idx_fill_recalc_job` (`recalc_job_id`, `task_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='数据质量补全写入与追溯批次';
+
+-- 人工重算是低频管理批次，不按分钟建 MySQL 明细；混合 Q0/Q1/Q2/缺失只累计汇总。
+CREATE TABLE IF NOT EXISTS `biz_data_quality_recalc_job` (
+    `job_id` VARCHAR(32) NOT NULL,
+    `idempotency_key` VARCHAR(160) NOT NULL,
+    `job_type` VARCHAR(30) NOT NULL,
+    `building_id` VARCHAR(32) NOT NULL,
+    `point_ids_json` JSON NOT NULL,
+    `from_minute` DATETIME(3) NOT NULL,
+    `to_minute` DATETIME(3) NOT NULL,
+    `supersedes_task_id` VARCHAR(32) DEFAULT NULL,
+    `reason` VARCHAR(500) NOT NULL,
+    `operator_id` BIGINT NOT NULL,
+    `status` VARCHAR(20) NOT NULL,
+    `phase` VARCHAR(20) NOT NULL,
+    `cursor_minute` DATETIME(3) NOT NULL,
+    `void_target_minutes_json` JSON DEFAULT NULL,
+    `q0_count` INT NOT NULL DEFAULT 0,
+    `q1_count` INT NOT NULL DEFAULT 0,
+    `q2_count` INT NOT NULL DEFAULT 0,
+    `missing_count` INT NOT NULL DEFAULT 0,
+    `voided_count` INT NOT NULL DEFAULT 0,
+    `replaced_count` INT NOT NULL DEFAULT 0,
+    `last_error` VARCHAR(1000) DEFAULT NULL,
+    `started_at` DATETIME(3) DEFAULT NULL,
+    `finished_at` DATETIME(3) DEFAULT NULL,
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)
+        ON UPDATE CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`job_id`),
+    UNIQUE KEY `uk_recalc_idempotency` (`idempotency_key`),
+    KEY `idx_recalc_status_cursor` (`status`, `update_time`, `job_id`),
+    KEY `idx_recalc_building_range`
+        (`building_id`, `status`, `from_minute`, `to_minute`),
+    KEY `idx_recalc_supersedes`
+        (`supersedes_task_id`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='人工数据质量重算批次';

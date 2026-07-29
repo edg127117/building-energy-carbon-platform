@@ -35,6 +35,8 @@ aggregation:
 data-quality:
   enabled: false
   reconciliation-enabled: false
+  # 普通自动化测试不启动人工重算调度；专项测试使用 Mock/Fake 后显式开启。
+  recalculation-enabled: false
 
 formula:
   enabled: true
