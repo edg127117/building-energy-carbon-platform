@@ -8,6 +8,7 @@ import com.platform.iot.formula.model.FormulaCalculation.Step;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 计算冷却塔效率，对应设计公式 5-4。
@@ -38,6 +39,17 @@ public final class CoolingTowerEfficiencyFormula implements IndicatorFormula {
     @Override
     public String formulaVersion() {
         return VERSION;
+    }
+
+    @Override
+    public Set<String> requiredInputKeys() {
+        // 同时声明主输入和替代输入，Resolver 只做候选筛选，不改变实测优先规则。
+        return Set.of(
+                FormulaKeys.TOWER_T_IN,
+                FormulaKeys.TOWER_T_OUT,
+                FormulaKeys.TOWER_TWB,
+                FormulaKeys.OUTDOOR_TDB,
+                FormulaKeys.OUTDOOR_RH);
     }
 
     @Override

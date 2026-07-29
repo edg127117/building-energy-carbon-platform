@@ -2,6 +2,7 @@ package com.platform.iot.formula;
 
 import com.platform.hvac.model.entity.BizIndicator;
 import com.platform.iot.formula.model.FormulaCalculation;
+import com.platform.iot.quality.PointRuntimeConfig;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 
 import java.util.ArrayList;
@@ -50,7 +51,12 @@ public final class FormulaInputAssembler {
             }
 
             // 环境点没有设备归属，使用族编码；设备点使用组件编码，防止 GW/PPE 串设备。
-            String key = semanticKey(aggregate, environment);
+            String key = semanticKey(
+                    environment,
+                    aggregate.familyCode(),
+                    aggregate.componentCode(),
+                    aggregate.suffixCode(),
+                    aggregate.pointId());
             FormulaCalculation.Input input = new FormulaCalculation.Input(
                     key,
                     aggregate.pointId(),
@@ -81,13 +87,31 @@ public final class FormulaInputAssembler {
                 && buildingId.equals(aggregate.buildingId());
     }
 
-    private String semanticKey(RawMinuteAggregate aggregate, boolean environment) {
-        String prefix = environment ? aggregate.familyCode() : aggregate.componentCode();
+    /**
+     * 从 MySQL 测点快照构造与分钟输入完全一致的语义键，供依赖筛选复用。
+     */
+    static String semanticKey(PointRuntimeConfig point) {
+        Objects.requireNonNull(point, "point");
+        return semanticKey(
+                point.equipId() == null,
+                point.familyCode(),
+                point.componentCode(),
+                point.suffixCode(),
+                point.pointId());
+    }
+
+    private static String semanticKey(
+            boolean environment,
+            String familyCode,
+            String componentCode,
+            String suffixCode,
+            String pointId) {
+        String prefix = environment ? familyCode : componentCode;
         if (prefix == null || prefix.isBlank()
-                || aggregate.suffixCode() == null || aggregate.suffixCode().isBlank()) {
+                || suffixCode == null || suffixCode.isBlank()) {
             throw new IllegalArgumentException(
-                    "Missing formula input key metadata for point: " + aggregate.pointId());
+                    "Missing formula input key metadata for point: " + pointId);
         }
-        return prefix + "/" + aggregate.suffixCode();
+        return prefix + "/" + suffixCode;
     }
 }

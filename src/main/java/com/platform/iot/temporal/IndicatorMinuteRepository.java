@@ -23,6 +23,13 @@ public interface IndicatorMinuteRepository {
     /** 批量写入失败审计，使缺失或非法输入不会静默丢失。 */
     void saveExceptions(List<FormulaCalculationException> exceptions);
 
+    /**
+     * 删除明确指标分钟键对应的旧成功结果。
+     *
+     * <p>只用于质量修正后公式已不再成功的失效处理；不得按建筑或时间范围扩大删除。</p>
+     */
+    void deleteSuccesses(Set<IndicatorMinuteKey> keys);
+
     /** 查询指定指标在来源分钟的成功结果。 */
     Optional<IndicatorMinuteResult> findSuccess(String indicatorId, long minuteStart);
 

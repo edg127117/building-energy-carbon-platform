@@ -11,7 +11,9 @@ import com.platform.iot.dataquality.model.QualityEventSource;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
+import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
@@ -59,6 +61,10 @@ class HvacFormulaEngineTest {
     private final IndicatorLatestCacheService cache = mock(IndicatorLatestCacheService.class);
     private final IndicatorRealtimePublisher publisher = mock(IndicatorRealtimePublisher.class);
     private final FormulaInputAssembler assembler = mock(FormulaInputAssembler.class);
+    private final DataPointConfigProvider pointConfigProvider =
+            mock(DataPointConfigProvider.class);
+    private final FormulaDependencyResolver dependencyResolver =
+            mock(FormulaDependencyResolver.class);
 
     @Test
     void isConditionalSynchronousSpringEventListener() throws Exception {
@@ -82,6 +88,7 @@ class HvacFormulaEngineTest {
                         IndicatorMinuteRepository.class,
                         IndicatorLatestCacheService.class,
                         IndicatorRealtimePublisher.class,
+                        DataPointConfigProvider.class,
                         FormulaProperties.class);
         assertThat(productionConstructor.getAnnotation(Autowired.class)).isNotNull();
     }
@@ -95,6 +102,7 @@ class HvacFormulaEngineTest {
                 .withBean(IndicatorMinuteRepository.class, () -> indicatorRepository)
                 .withBean(IndicatorLatestCacheService.class, () -> cache)
                 .withBean(IndicatorRealtimePublisher.class, () -> publisher)
+                .withBean(DataPointConfigProvider.class, () -> pointConfigProvider)
                 .withBean(FormulaProperties.class, FormulaProperties::new)
                 .withUserConfiguration(HvacFormulaEngine.class)
                 .run(context -> {
@@ -192,7 +200,7 @@ class HvacFormulaEngineTest {
         BizIndicator ahu = indicator("I4", "AHU_POW_EFF", "BLD001", "AHU");
         when(configProvider.findAllActive())
                 .thenReturn(List.of(chiller, tower, pump, ahu));
-        when(cache.setIfNotOlder(any())).thenReturn(true);
+        when(cache.setIfNotOlder(any(), eq(false))).thenReturn(true);
 
         List<RawMinuteAggregate> aggregates = List.of(
                 point("C1", "CHILLER", "MAIN", "TWin", 12.0),
@@ -212,7 +220,7 @@ class HvacFormulaEngineTest {
 
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, new FormulaProperties())
+                publisher, pointConfigProvider, new FormulaProperties())
                 .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, aggregates));
 
@@ -221,7 +229,8 @@ class HvacFormulaEngineTest {
                 ArgumentCaptor.forClass(IndicatorLatestState.class);
         verify(indicatorRepository).saveSuccesses(rows.capture());
         verify(indicatorRepository, never()).saveExceptions(any());
-        verify(cache, org.mockito.Mockito.times(4)).setIfNotOlder(states.capture());
+        verify(cache, org.mockito.Mockito.times(4))
+                .setIfNotOlder(states.capture(), eq(false));
         verify(publisher, org.mockito.Mockito.times(4)).publish(any());
         verify(minuteRepository, never()).findByMinute(any(Long.class), any());
         assertThat(rows.getValue())
@@ -237,17 +246,22 @@ class HvacFormulaEngineTest {
     }
 
     @Test
-    void recoveryEventRequeriesCompleteMinuteForPayloadBuildingIds() {
+    void normalRecoveryRequeriesCompleteMinuteAndCalculatesAllBuildingIndicators() {
         RawMinuteAggregate triggerOne = aggregate("P1", "BLD001");
         RawMinuteAggregate triggerTwo = aggregate("P2", "BLD002");
         RawMinuteAggregate recovered = aggregate("P3", "BLD001");
-        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001");
+        BizIndicator indicatorOne = indicator("I1", "WCR_COP", "BLD001");
+        BizIndicator indicatorTwo = indicator("I2", "WCR_COP", "BLD001");
         IndicatorFormula formula = formula("WCR_COP", "V1");
         FormulaInputs inputs = new FormulaInputs(List.of());
         when(minuteRepository.findByMinute(
                 MINUTE, Set.of("BLD001", "BLD002"))).thenReturn(List.of(recovered));
-        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
-        when(assembler.assemble(indicator, MINUTE, List.of(recovered))).thenReturn(inputs);
+        when(configProvider.findAllActive())
+                .thenReturn(List.of(indicatorOne, indicatorTwo));
+        when(assembler.assemble(indicatorOne, MINUTE, List.of(recovered)))
+                .thenReturn(inputs);
+        when(assembler.assemble(indicatorTwo, MINUTE, List.of(recovered)))
+                .thenReturn(inputs);
         when(formula.calculate(inputs)).thenReturn(success("WCR_COP", "V1", 4.2));
 
         engine(List.of(formula)).onMinuteQualityReady(
@@ -256,7 +270,14 @@ class HvacFormulaEngineTest {
 
         verify(minuteRepository).findByMinute(
                 MINUTE, Set.of("BLD001", "BLD002"));
-        verify(assembler).assemble(indicator, MINUTE, List.of(recovered));
+        verify(assembler).assemble(indicatorOne, MINUTE, List.of(recovered));
+        verify(assembler).assemble(indicatorTwo, MINUTE, List.of(recovered));
+        ArgumentCaptor<List<IndicatorMinuteResult>> successes = listCaptor();
+        verify(indicatorRepository).saveSuccesses(successes.capture());
+        assertThat(successes.getValue())
+                .extracting(IndicatorMinuteResult::indicatorId)
+                .containsExactly("I1", "I2");
+        verifyNoInteractions(dependencyResolver);
     }
 
     @Test
@@ -269,7 +290,8 @@ class HvacFormulaEngineTest {
 
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, new FormulaProperties())
+                publisher, new FormulaInputAssembler(), dependencyResolver,
+                List.of(new ChillerCopFormula()))
                 .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, true, List.of(trigger)));
 
@@ -283,6 +305,7 @@ class HvacFormulaEngineTest {
             assertThat(row.status()).isEqualTo(FormulaCalculation.Status.MISSING_INPUT);
             assertThat(row.reasonCode()).isEqualTo("CHILLER_INPUT_MISSING");
         });
+        verifyNoInteractions(dependencyResolver);
     }
 
     @Test
@@ -292,7 +315,7 @@ class HvacFormulaEngineTest {
 
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, new FormulaProperties())
+                publisher, pointConfigProvider, new FormulaProperties())
                 .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE,
                         FINALIZED_AT,
@@ -373,7 +396,7 @@ class HvacFormulaEngineTest {
                 .thenThrow(new IllegalStateException("bad strategy"));
         when(successFormula.calculate(successInputs))
                 .thenReturn(success("WCR_COP", "COP_V1", 5.5));
-        when(cache.setIfNotOlder(any())).thenReturn(true);
+        when(cache.setIfNotOlder(any(), eq(false))).thenReturn(true);
 
         engine(List.of(failureFormula, successFormula)).onMinuteQualityReady(
                 new HvacMinuteQualityReadyEvent(
@@ -387,10 +410,10 @@ class HvacFormulaEngineTest {
                 ArgumentCaptor.forClass(IndicatorLatestState.class);
         InOrder ordered = inOrder(indicatorRepository, cache, publisher);
         ordered.verify(indicatorRepository).saveSuccesses(successes.capture());
-        ordered.verify(cache).setIfNotOlder(successState.capture());
-        ordered.verify(publisher).publish(successState.getValue());
         ordered.verify(indicatorRepository).saveExceptions(failures.capture());
-        ordered.verify(cache).setIfNotOlder(failureState.capture());
+        ordered.verify(cache).setIfNotOlder(successState.capture(), eq(false));
+        ordered.verify(publisher).publish(successState.getValue());
+        ordered.verify(cache).setIfNotOlder(failureState.capture(), eq(false));
         ordered.verify(publisher).publish(failureState.getValue());
 
         assertThat(successes.getValue()).singleElement().satisfies(row -> {
@@ -454,6 +477,177 @@ class HvacFormulaEngineTest {
                 .hasMessage("tdengine unavailable");
 
         verify(indicatorRepository, never()).saveSuccesses(any());
+        verifyNoInteractions(cache, publisher);
+    }
+
+    @Test
+    void laterExceptionWriteFailureAlsoBlocksEarlierSuccessCacheUpdate() {
+        RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
+        BizIndicator succeeding = indicator("I1", "WCR_COP", "BLD001");
+        BizIndicator failing = indicator("I2", "PUMP_EFF", "BLD001");
+        IndicatorFormula successFormula = formula("WCR_COP", "COP_V1");
+        IndicatorFormula failureFormula = formula("PUMP_EFF", "PUMP_V1");
+        FormulaInputs successInputs = new FormulaInputs(List.of());
+        FormulaInputs failureInputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(succeeding, failing));
+        when(assembler.assemble(succeeding, MINUTE, List.of(aggregate)))
+                .thenReturn(successInputs);
+        when(assembler.assemble(failing, MINUTE, List.of(aggregate)))
+                .thenReturn(failureInputs);
+        when(successFormula.calculate(successInputs))
+                .thenReturn(success("WCR_COP", "COP_V1", 4.2));
+        when(failureFormula.calculate(failureInputs)).thenReturn(new FormulaCalculation(
+                FormulaCalculation.Status.INVALID_INPUT,
+                "PUMP_EFF", "PUMP_V1", null, null, List.of(), List.of(),
+                "PUMP_INPUT_INVALID", List.of()));
+        doThrow(new IllegalStateException("exception write failed"))
+                .when(indicatorRepository).saveExceptions(any());
+
+        assertThatThrownBy(() -> engine(List.of(successFormula, failureFormula))
+                .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                        MINUTE, FINALIZED_AT, false, List.of(aggregate))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("exception write failed");
+
+        verify(indicatorRepository).saveSuccesses(any());
+        verifyNoInteractions(cache, publisher);
+    }
+
+    @Test
+    void correctionFailureDeletesOldSuccessBeforeAuditAndPublishesAuthoritativeState() {
+        RawMinuteAggregate trigger = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
+        IndicatorFormula formula = formula("PUMP_EFF", "V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(dependencyResolver.resolve(any(), any(), any()))
+                .thenReturn(Set.of("I1"));
+        when(minuteRepository.findByMinute(MINUTE, Set.of("BLD001")))
+                .thenReturn(List.of(trigger));
+        when(assembler.assemble(indicator, MINUTE, List.of(trigger))).thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(new FormulaCalculation(
+                FormulaCalculation.Status.MISSING_INPUT,
+                "PUMP_EFF", "V1", null, null, List.of(), List.of(),
+                "PUMP_INPUT_MISSING", List.of(FormulaKeys.PUMP_PPE)));
+        when(cache.setIfNotOlder(any(), eq(true))).thenReturn(true);
+
+        engine(List.of(formula)).onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                MINUTE, FINALIZED_AT, QualityEventSource.LATE_REAL_CORRECTION,
+                Set.of("BLD001"), List.of(trigger), Set.of("P1")));
+
+        IndicatorMinuteKey key = new IndicatorMinuteKey("I1", MINUTE);
+        InOrder ordered = inOrder(indicatorRepository, cache, publisher);
+        ordered.verify(indicatorRepository).deleteSuccesses(Set.of(key));
+        ordered.verify(indicatorRepository).saveExceptions(any());
+        ordered.verify(cache).setIfNotOlder(any(), eq(true));
+        ordered.verify(publisher).publish(any());
+        verify(indicatorRepository, never()).saveSuccesses(any());
+    }
+
+    @Test
+    void correctionSuccessUpsertsWithoutDeletingNewSuccess() {
+        RawMinuteAggregate trigger = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001");
+        IndicatorFormula formula = formula("WCR_COP", "V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(dependencyResolver.resolve(any(), any(), any()))
+                .thenReturn(Set.of("I1"));
+        when(minuteRepository.findByMinute(MINUTE, Set.of("BLD001")))
+                .thenReturn(List.of(trigger));
+        when(assembler.assemble(indicator, MINUTE, List.of(trigger))).thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(success("WCR_COP", "V1", 4.5));
+
+        engine(List.of(formula)).onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                MINUTE, FINALIZED_AT, QualityEventSource.INTERPOLATION_CORRECTION,
+                Set.of("BLD001"), List.of(trigger), Set.of("P1")));
+
+        verify(indicatorRepository).saveSuccesses(any());
+        verify(indicatorRepository, never()).deleteSuccesses(any());
+        verify(indicatorRepository, never()).saveExceptions(any());
+    }
+
+    @Test
+    void normalFreezeFailureDoesNotDeleteAbsentSuccess() {
+        RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
+        IndicatorFormula formula = formula("PUMP_EFF", "V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(assembler.assemble(indicator, MINUTE, List.of(aggregate))).thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(new FormulaCalculation(
+                FormulaCalculation.Status.INVALID_INPUT,
+                "PUMP_EFF", "V1", null, null, List.of(), List.of(),
+                "PUMP_INPUT_INVALID", List.of()));
+
+        engine(List.of(formula)).onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                MINUTE, FINALIZED_AT, QualityEventSource.NORMAL_FREEZE,
+                Set.of("BLD001"), List.of(aggregate), Set.of()));
+
+        verify(indicatorRepository, never()).deleteSuccesses(any());
+        verify(indicatorRepository).saveExceptions(any());
+    }
+
+    @Test
+    void correctionDeleteFailurePropagatesAndBlocksAuditCacheAndWebSocket() {
+        RawMinuteAggregate trigger = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
+        IndicatorFormula formula = formula("PUMP_EFF", "V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(dependencyResolver.resolve(any(), any(), any()))
+                .thenReturn(Set.of("I1"));
+        when(minuteRepository.findByMinute(MINUTE, Set.of("BLD001")))
+                .thenReturn(List.of(trigger));
+        when(assembler.assemble(indicator, MINUTE, List.of(trigger))).thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(new FormulaCalculation(
+                FormulaCalculation.Status.INVALID_INPUT,
+                "PUMP_EFF", "V1", null, null, List.of(), List.of(),
+                "PUMP_INPUT_INVALID", List.of()));
+        doThrow(new IllegalStateException("delete failed"))
+                .when(indicatorRepository).deleteSuccesses(any());
+
+        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
+                        MINUTE, FINALIZED_AT, QualityEventSource.MANUAL_RECALCULATION,
+                        Set.of("BLD001"), List.of(trigger), Set.of("P1"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("delete failed");
+
+        verify(indicatorRepository, never()).saveExceptions(any());
+        verifyNoInteractions(cache, publisher);
+    }
+
+    @Test
+    void correctionAuditFailureAfterDeletionStillBlocksCacheAndWebSocket() {
+        RawMinuteAggregate trigger = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
+        IndicatorFormula formula = formula("PUMP_EFF", "V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(dependencyResolver.resolve(any(), any(), any()))
+                .thenReturn(Set.of("I1"));
+        when(minuteRepository.findByMinute(MINUTE, Set.of("BLD001")))
+                .thenReturn(List.of(trigger));
+        when(assembler.assemble(indicator, MINUTE, List.of(trigger))).thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(new FormulaCalculation(
+                FormulaCalculation.Status.INVALID_INPUT,
+                "PUMP_EFF", "V1", null, null, List.of(), List.of(),
+                "PUMP_INPUT_INVALID", List.of()));
+        doThrow(new IllegalStateException("exception write failed"))
+                .when(indicatorRepository).saveExceptions(any());
+
+        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
+                        MINUTE, FINALIZED_AT, QualityEventSource.LATE_REAL_CORRECTION,
+                        Set.of("BLD001"), List.of(trigger), Set.of("P1"))))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("exception write failed");
+
+        InOrder ordered = inOrder(indicatorRepository);
+        ordered.verify(indicatorRepository)
+                .deleteSuccesses(Set.of(new IndicatorMinuteKey("I1", MINUTE)));
+        ordered.verify(indicatorRepository).saveExceptions(any());
         verifyNoInteractions(cache, publisher);
     }
 
@@ -583,7 +777,7 @@ class HvacFormulaEngineTest {
     private HvacFormulaEngine engine(List<IndicatorFormula> formulas) {
         return new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, assembler, formulas);
+                publisher, assembler, dependencyResolver, formulas);
     }
 
     private static IndicatorFormula formula(String code, String version) {

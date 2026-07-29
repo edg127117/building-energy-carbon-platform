@@ -6,6 +6,7 @@ import com.platform.iot.formula.model.FormulaCalculation.Step;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 计算冷冻水泵扬程和效率，对应设计公式 5-6、5-5。
@@ -32,6 +33,11 @@ public final class PumpEfficiencyFormula implements IndicatorFormula {
     @Override
     public String formulaVersion() {
         return VERSION;
+    }
+
+    @Override
+    public Set<String> requiredInputKeys() {
+        return Set.copyOf(REQUIRED);
     }
 
     @Override

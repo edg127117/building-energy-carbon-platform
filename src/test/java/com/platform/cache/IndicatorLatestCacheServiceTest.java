@@ -129,6 +129,29 @@ class IndicatorLatestCacheServiceTest {
     }
 
     @Test
+    void authoritativeCorrectionAllowsEqualMinuteFailureToReplaceSuccess()
+            throws Exception {
+        when(valueOps.get(KEY)).thenReturn(objectMapper.writeValueAsString(
+                success("IND001", MINUTE, 5.8)));
+
+        assertThat(cache.setIfNotOlder(
+                failure("IND001", MINUTE), true)).isTrue();
+
+        verify(valueOps).set(eq(KEY), anyString(), eq(Duration.ofSeconds(120)));
+    }
+
+    @Test
+    void authoritativeCorrectionStillRejectsOlderMinute() throws Exception {
+        when(valueOps.get(KEY)).thenReturn(objectMapper.writeValueAsString(
+                success("IND001", MINUTE + 60_000L, 5.9)));
+
+        assertThat(cache.setIfNotOlder(
+                failure("IND001", MINUTE), true)).isFalse();
+
+        verify(valueOps, never()).set(eq(KEY), anyString(), any(Duration.class));
+    }
+
+    @Test
     void redisDataAccessFailuresAreCacheMissesAndRejectedWrites() {
         when(valueOps.get(KEY)).thenThrow(new DataAccessResourceFailureException("down"));
 

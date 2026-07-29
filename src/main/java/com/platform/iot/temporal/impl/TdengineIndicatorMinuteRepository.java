@@ -109,6 +109,22 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     }
 
     @Override
+    public void deleteSuccesses(Set<IndicatorMinuteKey> keys) {
+        if (keys.isEmpty()) {
+            return;
+        }
+        // 每条语句同时锁定指标子表和来源分钟，避免范围删除误伤其他历史结果。
+        String[] statements = keys.stream()
+                .sorted(Comparator
+                        .comparing(IndicatorMinuteKey::indicatorId)
+                        .thenComparingLong(IndicatorMinuteKey::minuteStart))
+                .map(key -> "DELETE FROM " + indicatorChild(key.indicatorId())
+                        + " WHERE ts=" + timestamp(key.minuteStart()))
+                .toArray(String[]::new);
+        template.batchUpdate(statements);
+    }
+
+    @Override
     public Optional<IndicatorMinuteResult> findSuccess(String indicatorId, long minuteStart) {
         String sql = successSelect()
                 + " WHERE indicator_id=" + quote(indicatorId)
