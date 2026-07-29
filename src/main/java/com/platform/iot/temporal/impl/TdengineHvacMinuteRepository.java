@@ -249,22 +249,23 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     }
 
     @Override
-    public void deleteIfOwnedByTask(
+    public boolean deleteIfOwnedByTask(
             String pointId, long minuteStart, String taskId) {
         MinuteQualityLockRegistry.MinuteKey key =
                 new MinuteQualityLockRegistry.MinuteKey(pointId, minuteStart);
-        lockRegistry.withLocks(List.of(key), () -> {
+        return lockRegistry.withLocks(List.of(key), () -> {
             Optional<RawMinuteAggregate> current =
                     findPointMinute(pointId, minuteStart);
             if (current.map(RawMinuteAggregate::qualityTaskId)
-                    .filter(taskId::equals).isPresent()) {
-                // TDengine 的 DELETE 以时间条件最稳定；先在同一进程锁内核对任务所有权，
-                // 再按子表时间戳删除，避免依赖普通数据列删除条件的版本兼容性。
-                template.execute("DELETE FROM " + qualifiedChild(pointId)
-                        + " WHERE ts="
-                        + quote(new Timestamp(minuteStart).toString()));
+                    .filter(taskId::equals).isEmpty()) {
+                return false;
             }
-            return null;
+            // TDengine 的 DELETE 以时间条件最稳定；先在同一进程锁内核对任务所有权，
+            // 再按子表时间戳删除，避免依赖普通数据列删除条件的版本兼容性。
+            template.execute("DELETE FROM " + qualifiedChild(pointId)
+                    + " WHERE ts="
+                    + quote(new Timestamp(minuteStart).toString()));
+            return true;
         });
     }
 

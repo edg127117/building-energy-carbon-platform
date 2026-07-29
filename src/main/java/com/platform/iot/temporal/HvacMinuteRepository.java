@@ -69,8 +69,11 @@ public interface HvacMinuteRepository {
 
     /**
      * 仅在分钟仍由指定补全任务持有时删除，避免作废旧任务误删升级后的数据。
+     *
+     * @return 当前调用通过所有权核验并发出删除时返回 {@code true}；分钟已不存在
+     * 或已由其他任务、Q0 持有时返回 {@code false}
      */
-    void deleteIfOwnedByTask(String pointId, long minuteStart, String taskId);
+    boolean deleteIfOwnedByTask(String pointId, long minuteStart, String taskId);
 
     /**
      * 一次读取某分钟已经存在的全部内部测点ID，仅供恢复任务判断缺口。

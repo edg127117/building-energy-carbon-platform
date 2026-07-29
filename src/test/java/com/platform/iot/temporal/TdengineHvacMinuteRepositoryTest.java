@@ -327,8 +327,10 @@ class TdengineHvacMinuteRepositoryTest {
                 generatedAggregateAt(
                         "POINT_Q1", 1, "TASK_Q1", 19.0, MINUTE)));
 
-        repository.deleteIfOwnedByTask("POINT_Q1", MINUTE, "TASK_Q1");
+        boolean deleted =
+                repository.deleteIfOwnedByTask("POINT_Q1", MINUTE, "TASK_Q1");
 
+        assertThat(deleted).isTrue();
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(template).execute(sql.capture());
         assertThat(sql.getValue())
@@ -344,8 +346,10 @@ class TdengineHvacMinuteRepositoryTest {
                 generatedAggregateAt(
                         "POINT_Q1", 1, "NEW_TASK", 19.0, MINUTE)));
 
-        repository.deleteIfOwnedByTask("POINT_Q1", MINUTE, "OLD_TASK");
+        boolean deleted =
+                repository.deleteIfOwnedByTask("POINT_Q1", MINUTE, "OLD_TASK");
 
+        assertThat(deleted).isFalse();
         verify(template, never()).execute(anyString());
     }
 

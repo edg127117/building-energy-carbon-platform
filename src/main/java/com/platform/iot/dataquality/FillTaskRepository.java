@@ -89,4 +89,17 @@ public interface FillTaskRepository {
     void reconcile(TaskReconciliation result);
 
     void markVoided(String taskId, long operatorId, String reason, LocalDateTime at);
+
+    /**
+     * 人工作废完成后一次写入精确计数，避免跨库重启时累加或重复扣减。
+     */
+    void markVoidedExact(
+            String taskId,
+            long operatorId,
+            String reason,
+            LocalDateTime at,
+            int minuteCount,
+            int failedCount,
+            int replacedCount,
+            int voidedCount);
 }

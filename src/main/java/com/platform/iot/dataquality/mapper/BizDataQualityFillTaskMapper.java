@@ -347,4 +347,32 @@ public interface BizDataQualityFillTaskMapper
             @Param("operatorId") long operatorId,
             @Param("reason") String reason,
             @Param("voidAt") LocalDateTime voidAt);
+
+    /**
+     * 重算作废按冻结目标核对后精确覆盖计数；重复执行必须得到相同结果。
+     */
+    @Update("""
+            UPDATE biz_data_quality_fill_task
+            SET apply_status = 'VOIDED',
+                minute_count = #{minuteCount},
+                applied_count = 0,
+                failed_count = #{failedCount},
+                replaced_count = #{replacedCount},
+                voided_count = #{voidedCount},
+                void_by = #{operatorId},
+                void_reason = #{reason},
+                void_at = #{voidAt},
+                closed_at = #{voidAt},
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE task_id = #{taskId}
+            """)
+    int markVoidedExactAtomic(
+            @Param("taskId") String taskId,
+            @Param("operatorId") long operatorId,
+            @Param("reason") String reason,
+            @Param("voidAt") LocalDateTime voidAt,
+            @Param("minuteCount") int minuteCount,
+            @Param("failedCount") int failedCount,
+            @Param("replacedCount") int replacedCount,
+            @Param("voidedCount") int voidedCount);
 }

@@ -181,6 +181,28 @@ class MySqlFillTaskRepositoryTest {
     }
 
     @Test
+    void exactVoidPersistsClosedCountsAndRejectsInconsistentTotal() {
+        LocalDateTime at = LocalDateTime.of(2026, 7, 29, 12, 10);
+        when(mapper.markVoidedExactAtomic(
+                "TASK001", 99L, "典型值配置错误", at,
+                4, 1, 2, 1)).thenReturn(1);
+
+        repository.markVoidedExact(
+                "TASK001", 99L, "典型值配置错误", at,
+                4, 1, 2, 1);
+
+        verify(mapper).markVoidedExactAtomic(
+                "TASK001", 99L, "典型值配置错误", at,
+                4, 1, 2, 1);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        repository.markVoidedExact(
+                                "TASK001", 99L, "错误计数", at,
+                                4, 1, 1, 1))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("计数");
+    }
+
+    @Test
     void lateFailureAndReconciliationCannotReviveTerminalTask() {
         BizDataQualityFillTask voided = typicalCandidate();
         voided.setTaskId("TASK001");

@@ -355,6 +355,48 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         mapper.markVoidedAtomic(taskId, operatorId, normalizedReason, at);
     }
 
+    @Override
+    public void markVoidedExact(
+            String taskId,
+            long operatorId,
+            String reason,
+            LocalDateTime at,
+            int minuteCount,
+            int failedCount,
+            int replacedCount,
+            int voidedCount) {
+        String normalizedTaskId = requireText(taskId, "taskId");
+        if (operatorId <= 0L) {
+            throw new IllegalArgumentException("operatorId 必须大于 0");
+        }
+        String normalizedReason = requireText(reason, "reason");
+        if (normalizedReason.length() > 500) {
+            throw new IllegalArgumentException("reason 不能超过 500 个字符");
+        }
+        Objects.requireNonNull(at, "at 不能为空");
+        if (minuteCount < 0 || failedCount < 0
+                || replacedCount < 0 || voidedCount < 0) {
+            throw new IllegalArgumentException("作废任务计数不能为负数");
+        }
+        if (minuteCount != failedCount + replacedCount + voidedCount) {
+            throw new IllegalArgumentException(
+                    "作废任务计数必须满足分钟数=失败+替换+作废");
+        }
+        int updated = mapper.markVoidedExactAtomic(
+                normalizedTaskId,
+                operatorId,
+                normalizedReason,
+                at,
+                minuteCount,
+                failedCount,
+                replacedCount,
+                voidedCount);
+        if (updated != 1) {
+            throw new IllegalStateException(
+                    "补全任务精确作废状态更新失败: " + normalizedTaskId);
+        }
+    }
+
     private FillTaskEvidence withAppliedSegments(
             FillSourceType sourceType,
             FillTaskEvidence evidence,
