@@ -145,6 +145,62 @@ class RecalculationVoidServiceTest {
     }
 
     @Test
+    void sparseTypicalTaskDoesNotCountUnrelatedHourRowsAsReplacements() {
+        BizDataQualityRecalcJob job = job(null);
+        BizDataQualityFillTask oldTask = oldTask(1, 0);
+        oldTask.setEndMinute(local(MINUTE + 60 * 60_000L));
+        RawMinuteAggregate oldOwned = minute(MINUTE, 2, "OLD_TASK");
+        List<RawMinuteAggregate> unrelated = java.util.stream.LongStream
+                .range(1, 60)
+                .mapToObj(offset -> minute(
+                        MINUTE + offset * 60_000L, 0, null))
+                .toList();
+        List<RawMinuteAggregate> before = new java.util.ArrayList<>();
+        before.add(oldOwned);
+        before.addAll(unrelated);
+        when(minuteRepository.findRange(
+                Set.of("POINT001"), MINUTE, MINUTE + 60 * 60_000L))
+                .thenReturn(before, unrelated);
+        when(minuteRepository.deleteIfOwnedByTask(
+                "POINT001", MINUTE, "OLD_TASK")).thenReturn(true);
+
+        RecalculationVoidService.VoidResult result =
+                service.voidOldTask(job, oldTask, NOW);
+
+        assertThat(result).isEqualTo(
+                new RecalculationVoidService.VoidResult(1, 0));
+        verify(fillTaskRepository).markVoidedExact(
+                "OLD_TASK", 99L, "错误配置", local(NOW),
+                1, 0, 0, 1);
+    }
+
+    @Test
+    void hotTypicalTaskUsesFrozenOwnedMinutesWhenHourlyCountIsStillZero() {
+        BizDataQualityRecalcJob job = job(null);
+        BizDataQualityFillTask oldTask = oldTask(0, 0);
+        oldTask.setEndMinute(local(MINUTE + 60 * 60_000L));
+        RawMinuteAggregate first = minute(MINUTE, 2, "OLD_TASK");
+        RawMinuteAggregate second =
+                minute(MINUTE + 120_000L, 2, "OLD_TASK");
+        when(minuteRepository.findRange(
+                Set.of("POINT001"), MINUTE, MINUTE + 60 * 60_000L))
+                .thenReturn(List.of(first, second), List.of());
+        when(minuteRepository.deleteIfOwnedByTask(
+                "POINT001", MINUTE, "OLD_TASK")).thenReturn(true);
+        when(minuteRepository.deleteIfOwnedByTask(
+                "POINT001", MINUTE + 120_000L, "OLD_TASK")).thenReturn(true);
+
+        RecalculationVoidService.VoidResult result =
+                service.voidOldTask(job, oldTask, NOW);
+
+        assertThat(result).isEqualTo(
+                new RecalculationVoidService.VoidResult(2, 0));
+        verify(fillTaskRepository).markVoidedExact(
+                "OLD_TASK", 99L, "错误配置", local(NOW),
+                2, 0, 0, 2);
+    }
+
+    @Test
     void tdengineFailureIsLoggedServerSideButExposesOnlyFixedJobError() {
         BizDataQualityRecalcJob job = job("[" + MINUTE + "]");
         BizDataQualityFillTask oldTask = oldTask(1, 0);
@@ -200,6 +256,8 @@ class RecalculationVoidServiceTest {
         task.setEndMinute(local(MINUTE + minuteCount * 60_000L));
         task.setMinuteCount(minuteCount);
         task.setFailedCount(failedCount);
+        task.setReplacedCount(0);
+        task.setVoidedCount(0);
         task.setApplyStatus(
                 failedCount > 0 ? FillApplyStatus.FAILED : FillApplyStatus.APPLIED);
         return task;

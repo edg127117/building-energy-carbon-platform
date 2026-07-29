@@ -87,6 +87,7 @@ public class RecalculationVoidService {
                 job.getJobId(), oldTask, context.fromInclusive(), context.toExclusive());
         Map<Long, RawMinuteAggregate> currentByMinute =
                 indexCurrentRows(oldTask, context, current);
+        Set<Long> targetMinutes = Set.copyOf(targets);
         boolean stillOwned = currentByMinute.values().stream()
                 .anyMatch(row -> oldTask.getTaskId().equals(row.qualityTaskId()));
         if (stillOwned) {
@@ -96,12 +97,48 @@ public class RecalculationVoidService {
         }
 
         int failedCount = nonNegative(oldTask.getFailedCount(), "failedCount");
-        int minuteCount = nonNegative(oldTask.getMinuteCount(), "minuteCount");
-        int replacedCount = currentByMinute.size();
-        if (failedCount + replacedCount > minuteCount) {
-            throw new IllegalStateException("旧补全任务计数与当前分钟数据不一致");
-        }
-        int voidedCount = minuteCount - failedCount - replacedCount;
+        int previousMinuteCount =
+                nonNegative(oldTask.getMinuteCount(), "minuteCount");
+        int previousReplaced =
+                nonNegative(oldTask.getReplacedCount(), "replacedCount");
+        int previousVoided =
+                nonNegative(oldTask.getVoidedCount(), "voidedCount");
+
+        /*
+         * 典型值任务的表区间通常是一整个自然小时，但它可能只真正写入其中几个
+         * 缺失分钟。不能把范围内所有既有 Q0/Q1 都算成该任务的 replacement。
+         * 已收口任务以 minuteCount 推导原先仍应持有但现在已换源/缺失的数量；
+         * 尚未小时收口的热任务 minuteCount 可能仍为 0，此时冻结目标本身就是
+         * 最可信的实际应用事实。
+         */
+        int expectedPreviouslyOwned = Math.max(
+                0,
+                previousMinuteCount
+                        - failedCount
+                        - previousReplaced
+                        - previousVoided);
+        int historicalReplacementCapacity = Math.max(
+                0, expectedPreviouslyOwned - targets.size());
+        int nonTargetCurrentRows = Math.toIntExact(currentByMinute.keySet().stream()
+                .filter(minute -> !targetMinutes.contains(minute))
+                .count());
+        int historicalReplaced = Math.min(
+                historicalReplacementCapacity, nonTargetCurrentRows);
+        int historicalAbsent =
+                historicalReplacementCapacity - historicalReplaced;
+
+        int targetReplaced = Math.toIntExact(currentByMinute.keySet().stream()
+                .filter(targetMinutes::contains)
+                .count());
+        int targetVoided = targets.size() - targetReplaced;
+        int replacedCount = Math.addExact(
+                previousReplaced,
+                Math.addExact(historicalReplaced, targetReplaced));
+        int voidedCount = Math.addExact(
+                previousVoided,
+                Math.addExact(historicalAbsent, targetVoided));
+        int minuteCount = Math.addExact(
+                failedCount, Math.addExact(replacedCount, voidedCount));
         LocalDateTime at = toLocal(now);
 
         // 两个 MySQL 收口都使用精确值而不是累加；在 TD 删除后进程重启，
