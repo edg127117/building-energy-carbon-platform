@@ -95,6 +95,16 @@ class MySqlFillTaskRepositoryTest {
     }
 
     @Test
+    void lateRealReplacementUsesAtomicIncrement() {
+        when(mapper.incrementReplacedCountAtomic("TASK001", 1))
+                .thenReturn(1);
+
+        repository.incrementReplacedCount("TASK001", 1);
+
+        verify(mapper).incrementReplacedCountAtomic("TASK001", 1);
+    }
+
+    @Test
     void failureIsRecordedImmediatelyAndKeepsAtMostSixtyMinutes() throws Exception {
         BizDataQualityFillTask task = typicalCandidate();
         task.setTaskId("TASK001");

@@ -108,6 +108,17 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         mapper.markFirstApplied(taskId);
     }
 
+    @Override
+    public void incrementReplacedCount(String taskId, int increment) {
+        requireText(taskId, "taskId");
+        if (increment <= 0) {
+            throw new IllegalArgumentException("increment 必须大于 0");
+        }
+        // TDengine 是分钟事实来源；任务并发作废或已删除时返回 0，等待小时收口
+        // 根据实际 quality_task_id 重建计数，不能反向撤销已经写入的 Q0。
+        mapper.incrementReplacedCountAtomic(taskId, increment);
+    }
+
     /**
      * 失败分钟 JSON 需要先锁行再合并，保证同一任务并发失败时不会相互覆盖。
      * 相同分钟只保留最新错误，列表超过自然小时上限时淘汰最早记录。

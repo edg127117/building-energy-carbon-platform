@@ -1,5 +1,6 @@
 package com.platform.iot.ingest;
 
+import com.platform.iot.dataquality.event.HvacLateRealEventStoredEvent;
 import com.platform.iot.quality.TelemetryQualityValidator;
 import com.platform.iot.quality.TelemetryValidationResult;
 import com.platform.iot.quality.ValidatedHvacTelemetry;
@@ -9,6 +10,8 @@ import com.platform.iot.temporal.model.RawTelemetryEvent;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Service;
 
@@ -26,19 +29,23 @@ public class HvacIngestionService {
     private final TelemetryQualityValidator validator;
     private final HvacRawEventRepository repository;
     private final MeterRegistry meterRegistry;
+    private final ApplicationEventPublisher eventPublisher;
     private final long finalizationDelayMillis;
     private final String sourceSystem;
     private final RetryTemplate retryTemplate;
 
+    @Autowired
     public HvacIngestionService(
             TelemetryQualityValidator validator,
             HvacRawEventRepository repository,
             MeterRegistry meterRegistry,
+            ApplicationEventPublisher eventPublisher,
             @Value("${aggregation.finalization-delay-seconds:30}") int finalizationDelaySeconds,
             @Value("${ingestion.source-system:MQTT_FREEZE_V1}") String sourceSystem) {
         this.validator = validator;
         this.repository = repository;
         this.meterRegistry = meterRegistry;
+        this.eventPublisher = eventPublisher;
         this.finalizationDelayMillis = finalizationDelaySeconds * 1_000L;
         this.sourceSystem = sourceSystem;
         this.retryTemplate = RetryTemplate.builder()
@@ -90,6 +97,7 @@ public class HvacIngestionService {
         return switch (result) {
             case INSERTED -> {
                 meterRegistry.counter("iot.hvac.ingestion.accepted").increment();
+                publishLateStored(event);
                 yield HvacIngestionResult.of(IngestionOutcome.ACCEPTED);
             }
             case DUPLICATE -> {
@@ -100,8 +108,31 @@ public class HvacIngestionService {
                 meterRegistry.counter("iot.hvac.ingestion.conflict").increment();
                 log.warn("同一测点同一设备时间出现冲突值，最后收到值生效: pointCode={}, eventTime={}, value={}",
                         event.pointCode(), event.eventTime(), event.value());
+                publishLateStored(event);
                 yield HvacIngestionResult.of(IngestionOutcome.CONFLICT_UPDATED);
             }
         };
+    }
+
+    private void publishLateStored(RawTelemetryEvent event) {
+        if (!event.late()) {
+            return;
+        }
+        long minuteStart = event.eventTime()
+                - Math.floorMod(event.eventTime(), 60_000L);
+        try {
+            eventPublisher.publishEvent(new HvacLateRealEventStoredEvent(
+                    event.pointId(),
+                    event.buildingId(),
+                    minuteStart,
+                    event.receivedTime()));
+            meterRegistry.counter("iot.hvac.ingestion.late_stored").increment();
+        } catch (RuntimeException exception) {
+            // 原始证据已经成功落盘，不能把事件总线异常伪装成 TDengine 写失败并触发
+            // MQTT 重投；重投只会命中 DUPLICATE，无法替代后台补偿。
+            meterRegistry.counter("iot.hvac.ingestion.late_dispatch_failed").increment();
+            log.error("迟到真实事件通知失败，原始证据已保留: pointId={}, minute={}",
+                    event.pointId(), minuteStart, exception);
+        }
     }
 }

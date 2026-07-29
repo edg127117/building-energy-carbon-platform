@@ -13,6 +13,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,6 +38,7 @@ class NineteenPointIngestionAcceptanceTest {
     private static final long EVENT_TIME = 1_800_000_000_000L;
 
     @Mock private HvacRawEventRepository repository;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @Test
     void allNineteenFrozenAliasesResolveToCanonicalPointIdentities() {
@@ -51,6 +53,7 @@ class NineteenPointIngestionAcceptanceTest {
                 new TelemetryQualityValidator(provider),
                 repository,
                 new SimpleMeterRegistry(),
+                eventPublisher,
                 30,
                 "MQTT_FREEZE_V1");
         when(repository.upsert(any())).thenReturn(RawEventWriteResult.INSERTED);

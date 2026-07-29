@@ -22,6 +22,13 @@ public interface FillTaskRepository {
 
     void markFirstApplied(String taskId);
 
+    /**
+     * 真实数据替换生成分钟后原子累加旧任务的替换计数。
+     *
+     * <p>禁止先读取旧计数再整体收口，否则多个迟到分钟会相互覆盖。</p>
+     */
+    void incrementReplacedCount(String taskId, int increment);
+
     void recordFailure(String taskId, long minuteStart, String error);
 
     void reconcile(TaskReconciliation result);

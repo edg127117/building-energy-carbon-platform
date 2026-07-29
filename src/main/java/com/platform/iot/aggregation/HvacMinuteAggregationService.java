@@ -8,14 +8,13 @@ import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.DoubleSummaryStatistics;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -39,6 +38,7 @@ public class HvacMinuteAggregationService {
     private final HvacRawEventRepository rawRepository;
     private final HvacMinuteRepository minuteRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final HvacPointMinuteAggregator pointMinuteAggregator;
     private final long finalizationDelayMillis;
     private final int catchUpMinutes;
 
@@ -50,17 +50,20 @@ public class HvacMinuteAggregationService {
      */
     private final AtomicLong lastProcessedMinute = new AtomicLong(Long.MIN_VALUE);
 
+    @Autowired
     public HvacMinuteAggregationService(
             DataPointConfigProvider configProvider,
             HvacRawEventRepository rawRepository,
             HvacMinuteRepository minuteRepository,
             ApplicationEventPublisher eventPublisher,
+            HvacPointMinuteAggregator pointMinuteAggregator,
             @Value("${aggregation.finalization-delay-seconds:30}") int finalizationDelaySeconds,
             @Value("${aggregation.catch-up-minutes:10}") int catchUpMinutes) {
         this.configProvider = configProvider;
         this.rawRepository = rawRepository;
         this.minuteRepository = minuteRepository;
         this.eventPublisher = eventPublisher;
+        this.pointMinuteAggregator = pointMinuteAggregator;
         this.finalizationDelayMillis = finalizationDelaySeconds * 1_000L;
         this.catchUpMinutes = Math.max(1, catchUpMinutes);
     }
@@ -216,47 +219,10 @@ public class HvacMinuteAggregationService {
             if (pointEvents == null || pointEvents.isEmpty()) {
                 continue;
             }
-            aggregates.add(toAggregate(
-                    pointEntry.getValue(), pointEvents, minuteStart, finalizedAt));
+            aggregates.add(pointMinuteAggregator.aggregate(
+                    pointEntry.getValue(), minuteStart, pointEvents, finalizedAt));
         }
         return aggregates;
-    }
-
-    private RawMinuteAggregate toAggregate(
-            PointRuntimeConfig point,
-            List<RawTelemetryEvent> events,
-            long minuteStart,
-            long finalizedAt) {
-        DoubleSummaryStatistics statistics = events.stream()
-                .mapToDouble(RawTelemetryEvent::value).summaryStatistics();
-        int worstQuality = events.stream()
-                .mapToInt(RawTelemetryEvent::dataQuality).max().orElse(0);
-        long firstReceived = events.stream().map(RawTelemetryEvent::receivedTime)
-                .min(Comparator.naturalOrder()).orElseThrow();
-        long lastReceived = events.stream().map(RawTelemetryEvent::receivedTime)
-                .max(Comparator.naturalOrder()).orElseThrow();
-        return new RawMinuteAggregate(
-                point.pointId(),
-                point.pointCode(),
-                point.buildingId(),
-                point.systemGroupId(),
-                point.equipId(),
-                point.equipCode(),
-                point.familyCode(),
-                point.componentCode(),
-                point.suffixCode(),
-                point.isForCalc(),
-                minuteStart,
-                statistics.getAverage(),
-                statistics.getMin(),
-                statistics.getMax(),
-                Math.toIntExact(statistics.getCount()),
-                worstQuality,
-                firstReceived,
-                lastReceived,
-                finalizedAt,
-                null
-        );
     }
 
     private Map<String, PointRuntimeConfig> activePoints() {

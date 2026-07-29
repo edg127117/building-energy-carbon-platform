@@ -71,6 +71,21 @@ public interface BizDataQualityFillTaskMapper
     int markFirstApplied(@Param("taskId") String taskId);
 
     /**
+     * 迟到 Q0 写入成功后只原子累加替换计数，小时收口任务再统一重建最终状态。
+     */
+    @Update("""
+            UPDATE biz_data_quality_fill_task
+            SET replaced_count = LEAST(
+                    minute_count, replaced_count + #{increment}),
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE task_id = #{taskId}
+              AND apply_status <> 'VOIDED'
+            """)
+    int incrementReplacedCountAtomic(
+            @Param("taskId") String taskId,
+            @Param("increment") int increment);
+
+    /**
      * 写 TDengine 失败后立即保存失败分钟证据，但不增加 retry_count。
      * retry_count 只在恢复服务真正发起重试时另行更新。
      */

@@ -1109,6 +1109,16 @@ void recordReplacements(Map<String, Integer> countsByOldTaskId);
 - 任务仍失败时累计 retryCount 和 lastError；
 - 失败任务不得发布 READY；
 - 一次最多取固定 100 条，避免无界恢复。
+- 接入事件发布或正式分钟写入失败：先扫描最近自动修正窗口内
+  `late_flag=1` 的原始事件，按 `pointId+minuteStart` 分组并取最大
+  `receivedAt`，幂等触发完整证据重聚合和 Q0 升级；
+- 迟到 Q0 已写入但 READY/插值失败：再从同一窗口内的正式分钟派生扫描
+  `data_quality=0` 且 `finalized_at` 晚于正常冻结边界的行；
+  依赖指标缺失或 `calculated_at < finalized_at` 时补发
+  `LATE_REAL_CORRECTION` READY，并幂等重跑该 Q0 之前的短缺口插值；
+- 上述原始 late 证据和迟到 Q0 扫描必须批量读取窗口、分组去重并限制每轮处理数，
+  不新增高频任务表，
+  从而覆盖事件发布失败、进程在 Q0 落盘后重启以及插值调用失败。
 
 ### Step 2: 写小时收口失败测试
 
@@ -1141,6 +1151,13 @@ Expected: 编译失败，因为恢复和收口组件尚不存在。
 - Q2 重试只处理任务 evidence 中记录的失败分钟，或尚未在 TDengine 发现相同 taskId 的分钟。
 - Q1 重试以一个连续缺口为单位批量执行。
 - 写入结果为 IDEMPOTENT 也可修复 MySQL 状态，但不得重复发布公式事件；只有本轮实际写入/升级的分钟发布 READY。
+- 迟到 Q0 没有 `quality_task_id`，恢复服务以正式分钟的
+  `finalized_at` 和 Task 9 指标结果的 `calculated_at` 判断下游是否过期；
+  只有缺失或过期的依赖指标才补发 READY，避免周期性重复重算全部指标。
+- 原始 late 证据扫描必须先于迟到 Q0 下游扫描；前者覆盖接入事件发布失败和
+  Q0 写入失败，后者覆盖 Q0 已落盘后进程退出或 READY 失败。
+- 即使依赖指标已经是最新，迟到 Q0 的短缺口插值也允许幂等重跑；
+  这样 READY 成功但历史 Q1 回溯失败时仍可自动恢复。
 - 收口以自然小时结束作为边界，不扫描仍在进行中的小时。
 - 所有调度异常按任务隔离，单个坏任务不得中止后续任务。
 

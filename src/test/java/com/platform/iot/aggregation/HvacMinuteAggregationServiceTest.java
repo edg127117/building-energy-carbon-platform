@@ -38,7 +38,8 @@ class HvacMinuteAggregationServiceTest {
     @BeforeEach
     void setUp() {
         service = new HvacMinuteAggregationService(
-                configProvider, rawRepository, minuteRepository, eventPublisher, 30, 1);
+                configProvider, rawRepository, minuteRepository, eventPublisher,
+                new HvacPointMinuteAggregator(), 30, 1);
         lenient().when(minuteRepository.saveAllWithQualityPriority(anyList(), isNull()))
                 .thenAnswer(invocation -> {
                     List<RawMinuteAggregate> rows = invocation.getArgument(0);

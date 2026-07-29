@@ -53,12 +53,15 @@ class DataQualityConditionalConfigurationTest {
                 .withBean(ApplicationEventPublisher.class, () -> publisher)
                 .withUserConfiguration(
                         HvacMinuteQualityCompletionService.class,
-                        HvacMinuteQualityBypassListener.class)
+                        HvacMinuteQualityBypassListener.class,
+                        LateRealMinuteCorrectionService.class)
                 .run(context -> {
                     assertThat(context).hasSingleBean(
                             HvacMinuteQualityBypassListener.class);
                     assertThat(context).doesNotHaveBean(
                             HvacMinuteQualityCompletionService.class);
+                    assertThat(context).doesNotHaveBean(
+                            LateRealMinuteCorrectionService.class);
                 });
 
         // ApplicationEventPublisher 是 Spring 的可解析基础设施依赖，ContextRunner 会优先
