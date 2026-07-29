@@ -1,10 +1,13 @@
 package com.platform.iot.dataquality;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BizDataPointMapper;
 import com.platform.hvac.model.entity.BizDataPoint;
 import com.platform.iot.dataquality.mapper.BizPointTypicalValueConfigMapper;
 import com.platform.iot.dataquality.model.TypicalValueStatus;
+import com.platform.iot.dataquality.model.dto.TypicalValueDtos;
 import com.platform.iot.dataquality.model.entity.BizPointTypicalValueConfig;
 import com.platform.security.FormalRole;
 import com.platform.system.service.BuildingScopeService;
@@ -17,13 +20,16 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Collection;
+import java.util.Set;
 
 /**
  * 典型值配置的版本创建、草稿维护和审批状态机。
  *
- * <p>能效管理员只在授权建筑内创建、修改和提交配置；平台管理员负责批准、拒绝和停用。
+ * <p>能效管理员只在授权建筑内创建、修改和提交配置；平台管理员可维护全部建筑并负责审批和停用。
  * 创建版本时锁父测点后分配版本，批准时先锁配置行再锁父测点，保证并发操作不会产生重复版本
  * 或重叠的批准有效期。已批准记录不可直接修改，只能创建新版本。</p>
  */
@@ -33,10 +39,147 @@ import java.util.Collection;
 @ConditionalOnProperty(prefix = "data-quality", name = "enabled", havingValue = "true")
 public class TypicalValueConfigService {
 
+    private static final ZoneId MYSQL_ZONE = ZoneId.of("Asia/Shanghai");
+
     private final BizPointTypicalValueConfigMapper configMapper;
     private final BizDataPointMapper pointMapper;
     private final BuildingScopeService buildingScopeService;
     private final TypicalValueConfigProvider provider;
+
+    /**
+     * 按登录人的建筑范围分页查询配置。
+     *
+     * <p>平台管理员以 {@code allBuildings=true} 查询全量；其他可读角色把授权建筑集合传入
+     * Mapper，由 SQL 在分页前过滤，避免先查全量再在 Java 中裁剪造成数量和内容泄漏。</p>
+     */
+    public IPage<TypicalValueDtos.Response> page(
+            Long userId,
+            Collection<String> roles,
+            int pageNum,
+            int pageSize,
+            String buildingId,
+            String pointId,
+            TypicalValueStatus status,
+            Long validFrom,
+            Long validTo) {
+        requireReader(roles);
+        if (pageNum < 1 || pageSize < 1 || pageSize > 100) {
+            throw new BusinessException(400, "分页参数超出允许范围");
+        }
+
+        String normalizedBuildingId = trimToNull(buildingId);
+        validateFilterLength(normalizedBuildingId, "建筑ID");
+        String normalizedPointId = trimToNull(pointId);
+        validateFilterLength(normalizedPointId, "测点ID");
+        if (normalizedBuildingId != null) {
+            buildingScopeService.checkAccess(userId, roles, normalizedBuildingId);
+        }
+        LocalDateTime from = toLocalDateTime(validFrom);
+        LocalDateTime to = toLocalDateTime(validTo);
+        validateOptionalPeriod(from, to);
+
+        Set<String> accessibleBuildingIds =
+                buildingScopeService.getAccessibleBuildingIds(userId, roles);
+        IPage<BizPointTypicalValueConfig> result = configMapper.selectPageFiltered(
+                new Page<>(pageNum, pageSize),
+                accessibleBuildingIds == null,
+                accessibleBuildingIds,
+                normalizedBuildingId,
+                normalizedPointId,
+                status == null ? null : status.name(),
+                from,
+                to);
+        return result.convert(this::toResponse);
+    }
+
+    /** 查询单条配置时仍校验记录所属建筑，不能凭配置 ID 绕过数据范围。 */
+    public TypicalValueDtos.Response detail(
+            Long userId,
+            Collection<String> roles,
+            String configId) {
+        requireReader(roles);
+        BizPointTypicalValueConfig config = configMapper.selectById(
+                requireText(configId, "典型值配置ID不能为空"));
+        if (config == null) {
+            throw new BusinessException(404, "典型值配置不存在");
+        }
+        buildingScopeService.checkAccess(userId, roles, config.getBuildingId());
+        return toResponse(config);
+    }
+
+    /** API 创建入口：由 Service 统一把 Unix 毫秒转换为 MySQL 本地时间。 */
+    @Transactional(rollbackFor = Exception.class)
+    public TypicalValueDtos.Response createView(
+            Long userId,
+            Collection<String> roles,
+            TypicalValueDtos.CreateRequest request) {
+        return toResponse(create(
+                userId,
+                roles,
+                request.pointId(),
+                request.typicalValue(),
+                request.sourceDescription(),
+                request.reason(),
+                requiredLocalDateTime(request.validFrom()),
+                toLocalDateTime(request.validTo())));
+    }
+
+    /** API 修改入口：只修改草稿业务字段，不接受状态和审计字段。 */
+    @Transactional(rollbackFor = Exception.class)
+    public TypicalValueDtos.Response updateView(
+            Long userId,
+            Collection<String> roles,
+            String configId,
+            TypicalValueDtos.UpdateRequest request) {
+        return toResponse(update(
+                userId,
+                roles,
+                configId,
+                request.typicalValue(),
+                request.sourceDescription(),
+                request.reason(),
+                requiredLocalDateTime(request.validFrom()),
+                toLocalDateTime(request.validTo())));
+    }
+
+    /** API 提交入口，返回稳定的响应 DTO。 */
+    @Transactional(rollbackFor = Exception.class)
+    public TypicalValueDtos.Response submitView(
+            Long userId,
+            Collection<String> roles,
+            String configId) {
+        return toResponse(submit(userId, roles, configId));
+    }
+
+    /** API 批准入口，只有平台管理员角色可通过底层状态机校验。 */
+    @Transactional(rollbackFor = Exception.class)
+    public TypicalValueDtos.Response approveView(
+            Long reviewerId,
+            Collection<String> roles,
+            String configId,
+            TypicalValueDtos.ReviewRequest request) {
+        return toResponse(approve(reviewerId, roles, configId, request.comment()));
+    }
+
+    /** API 拒绝入口，审核意见由 DTO 和状态机双重校验。 */
+    @Transactional(rollbackFor = Exception.class)
+    public TypicalValueDtos.Response rejectView(
+            Long reviewerId,
+            Collection<String> roles,
+            String configId,
+            TypicalValueDtos.ReviewRequest request) {
+        return toResponse(reject(reviewerId, roles, configId, request.comment()));
+    }
+
+    /** API 停用入口，历史任务仍保留原典型值版本证据。 */
+    @Transactional(rollbackFor = Exception.class)
+    public TypicalValueDtos.Response disableView(
+            Long operatorId,
+            Collection<String> roles,
+            String configId,
+            TypicalValueDtos.DisableRequest request) {
+        return toResponse(disable(operatorId, roles, configId, request.reason()));
+    }
 
     /**
      * 创建新的草稿版本。
@@ -53,7 +196,7 @@ public class TypicalValueConfigService {
             String reason,
             LocalDateTime validFrom,
             LocalDateTime validTo) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
         requireText(pointId, "测点不能为空");
         validatePeriod(validFrom, validTo);
 
@@ -89,10 +232,11 @@ public class TypicalValueConfigService {
             String reason,
             LocalDateTime validFrom,
             LocalDateTime validTo) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
         BizPointTypicalValueConfig config = requireLockedConfig(configId);
-        requireStatus(config, TypicalValueStatus.DRAFT, "只有草稿典型值可以修改");
+        // 先校验建筑范围，再暴露状态冲突，避免配置 ID 被猜中后泄露其他建筑的审批状态。
         buildingScopeService.checkAccess(userId, roles, config.getBuildingId());
+        requireStatus(config, TypicalValueStatus.DRAFT, "只有草稿典型值可以修改");
         validatePeriod(validFrom, validTo);
 
         BizDataPoint point = requireEligiblePoint(pointMapper.selectById(config.getPointId()));
@@ -114,12 +258,13 @@ public class TypicalValueConfigService {
             Long userId,
             Collection<String> roles,
             String configId) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
         BizPointTypicalValueConfig config = requireLockedConfig(configId);
-        requireStatus(config, TypicalValueStatus.DRAFT, "只有草稿典型值可以提交");
+        // 与修改入口保持相同顺序：越权始终返回 403，不泄露目标配置状态。
         buildingScopeService.checkAccess(userId, roles, config.getBuildingId());
+        requireStatus(config, TypicalValueStatus.DRAFT, "只有草稿典型值可以提交");
         config.setStatus(TypicalValueStatus.PENDING);
-        config.setSubmittedAt(LocalDateTime.now());
+        config.setSubmittedAt(LocalDateTime.now(MYSQL_ZONE));
         configMapper.updateById(config);
         return config;
     }
@@ -158,7 +303,7 @@ public class TypicalValueConfigService {
         config.setStatus(TypicalValueStatus.APPROVED);
         config.setReviewerId(reviewerId);
         config.setReviewComment(trimToNull(comment));
-        config.setReviewedAt(LocalDateTime.now());
+        config.setReviewedAt(LocalDateTime.now(MYSQL_ZONE));
         configMapper.updateById(config);
         refreshSnapshotAfterCommit();
         return config;
@@ -178,7 +323,7 @@ public class TypicalValueConfigService {
         config.setStatus(TypicalValueStatus.REJECTED);
         config.setReviewerId(reviewerId);
         config.setReviewComment(requiredComment);
-        config.setReviewedAt(LocalDateTime.now());
+        config.setReviewedAt(LocalDateTime.now(MYSQL_ZONE));
         configMapper.updateById(config);
         return config;
     }
@@ -201,7 +346,7 @@ public class TypicalValueConfigService {
         config.setStatus(TypicalValueStatus.DISABLED);
         config.setDisabledBy(operatorId);
         config.setDisabledReason(requiredReason);
-        config.setDisabledAt(LocalDateTime.now());
+        config.setDisabledAt(LocalDateTime.now(MYSQL_ZONE));
         configMapper.updateById(config);
         refreshSnapshotAfterCommit();
         return config;
@@ -258,6 +403,14 @@ public class TypicalValueConfigService {
         }
     }
 
+    private static void validateOptionalPeriod(
+            LocalDateTime validFrom,
+            LocalDateTime validTo) {
+        if (validFrom != null && validTo != null && !validTo.isAfter(validFrom)) {
+            throw new BusinessException(400, "查询结束时间必须晚于开始时间");
+        }
+    }
+
     private static void requireStatus(
             BizPointTypicalValueConfig config,
             TypicalValueStatus expected,
@@ -267,10 +420,18 @@ public class TypicalValueConfigService {
         }
     }
 
-    private static void requireEnergyManager(Collection<String> roles) {
+    private static void requireMaintainer(Collection<String> roles) {
         if (!hasRole(roles, FormalRole.ENERGY_MANAGER)
                 && !hasRole(roles, FormalRole.PLATFORM_ADMIN)) {
             throw new BusinessException(403, "只有能效管理员或平台管理员可以维护典型值配置");
+        }
+    }
+
+    private static void requireReader(Collection<String> roles) {
+        if (!hasRole(roles, FormalRole.BUILDING_OWNER)
+                && !hasRole(roles, FormalRole.ENERGY_MANAGER)
+                && !hasRole(roles, FormalRole.PLATFORM_ADMIN)) {
+            throw new BusinessException(403, "当前角色无权读取典型值配置");
         }
     }
 
@@ -298,6 +459,62 @@ public class TypicalValueConfigService {
             return null;
         }
         return value.trim();
+    }
+
+    private static void validateFilterLength(String value, String field) {
+        if (value != null && value.length() > 32) {
+            throw new BusinessException(400, field + "不能超过32个字符");
+        }
+    }
+
+    private static LocalDateTime requiredLocalDateTime(Long epochMillis) {
+        LocalDateTime value = toLocalDateTime(epochMillis);
+        if (value == null) {
+            throw new BusinessException(400, "典型值生效时间不能为空");
+        }
+        return value;
+    }
+
+    private static LocalDateTime toLocalDateTime(Long epochMillis) {
+        if (epochMillis == null) {
+            return null;
+        }
+        try {
+            return Instant.ofEpochMilli(epochMillis)
+                    .atZone(MYSQL_ZONE)
+                    .toLocalDateTime();
+        } catch (RuntimeException exception) {
+            throw new BusinessException(400, "时间戳超出允许范围");
+        }
+    }
+
+    private TypicalValueDtos.Response toResponse(BizPointTypicalValueConfig config) {
+        return new TypicalValueDtos.Response(
+                config.getConfigId(),
+                config.getPointId(),
+                config.getBuildingId(),
+                config.getTypicalValue(),
+                config.getUnit(),
+                config.getSourceDescription(),
+                config.getReason(),
+                toEpochMillis(config.getValidFrom()),
+                toEpochMillis(config.getValidTo()),
+                config.getStatus(),
+                config.getVersion(),
+                config.getCreatedBy(),
+                toEpochMillis(config.getSubmittedAt()),
+                config.getReviewerId(),
+                config.getReviewComment(),
+                toEpochMillis(config.getReviewedAt()),
+                config.getDisabledBy(),
+                config.getDisabledReason(),
+                toEpochMillis(config.getDisabledAt()),
+                toEpochMillis(config.getCreateTime()),
+                toEpochMillis(config.getUpdateTime()));
+    }
+
+    private static Long toEpochMillis(LocalDateTime value) {
+        return value == null ? null : value.atZone(MYSQL_ZONE).toInstant().toEpochMilli();
     }
 
     private void refreshSnapshotAfterCommit() {

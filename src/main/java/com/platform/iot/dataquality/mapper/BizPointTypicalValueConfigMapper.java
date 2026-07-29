@@ -1,12 +1,14 @@
 package com.platform.iot.dataquality.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.platform.iot.dataquality.model.entity.BizPointTypicalValueConfig;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -18,6 +20,59 @@ import java.util.Optional;
  */
 @Mapper
 public interface BizPointTypicalValueConfigMapper extends BaseMapper<BizPointTypicalValueConfig> {
+
+    /**
+     * 在 MySQL 中完成典型值配置的建筑范围、状态和有效期过滤后再分页。
+     *
+     * <p>{@code allBuildings} 只允许平台管理员传入 true；普通角色没有建筑授权时显式追加
+     * {@code 1 = 0}，不能省略条件后误查全量。有效期按半开区间重叠语义过滤。</p>
+     */
+    @Select("""
+            <script>
+            SELECT *
+            FROM biz_point_typical_value_config
+            WHERE 1 = 1
+            <if test="allBuildings == false">
+              <choose>
+                <when test="buildingIds != null and !buildingIds.isEmpty()">
+                  AND building_id IN
+                  <foreach collection="buildingIds" item="buildingId"
+                           open="(" separator="," close=")">
+                    #{buildingId}
+                  </foreach>
+                </when>
+                <otherwise>
+                  AND 1 = 0
+                </otherwise>
+              </choose>
+            </if>
+            <if test="buildingId != null and buildingId != ''">
+              AND building_id = #{buildingId}
+            </if>
+            <if test="pointId != null and pointId != ''">
+              AND point_id = #{pointId}
+            </if>
+            <if test="status != null">
+              AND status = #{status}
+            </if>
+            <if test="validFrom != null">
+              AND (valid_to IS NULL OR valid_to &gt; #{validFrom})
+            </if>
+            <if test="validTo != null">
+              AND valid_from &lt; #{validTo}
+            </if>
+            ORDER BY create_time DESC, config_id DESC
+            </script>
+            """)
+    IPage<BizPointTypicalValueConfig> selectPageFiltered(
+            IPage<BizPointTypicalValueConfig> page,
+            @Param("allBuildings") boolean allBuildings,
+            @Param("buildingIds") Collection<String> buildingIds,
+            @Param("buildingId") String buildingId,
+            @Param("pointId") String pointId,
+            @Param("status") String status,
+            @Param("validFrom") LocalDateTime validFrom,
+            @Param("validTo") LocalDateTime validTo);
 
     /** 锁定配置行，保证一次审批状态流转只能由一个事务完成。 */
     @Select("""
