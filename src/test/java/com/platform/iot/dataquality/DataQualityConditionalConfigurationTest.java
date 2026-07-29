@@ -91,12 +91,21 @@ class DataQualityConditionalConfigurationTest {
                         () -> mock(FillTaskReconciliationService.class))
                 .withUserConfiguration(
                         DataQualityRecoveryScheduler.class,
-                        FillTaskReconciliationScheduler.class)
+                        FillTaskReconciliationScheduler.class,
+                        DataQualityRecalculationScheduler.class,
+                        DataQualityRecalculationService.class,
+                        DataQualityRecalculationJobService.class)
                 .run(context -> {
                     assertThat(context).doesNotHaveBean(
                             DataQualityRecoveryScheduler.class);
                     assertThat(context).doesNotHaveBean(
                             FillTaskReconciliationScheduler.class);
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecalculationScheduler.class);
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecalculationService.class);
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecalculationJobService.class);
                 });
     }
 
@@ -118,6 +127,26 @@ class DataQualityConditionalConfigurationTest {
                             DataQualityRecoveryScheduler.class);
                     assertThat(context).doesNotHaveBean(
                             FillTaskReconciliationScheduler.class);
+                });
+    }
+
+    @Test
+    void disabledRecalculationOmitsSchedulerExecutorAndJobService() {
+        new ApplicationContextRunner()
+                .withPropertyValues(
+                        "data-quality.enabled=true",
+                        "data-quality.recalculation-enabled=false")
+                .withUserConfiguration(
+                        DataQualityRecalculationScheduler.class,
+                        DataQualityRecalculationService.class,
+                        DataQualityRecalculationJobService.class)
+                .run(context -> {
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecalculationScheduler.class);
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecalculationService.class);
+                    assertThat(context).doesNotHaveBean(
+                            DataQualityRecalculationJobService.class);
                 });
     }
 
