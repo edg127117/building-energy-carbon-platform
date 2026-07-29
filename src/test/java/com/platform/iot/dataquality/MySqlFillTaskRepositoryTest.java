@@ -270,6 +270,20 @@ class MySqlFillTaskRepositoryTest {
         verify(mapper).incrementReplacedCountAtomic("OLD", 2);
     }
 
+    @Test
+    void findsChildTasksByRecalculationJobId() {
+        BizDataQualityFillTask child = typicalCandidate();
+        child.setTaskId("CHILD1");
+        child.setRecalcJobId("JOB1");
+        when(mapper.selectByRecalculationJobId("JOB1"))
+                .thenReturn(List.of(child));
+
+        assertThat(repository.findByRecalculationJobId("JOB1"))
+                .containsExactly(child);
+
+        verify(mapper).selectByRecalculationJobId("JOB1");
+    }
+
     private BizDataQualityFillTask typicalCandidate() {
         BizDataQualityFillTask task = new BizDataQualityFillTask();
         task.setIdempotencyKey("Q2:POINT001:CONFIG001:1:3600000");

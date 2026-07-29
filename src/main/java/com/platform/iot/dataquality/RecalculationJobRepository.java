@@ -24,6 +24,14 @@ public interface RecalculationJobRepository {
 
     Optional<BizDataQualityRecalcJob> findByIdempotencyKey(String key);
 
+    /**
+     * 在 MySQL 事务内使用当前读取得幂等任务。
+     *
+     * <p>建筑锁前的普通快照读可能受 REPEATABLE READ 和 MyBatis 一级缓存影响，
+     * 锁后最终判断必须使用该入口才能看见等待期间刚提交的相同任务。</p>
+     */
+    Optional<BizDataQualityRecalcJob> findByIdempotencyKeyForUpdate(String key);
+
     List<BizDataQualityRecalcJob> findOverlappingForUpdate(
             String buildingId, LocalDateTime from, LocalDateTime to);
 

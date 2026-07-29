@@ -1,6 +1,7 @@
 package com.platform.iot.dataquality.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.platform.iot.dataquality.model.FillApplyStatus;
 import com.platform.iot.dataquality.model.entity.BizDataQualityFillTask;
 import org.apache.ibatis.annotations.Mapper;
@@ -9,6 +10,7 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -20,6 +22,75 @@ import java.util.List;
 @Mapper
 public interface BizDataQualityFillTaskMapper
         extends BaseMapper<BizDataQualityFillTask> {
+
+    /**
+     * 在 MySQL 完成建筑范围、来源、状态和半开时间区间过滤后再分页。
+     *
+     * <p>普通角色没有建筑授权时显式返回空集，不能因为 IN 集合为空而退化成全量查询。</p>
+     */
+    @Select("""
+            <script>
+            SELECT *
+            FROM biz_data_quality_fill_task
+            WHERE 1 = 1
+            <if test="allBuildings == false">
+              <choose>
+                <when test="buildingIds != null and !buildingIds.isEmpty()">
+                  AND building_id IN
+                  <foreach collection="buildingIds" item="scopeBuildingId"
+                           open="(" separator="," close=")">
+                    #{scopeBuildingId}
+                  </foreach>
+                </when>
+                <otherwise>
+                  AND 1 = 0
+                </otherwise>
+              </choose>
+            </if>
+            <if test="buildingId != null and buildingId != ''">
+              AND building_id = #{buildingId}
+            </if>
+            <if test="pointId != null and pointId != ''">
+              AND point_id = #{pointId}
+            </if>
+            <if test="sourceType != null">
+              AND source_type = #{sourceType}
+            </if>
+            <if test="dataQuality != null">
+              AND data_quality = #{dataQuality}
+            </if>
+            <if test="applyStatus != null">
+              AND apply_status = #{applyStatus}
+            </if>
+            <if test="fromInclusive != null">
+              AND end_minute &gt; #{fromInclusive}
+            </if>
+            <if test="toExclusive != null">
+              AND start_minute &lt; #{toExclusive}
+            </if>
+            ORDER BY generated_at DESC, task_id DESC
+            </script>
+            """)
+    IPage<BizDataQualityFillTask> selectPageFiltered(
+            IPage<BizDataQualityFillTask> page,
+            @Param("allBuildings") boolean allBuildings,
+            @Param("buildingIds") Collection<String> buildingIds,
+            @Param("buildingId") String buildingId,
+            @Param("pointId") String pointId,
+            @Param("sourceType") String sourceType,
+            @Param("dataQuality") Integer dataQuality,
+            @Param("applyStatus") String applyStatus,
+            @Param("fromInclusive") LocalDateTime fromInclusive,
+            @Param("toExclusive") LocalDateTime toExclusive);
+
+    @Select("""
+            SELECT *
+            FROM biz_data_quality_fill_task
+            WHERE recalc_job_id = #{jobId}
+            ORDER BY generated_at, task_id
+            """)
+    List<BizDataQualityFillTask> selectByRecalculationJobId(
+            @Param("jobId") String jobId);
 
     @Select("""
             SELECT *

@@ -87,6 +87,14 @@ public class MySqlRecalculationJobRepository
 
     @Override
     @Transactional
+    public Optional<BizDataQualityRecalcJob> findByIdempotencyKeyForUpdate(
+            String key) {
+        return Optional.ofNullable(mapper.selectByIdempotencyKeyForUpdate(
+                requireText(key, "idempotencyKey")));
+    }
+
+    @Override
+    @Transactional
     public List<BizDataQualityRecalcJob> findOverlappingForUpdate(
             String buildingId,
             LocalDateTime from,

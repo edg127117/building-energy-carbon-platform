@@ -1,10 +1,13 @@
 package com.platform.iot.dataquality;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.platform.iot.dataquality.model.FillSourceType;
 import com.platform.iot.dataquality.model.TaskReconciliation;
 import com.platform.iot.dataquality.model.FillApplyStatus;
 import com.platform.iot.dataquality.model.entity.BizDataQualityFillTask;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -21,7 +24,27 @@ public interface FillTaskRepository {
 
     Optional<BizDataQualityFillTask> findById(String taskId);
 
+    /**
+     * 管理查询先读取任务归属再校验 JSON，避免损坏证据阻断建筑权限检查。
+     */
+    Optional<BizDataQualityFillTask> findAuditById(String taskId);
+
     Optional<BizDataQualityFillTask> findByIdForUpdate(String taskId);
+
+    IPage<BizDataQualityFillTask> findPage(
+            int pageNum,
+            int pageSize,
+            boolean allBuildings,
+            Collection<String> buildingIds,
+            String buildingId,
+            String pointId,
+            FillSourceType sourceType,
+            Integer dataQuality,
+            FillApplyStatus applyStatus,
+            LocalDateTime fromInclusive,
+            LocalDateTime toExclusive);
+
+    List<BizDataQualityFillTask> findByRecalculationJobId(String jobId);
 
     void markFirstApplied(String taskId);
 

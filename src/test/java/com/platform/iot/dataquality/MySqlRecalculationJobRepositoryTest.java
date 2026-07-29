@@ -77,6 +77,18 @@ class MySqlRecalculationJobRepositoryTest {
     }
 
     @Test
+    void explicitCurrentReadUsesForUpdateMapperEntry() {
+        BizDataQualityRecalcJob existing = candidate();
+        when(mapper.selectByIdempotencyKeyForUpdate("RANGE_RECALC:KEY"))
+                .thenReturn(existing);
+
+        assertThat(repository.findByIdempotencyKeyForUpdate(
+                "RANGE_RECALC:KEY")).containsSame(existing);
+
+        verify(mapper).selectByIdempotencyKeyForUpdate("RANGE_RECALC:KEY");
+    }
+
+    @Test
     void claimAndAdvanceDelegateToConditionalAtomicUpdates() {
         LocalDateTime staleBefore = FROM.minusMinutes(2);
         LocalDateTime now = FROM.plusMinutes(1);

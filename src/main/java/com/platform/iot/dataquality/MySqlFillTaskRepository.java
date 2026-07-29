@@ -1,5 +1,7 @@
 package com.platform.iot.dataquality;
 
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -17,6 +19,7 @@ import java.time.LocalDateTime;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -94,11 +97,54 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
     }
 
     @Override
+    public Optional<BizDataQualityFillTask> findAuditById(String taskId) {
+        requireText(taskId, "taskId");
+        // 管理层必须先按 buildingId 鉴权，再解析可能损坏的 evidence_json。
+        return Optional.ofNullable(mapper.selectById(taskId));
+    }
+
+    @Override
     @Transactional
     public Optional<BizDataQualityFillTask> findByIdForUpdate(String taskId) {
         requireText(taskId, "taskId");
         return Optional.ofNullable(mapper.selectByTaskIdForUpdate(taskId))
                 .map(this::validateStoredTask);
+    }
+
+    @Override
+    public IPage<BizDataQualityFillTask> findPage(
+            int pageNum,
+            int pageSize,
+            boolean allBuildings,
+            Collection<String> buildingIds,
+            String buildingId,
+            String pointId,
+            FillSourceType sourceType,
+            Integer dataQuality,
+            FillApplyStatus applyStatus,
+            LocalDateTime fromInclusive,
+            LocalDateTime toExclusive) {
+        if (pageNum < 1 || pageSize < 1 || pageSize > 100) {
+            throw new IllegalArgumentException("分页参数超出允许范围");
+        }
+        return mapper.selectPageFiltered(
+                new Page<>(pageNum, pageSize),
+                allBuildings,
+                buildingIds,
+                buildingId,
+                pointId,
+                sourceType == null ? null : sourceType.name(),
+                dataQuality,
+                applyStatus == null ? null : applyStatus.name(),
+                fromInclusive,
+                toExclusive);
+    }
+
+    @Override
+    public List<BizDataQualityFillTask> findByRecalculationJobId(
+            String jobId) {
+        return List.copyOf(mapper.selectByRecalculationJobId(
+                requireText(jobId, "jobId")));
     }
 
     @Override

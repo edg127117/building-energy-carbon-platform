@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS sys_building_access_request;
+DROP TABLE IF EXISTS biz_data_quality_recalc_job;
 DROP TABLE IF EXISTS biz_data_quality_fill_task;
 DROP TABLE IF EXISTS biz_point_typical_value_config;
 DROP TABLE IF EXISTS gen_column;
