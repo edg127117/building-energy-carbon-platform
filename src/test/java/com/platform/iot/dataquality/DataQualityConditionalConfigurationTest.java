@@ -30,6 +30,8 @@ class DataQualityConditionalConfigurationTest {
                         () -> mock(HvacMinuteRepository.class))
                 .withBean(TypicalValueFillService.class,
                         () -> mock(TypicalValueFillService.class))
+                .withBean(InterpolationFillService.class,
+                        () -> mock(InterpolationFillService.class))
                 .withBean(ApplicationEventPublisher.class,
                         () -> mock(ApplicationEventPublisher.class))
                 .withUserConfiguration(

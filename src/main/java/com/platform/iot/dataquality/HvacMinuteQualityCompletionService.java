@@ -7,8 +7,8 @@ import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.quality.PointRuntimeConfig;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
-import lombok.RequiredArgsConstructor;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -28,7 +29,6 @@ import java.util.Set;
  * 让公式明确记录缺失。完整质量 0 分钟不会访问典型值或补全任务仓储。</p>
  */
 @Service
-@RequiredArgsConstructor
 @ConditionalOnProperty(
         prefix = "data-quality", name = "enabled", havingValue = "true")
 public class HvacMinuteQualityCompletionService {
@@ -36,7 +36,27 @@ public class HvacMinuteQualityCompletionService {
     private final DataPointConfigProvider pointConfigProvider;
     private final HvacMinuteRepository minuteRepository;
     private final TypicalValueFillService typicalValueFillService;
+    private final InterpolationFillService interpolationFillService;
     private final ApplicationEventPublisher eventPublisher;
+
+    @Autowired
+    public HvacMinuteQualityCompletionService(
+            DataPointConfigProvider pointConfigProvider,
+            HvacMinuteRepository minuteRepository,
+            TypicalValueFillService typicalValueFillService,
+            InterpolationFillService interpolationFillService,
+            ApplicationEventPublisher eventPublisher) {
+        this.pointConfigProvider =
+                Objects.requireNonNull(pointConfigProvider, "pointConfigProvider");
+        this.minuteRepository =
+                Objects.requireNonNull(minuteRepository, "minuteRepository");
+        this.typicalValueFillService =
+                Objects.requireNonNull(typicalValueFillService, "typicalValueFillService");
+        this.interpolationFillService =
+                Objects.requireNonNull(interpolationFillService, "interpolationFillService");
+        this.eventPublisher =
+                Objects.requireNonNull(eventPublisher, "eventPublisher");
+    }
 
     /**
      * 同步处理冻结事件，READY 发布返回后 Task 7 才会追加历史 Q1 回溯，
@@ -94,6 +114,14 @@ public class HvacMinuteQualityCompletionService {
                 event.buildingIds(),
                 readyInputs,
                 affectedPointIds));
+
+        // Spring 默认同步处理 READY；只有当前分钟公式已经完成后，才回溯历史短缺口。
+        // 五分钟是历史升级范围，不是当前分钟等待窗口，因此此调用必须位于 READY 之后。
+        interpolationFillService.fillFromRightEndpoints(
+                readyInputs.stream()
+                        .filter(row -> row.dataQuality() == 0)
+                        .toList(),
+                event.finalizedAt());
     }
 
     private Map<String, PointRuntimeConfig> targetPoints(

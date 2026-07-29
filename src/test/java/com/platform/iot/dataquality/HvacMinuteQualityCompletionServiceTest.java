@@ -38,6 +38,7 @@ class HvacMinuteQualityCompletionServiceTest {
     @Mock private TypicalValueConfigProvider typicalValueConfigProvider;
     @Mock private FillTaskRepository fillTaskRepository;
     @Mock private HvacMinuteRepository minuteRepository;
+    @Mock private InterpolationFillService interpolationFillService;
     @Mock private ApplicationEventPublisher eventPublisher;
 
     private TypicalValueFillService fillService;
@@ -51,7 +52,8 @@ class HvacMinuteQualityCompletionServiceTest {
                 new FillTaskEvidenceCodec(new ObjectMapper().findAndRegisterModules()),
                 minuteRepository);
         completionService = new HvacMinuteQualityCompletionService(
-                pointConfigProvider, minuteRepository, fillService, eventPublisher);
+                pointConfigProvider, minuteRepository, fillService,
+                interpolationFillService, eventPublisher);
     }
 
     @Test
@@ -102,7 +104,8 @@ class HvacMinuteQualityCompletionServiceTest {
         TypicalValueFillService mockFillService =
                 org.mockito.Mockito.mock(TypicalValueFillService.class);
         completionService = new HvacMinuteQualityCompletionService(
-                pointConfigProvider, minuteRepository, mockFillService, eventPublisher);
+                pointConfigProvider, minuteRepository, mockFillService,
+                interpolationFillService, eventPublisher);
         when(pointConfigProvider.findAll()).thenReturn(List.of(first, missing));
         when(mockFillService.fillMissing(missing, MINUTE, MINUTE + 45_000L))
                 .thenReturn(Optional.of(generated));
@@ -126,7 +129,7 @@ class HvacMinuteQualityCompletionServiceTest {
                 org.mockito.Mockito.mock(TypicalValueFillService.class);
         completionService = new HvacMinuteQualityCompletionService(
                 pointConfigProvider, minuteRepository,
-                mockFillService, eventPublisher);
+                mockFillService, interpolationFillService, eventPublisher);
         when(pointConfigProvider.findAll()).thenReturn(List.of(target));
         when(mockFillService.fillMissing(
                 target, MINUTE, MINUTE + 45_000L))
