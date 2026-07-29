@@ -6,6 +6,13 @@ import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 
+/**
+ * 测点档案的 MySQL 持久化入口。
+ *
+ * <p>普通档案读写沿用 MyBatis-Plus；典型值配置创建和审批通过本接口锁定父测点，
+ * 使同一测点的版本号分配与有效期校验串行执行。该接口不读取 TDengine 分钟数据，
+ * 也不承载典型值审批流程，业务规则仍由数据质量 Service 负责。</p>
+ */
 @Mapper
 public interface BizDataPointMapper extends BaseMapper<BizDataPoint> {
 
