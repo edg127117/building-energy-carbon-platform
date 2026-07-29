@@ -62,6 +62,6 @@ class FormulaInputAssemblerTest {
             String component, String suffix, int isForCalc, long minute, double value) {
         return new RawMinuteAggregate(pointId, pointId, buildingId, "GROUP001",
                 equipId, equipId, family, component, suffix, isForCalc, minute,
-                value, value, value, 1, 0, minute, minute, minute);
+                value, value, value, 1, 0, minute, minute, minute, null);
     }
 }

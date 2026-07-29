@@ -3,6 +3,7 @@ package com.platform.iot.temporal;
 import com.platform.config.TdengineProperties;
 import com.platform.iot.temporal.impl.TdengineHvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
+import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -46,9 +47,11 @@ class TdengineHvacMinuteRepositoryTest {
 
     @Test
     void writesAllPointMinutesInOneDataInsertStatement() {
-        repository.saveAll(List.of(
+        when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of());
+
+        List<MinuteQualityWriteResult> results = repository.saveAllWithQualityPriority(List.of(
                 aggregate("WCR1_TWin", "WCR1", "TWin", 12.3),
-                aggregate("DBO_RH", null, "RH", 60.0)));
+                aggregate("DBO_RH", null, "RH", 60.0)), null);
 
         ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
         verify(template, atLeastOnce()).execute(sqlCaptor.capture());
@@ -59,7 +62,11 @@ class TdengineHvacMinuteRepositoryTest {
                 .contains("st_raw_minute_POINT_WCR")
                 .contains("st_raw_minute_POINT_DBO")
                 .contains("12.300000000000")
-                .contains("60.000000000000"));
+                .contains("60.000000000000")
+                .contains("quality_task_id")
+                .contains("NULL"));
+        assertThat(results).extracting(MinuteQualityWriteResult::outcome)
+                .containsOnly(MinuteQualityWriteResult.Outcome.INSERTED);
     }
 
     @Test
@@ -103,6 +110,7 @@ class TdengineHvacMinuteRepositoryTest {
                 .thenReturn(new Timestamp(MINUTE + 50_000L));
         when(resultSet.getTimestamp("finalized_at"))
                 .thenReturn(new Timestamp(MINUTE + 90_000L));
+        when(resultSet.getString("quality_task_id")).thenReturn(null);
         when(template.query(anyString(), any(RowMapper.class))).thenAnswer(invocation -> {
             RowMapper<RawMinuteAggregate> mapper = invocation.getArgument(1);
             return List.of(mapper.mapRow(resultSet, 0));
@@ -115,14 +123,14 @@ class TdengineHvacMinuteRepositoryTest {
                 "POINT001", "WCR1_TWin", "BLD001", "GROUP001",
                 "EQUIP001", "WCR1", "WCR", "MAIN", "TWin", 1,
                 MINUTE, 12.3, 11.8, 12.8, 3, 0,
-                MINUTE + 1_000L, MINUTE + 50_000L, MINUTE + 90_000L));
+                MINUTE + 1_000L, MINUTE + 50_000L, MINUTE + 90_000L, null));
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(template).query(sql.capture(), any(RowMapper.class));
         assertThat(sql.getValue()).isEqualTo("""
                 SELECT point_id, point_code, building_id, system_group_id, equip_id,
                        equip_code, family_code, component_code, suffix_code, is_for_calc,
                        ts, avg_val, min_val, max_val, sample_count, data_quality,
-                       first_received_time, last_received_time, finalized_at
+                       first_received_time, last_received_time, finalized_at, quality_task_id
                 FROM iot_telemetry.st_raw_minute
                 WHERE ts = '%s'
                   AND building_id IN ('BLD001','BLD002')
@@ -151,9 +159,164 @@ class TdengineHvacMinuteRepositoryTest {
 
     @Test
     void emptyBatchDoesNotTouchTdengine() {
-        repository.saveAll(List.of());
+        assertThat(repository.saveAllWithQualityPriority(List.of(), null)).isEmpty();
 
         verifyNoInteractions(template);
+    }
+
+    @Test
+    void generatedMinuteWritesNullReceiveTimesAndQualityTaskId() {
+        when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of());
+        RawMinuteAggregate generated = generatedAggregate(2, "TASK_Q2", 18.5);
+
+        repository.saveAllWithQualityPriority(List.of(generated), null);
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(sqlCaptor.capture());
+        assertThat(sqlCaptor.getAllValues().stream()
+                .filter(sql -> sql.startsWith("INSERT INTO"))
+                .findFirst()).get().satisfies(sql -> assertThat(sql)
+                .contains("first_received_time,last_received_time,finalized_at,quality_task_id")
+                .contains(",0,NULL,NULL,")
+                .contains("'TASK_Q2'"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void appliesQualityPriorityIdempotencyAndSameLevelSupersessionInOneBatchRead() {
+        RawMinuteAggregate oldQ2 = generatedAggregate(2, "OLD_Q2", 18.0);
+        RawMinuteAggregate oldQ1 = generatedAggregateAt(
+                "POINT_Q1", 1, "OLD_Q1", 19.0, MINUTE + 60_000L);
+        RawMinuteAggregate realQ0 = realAggregateAt(
+                "POINT_Q0", 20.0, MINUTE + 120_000L);
+        when(template.query(anyString(), any(RowMapper.class)))
+                .thenReturn(List.of(oldQ2, oldQ1, realQ0));
+
+        List<MinuteQualityWriteResult> results = repository.saveAllWithQualityPriority(List.of(
+                generatedAggregate(1, "NEW_Q1", 18.5),
+                generatedAggregateAt("POINT_Q1", 1, "OLD_Q1", 19.0, MINUTE + 60_000L),
+                generatedAggregateAt("POINT_Q0", 2, "NEW_Q2", 21.0, MINUTE + 120_000L)
+        ), null);
+
+        assertThat(results).extracting(MinuteQualityWriteResult::outcome)
+                .containsExactly(
+                        MinuteQualityWriteResult.Outcome.UPGRADED,
+                        MinuteQualityWriteResult.Outcome.IDEMPOTENT,
+                        MinuteQualityWriteResult.Outcome.REJECTED_HIGHER_QUALITY);
+        verify(template, times(1)).query(anyString(), any(RowMapper.class));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void acceptsRealCorrectionAndRejectsSameQualityDifferentTaskUnlessSuperseded() {
+        RawMinuteAggregate oldReal = realAggregateAt("POINT_Q0", 20.0, MINUTE);
+        RawMinuteAggregate oldQ1 = generatedAggregateAt(
+                "POINT_Q1", 1, "OLD_Q1", 19.0, MINUTE + 60_000L);
+        when(template.query(anyString(), any(RowMapper.class)))
+                .thenReturn(List.of(oldReal, oldQ1));
+
+        List<MinuteQualityWriteResult> rejected = repository.saveAllWithQualityPriority(List.of(
+                realAggregateAt("POINT_Q0", 20.5, MINUTE),
+                generatedAggregateAt("POINT_Q1", 1, "NEW_Q1", 19.5, MINUTE + 60_000L)
+        ), null);
+
+        assertThat(rejected).extracting(MinuteQualityWriteResult::outcome)
+                .containsExactly(
+                        MinuteQualityWriteResult.Outcome.UPDATED_REAL,
+                        MinuteQualityWriteResult.Outcome.REJECTED_SAME_QUALITY);
+
+        reset(template);
+        when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of(oldQ1));
+        List<MinuteQualityWriteResult> superseded =
+                repository.saveAllWithQualityPriority(List.of(
+                        generatedAggregateAt("POINT_Q1", 1, "NEW_Q1", 19.5,
+                                MINUTE + 60_000L)), "OLD_Q1");
+        assertThat(superseded).extracting(MinuteQualityWriteResult::outcome)
+                .containsExactly(MinuteQualityWriteResult.Outcome.UPGRADED);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void upgradesBothQ2AndQ1ToRealQ0() {
+        RawMinuteAggregate oldQ2 = generatedAggregateAt(
+                "POINT_Q2", 2, "OLD_Q2", 18.0, MINUTE);
+        RawMinuteAggregate oldQ1 = generatedAggregateAt(
+                "POINT_Q1", 1, "OLD_Q1", 19.0, MINUTE + 60_000L);
+        when(template.query(anyString(), any(RowMapper.class)))
+                .thenReturn(List.of(oldQ2, oldQ1));
+
+        List<MinuteQualityWriteResult> results =
+                repository.saveAllWithQualityPriority(List.of(
+                        realAggregateAt("POINT_Q2", 18.5, MINUTE),
+                        realAggregateAt("POINT_Q1", 19.5, MINUTE + 60_000L)), null);
+
+        assertThat(results).extracting(MinuteQualityWriteResult::outcome)
+                .containsExactly(
+                        MinuteQualityWriteResult.Outcome.UPGRADED,
+                        MinuteQualityWriteResult.Outcome.UPGRADED);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void findsOnePointMinuteInOneQuery() {
+        RawMinuteAggregate expected = realAggregateAt("POINT_Q0", 20.0, MINUTE);
+        when(template.query(anyString(), any(RowMapper.class)))
+                .thenReturn(List.of(expected));
+
+        assertThat(repository.findPointMinute("POINT_Q0", MINUTE)).contains(expected);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template).query(sql.capture(), any(RowMapper.class));
+        assertThat(sql.getValue())
+                .contains("point_id='POINT_Q0'")
+                .contains("AND ts=");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void findsPointRangeAndTaskRowsWithOneQueryAndHalfOpenBounds() {
+        when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of());
+
+        repository.findRange(Set.of("POINT_Q0", "POINT_Q1"), MINUTE, MINUTE + 120_000L);
+        repository.findByQualityTaskId("TASK'01");
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template, times(2)).query(sql.capture(), any(RowMapper.class));
+        assertThat(sql.getAllValues().get(0))
+                .contains("point_id IN ('POINT_Q0','POINT_Q1')")
+                .contains("ts>=")
+                .contains("ts<");
+        assertThat(sql.getAllValues().get(1))
+                .contains("quality_task_id='TASK''01'");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void deletesOnlyMinuteStillOwnedByTask() {
+        when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of(
+                generatedAggregateAt(
+                        "POINT_Q1", 1, "TASK_Q1", 19.0, MINUTE)));
+
+        repository.deleteIfOwnedByTask("POINT_Q1", MINUTE, "TASK_Q1");
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template).execute(sql.capture());
+        assertThat(sql.getValue())
+                .contains("DELETE FROM iot_telemetry.st_raw_minute_POINT_Q1")
+                .contains("WHERE ts=")
+                .doesNotContain("quality_task_id");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void doesNotDeleteMinuteAlreadyOwnedByAnotherTask() {
+        when(template.query(anyString(), any(RowMapper.class))).thenReturn(List.of(
+                generatedAggregateAt(
+                        "POINT_Q1", 1, "NEW_TASK", 19.0, MINUTE)));
+
+        repository.deleteIfOwnedByTask("POINT_Q1", MINUTE, "OLD_TASK");
+
+        verify(template, never()).execute(anyString());
     }
 
     @Test
@@ -205,7 +368,8 @@ class TdengineHvacMinuteRepositoryTest {
         verify(template).query(sql.capture(), any(RowMapper.class));
         assertThat(sql.getValue())
                 .contains("_wstart AS bucket_time")
-                .contains("SUM(avg_val*sample_count)/SUM(sample_count)")
+                .contains("SUM(avg_val * CASE WHEN sample_count > 0 THEN sample_count ELSE 1 END)")
+                .contains("/ SUM(CASE WHEN sample_count > 0 THEN sample_count ELSE 1 END)")
                 .contains("MIN(min_val)")
                 .contains("MAX(max_val)")
                 .contains("SUM(sample_count)")
@@ -254,7 +418,26 @@ class TdengineHvacMinuteRepositoryTest {
                 "MAIN", suffixCode, 1,
                 MINUTE, average, average - 0.5, average + 0.5,
                 3, 0, MINUTE + 1_000L, MINUTE + 50_000L,
-                MINUTE + 90_000L);
+                MINUTE + 90_000L, null);
+    }
+
+    private RawMinuteAggregate generatedAggregate(int quality, String taskId, double average) {
+        return generatedAggregateAt("POINT_WCR", quality, taskId, average, MINUTE);
+    }
+
+    private RawMinuteAggregate generatedAggregateAt(
+            String pointId, int quality, String taskId, double average, long minute) {
+        return new RawMinuteAggregate(
+                pointId, pointId, "BLD001", "GROUP001", "WCR1", "WCR1",
+                "WCR", "MAIN", "TWin", 1, minute, average, average, average,
+                0, quality, null, null, minute + 90_000L, taskId);
+    }
+
+    private RawMinuteAggregate realAggregateAt(String pointId, double average, long minute) {
+        return new RawMinuteAggregate(
+                pointId, pointId, "BLD001", "GROUP001", "WCR1", "WCR1",
+                "WCR", "MAIN", "TWin", 1, minute, average, average, average,
+                1, 0, minute + 1_000L, minute + 2_000L, minute + 90_000L, null);
     }
 
     private HvacMinuteQueryRow row(String pointId, long time, double average) {

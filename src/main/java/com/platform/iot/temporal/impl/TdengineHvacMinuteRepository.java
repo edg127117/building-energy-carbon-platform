@@ -1,10 +1,13 @@
 package com.platform.iot.temporal.impl;
 
 import com.platform.config.TdengineProperties;
+import com.platform.iot.dataquality.MinuteQualityLockRegistry;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
+import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -12,9 +15,13 @@ import org.springframework.stereotype.Repository;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
@@ -35,13 +42,25 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
 
     private final JdbcTemplate template;
     private final TdengineProperties properties;
+    private final MinuteQualityLockRegistry lockRegistry;
     private final Set<String> identityTagChecked = ConcurrentHashMap.newKeySet();
 
+    @Autowired
     public TdengineHvacMinuteRepository(
             @Qualifier("taosJdbcTemplate") JdbcTemplate template,
-            TdengineProperties properties) {
+            TdengineProperties properties,
+            MinuteQualityLockRegistry lockRegistry) {
         this.template = template;
         this.properties = properties;
+        this.lockRegistry = lockRegistry;
+    }
+
+    /**
+     * 测试和非 Spring 场景使用独立锁注册表；生产环境由 Spring 注入全局单例。
+     */
+    public TdengineHvacMinuteRepository(
+            JdbcTemplate template, TdengineProperties properties) {
+        this(template, properties, new MinuteQualityLockRegistry());
     }
 
     @Override
@@ -65,7 +84,7 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                 SELECT point_id, point_code, building_id, system_group_id, equip_id,
                        equip_code, family_code, component_code, suffix_code, is_for_calc,
                        ts, avg_val, min_val, max_val, sample_count, data_quality,
-                       first_received_time, last_received_time, finalized_at
+                       first_received_time, last_received_time, finalized_at, quality_task_id
                 FROM %s
                 WHERE ts = %s
                   AND building_id IN (%s)
@@ -127,11 +146,160 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
     }
 
     @Override
-    public void saveAll(List<RawMinuteAggregate> aggregates) {
+    public List<MinuteQualityWriteResult> saveAllWithQualityPriority(
+            List<RawMinuteAggregate> aggregates, String supersedesTaskId) {
         if (aggregates.isEmpty()) {
-            return;
+            return List.of();
         }
-        aggregates.forEach(this::ensureExistingChildBuildingTag);
+        validateBatch(aggregates);
+        List<RawMinuteAggregate> batch = List.copyOf(aggregates);
+        List<MinuteQualityLockRegistry.MinuteKey> keys = batch.stream()
+                .map(row -> new MinuteQualityLockRegistry.MinuteKey(
+                        row.pointId(), row.minuteStart()))
+                .toList();
+        return lockRegistry.withLocks(keys,
+                () -> compareAndWrite(batch, supersedesTaskId));
+    }
+
+    @Override
+    public Optional<RawMinuteAggregate> findPointMinute(
+            String pointId, long minuteStart) {
+        String sql = aggregateSelect()
+                + " WHERE point_id=" + quote(pointId)
+                + " AND ts=" + quote(new Timestamp(minuteStart).toString());
+        return template.query(sql, this::mapAggregate).stream().findFirst();
+    }
+
+    @Override
+    public List<RawMinuteAggregate> findRange(
+            Set<String> pointIds, long fromInclusive, long toExclusive) {
+        if (pointIds.isEmpty()) {
+            return List.of();
+        }
+        List<String> orderedPointIds = pointIds.stream().sorted().toList();
+        String sql = aggregateSelect()
+                + " WHERE point_id IN (" + pointIdIn(orderedPointIds) + ") AND "
+                + timeRange(fromInclusive, toExclusive)
+                + " ORDER BY point_id,ts";
+        return template.query(sql, this::mapAggregate);
+    }
+
+    @Override
+    public List<RawMinuteAggregate> findByQualityTaskId(String qualityTaskId) {
+        String sql = aggregateSelect()
+                + " WHERE quality_task_id=" + quote(qualityTaskId)
+                + " ORDER BY point_id,ts";
+        return template.query(sql, this::mapAggregate);
+    }
+
+    @Override
+    public void deleteIfOwnedByTask(
+            String pointId, long minuteStart, String taskId) {
+        MinuteQualityLockRegistry.MinuteKey key =
+                new MinuteQualityLockRegistry.MinuteKey(pointId, minuteStart);
+        lockRegistry.withLocks(List.of(key), () -> {
+            Optional<RawMinuteAggregate> current =
+                    findPointMinute(pointId, minuteStart);
+            if (current.map(RawMinuteAggregate::qualityTaskId)
+                    .filter(taskId::equals).isPresent()) {
+                // TDengine 的 DELETE 以时间条件最稳定；先在同一进程锁内核对任务所有权，
+                // 再按子表时间戳删除，避免依赖普通数据列删除条件的版本兼容性。
+                template.execute("DELETE FROM " + qualifiedChild(pointId)
+                        + " WHERE ts="
+                        + quote(new Timestamp(minuteStart).toString()));
+            }
+            return null;
+        });
+    }
+
+    private List<MinuteQualityWriteResult> compareAndWrite(
+            List<RawMinuteAggregate> ordered, String supersedesTaskId) {
+        List<RawMinuteAggregate> currentRows = readCurrentBatch(ordered);
+        Map<MinuteKey, RawMinuteAggregate> currentByKey = new LinkedHashMap<>();
+        currentRows.forEach(row -> currentByKey.put(
+                new MinuteKey(row.pointId(), row.minuteStart()), row));
+
+        List<RawMinuteAggregate> accepted = new ArrayList<>();
+        List<MinuteQualityWriteResult> results = new ArrayList<>();
+        for (RawMinuteAggregate incoming : ordered) {
+            RawMinuteAggregate current = currentByKey.get(
+                    new MinuteKey(incoming.pointId(), incoming.minuteStart()));
+            MinuteQualityWriteResult result =
+                    decide(incoming, current, supersedesTaskId);
+            results.add(result);
+            if (isWritable(result.outcome())) {
+                accepted.add(incoming);
+            }
+        }
+        if (!accepted.isEmpty()) {
+            accepted.forEach(this::ensureExistingChildBuildingTag);
+            insertBatch(accepted);
+        }
+        return List.copyOf(results);
+    }
+
+    private List<RawMinuteAggregate> readCurrentBatch(
+            List<RawMinuteAggregate> aggregates) {
+        String predicates = aggregates.stream()
+                .map(row -> "(point_id=" + quote(row.pointId())
+                        + " AND ts=" + quote(new Timestamp(
+                                row.minuteStart()).toString()) + ")")
+                .collect(Collectors.joining(" OR "));
+        // 质量判断必须基于同一个数据库快照；整批只查一次，禁止逐测点 N+1。
+        return template.query(aggregateSelect() + " WHERE " + predicates,
+                this::mapAggregate);
+    }
+
+    private MinuteQualityWriteResult decide(
+            RawMinuteAggregate incoming,
+            RawMinuteAggregate current,
+            String supersedesTaskId) {
+        if (current == null) {
+            return result(incoming, MinuteQualityWriteResult.Outcome.INSERTED, null);
+        }
+        if (incoming.qualityTaskId() != null
+                && incoming.qualityTaskId().equals(current.qualityTaskId())) {
+            return result(incoming, MinuteQualityWriteResult.Outcome.IDEMPOTENT, current);
+        }
+        if (incoming.dataQuality() < current.dataQuality()) {
+            return result(incoming, MinuteQualityWriteResult.Outcome.UPGRADED, current);
+        }
+        if (incoming.dataQuality() > current.dataQuality()) {
+            return result(incoming,
+                    MinuteQualityWriteResult.Outcome.REJECTED_HIGHER_QUALITY, current);
+        }
+        if (incoming.dataQuality() == 0) {
+            // 同一分钟可能收到多个真实事件，重新聚合后的 Q0 必须能够刷新旧 Q0。
+            return result(incoming, MinuteQualityWriteResult.Outcome.UPDATED_REAL, current);
+        }
+        if (supersedesTaskId != null
+                && supersedesTaskId.equals(current.qualityTaskId())) {
+            return result(incoming, MinuteQualityWriteResult.Outcome.UPGRADED, current);
+        }
+        return result(incoming,
+                MinuteQualityWriteResult.Outcome.REJECTED_SAME_QUALITY, current);
+    }
+
+    private MinuteQualityWriteResult result(
+            RawMinuteAggregate incoming,
+            MinuteQualityWriteResult.Outcome outcome,
+            RawMinuteAggregate current) {
+        return new MinuteQualityWriteResult(
+                incoming.pointId(),
+                incoming.minuteStart(),
+                outcome,
+                current == null ? null : current.dataQuality(),
+                current == null ? null : current.qualityTaskId());
+    }
+
+    private boolean isWritable(MinuteQualityWriteResult.Outcome outcome) {
+        return switch (outcome) {
+            case INSERTED, UPGRADED, UPDATED_REAL -> true;
+            case IDEMPOTENT, REJECTED_HIGHER_QUALITY, REJECTED_SAME_QUALITY -> false;
+        };
+    }
+
+    private void insertBatch(List<RawMinuteAggregate> aggregates) {
         String stable = safe(properties.getDatabase()) + "." + safe(properties.getStRawMinute());
         StringBuilder sql = new StringBuilder("INSERT INTO ");
         for (RawMinuteAggregate aggregate : aggregates) {
@@ -151,7 +319,8 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                 .append(quote(aggregate.suffixCode())).append(",")
                 .append(aggregate.isForCalc()).append(") ")
                 .append("(ts,val,data_quality,avg_val,min_val,max_val,sample_count,")
-                .append("first_received_time,last_received_time,finalized_at) VALUES (")
+                .append("first_received_time,last_received_time,finalized_at,")
+                .append("quality_task_id) VALUES (")
                 .append(quote(new Timestamp(aggregate.minuteStart()).toString())).append(",")
                 .append(number(aggregate.averageValue())).append(",")
                 .append(aggregate.dataQuality()).append(",")
@@ -159,11 +328,37 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                 .append(number(aggregate.minimumValue())).append(",")
                 .append(number(aggregate.maximumValue())).append(",")
                 .append(aggregate.sampleCount()).append(",")
-                .append(quote(new Timestamp(aggregate.firstReceivedTime()).toString())).append(",")
-                .append(quote(new Timestamp(aggregate.lastReceivedTime()).toString())).append(",")
-                .append(quote(new Timestamp(aggregate.finalizedAt()).toString())).append(") ");
+                .append(nullableTimestamp(aggregate.firstReceivedTime())).append(",")
+                .append(nullableTimestamp(aggregate.lastReceivedTime())).append(",")
+                .append(quote(new Timestamp(aggregate.finalizedAt()).toString())).append(",")
+                .append(nullableQuote(aggregate.qualityTaskId())).append(") ");
         }
         template.execute(sql.toString().trim());
+    }
+
+    private void validateBatch(List<RawMinuteAggregate> aggregates) {
+        Set<MinuteKey> keys = new LinkedHashSet<>();
+        for (RawMinuteAggregate aggregate : aggregates) {
+            if (!keys.add(new MinuteKey(
+                    aggregate.pointId(), aggregate.minuteStart()))) {
+                throw new IllegalArgumentException("同一批次不能重复写入相同测点分钟");
+            }
+            if (aggregate.dataQuality() < 0 || aggregate.dataQuality() > 2) {
+                throw new IllegalArgumentException("分钟数据质量只允许 0、1、2");
+            }
+            if (aggregate.dataQuality() == 0) {
+                if (aggregate.qualityTaskId() != null) {
+                    throw new IllegalArgumentException("真实 Q0 不能绑定补全任务");
+                }
+            } else if (aggregate.qualityTaskId() == null
+                    || aggregate.qualityTaskId().isBlank()
+                    || aggregate.sampleCount() != 0
+                    || aggregate.firstReceivedTime() != null
+                    || aggregate.lastReceivedTime() != null) {
+                throw new IllegalArgumentException(
+                        "生成 Q1/Q2 必须绑定任务、样本数为0且接收时间为空");
+            }
+        }
     }
 
     private void ensureExistingChildBuildingTag(RawMinuteAggregate aggregate) {
@@ -211,7 +406,9 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
         return """
                 SELECT point_id,
                        _wstart AS bucket_time,
-                       SUM(avg_val*sample_count)/SUM(sample_count) AS average_value,
+                       SUM(avg_val * CASE WHEN sample_count > 0 THEN sample_count ELSE 1 END)
+                           / SUM(CASE WHEN sample_count > 0 THEN sample_count ELSE 1 END)
+                           AS average_value,
                        MIN(min_val) AS minimum_value,
                        MAX(max_val) AS maximum_value,
                        SUM(sample_count) AS sample_count,
@@ -260,9 +457,20 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                 resultSet.getDouble("max_val"),
                 resultSet.getInt("sample_count"),
                 resultSet.getInt("data_quality"),
-                resultSet.getTimestamp("first_received_time").getTime(),
-                resultSet.getTimestamp("last_received_time").getTime(),
-                resultSet.getTimestamp("finalized_at").getTime());
+                nullableTime(resultSet.getTimestamp("first_received_time")),
+                nullableTime(resultSet.getTimestamp("last_received_time")),
+                resultSet.getTimestamp("finalized_at").getTime(),
+                resultSet.getString("quality_task_id"));
+    }
+
+    private String aggregateSelect() {
+        return """
+                SELECT point_id, point_code, building_id, system_group_id, equip_id,
+                       equip_code, family_code, component_code, suffix_code, is_for_calc,
+                       ts, avg_val, min_val, max_val, sample_count, data_quality,
+                       first_received_time, last_received_time, finalized_at, quality_task_id
+                FROM %s
+                """.formatted(stable()).stripTrailing();
     }
 
     private String stable() {
@@ -304,7 +512,18 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
         return value == null ? "NULL" : quote(value);
     }
 
+    private String nullableTimestamp(Long value) {
+        return value == null ? "NULL" : quote(new Timestamp(value).toString());
+    }
+
+    private Long nullableTime(Timestamp timestamp) {
+        return timestamp == null ? null : timestamp.getTime();
+    }
+
     private String number(double value) {
         return String.format(Locale.ROOT, "%.12f", value);
+    }
+
+    private record MinuteKey(String pointId, long minuteStart) {
     }
 }

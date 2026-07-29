@@ -5,6 +5,7 @@ import com.platform.iot.quality.PointRuntimeConfig;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
+import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,15 @@ class HvacMinuteAggregationServiceTest {
     void setUp() {
         service = new HvacMinuteAggregationService(
                 configProvider, rawRepository, minuteRepository, eventPublisher, 30, 1);
+        lenient().when(minuteRepository.saveAllWithQualityPriority(anyList(), isNull()))
+                .thenAnswer(invocation -> {
+                    List<RawMinuteAggregate> rows = invocation.getArgument(0);
+                    return rows.stream()
+                            .map(row -> new MinuteQualityWriteResult(
+                                    row.pointId(), row.minuteStart(),
+                                    MinuteQualityWriteResult.Outcome.INSERTED, null, null))
+                            .toList();
+                });
         lenient().when(configProvider.findAll()).thenReturn(List.of(
                 point("WCR1_TWin", "WCR1", "TWin"),
                 point("DBO_RH", null, "RH")));
@@ -75,7 +85,7 @@ class HvacMinuteAggregationServiceTest {
         service.finalizeDueMinutes(MINUTE + 90_000L);
 
         InOrder order = inOrder(minuteRepository, eventPublisher);
-        order.verify(minuteRepository).saveAll(anyList());
+        order.verify(minuteRepository).saveAllWithQualityPriority(anyList(), isNull());
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         order.verify(eventPublisher).publishEvent(eventCaptor.capture());
         HvacMinuteBatchFrozenEvent frozen =
@@ -83,6 +93,22 @@ class HvacMinuteAggregationServiceTest {
         assertThat(frozen.minuteStart()).isEqualTo(MINUTE);
         assertThat(frozen.recovery()).isFalse();
         assertThat(frozen.aggregates()).hasSize(1);
+    }
+
+    @Test
+    void doesNotPublishRejectedLowerQualityMinute() {
+        when(rawRepository.findWindow(MINUTE, MINUTE + 60_000L, false))
+                .thenReturn(List.of(
+                        event("WCR1_TWin", "WCR1", "TWin", 12.3, 5_000L, 6_000L)));
+        when(minuteRepository.saveAllWithQualityPriority(anyList(), isNull()))
+                .thenReturn(List.of(new MinuteQualityWriteResult(
+                        "POINT_WCR", MINUTE,
+                        MinuteQualityWriteResult.Outcome.REJECTED_HIGHER_QUALITY,
+                        0, null)));
+
+        service.finalizeDueMinutes(MINUTE + 90_000L);
+
+        verify(eventPublisher, never()).publishEvent(any(Object.class));
     }
 
     @Test
@@ -112,15 +138,18 @@ class HvacMinuteAggregationServiceTest {
                 .thenReturn(List.of(
                         event("WCR1_TWin", "WCR1", "TWin", 12.3, 5_000L, 6_000L)));
         doThrow(new IllegalStateException("TDengine unavailable"))
-                .doNothing()
-                .when(minuteRepository).saveAll(anyList());
+                .doReturn(List.of(new MinuteQualityWriteResult(
+                        "POINT_WCR", MINUTE,
+                        MinuteQualityWriteResult.Outcome.INSERTED, null, null)))
+                .when(minuteRepository).saveAllWithQualityPriority(anyList(), isNull());
 
         service.finalizeDueMinutes(MINUTE + 90_000L);
         service.finalizeDueMinutes(MINUTE + 95_000L);
 
         verify(rawRepository, times(2))
                 .findWindow(MINUTE, MINUTE + 60_000L, false);
-        verify(minuteRepository, times(2)).saveAll(anyList());
+        verify(minuteRepository, times(2))
+                .saveAllWithQualityPriority(anyList(), isNull());
         verify(eventPublisher, times(1)).publishEvent(any(Object.class));
     }
 
@@ -151,7 +180,8 @@ class HvacMinuteAggregationServiceTest {
         service.recoverRecentMinutes(MINUTE + 90_000L);
 
         verify(rawRepository, never()).findWindow(anyLong(), anyLong(), anyBoolean());
-        verify(minuteRepository, never()).saveAll(anyList());
+        verify(minuteRepository, never())
+                .saveAllWithQualityPriority(anyList(), isNull());
         verifyNoInteractions(eventPublisher);
     }
 
@@ -186,7 +216,7 @@ class HvacMinuteAggregationServiceTest {
     private List<RawMinuteAggregate> capturedBatch() {
         ArgumentCaptor<List<RawMinuteAggregate>> captor =
                 ArgumentCaptor.forClass(List.class);
-        verify(minuteRepository).saveAll(captor.capture());
+        verify(minuteRepository).saveAllWithQualityPriority(captor.capture(), isNull());
         return captor.getValue();
     }
 

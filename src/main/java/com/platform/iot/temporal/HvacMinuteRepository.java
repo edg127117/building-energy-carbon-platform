@@ -2,8 +2,10 @@ package com.platform.iot.temporal;
 
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
+import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -19,7 +21,33 @@ public interface HvacMinuteRepository {
      *
      * @param aggregates 已完成质量处理、可以冻结保存的分钟聚合结果
      */
-    void saveAll(List<RawMinuteAggregate> aggregates);
+    default void saveAll(List<RawMinuteAggregate> aggregates) {
+        saveAllWithQualityPriority(aggregates, null);
+    }
+
+    /**
+     * 在一个批次内比较已有分钟质量并只写入合法升级。
+     *
+     * <p>质量数字越小可信度越高，即 {@code Q0 > Q1 > Q2}。相同任务可幂等重试，
+     * 同质量不同任务只有明确指定被替代任务后才允许写入。</p>
+     */
+    List<MinuteQualityWriteResult> saveAllWithQualityPriority(
+            List<RawMinuteAggregate> aggregates, String supersedesTaskId);
+
+    Optional<RawMinuteAggregate> findPointMinute(String pointId, long minuteStart);
+
+    /**
+     * 一次读取多个测点在半开区间 {@code [fromInclusive, toExclusive)} 内的正式分钟。
+     */
+    List<RawMinuteAggregate> findRange(
+            Set<String> pointIds, long fromInclusive, long toExclusive);
+
+    List<RawMinuteAggregate> findByQualityTaskId(String qualityTaskId);
+
+    /**
+     * 仅在分钟仍由指定补全任务持有时删除，避免作废旧任务误删升级后的数据。
+     */
+    void deleteIfOwnedByTask(String pointId, long minuteStart, String taskId);
 
     /**
      * 一次读取某分钟已经存在的全部内部测点ID，仅供恢复任务判断缺口。

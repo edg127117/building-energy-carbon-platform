@@ -6,6 +6,7 @@ import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
+import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
@@ -154,10 +155,25 @@ public class HvacMinuteAggregationService {
         }
 
         // 先持久化再通知公式模块，保证事件中的每个输入都能在st_raw_minute复审。
-        minuteRepository.saveAll(aggregates);
-        publishFrozenEvent(minuteStart, finalizedAt, recovery, aggregates);
+        List<MinuteQualityWriteResult> writeResults =
+                minuteRepository.saveAllWithQualityPriority(aggregates, null);
+        Set<MinuteKey> acceptedKeys = writeResults.stream()
+                .filter(result -> switch (result.outcome()) {
+                    case INSERTED, UPGRADED, UPDATED_REAL, IDEMPOTENT -> true;
+                    case REJECTED_HIGHER_QUALITY, REJECTED_SAME_QUALITY -> false;
+                })
+                .map(result -> new MinuteKey(result.pointId(), result.minuteStart()))
+                .collect(java.util.stream.Collectors.toSet());
+        List<RawMinuteAggregate> accepted = aggregates.stream()
+                .filter(row -> acceptedKeys.contains(
+                        new MinuteKey(row.pointId(), row.minuteStart())))
+                .toList();
+        if (accepted.isEmpty()) {
+            return;
+        }
+        publishFrozenEvent(minuteStart, finalizedAt, recovery, accepted);
         log.info("HVAC分钟批量数据已冻结: minute={}, points={}, recovery={}",
-                minuteStart, aggregates.size(), recovery);
+                minuteStart, accepted.size(), recovery);
     }
 
     private List<RawMinuteAggregate> aggregate(
@@ -223,7 +239,8 @@ public class HvacMinuteAggregationService {
                 worstQuality,
                 firstReceived,
                 lastReceived,
-                finalizedAt
+                finalizedAt,
+                null
         );
     }
 
@@ -259,5 +276,8 @@ public class HvacMinuteAggregationService {
         long currentEffectiveMinute =
                 effectiveNow - Math.floorMod(effectiveNow, MINUTE_MILLIS);
         return currentEffectiveMinute - MINUTE_MILLIS;
+    }
+
+    private record MinuteKey(String pointId, long minuteStart) {
     }
 }
