@@ -79,7 +79,9 @@ TDengine，缺失不创建虚假补全任务，二者数量记录在批次汇总
 | `reason` | `VARCHAR(500)` | 管理员操作原因 |
 | `operator_id` | `BIGINT` | 操作人 |
 | `status` | `VARCHAR(20)` | `WAITING/RUNNING/SUCCEEDED/FAILED` |
+| `phase` | `VARCHAR(20)` | `VOIDING` 或 `RECALCULATING` |
 | `cursor_minute` | `DATETIME(3)` | 下一块起点；成功分块不会重复执行 |
+| `void_target_minutes_json` | `JSON` | 删除前冻结的旧任务所属分钟，最多一个自然小时 |
 | `q0_count` | `INT` | 本批次确认或生成的 Q0 分钟数 |
 | `q1_count` | `INT` | 本批次生成或保留的 Q1 分钟数 |
 | `q2_count` | `INT` | 本批次生成或保留的 Q2 分钟数 |
@@ -191,18 +193,31 @@ WAITING → RUNNING → SUCCEEDED
 
 执行首个分块前按旧任务的点位和 `[start,end)` 读取当前正式分钟：
 
-1. 当前 `quality_task_id == oldTaskId`：调用带锁的条件删除；
+1. 当前 `quality_task_id == oldTaskId`：先把分钟集合写入批次的
+   `void_target_minutes_json`，再调用带锁的条件删除；
 2. 当前为 Q0、Q1 或其他任务：保留并计入 `replaced_count`；
 3. 当前不存在：不删除，计入旧任务的作废范围；
 4. 删除接口必须返回是否实际删除，防止预读和删除之间的并发升级造成误计数。
 
+批次在删除阶段使用 `phase=VOIDING`。若进程在 TDengine 删除成功、MySQL 收口前
+退出，下一轮根据冻结目标再次核对：目标分钟不存在表示已经删除，出现其他任务
+或更高质量表示已经替换，仍属于旧任务则继续条件删除。这样不需要新增逐分钟表，
+也不会因跨库中断丢失作废范围。
+
 旧任务最终以一次 MySQL 原子更新写入：
 
 - `apply_status=VOIDED`；
-- 精确的 `voided_count/replaced_count/applied_count/failed_count`；
+- `applied_count=0`；
+- `voided_count` 为冻结目标中最终被删除的分钟数；
+- `replaced_count` 为当前由 Q0、Q1 或其他任务持有的分钟数；
+- `failed_count` 保留旧任务已记录但从未成功写入的失败分钟数；
+- `minute_count=voided_count+replaced_count+failed_count`；
 - `void_by/void_reason/void_at/closed_at`。
 
 已经被更高质量或其他合法任务持有的分钟绝不删除。
+
+旧任务完成精确作废后，批次把 `phase` 从 `VOIDING` 改为
+`RECALCULATING`，随后才处理 60 分钟重算分块。
 
 ## 9. 60 分钟分块重算
 
@@ -218,9 +233,22 @@ chunkEnd = min(chunkStart + 60分钟, to_minute)
 
 每个分块按以下顺序执行：
 
+为避免漏掉跨 60 分钟边界的短缺口，每块允许读取有界上下文：
+
+```text
+contextFrom = max(job.from, chunkStart - (maxGapMinutes + 1)分钟)
+contextTo   = min(job.to, chunkEnd + (maxGapMinutes + 1)分钟)
+```
+
+原始事件和正式分钟仍各自批量查询一次上下文窗口，不执行逐点逐分钟查询。右侧
+上下文中聚合出的 Q0 可以提前按质量优先级幂等写入，为目标块提供真实端点；Q1、
+Q2、READY 和批次计数只处理目标 `[chunkStart,chunkEnd)`，因此相邻块不会重复
+计算业务结果。默认最大缺口为五分钟，所以每侧最多额外读取六分钟，不会退化为
+全历史加载。
+
 ### 9.1 重新聚合 Q0
 
-- 在块内批量读取相关测点的原始事件；
+- 在上述有界上下文内批量读取相关测点的原始事件；
 - 复用现有聚合、数据校验、单位和量程规则；
 - 人工入口不受自动迟到修正的 24 小时窗口限制；
 - 仍使用点位与分钟锁，避免与自动冻结、迟到修正并发覆盖；
