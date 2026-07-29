@@ -12,6 +12,16 @@ import java.util.Set;
 public interface BuildingService extends IService<Building> {
 
     /**
+     * 在调用方 MySQL 事务内锁定现有建筑。
+     *
+     * <p>数据质量模块通过该业务边界串行化同一建筑的重算任务，不能跨模块直接
+     * 调用建筑 Mapper。</p>
+     *
+     * @throws com.platform.framework.exception.BusinessException 建筑不存在时返回 404
+     */
+    void lockExistingForUpdate(String buildingId);
+
+    /**
      * 按名称/编码模糊搜索分页查询建筑列表
      */
     Result<IPage<Building>> list(Integer page, Integer size, String keyword, Set<String> accessibleBuildingIds);

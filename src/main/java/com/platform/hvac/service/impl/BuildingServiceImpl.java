@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.platform.framework.common.Result;
+import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
 import com.platform.hvac.model.entity.Building;
 import com.platform.hvac.service.BuildingService;
@@ -19,6 +20,16 @@ import java.util.Set;
 @Slf4j
 @Service
 public class BuildingServiceImpl extends ServiceImpl<BuildingMapper, Building> implements BuildingService {
+
+    /**
+     * 通过建筑主表行锁保护后续“检查重叠任务并创建任务”的事务区间。
+     */
+    @Override
+    public void lockExistingForUpdate(String buildingId) {
+        if (baseMapper.selectExistingForUpdate(buildingId) == null) {
+            throw new BusinessException(404, "建筑不存在");
+        }
+    }
 
     @Override
     public Result<IPage<Building>> list(Integer page, Integer size, String keyword, Set<String> accessibleBuildingIds) {
