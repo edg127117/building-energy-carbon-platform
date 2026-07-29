@@ -89,6 +89,22 @@ aggregation:
   recovery-enabled: true
   recovery-delay-ms: 600000
 
+# HVAC 分钟质量补全。首次结果不等待插值窗口：缺少质量0时只使用已批准典型值。
+data-quality:
+  # false 时不注册质量补全、典型值管理和后台补偿组件；测试环境默认关闭。
+  enabled: true
+  interpolation:
+    # 右侧质量0端点到达后，最多回溯修正5个连续缺失分钟。
+    max-gap-minutes: 5
+  # 迟到真实值在24小时内可自动替换质量1/2并触发定向重算，超期需人工重算。
+  late-real-correction-hours: 24
+  # 已批准典型值采用本地完整快照，刷新失败继续使用上一份快照。
+  typical-config-refresh-ms: 60000
+  # 跨 MySQL/TDengine 不做分布式事务，失败任务按此低频间隔补偿。
+  retry-delay-ms: 600000
+  # true 时在自然小时结束后核对 TDengine 实际行并一次性收口批次，避免分钟热路径写放大。
+  reconciliation-enabled: true
+
 formula:
   # false 时不创建公式引擎、指标查询 API 和补算任务；测试可据此停止公式业务链路。
   enabled: true

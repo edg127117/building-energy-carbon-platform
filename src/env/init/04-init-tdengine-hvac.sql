@@ -39,7 +39,8 @@ CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_raw_minute` (
     `sample_count`        INT,
     `first_received_time` TIMESTAMP,
     `last_received_time`  TIMESTAMP,
-    `finalized_at`        TIMESTAMP
+    `finalized_at`        TIMESTAMP,
+    `quality_task_id`     NCHAR(32)
 ) TAGS (
     `point_id`       NCHAR(32),
     `point_code`     NCHAR(100),
