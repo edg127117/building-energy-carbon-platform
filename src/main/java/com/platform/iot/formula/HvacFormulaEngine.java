@@ -4,7 +4,7 @@ import com.platform.cache.IndicatorLatestCacheService;
 import com.platform.config.FormulaProperties;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.model.entity.BizIndicator;
-import com.platform.iot.aggregation.HvacMinuteBatchFrozenEvent;
+import com.platform.iot.dataquality.event.HvacMinuteQualityReadyEvent;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
@@ -30,7 +30,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * HVAC 冻结分钟到指标结果的核心编排器。
+ * HVAC 质量完成分钟到指标结果的核心编排器。
  *
  * <p>它位于分钟聚合事件与 TDengine 指标仓储之间：选择活动指标、组装输入、
  * 调用纯公式、持久化成功或失败审计，然后以最佳努力更新 Redis 和 WebSocket。
@@ -92,22 +92,20 @@ public class HvacFormulaEngine {
     }
 
     /**
-     * 消费原始分钟已成功落库后的冻结事件。
+     * 消费分钟质量选择已经完成的 READY 事件。
      *
-     * <p>只有上游持久化完成才会进入这里，因此指标不会领先于源分钟。恢复事件
-     * 可能只携带本次补写的测点，必须从 TDengine 重新读取该分钟完整输入。</p>
+     * <p>首次冻结直接使用事件快照；恢复或历史修正携带受影响点位，必须从
+     * TDengine 重新读取该建筑完整分钟，避免用局部修正输入计算错误结果。</p>
      */
     @EventListener
-    public void onMinuteFrozen(HvacMinuteBatchFrozenEvent event) {
-        Set<String> buildingIds = event.aggregates().stream()
-                .map(RawMinuteAggregate::buildingId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        List<RawMinuteAggregate> inputs = event.recovery()
-                ? minuteRepository.findByMinute(event.minuteStart(), buildingIds)
+    public void onMinuteQualityReady(HvacMinuteQualityReadyEvent event) {
+        List<RawMinuteAggregate> inputs = !event.affectedPointIds().isEmpty()
+                ? minuteRepository.findByMinute(
+                        event.minuteStart(), event.buildingIds())
                 : event.aggregates();
         calculateAndPersist(
-                event.minuteStart(), event.finalizedAt(), inputs, buildingIds, null);
+                event.minuteStart(), event.finalizedAt(), inputs,
+                event.buildingIds(), null);
     }
 
     void calculateAndPersist(

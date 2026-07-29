@@ -43,6 +43,11 @@ class MySqlDataPointConfigProviderTest {
         PointAliasKey key = new PointAliasKey("BLD001", "MQTT_FREEZE_V1", "WCR1_Flow");
         assertThat(provider.find(key)).get()
                 .extracting(PointRuntimeConfig::pointCode).isEqualTo("WCR1_GW");
+        assertThat(provider.find(key)).get()
+                .extracting(
+                        PointRuntimeConfig::dataType,
+                        PointRuntimeConfig::unit)
+                .containsExactly("ANALOG", "m³/h");
         assertThat(provider.find(new PointAliasKey(
                 "BLD002", "MQTT_FREEZE_V1", "WCR1_Flow"))).isEmpty();
         assertThat(provider.findByPointId("POINT001")).isPresent();
@@ -76,6 +81,8 @@ class MySqlDataPointConfigProviderTest {
         point.setFamilyCode("WCR");
         point.setComponentCode("MAIN");
         point.setSuffixCode("GW");
+        point.setDataType("ANALOG");
+        point.setUnit("m³/h");
         point.setIsForCalc(1);
         point.setStatus("ONLINE");
         return point;

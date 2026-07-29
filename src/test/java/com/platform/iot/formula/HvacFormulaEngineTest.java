@@ -6,7 +6,8 @@ import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.controller.HvacIndicatorController;
 import com.platform.hvac.model.entity.BizIndicator;
 import com.platform.hvac.service.HvacIndicatorQueryService;
-import com.platform.iot.aggregation.HvacMinuteBatchFrozenEvent;
+import com.platform.iot.dataquality.event.HvacMinuteQualityReadyEvent;
+import com.platform.iot.dataquality.model.QualityEventSource;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
@@ -70,7 +71,7 @@ class HvacFormulaEngineTest {
         assertThat(condition.matchIfMissing()).isTrue();
 
         Method listener = HvacFormulaEngine.class.getMethod(
-                "onMinuteFrozen", HvacMinuteBatchFrozenEvent.class);
+                "onMinuteQualityReady", HvacMinuteQualityReadyEvent.class);
         assertThat(listener.getAnnotation(EventListener.class)).isNotNull();
         assertThat(listener.getAnnotation(Async.class)).isNull();
 
@@ -175,8 +176,8 @@ class HvacFormulaEngineTest {
         when(assembler.assemble(indicator, MINUTE, List.of(payload))).thenReturn(inputs);
         when(formula.calculate(inputs)).thenReturn(success("WCR_COP", "V1", 4.2));
 
-        engine(List.of(formula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(payload)));
 
         verify(minuteRepository, never()).findByMinute(any(Long.class), any());
@@ -212,7 +213,7 @@ class HvacFormulaEngineTest {
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
                 publisher, new FormulaProperties())
-                .onMinuteFrozen(new HvacMinuteBatchFrozenEvent(
+                .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, aggregates));
 
         ArgumentCaptor<List<IndicatorMinuteResult>> rows = listCaptor();
@@ -249,8 +250,8 @@ class HvacFormulaEngineTest {
         when(assembler.assemble(indicator, MINUTE, List.of(recovered))).thenReturn(inputs);
         when(formula.calculate(inputs)).thenReturn(success("WCR_COP", "V1", 4.2));
 
-        engine(List.of(formula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, true, List.of(triggerOne, triggerTwo)));
 
         verify(minuteRepository).findByMinute(
@@ -269,7 +270,7 @@ class HvacFormulaEngineTest {
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
                 publisher, new FormulaProperties())
-                .onMinuteFrozen(new HvacMinuteBatchFrozenEvent(
+                .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, true, List.of(trigger)));
 
         ArgumentCaptor<List<FormulaCalculationException>> failures = listCaptor();
@@ -285,6 +286,33 @@ class HvacFormulaEngineTest {
     }
 
     @Test
+    void qualityReadyWithNoRowsStillPersistsMissingInputForDeclaredBuilding() {
+        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001");
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+
+        new HvacFormulaEngine(
+                configProvider, minuteRepository, indicatorRepository, cache,
+                publisher, new FormulaProperties())
+                .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                        MINUTE,
+                        FINALIZED_AT,
+                        QualityEventSource.NORMAL_FREEZE,
+                        Set.of("BLD001"),
+                        List.of(),
+                        Set.of()));
+
+        ArgumentCaptor<List<FormulaCalculationException>> failures = listCaptor();
+        verify(indicatorRepository, never()).saveSuccesses(any());
+        verify(indicatorRepository).saveExceptions(failures.capture());
+        assertThat(failures.getValue()).singleElement().satisfies(row -> {
+            assertThat(row.indicatorId()).isEqualTo("I1");
+            assertThat(row.status()).isEqualTo(FormulaCalculation.Status.MISSING_INPUT);
+            assertThat(row.reasonCode()).isEqualTo("CHILLER_INPUT_MISSING");
+        });
+        verify(minuteRepository, never()).findByMinute(any(Long.class), any());
+    }
+
+    @Test
     void selectsOnlyActiveIndicatorsForAffectedBuildings() {
         RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
         BizIndicator affected = indicator("I1", "WCR_COP", "BLD001");
@@ -295,8 +323,8 @@ class HvacFormulaEngineTest {
         when(assembler.assemble(affected, MINUTE, List.of(aggregate))).thenReturn(inputs);
         when(formula.calculate(inputs)).thenReturn(success("WCR_COP", "V1", 4.2));
 
-        engine(List.of(formula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(aggregate)));
 
         verify(assembler).assemble(affected, MINUTE, List.of(aggregate));
@@ -347,8 +375,8 @@ class HvacFormulaEngineTest {
                 .thenReturn(success("WCR_COP", "COP_V1", 5.5));
         when(cache.setIfNotOlder(any())).thenReturn(true);
 
-        engine(List.of(failureFormula, successFormula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        engine(List.of(failureFormula, successFormula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(aggregate)));
 
         ArgumentCaptor<List<IndicatorMinuteResult>> successes = listCaptor();
@@ -394,8 +422,8 @@ class HvacFormulaEngineTest {
         doThrow(new IllegalStateException("tdengine unavailable"))
                 .when(indicatorRepository).saveSuccesses(any());
 
-        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(aggregate))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("tdengine unavailable");
@@ -419,8 +447,8 @@ class HvacFormulaEngineTest {
         doThrow(new IllegalStateException("tdengine unavailable"))
                 .when(indicatorRepository).saveExceptions(any());
 
-        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(aggregate))))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("tdengine unavailable");
@@ -451,8 +479,8 @@ class HvacFormulaEngineTest {
         when(validFormula.calculate(validInputs))
                 .thenReturn(success("WCR_COP", "COP_V1", 5.5));
 
-        engine(List.of(malformedFormula, validFormula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        engine(List.of(malformedFormula, validFormula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(aggregate)));
 
         ArgumentCaptor<List<IndicatorMinuteResult>> successes = listCaptor();
@@ -489,8 +517,8 @@ class HvacFormulaEngineTest {
         when(validFormula.calculate(validInputs))
                 .thenReturn(success("WCR_COP", "COP_V1", 5.5));
 
-        engine(List.of(malformedFormula, validFormula)).onMinuteFrozen(
-                new HvacMinuteBatchFrozenEvent(
+        engine(List.of(malformedFormula, validFormula)).onMinuteQualityReady(
+                new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, List.of(aggregate)));
 
         ArgumentCaptor<List<IndicatorMinuteResult>> successes = listCaptor();

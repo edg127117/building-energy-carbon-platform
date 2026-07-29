@@ -92,6 +92,7 @@ class HvacMinuteAggregationServiceTest {
                 (HvacMinuteBatchFrozenEvent) eventCaptor.getValue();
         assertThat(frozen.minuteStart()).isEqualTo(MINUTE);
         assertThat(frozen.recovery()).isFalse();
+        assertThat(frozen.buildingIds()).containsExactly("BLD001");
         assertThat(frozen.aggregates()).hasSize(1);
     }
 
@@ -129,7 +130,24 @@ class HvacMinuteAggregationServiceTest {
 
         verify(rawRepository, times(1))
                 .findWindow(MINUTE, MINUTE + 60_000L, false);
-        verifyNoInteractions(minuteRepository, eventPublisher);
+        verifyNoInteractions(minuteRepository);
+        verify(eventPublisher, times(1)).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void emptyRealMinuteStillPublishesBuildingsForQualityCompletion() {
+        when(rawRepository.findWindow(MINUTE, MINUTE + 60_000L, false))
+                .thenReturn(List.of());
+
+        service.finalizeDueMinutes(MINUTE + 90_000L);
+
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(eventCaptor.capture());
+        HvacMinuteBatchFrozenEvent frozen =
+                (HvacMinuteBatchFrozenEvent) eventCaptor.getValue();
+        assertThat(frozen.aggregates()).isEmpty();
+        assertThat(frozen.buildingIds()).containsExactly("BLD001");
+        verifyNoInteractions(minuteRepository);
     }
 
     @Test
@@ -155,8 +173,17 @@ class HvacMinuteAggregationServiceTest {
 
     @Test
     void recoveryQueriesOnceAndWritesOnlyMissingPointCodes() {
+        PointRuntimeConfig buildingTwo = new PointRuntimeConfig(
+                "POINT_B2", "WCR2_TWin", "二号楼进水温度",
+                "BLD002", "GROUP_B2", "EQUIP_B2", "WCR2",
+                "WCR", "MAIN", "TWin", "ANALOG", "℃",
+                "ONLINE", 1, null, null);
+        when(configProvider.findAll()).thenReturn(List.of(
+                point("WCR1_TWin", "WCR1", "TWin"),
+                point("DBO_RH", null, "RH"),
+                buildingTwo));
         when(minuteRepository.findExistingPointIds(MINUTE))
-                .thenReturn(Set.of("POINT_WCR"));
+                .thenReturn(Set.of("POINT_WCR", "POINT_B2"));
         when(rawRepository.findWindow(MINUTE, MINUTE + 60_000L, false))
                 .thenReturn(List.of(
                         event("WCR1_TWin", "WCR1", "TWin", 12.3, 5_000L, 6_000L),
@@ -169,7 +196,10 @@ class HvacMinuteAggregationServiceTest {
                 .containsExactly("DBO_RH");
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(eventCaptor.capture());
-        assertThat(((HvacMinuteBatchFrozenEvent) eventCaptor.getValue()).recovery()).isTrue();
+        HvacMinuteBatchFrozenEvent frozen =
+                (HvacMinuteBatchFrozenEvent) eventCaptor.getValue();
+        assertThat(frozen.recovery()).isTrue();
+        assertThat(frozen.buildingIds()).containsExactly("BLD001");
     }
 
     @Test
@@ -190,11 +220,13 @@ class HvacMinuteAggregationServiceTest {
         PointRuntimeConfig buildingOne = new PointRuntimeConfig(
                 "POINT_B1", "WCR1_TWin", "一号楼进水温度",
                 "BLD001", "GROUP_B1", "EQUIP_B1", "WCR1",
-                "WCR", "MAIN", "TWin", "ONLINE", 1, null, null);
+                "WCR", "MAIN", "TWin", "ANALOG", "℃",
+                "ONLINE", 1, null, null);
         PointRuntimeConfig buildingTwo = new PointRuntimeConfig(
                 "POINT_B2", "WCR1_TWin", "二号楼进水温度",
                 "BLD002", "GROUP_B2", "EQUIP_B2", "WCR1",
-                "WCR", "MAIN", "TWin", "ONLINE", 1, null, null);
+                "WCR", "MAIN", "TWin", "ANALOG", "℃",
+                "ONLINE", 1, null, null);
         when(configProvider.findAll()).thenReturn(List.of(buildingOne, buildingTwo));
         when(rawRepository.findWindow(MINUTE, MINUTE + 60_000L, false))
                 .thenReturn(List.of(
@@ -240,7 +272,9 @@ class HvacMinuteAggregationServiceTest {
         return new PointRuntimeConfig(
                 pointId(pointCode), pointCode, pointCode, "BLD001", "GROUP001",
                 equipId, equipId, pointCode.startsWith("DBO") ? "RHO" : "WCR",
-                "MAIN", suffixCode, "ONLINE", 1, null, null);
+                "MAIN", suffixCode, "ANALOG",
+                pointCode.startsWith("DBO") ? "%" : "℃",
+                "ONLINE", 1, null, null);
     }
 
     private String pointId(String pointCode) {
