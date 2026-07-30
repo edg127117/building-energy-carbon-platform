@@ -94,13 +94,17 @@ class FourRoleBackendFlowTest {
         mockMvc.perform(get("/open-api/buildings/BLD002").header(auth(), bearer(thirdToken)))
                 .andExpect(status().isForbidden());
 
-        mockMvc.perform(post("/control/issue")
+        mockMvc.perform(get("/" + "device" + "/list")
+                        .header(auth(), bearer(adminToken)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(get("/" + "telemetry" + "/history")
+                        .header(auth(), bearer(adminToken)))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(post("/" + "control" + "/issue")
                         .header(auth(), bearer(adminToken))
-                        .param("deviceId", "meter-001")
-                        .param("commandType", "1")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isNotFound());
     }
 
     private void register(String username) throws Exception {

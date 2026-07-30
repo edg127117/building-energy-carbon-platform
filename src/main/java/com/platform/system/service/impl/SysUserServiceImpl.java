@@ -124,11 +124,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             throw new BusinessException(403, "账号已被删除");
         }
 
-        // 内置 admin 平滑迁移；普通旧账号必须由平台管理员分配正式角色。
-        if ("admin".equalsIgnoreCase(user.getUsername())) {
-            SysRole role = sysRoleService.ensureRole(FormalRole.PLATFORM_ADMIN.name(), "己方管理");
-            bindRoleIfAbsent(user.getId(), role.getId());
-        }
+        // 初始化脚本直接给内置管理员绑定正式角色；登录不再修复旧角色数据。
         List<String> roleKeys = sysRoleMapper.selectRoleKeysByUserId(user.getId()).stream()
                 .map(String::toUpperCase)
                 .filter(FormalRole::isFormal)
@@ -157,17 +153,4 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
                 .build();
     }
 
-    private void bindRoleIfAbsent(Long userId, Long roleId) {
-        // 幂等绑定：防止重复插入 user_role
-        Long count = sysUserRoleMapper.selectCount(new LambdaQueryWrapper<SysUserRole>()
-                .eq(SysUserRole::getUserId, userId)
-                .eq(SysUserRole::getRoleId, roleId));
-        if (count != null && count > 0) {
-            return;
-        }
-        SysUserRole userRole = new SysUserRole();
-        userRole.setUserId(userId);
-        userRole.setRoleId(roleId);
-        sysUserRoleMapper.insert(userRole);
-    }
 }

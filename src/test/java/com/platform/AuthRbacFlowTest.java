@@ -11,12 +11,17 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
+import java.util.stream.StreamSupport;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+/**
+ * 验证公开注册、正式角色登录和旧电表 HTTP 路由下线后的认证边界。
+ */
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
@@ -29,9 +34,8 @@ public class AuthRbacFlowTest {
     private ObjectMapper objectMapper;
 
     @Test
-    void should_register_login_and_enforce_rbac() throws Exception {
+    void shouldRegisterLoginAndExposeOnlyFormalRbacRoutes() throws Exception {
         String username = "user_demo";
-
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -39,63 +43,41 @@ public class AuthRbacFlowTest {
                                 """.formatted(username)))
                 .andExpect(status().isOk());
 
-        String userToken = loginAndGetToken(username, "123456");
+        String ownerToken = loginAndGetToken(username, "123456");
+        JsonNode owner = json(mockMvc.perform(get("/auth/me")
+                        .header(auth(), bearer(ownerToken)))
+                .andExpect(status().isOk())
+                .andReturn()).path("data");
+        assertThat(roles(owner.path("roles")))
+                .containsExactly("BUILDING_OWNER");
 
-        mockMvc.perform(get("/auth/me")
-                        .header("Authorization", "Bearer " + userToken))
-                .andExpect(status().isOk());
-
-        mockMvc.perform(get("/device/list"))
+        mockMvc.perform(get("/hvac/buildings/BLD001/snapshot"))
                 .andExpect(status().isUnauthorized());
 
-        mockMvc.perform(get("/device/list")
-                        .header("Authorization", "Bearer " + userToken))
-                .andExpect(status().isOk());
-
-        mockMvc.perform(post("/device/add")
-                        .header("Authorization", "Bearer " + userToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"deviceId":"meter-999","deviceName":"Demo电表","deviceType":1,"location":"Demo位置"}
-                                """))
-                .andExpect(status().isForbidden());
-
         String adminToken = loginAndGetToken("admin", "123456");
-
-        mockMvc.perform(post("/device/add")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"deviceId":"meter-999","deviceName":"Demo电表","deviceType":1,"location":"Demo位置"}
-                                """))
-                .andExpect(status().isOk());
-
-        MvcResult listResult = mockMvc.perform(get("/device/list")
-                        .header("Authorization", "Bearer " + adminToken)
-                        .param("page", "1")
-                        .param("pageSize", "100"))
+        JsonNode admin = json(mockMvc.perform(get("/auth/me")
+                        .header(auth(), bearer(adminToken)))
                 .andExpect(status().isOk())
-                .andReturn();
+                .andReturn()).path("data");
+        assertThat(roles(admin.path("roles")))
+                .containsExactly("PLATFORM_ADMIN");
 
-        JsonNode listJson = objectMapper.readTree(listResult.getResponse().getContentAsString());
-        JsonNode devices = listJson.get("data").get("records");
-        assertThat(devices).isNotNull();
-
-        Long addedId = null;
-        for (JsonNode d : devices) {
-            if ("meter-999".equals(d.get("deviceId").asText())) {
-                addedId = d.get("id").asLong();
-                break;
-            }
+        for (String path : List.of(
+                "/" + "device" + "/list",
+                "/" + "telemetry" + "/history")) {
+            mockMvc.perform(get(path).header(auth(), bearer(adminToken)))
+                    .andExpect(status().isNotFound());
         }
-        assertThat(addedId).isNotNull();
-
-        mockMvc.perform(delete("/device/delete/" + addedId)
-                        .header("Authorization", "Bearer " + adminToken))
-                .andExpect(status().isOk());
+        mockMvc.perform(post("/" + "control" + "/issue")
+                        .header(auth(), bearer(adminToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isNotFound());
     }
 
-    private String loginAndGetToken(String username, String password) throws Exception {
+    private String loginAndGetToken(
+            String username,
+            String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
@@ -104,11 +86,27 @@ public class AuthRbacFlowTest {
                 .andExpect(status().isOk())
                 .andReturn();
 
-        JsonNode json = objectMapper.readTree(result.getResponse().getContentAsString());
-        JsonNode tokenNode = json.path("data").path("token");
-        assertThat(tokenNode.isMissingNode()).isFalse();
-        String token = tokenNode.asText();
+        String token = json(result).path("data").path("token").asText();
         assertThat(token).isNotBlank();
         return token;
+    }
+
+    private JsonNode json(MvcResult result) throws Exception {
+        return objectMapper.readTree(
+                result.getResponse().getContentAsString());
+    }
+
+    private List<String> roles(JsonNode roleNodes) {
+        return StreamSupport.stream(roleNodes.spliterator(), false)
+                .map(JsonNode::asText)
+                .toList();
+    }
+
+    private String auth() {
+        return "Authorization";
+    }
+
+    private String bearer(String token) {
+        return "Bearer " + token;
     }
 }

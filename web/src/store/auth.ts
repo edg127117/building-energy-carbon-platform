@@ -14,7 +14,7 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     roles: (s) => s.userInfo?.roles ?? [],
-    isAdmin: (s) => (s.userInfo?.roles ?? []).includes('ADMIN'),
+    isAdmin: (s) => (s.userInfo?.roles ?? []).includes('PLATFORM_ADMIN'),
     isAuthed: (s) => Boolean(s.token),
   },
   actions: {
@@ -47,4 +47,3 @@ export const useAuthStore = defineStore('auth', {
     },
   },
 })
-

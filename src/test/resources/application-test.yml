@@ -14,9 +14,6 @@ mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
 
-features:
-  control-enabled: false
-
 # 测试使用 H2，不允许字符集修复程序向真实 MySQL 执行 ALTER DATABASE。
 database:
   charset-fix:

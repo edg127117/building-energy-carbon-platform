@@ -2,8 +2,6 @@ INSERT INTO sys_user (id, username, password, nickname, status, del_flag)
 VALUES (1, 'admin', '123456', '超级管理员', 1, 0);
 
 INSERT INTO sys_role (id, role_key, role_name, status, data_scope) VALUES
-(1, 'ADMIN', '旧管理员', 1, 'ALL'),
-(2, 'USER', '旧普通用户', 1, 'ALL'),
 (10, 'BUILDING_OWNER', '建筑业主', 1, 'BUILDING'),
 (11, 'ENERGY_MANAGER', '能效管理方', 1, 'BUILDING'),
 (12, 'THIRD_PARTY', '对方开发', 1, 'BUILDING'),
@@ -133,6 +131,3 @@ VALUES
  'EQUIP_PUMP_B1','EQUIP_PUMP_B1','GROUP001',1),
 ('INDICATOR_AHU_EFF_B1','BLD001','AHU_POW_EFF','EQUIPMENT',
  'EQUIP_AHU_B1','EQUIP_AHU_B1','GROUP001',1);
-
-INSERT INTO iot_device (device_id, device_name, device_type, location, building_id)
-VALUES ('meter-001', '1号车间总电表', 1, '1栋配电房', 'BLD001');
