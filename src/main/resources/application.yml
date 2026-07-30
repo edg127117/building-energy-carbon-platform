@@ -57,10 +57,8 @@ mqtt:
   client-id: ${MQTT_CLIENT_ID:platform-backend-01}
   username: ${MQTT_USER:admin}
   password: ${MQTT_PASSWORD:change-me}
-  # 本期只接收19个真实测点；需要演示虚拟设备控制回执时再显式改为 true。
-  demo-simulator-enabled: false
   topics:
-    # 接收硬件上报的测点数据
+    # 只接收 HVAC 19 测点上报；缺少 pointCode 的旧格式报文会被确认并拒绝。
     upstream: device/data/up
 
 # TDengine 配置 (使用 RESTful 端口 6041)
@@ -71,7 +69,6 @@ tdengine:
   username: ${TDENGINE_USER:root}
   password: ${TDENGINE_PASSWORD:taosdata}
   database: iot_telemetry
-  stableName: st_electric_data
   st-raw-event: st_raw_event
 
 # MySQL 字符集启动修复。true：启动时执行一次 ALTER DATABASE；测试环境会覆盖为 false。
@@ -158,7 +155,3 @@ security:
   jwt:
     secret: ${JWT_SECRET:iot-platform-demo-jwt-secret-please-change-32-bytes-min}
     expire-seconds: ${JWT_EXPIRE_SECONDS:86400}
-
-features:
-  # 冻结书 D-001：本期只采集、只计算，不开放控制
-  control-enabled: false

@@ -355,8 +355,8 @@ INSERT INTO `sys_menu` (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `co
                                                                                                                     (220, 200,  '建筑管理',    'M', '/system/building', NULL,    'home',     2),
                                                                                                                     (221, 220,  '建筑注册',    'C', '/system/building/list',     'system/BuildingList','home',   1),
                                                                                                                     (222, 220,  '空间管理',    'C', '/system/space/list',        'system/SpaceList',  'block',   2),
-                                                                                                                    (230, 200,  '设备管理',    'M', '/system/device',  NULL,     'tool',     3),
-                                                                                                                    (231, 230,  '设备台账',    'C', '/system/device/list',       'system/DeviceList', 'database',1),
+                                                                                                                    (230, 200,  '设备管理',    'M', '/system/equipment',  NULL,     'tool',     3),
+                                                                                                                    (231, 230,  '设备台账',    'C', '/system/equipment/list',       'system/DeviceList', 'database',1),
                                                                                                                     (232, 230,  '测点管理',    'C', '/system/datapoint/list',    'system/PointList',  'node',    2),
                                                                                                                     (240, 200,  '后台配置',    'M', '/system/config',  NULL,     'code',     4),
                                                                                                                     (241, 240,  '菜单管理',    'C', '/system/menu/list',         'system/MenuList',   'menu',    1),
@@ -376,14 +376,6 @@ SET @ddl = IF(
            WHERE table_schema=DATABASE() AND table_name='sys_role' AND column_name='data_scope'),
     'SELECT 1',
     'ALTER TABLE `sys_role` ADD COLUMN `data_scope` VARCHAR(16) DEFAULT ''ALL'' COMMENT ''数据范围：ALL-全部, BUILDING-按建筑, SELF-仅自己'''
-);
-PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-
-SET @ddl = IF(
-    EXISTS(SELECT 1 FROM information_schema.columns
-           WHERE table_schema=DATABASE() AND table_name='iot_device' AND column_name='building_id'),
-    'SELECT 1',
-    'ALTER TABLE `iot_device` ADD COLUMN `building_id` VARCHAR(32) DEFAULT NULL COMMENT ''所属建筑'''
 );
 PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
@@ -472,11 +464,6 @@ CREATE TABLE IF NOT EXISTS `sys_building_access_request` (
     INDEX `idx_access_request_status` (`status`),
     INDEX `idx_access_request_building` (`building_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='建筑访问申请';
-
--- 内置管理员平滑迁移到正式 PLATFORM_ADMIN 角色
-INSERT IGNORE INTO `sys_user_role` (`user_id`, `role_id`)
-SELECT u.id, r.id FROM `sys_user` u JOIN `sys_role` r ON r.role_key='PLATFORM_ADMIN'
-WHERE u.username='admin';
 
 -- 平台管理员拥有全部菜单；建筑业主和能效管理方拥有本期能效菜单
 INSERT IGNORE INTO `sys_role_menu` (`role_id`, `menu_id`)

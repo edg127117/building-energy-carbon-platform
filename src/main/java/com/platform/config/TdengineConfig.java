@@ -18,9 +18,11 @@ import javax.sql.DataSource;
 import java.util.*;
 
 /**
- * TDengine 数据源核心配置与自动化构建类
- * 与主 MySQL 数据源完全物理隔离，互不影响。
- * 利用 Spring 启动周期，全自动完成时序库和超级表的基建
+ * HVAC 时序数据源与四张超级表的启动装配。
+ *
+ * <p>该数据源通过明确 Bean 名称与 MySQL 物理隔离，避免把两类 SQL 发往错误
+ * 数据库。生产默认在启动期创建 HVAC Schema；普通自动化测试通过
+ * {@code tdengine.initialization-enabled=false} 关闭外部连接。</p>
  */
 @Configuration
 @Slf4j
@@ -96,7 +98,6 @@ public class TdengineConfig {
      */
     private void doInitialize(JdbcTemplate template) {
         String database = properties.getDatabase();
-        String stableName = properties.getStableName();
 
         // 1. 自动建库
         // KEEP 3650 代表自带 10 年的数据生命周期 ，过期数据自动抹除，
@@ -109,41 +110,24 @@ public class TdengineConfig {
         template.execute(createDb);
         log.info("数据库 [{}] 已创建/已存在", database);
 
-        // 2. 自动建超级表
-        // 采用 schema.table 的指定方式，避免了复杂的 session 切换问题。
-        // 以后新接十万台设备，底层会自动继承它建子表，代码零改动。
-        String createStable = String.format(
-                "CREATE STABLE IF NOT EXISTS %s.%s (" +
-                        "ts TIMESTAMP, " +
-                        "voltage_a FLOAT, voltage_b FLOAT, voltage_c FLOAT, " +
-                        "current_a FLOAT, current_b FLOAT, current_c FLOAT, " +
-                        "active_power FLOAT, frequency FLOAT, quality TINYINT" +
-                        ") TAGS (device_id VARCHAR(64), location VARCHAR(128));",
-                database, stableName
-        );
-        template.execute(createStable);
-
-        // 3. 自动创建 HVAC 逐条事件和分钟汇总结构，并兼容已经存在的旧分钟表。
+        // 2. 自动创建 HVAC 逐条事件和分钟汇总结构，并兼容已经存在的旧分钟表。
         initializeHvacSchema(template);
 
-        // 4. 自动创建公式成功结果和异常审计结构，并迁移旧指标表。
+        // 3. 自动创建公式成功结果和异常审计结构，并迁移旧指标表。
         initializeFormulaSchema(template);
 
-        log.info("✅ TDengine 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}]",
-                database, stableName, properties.getStRawEvent(),
+        log.info("✅ TDengine HVAC 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}]",
+                database, properties.getStRawEvent(),
                 properties.getStRawMinute(), properties.getStIndicatorMinute(),
                 properties.getStFormulaCalcException());
 
-        // 验证所有超级表
-        verifyInitialization(template, database, stableName);
-
-        // 验证 HVAC 超级表
-        String rawMinute = properties.getStRawMinute();
-        verifyInitialization(template, database, properties.getStRawEvent());
-        String indicatorMinute = properties.getStIndicatorMinute();
-        verifyInitialization(template, database, rawMinute);
-        verifyInitialization(template, database, indicatorMinute);
-        verifyInitialization(template, database, properties.getStFormulaCalcException());
+        // 启动验证只覆盖当前运行需要的四张 HVAC 超级表。
+        List.of(
+                properties.getStRawEvent(),
+                properties.getStRawMinute(),
+                properties.getStIndicatorMinute(),
+                properties.getStFormulaCalcException()
+        ).forEach(stable -> verifyInitialization(template, database, stable));
     }
 
     /**

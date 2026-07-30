@@ -98,7 +98,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
             // 3. 绝对不要在这里 response.write 401！必须 doFilter 放行！
             // 如果请求是 /auth/login (permitAll)，由于不需要身份，Spring Security 会让它通过。
-            // 如果请求是 /api/device/list (authenticated)，Spring Security 发现它其实是个“匿名用户”，会自动触发 RestAuthenticationEntryPoint 返回漂亮的 401 JSON。
+            // 例如访问受保护的 /api/hvac/buildings/{id}/snapshot 时，
+            // Spring Security 会把没有有效 JWT 的请求交给统一 401 入口。
             filterChain.doFilter(request, response);
         }
     }

@@ -11,11 +11,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 
 /**
- * WebSocket 大屏推送服务端
- * 作用：维护所有打开了"大屏页面"的浏览器连接，并将收到的设备数据并发群发给他们。
- * 前端连接地址: ws://localhost:8081/api/ws/dashboard
+ * HVAC 指标实时广播端点。
+ *
+ * <p>该端点只承载公式模块生成的 {@code HVAC_INDICATOR} 消息。当前任务只清理
+ * 业务边界；JWT 握手、建筑订阅和广播隔离由后续正式实时功能单独实现。</p>
  */
-@ServerEndpoint("/ws/dashboard")
+@ServerEndpoint("/ws/hvac")
 @Component
 public class WebSocketServer {
 
@@ -27,23 +28,25 @@ public class WebSocketServer {
     private static final Set<String> closedSessionIds = ConcurrentHashMap.newKeySet();
 
     /**
-     * 当浏览器大屏建立连接时触发
+     * 当 HVAC 实时客户端建立连接时触发。
      */
     @OnOpen
     public void onOpen(Session session) {
         closedSessionIds.remove(session.getId()); // 重连时清除关闭标记
         sessionPool.add(session);
-        log.info("[WebSocket] 有新的大屏接入！SessionId: {}，当前共有 {} 个大屏在线", session.getId(), sessionPool.size());
+        log.info("[WebSocket] HVAC 实时客户端接入: sessionId={}, online={}",
+                session.getId(), sessionPool.size());
     }
 
     /**
-     * 当浏览器大屏关闭或刷新时触发
+     * 当 HVAC 实时客户端关闭或刷新时触发。
      */
     @OnClose
     public void onClose(Session session) {
         closedSessionIds.add(session.getId()); // 标记已关闭，防止 broadcastMessage 再往里写
         sessionPool.remove(session);
-        log.info("[WebSocket] 大屏连接断开！SessionId: {}，当前共有 {} 个大屏在线", session.getId(), sessionPool.size());
+        log.info("[WebSocket] HVAC 实时客户端断开: sessionId={}, online={}",
+                session.getId(), sessionPool.size());
     }
 
     /**
@@ -51,7 +54,7 @@ public class WebSocketServer {
      */
     @OnError
     public void onError(Session session, Throwable error) {
-        log.error("[WebSocket] 大屏连接异常: ", error);
+        log.error("[WebSocket] HVAC 实时连接异常", error);
         // 异常后也做清理，避免脏 Session 留在池子里继续报错
         if (session != null) {
             closedSessionIds.add(session.getId());
@@ -60,8 +63,8 @@ public class WebSocketServer {
     }
 
     /**
-     * 【核心功能】：群发消息给所有在线的大屏
-     * 使用 static 方法，方便我们从 DeviceMessageConsumer 中直接调用。
+     * 向所有在线 HVAC 实时客户端广播指标消息。
+     *
      * 关键设计：synchronized + getBasicRemote() 必须配对使用。
      * - getBasicRemote().sendText() 是同步阻塞的，消息真正发完才返回
      * - synchronized(session) 保证同一时刻只有一个线程拿到锁
@@ -82,7 +85,7 @@ public class WebSocketServer {
                     }
                 }
             } catch (Exception e) {
-                log.error("[WebSocket] 向大屏推送消息失败: ", e);
+                log.error("[WebSocket] HVAC 指标消息推送失败", e);
                 // 发送失败说明连接已坏，做清理
                 closedSessionIds.add(session.getId());
                 sessionPool.remove(session);

@@ -14,6 +14,37 @@ import static org.mockito.Mockito.*;
 class TdengineHvacSchemaTest {
 
     @Test
+    void fullInitializationContainsOnlyHvacStables() throws Exception {
+        TdengineProperties properties = new TdengineProperties();
+        properties.setDatabase("iot_telemetry");
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        when(template.queryForList(startsWith("DESCRIBE")))
+                .thenReturn(List.of(Map.of("field", "ts")));
+        when(template.queryForList(startsWith(
+                "SELECT name FROM information_schema.ins_databases")))
+                .thenReturn(List.of(Map.of("name", "iot_telemetry")));
+        TdengineConfig config = new TdengineConfig(properties);
+
+        config.initTaosDb(template).run();
+
+        ArgumentCaptor<String> sqlCaptor =
+                ArgumentCaptor.forClass(String.class);
+        verify(template, atLeastOnce()).execute(sqlCaptor.capture());
+        String allSql =
+                String.join("\n", sqlCaptor.getAllValues()).toLowerCase();
+        assertThat(allSql).contains(
+                "st_raw_event",
+                "st_raw_minute",
+                "st_indicator_minute",
+                "st_formula_calc_exception");
+        assertThat(allSql).doesNotContain(
+                "st_" + "electric" + "_data",
+                "voltage" + "_a",
+                "current" + "_a",
+                "active" + "_power");
+    }
+
+    @Test
     void createsIdentityAwareStablesAndExpandsLegacyStructures() {
         TdengineProperties properties = new TdengineProperties();
         properties.setDatabase("iot_telemetry");

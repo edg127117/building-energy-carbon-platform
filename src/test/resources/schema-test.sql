@@ -19,8 +19,6 @@ DROP TABLE IF EXISTS biz_equipment_type;
 DROP TABLE IF EXISTS biz_system_group;
 DROP TABLE IF EXISTS biz_space;
 DROP TABLE IF EXISTS building;
-DROP TABLE IF EXISTS iot_device_status_log;
-DROP TABLE IF EXISTS iot_device;
 
 CREATE TABLE sys_user (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -239,26 +237,6 @@ CREATE TABLE sys_building_access_request (
   review_time TIMESTAMP,
   create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE iot_device (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  device_id VARCHAR(64) NOT NULL UNIQUE,
-  device_name VARCHAR(100) NOT NULL,
-  device_type TINYINT NOT NULL,
-  location VARCHAR(255),
-  building_id VARCHAR(32),
-  status TINYINT DEFAULT 0,
-  ip_address VARCHAR(50),
-  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE iot_device_status_log (
-  id BIGINT AUTO_INCREMENT PRIMARY KEY,
-  device_id VARCHAR(64),
-  status TINYINT,
-  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE gen_table (

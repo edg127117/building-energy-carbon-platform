@@ -21,17 +21,17 @@
             </div>
           </div>
           <div class="mt-7 text-3xl font-semibold leading-tight text-zinc-50">
-            把数据流动做成可视化，把控制闭环做成可追踪。
+            让中央空调数据可追溯，让调适指标可复核。
           </div>
           <div class="mt-4 max-w-[420px] text-sm leading-6 text-zinc-400">
-            Demo 版聚焦：登录鉴权、设备台账、实时推送与指令下发骨架。后续可无缝扩展为菜单权限、算法联调与数字孪生。
+            V1 聚焦 HVAC 19 测点采集、数据质量、四项指标计算、建筑权限和查询能力，不提供设备控制。
           </div>
           <div class="mt-8 flex gap-3">
             <div class="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-zinc-300">
               API: <span class="text-zinc-100">{{ apiBase }}</span>
             </div>
             <div class="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-zinc-300">
-              WS: <span class="text-zinc-100">{{ wsUrl }}</span>
+              范围: <span class="text-zinc-100">HVAC V1</span>
             </div>
           </div>
         </div>
@@ -65,7 +65,7 @@
                 </a-form-item>
 
                 <a-button type="primary" html-type="submit" :loading="loading" block size="large">
-                  {{ mode === 'login' ? '登录进入控制台' : '注册并登录' }}
+                  {{ mode === 'login' ? '登录进入平台' : '注册并登录' }}
                 </a-button>
 
                 <div class="mt-4 grid grid-cols-2 gap-3 text-xs text-zinc-400">
@@ -73,7 +73,7 @@
                     管理员：<span class="text-zinc-100">admin / 123456</span>
                   </div>
                   <div class="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                    普通用户：注册后默认 <span class="text-zinc-100">USER</span>
+                    注册账号：默认 <span class="text-zinc-100">BUILDING_OWNER</span>，不自动授予建筑
                   </div>
                 </div>
               </a-form>
@@ -110,14 +110,6 @@ const form = reactive({
 const loading = ref(false)
 
 const apiBase = computed(() => import.meta.env.VITE_API_BASE ?? 'http://localhost:8081/api')
-const wsUrl = computed(() => {
-  const explicit = import.meta.env.VITE_WS_URL
-  if (explicit) return explicit
-  const origin = apiBase.value.replace(/\/api\/?$/, '')
-  const wsOrigin = origin.startsWith('https://') ? origin.replace('https://', 'wss://') : origin.replace('http://', 'ws://')
-  return `${wsOrigin}/api/ws/dashboard`
-})
-
 async function onSubmit() {
   loading.value = true
   try {
@@ -126,7 +118,7 @@ async function onSubmit() {
     }
     await auth.login({ username: form.username, password: form.password })
     message.success('登录成功')
-    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard'
+    const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/hvac-demo'
     router.replace(redirect)
   } catch (e: any) {
     message.error(e?.message || '操作失败')

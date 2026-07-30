@@ -57,7 +57,7 @@ public class SecurityConfig {
         http.authorizeHttpRequests(auth -> auth
                 // 1. 放行登录与注册相关接口
                 .requestMatchers("/auth/**", "/api/auth/**").permitAll()
-                // 2. 现有大屏 WebSocket 暂时放行；正式多建筑推送前需补 JWT 握手和建筑订阅隔离。
+                // 2. HVAC 实时端点暂时放行；正式多建筑推送前需补 JWT 握手和建筑订阅隔离。
                 .requestMatchers("/ws/**", "/api/ws/**").permitAll()
                 // 3. 其他所有请求必须携带 Token 并通过鉴权
                 .anyRequest().authenticated()

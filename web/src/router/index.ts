@@ -1,14 +1,12 @@
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import LoginPage from '@/pages/LoginPage.vue'
-import DashboardPage from '@/pages/DashboardPage.vue'
-import DevicePage from '@/pages/DevicePage.vue'
 import ForbiddenPage from '@/pages/ForbiddenPage.vue'
 
-const routes: RouteRecordRaw[] = [
+export const routes: RouteRecordRaw[] = [
   {
     path: '/',
-    redirect: '/dashboard',
+    redirect: '/login',
   },
   {
     path: '/login',
@@ -20,17 +18,6 @@ const routes: RouteRecordRaw[] = [
     path: '/hvac-demo',
     name: 'hvac-demo',
     component: () => import('@/pages/HvacDemoPage.vue'),
-    meta: { public: true },
-  },
-  {
-    path: '/dashboard',
-    name: 'dashboard',
-    component: DashboardPage,
-  },
-  {
-    path: '/device',
-    name: 'device',
-    component: DevicePage,
   },
   {
     path: '/403',

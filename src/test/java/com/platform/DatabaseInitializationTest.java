@@ -8,6 +8,7 @@ import org.springframework.jdbc.datasource.init.DatabasePopulatorUtils;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 import java.util.Set;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -28,7 +29,8 @@ class DatabaseInitializationTest {
         dataSource.setUser("sa");
         ResourceDatabasePopulator schema =
                 new ResourceDatabasePopulator(
-                        new ClassPathResource("schema-test.sql"));
+                        new ClassPathResource("schema-test.sql"),
+                        new ClassPathResource("data-test.sql"));
         DatabasePopulatorUtils.execute(schema, dataSource);
         JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
 
@@ -48,6 +50,19 @@ class DatabaseInitializationTest {
         assertThat(columns(
                 jdbcTemplate, "BIZ_DATA_QUALITY_FILL_TASK"))
                 .contains("RECALC_JOB_ID");
+        assertThat(tableNames(jdbcTemplate))
+                .doesNotContain(
+                        "IOT_DEVICE",
+                        "IOT_DEVICE_STATUS_LOG",
+                        "CONTROL_COMMANDS");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT role_key FROM sys_role ORDER BY role_key",
+                String.class))
+                .containsExactly(
+                        "BUILDING_OWNER",
+                        "ENERGY_MANAGER",
+                        "PLATFORM_ADMIN",
+                        "THIRD_PARTY");
     }
 
     private Set<String> columns(
@@ -61,5 +76,15 @@ class DatabaseInitializationTest {
                 """,
                 String.class,
                 tableName));
+    }
+
+    private List<String> tableNames(JdbcTemplate jdbcTemplate) {
+        return jdbcTemplate.queryForList(
+                """
+                SELECT UPPER(TABLE_NAME)
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = 'PUBLIC'
+                """,
+                String.class);
     }
 }

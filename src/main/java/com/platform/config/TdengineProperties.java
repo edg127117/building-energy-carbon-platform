@@ -15,9 +15,6 @@ public class TdengineProperties {
     private int keep = 3650;
     private String duration = "10d";
 
-    /** 电表数据超级表（存量） */
-    private String stableName = "st_electric_data";
-
     /** 空调原始测点数据超级表（设计书 §2.1） */
     private String stRawMinute = "st_raw_minute";
 
