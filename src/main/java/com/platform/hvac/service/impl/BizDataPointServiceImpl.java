@@ -22,7 +22,10 @@ import org.springframework.stereotype.Service;
 import java.util.List;
 
 /**
- * 数据测点业务实现类
+ * 测点档案的业务写入边界，负责校验标准身份、设备归属和计算单位契约。
+ *
+ * <p>通用代码生成器只能提供单表 CRUD，不能表达在线计算模拟量必须配置单位等
+ * HVAC 业务规则，因此生成结果只能选择性合并，不能整体覆盖本实现。</p>
  */
 @Slf4j
 @Service
@@ -55,6 +58,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
     public Result<BizDataPoint> add(BizDataPoint point) {
         point.setPointId(null);
         validateRelationships(point);
+        validateCalculationPointUnit(point);
         this.save(point);
         configProvider.refreshAll();
         return Result.success(point);
@@ -63,8 +67,25 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
     @Override
     public Result<BizDataPoint> update(BizDataPoint point) {
         BizDataPoint existing = this.getById(point.getPointId());
-        if (existing == null) throw new BusinessException(404, "测点不存在");
-        // 标准身份和建筑归属只能通过受控迁移调整，普通编辑保持不变。
+        if (existing == null) {
+            throw new BusinessException(404, "测点不存在");
+        }
+        prepareFinalStateForUpdate(existing, point);
+        validateRelationships(point);
+        validateCalculationPointUnit(point);
+        this.updateById(point);
+        configProvider.refreshAll();
+        return Result.success(point);
+    }
+
+    /**
+     * 锁定普通编辑不能改变的标准身份，并补全单位规则依赖的部分更新字段。
+     *
+     * <p>MyBatis-Plus 默认忽略值为 {@code null} 的更新字段；先用旧值补全
+     * {@code status}、{@code isForCalc} 和 {@code unit}，单位校验才能针对
+     * 数据库真正会得到的最终状态，避免部分更新绕过或误触发规则。</p>
+     */
+    private void prepareFinalStateForUpdate(BizDataPoint existing, BizDataPoint point) {
         point.setPointCode(existing.getPointCode());
         point.setBuildingId(existing.getBuildingId());
         point.setSystemGroupId(existing.getSystemGroupId());
@@ -74,10 +95,15 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         point.setComponentCode(existing.getComponentCode());
         point.setSuffixCode(existing.getSuffixCode());
         point.setDataType(existing.getDataType());
-        validateRelationships(point);
-        this.updateById(point);
-        configProvider.refreshAll();
-        return Result.success(point);
+        if (point.getStatus() == null) {
+            point.setStatus(existing.getStatus());
+        }
+        if (point.getIsForCalc() == null) {
+            point.setIsForCalc(existing.getIsForCalc());
+        }
+        if (point.getUnit() == null) {
+            point.setUnit(existing.getUnit());
+        }
     }
 
     @Override
@@ -85,6 +111,21 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         this.removeById(pointId);
         configProvider.refreshAll();
         return Result.success();
+    }
+
+    /**
+     * 阻止缺少单位的在线计算模拟量进入 MySQL 和测点配置快照。
+     */
+    private void validateCalculationPointUnit(BizDataPoint point) {
+        boolean onlineCalculationAnalog =
+                "ONLINE".equalsIgnoreCase(point.getStatus())
+                        && "ANALOG".equalsIgnoreCase(point.getDataType())
+                        && Integer.valueOf(1).equals(point.getIsForCalc());
+        if (onlineCalculationAnalog
+                && (point.getUnit() == null || point.getUnit().isBlank())) {
+            // 写库后再发现缺少单位，会让公式和质量链路读取到含义不完整的计算输入。
+            throw new BusinessException(400, "参与计算的在线模拟量必须配置单位");
+        }
     }
 
     private void validateRelationships(BizDataPoint point) {
