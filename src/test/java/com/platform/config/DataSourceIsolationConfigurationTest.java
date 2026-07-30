@@ -49,4 +49,16 @@ class DataSourceIsolationConfigurationTest {
         assertThat(condition.havingValue()).isEqualTo("true");
         assertThat(condition.matchIfMissing()).isTrue();
     }
+
+    @Test
+    void mqttInfrastructureCanBeDisabledByProperty() {
+        ConditionalOnProperty condition =
+                MqttConfig.class.getAnnotation(ConditionalOnProperty.class);
+
+        assertThat(condition).isNotNull();
+        assertThat(condition.prefix()).isEqualTo("mqtt");
+        assertThat(condition.name()).containsExactly("enabled");
+        assertThat(condition.havingValue()).isEqualTo("true");
+        assertThat(condition.matchIfMissing()).isTrue();
+    }
 }

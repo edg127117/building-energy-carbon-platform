@@ -53,6 +53,8 @@ mybatis-plus:
 
 # EMQX 配置
 mqtt:
+  # true：创建 MQTT Client 并订阅 HVAC 上行；false：完全不连接 Broker，供自动化测试隔离。
+  enabled: ${MQTT_ENABLED:true}
   broker-url: ${MQTT_BROKER_URL:tcp://127.0.0.1:1883}
   client-id: ${MQTT_CLIENT_ID:platform-backend-01}
   username: ${MQTT_USER:admin}
