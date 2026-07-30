@@ -6,6 +6,7 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+COMPOSE_FILE="$SCRIPT_DIR/src/env/docker-compose.yml"
 JAR_FILE="$SCRIPT_DIR/iot-platform-demo-1.0-SNAPSHOT.jar"
 LOG_FILE="$SCRIPT_DIR/app.log"
 
@@ -34,9 +35,23 @@ if ! docker info > /dev/null 2>&1; then
     exit 1
 fi
 
+if [ ! -f "$COMPOSE_FILE" ]; then
+    echo "[ERROR] 找不到 Docker Compose 文件: $COMPOSE_FILE"
+    exit 1
+fi
+
+if docker compose version > /dev/null 2>&1; then
+    COMPOSE_COMMAND=(docker compose)
+elif command -v docker-compose > /dev/null 2>&1; then
+    COMPOSE_COMMAND=(docker-compose)
+else
+    echo "[ERROR] 未找到 Docker Compose，请安装 docker compose 或 docker-compose"
+    exit 1
+fi
+
 # 3. 启动基础设施容器
 echo "[1/3] 启动 Docker 容器 (MySQL + EMQX + TDengine)..."
-docker-compose -f "$SCRIPT_DIR/docker-compose.yml" up -d
+"${COMPOSE_COMMAND[@]}" -f "$COMPOSE_FILE" up -d
 
 # 4. 等待 MySQL 就绪
 echo "[2/3] 等待 MySQL 初始化完成..."
