@@ -206,8 +206,11 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                         + quote(new Timestamp(
                         key.minuteStart() + 60_000L).toString()) + ")")
                 .collect(java.util.stream.Collectors.joining(" OR "));
+        // TDengine 的 INTERVAL 窗口查询必须至少包含一个聚合函数；COUNT 只用于让
+        // “测点 + 分钟”证据去重查询合法化，调用方仍只读取 point_id 和 minute_start。
         String sql = """
-                SELECT point_id, _wstart AS minute_start
+                SELECT point_id, _wstart AS minute_start,
+                       COUNT(*) AS evidence_count
                 FROM %s
                 WHERE late_flag = 1
                   AND (%s)

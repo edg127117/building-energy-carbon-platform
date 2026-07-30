@@ -152,6 +152,7 @@ class TdengineHvacRawEventRepositoryTest {
                 .contains("late_flag = 1")
                 .contains("point_id='POINT''001'")
                 .contains("point_id='POINT002'")
+                .contains("COUNT(*) AS evidence_count")
                 .contains("PARTITION BY point_id")
                 .contains("INTERVAL(1m)");
     }
