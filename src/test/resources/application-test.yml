@@ -23,6 +23,10 @@ database:
 tdengine:
   initialization-enabled: false
 
+# 普通自动化测试不创建 MQTT Client，也不会连接或订阅真实 EMQX。
+mqtt:
+  enabled: false
+
 # 自动化测试直接调用聚合方法；关闭后台恢复，避免测试上下文访问真实TDengine。
 aggregation:
   recovery-enabled: false

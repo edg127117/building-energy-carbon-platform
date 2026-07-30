@@ -16,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -32,8 +33,17 @@ import java.util.Map;
  *
  * <p>QoS 1 使用手动确认：落库成功、重复数据和业务无效毒消息都会确认；
  * TDengine 存储失败不确认，从而保留由 EMQX 重新投递的机会。</p>
+ *
+ * <p>整个配置受 {@code mqtt.enabled} 控制。测试环境关闭后不会创建 Client 或执行
+ * 连接任务，从而避免普通自动化测试接触真实 Broker；采集业务单元测试仍可直接
+ * 构造本类验证协议和 ACK 语义。</p>
  */
 @Configuration
+@ConditionalOnProperty(
+        prefix = "mqtt",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class MqttConfig {
 
     private static final Logger log = LoggerFactory.getLogger(MqttConfig.class);

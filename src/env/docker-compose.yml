@@ -1,7 +1,5 @@
-version: '3.8'
-
 services:
-  # 1. 关系型数据底座 (存放人员、设备台账)
+  # 1. 关系型数据底座（正式权限、建筑、设备和测点档案）
   mysql:
     image: mysql:8.0
     container_name: iot-mysql
@@ -18,11 +16,16 @@ services:
       # 04/06/07/09 属于 TDengine，05/08/10 属于旧库手工迁移；
       # 这些脚本都不能挂入 MySQL 首次启动目录。
       - ./init/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
-      - ./init/02-init-10000-devices.sql:/docker-entrypoint-initdb.d/02-init-10000-devices.sql:ro
       - ./init/03-init-hvac-schema.sql:/docker-entrypoint-initdb.d/03-init-hvac-schema.sql:ro
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
-  # 2. MQTT 消息接入中枢 (接收电表数据)
+  # 2. MQTT 消息接入中枢（接收 HVAC 19 测点上行）
   emqx:
     image: emqx/emqx:5.6.0
     container_name: iot-emqx
@@ -37,8 +40,14 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./emqx-acl.conf:/opt/emqx/etc/acl.conf:ro
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
-  # 3. 时序数据底座 (存放极高频的电表电压电流)
+  # 3. 时序数据底座（保存 HVAC 原始事件、分钟数据和指标结果）
   tdengine:
     image: tdengine/tdengine:3.2.3.0
     container_name: iot-tdengine
@@ -50,6 +59,12 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - ./taos-data:/var/lib/taos        # 时序数据持久化
+    healthcheck:
+      test: ["CMD-SHELL", "taos -s 'SHOW DATABASES;' >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
 
   # 4. 最新指标状态缓存
   redis:
@@ -61,3 +76,9 @@ services:
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - ./redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
