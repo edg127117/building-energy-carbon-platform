@@ -193,7 +193,8 @@ public class TdengineConfig {
                         "val DOUBLE, " +
                         "data_quality TINYINT, " +
                         "avg_val DOUBLE, min_val DOUBLE, max_val DOUBLE, sample_count INT, " +
-                        "first_received_time TIMESTAMP, last_received_time TIMESTAMP, finalized_at TIMESTAMP" +
+                        "first_received_time TIMESTAMP, last_received_time TIMESTAMP, " +
+                        "finalized_at TIMESTAMP, quality_task_id NCHAR(32)" +
                         ") TAGS (point_id NCHAR(32), point_code NCHAR(100), " +
                         "building_id NCHAR(32), system_group_id NCHAR(32), " +
                         "equip_id NCHAR(32), equip_code NCHAR(50), " +
@@ -221,6 +222,8 @@ public class TdengineConfig {
         requiredColumns.put("first_received_time", "TIMESTAMP");
         requiredColumns.put("last_received_time", "TIMESTAMP");
         requiredColumns.put("finalized_at", "TIMESTAMP");
+        // 生成分钟通过该字段关联 MySQL 补全批次；质量 0 真实分钟保持为空。
+        requiredColumns.put("quality_task_id", "NCHAR(32)");
         ensureFields(template, qualified, requiredColumns, identityTags());
     }
 

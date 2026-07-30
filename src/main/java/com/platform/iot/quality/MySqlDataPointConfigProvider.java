@@ -64,6 +64,8 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
                         point.getFamilyCode(),
                         point.getComponentCode(),
                         point.getSuffixCode(),
+                        point.getDataType(),
+                        point.getUnit(),
                         point.getStatus(),
                         Integer.valueOf(1).equals(point.getIsForCalc()) ? 1 : 0,
                         point.getValueMin(),

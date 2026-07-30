@@ -225,10 +225,23 @@ docker compose -f src/env/docker-compose.yml up -d
 ```
 
 全新的 MySQL 数据卷只会自动执行 `01-init-tables.sql`、
-`02-init-10000-devices.sql` 和 `03-init-hvac-schema.sql`。`05` 是旧 MySQL
-模型的一次性手工迁移，`06` 是旧 TDengine 模型的一次性手工迁移，均须先备份
-并按文件头说明执行。TDengine 当前表结构由后端 `TdengineConfig` 在启动时创建
-或补齐，不能把 TDengine SQL 交给 MySQL 初始化器执行。
+`02-init-10000-devices.sql` 和 `03-init-hvac-schema.sql`。Docker 官方镜像仅在
+数据目录为空时执行 `/docker-entrypoint-initdb.d`，因此已有数据卷不会因重启
+Compose 而重新执行初始化脚本。
+
+持久环境升级数据质量功能时，应先备份，再严格按 `08`（MySQL）→ `09`
+（TDengine）→ `10`（MySQL）的顺序，根据各文件头说明手工执行：
+
+- `08-migrate-mysql-data-quality-fill.sql`：补全任务和典型值配置；
+- `09-migrate-tdengine-data-quality-fill.sql`：分钟质量与任务所有权；
+- `10-migrate-mysql-data-quality-recalculation.sql`：异步人工重算批次。
+
+从更早版本升级的持久环境，还必须先按文件头说明完成 `05`、`06`、`07`，
+不能因为本节只验证数据质量链路而跳过既有模型迁移。
+
+`10` 不会自动应用到已有 MySQL 数据卷。`08`、`09`、`10` 都不能挂入 MySQL
+初始化目录，其中 `09` 只能交给 TDengine 执行。TDengine 当前表结构也可由后端
+`TdengineConfig` 在允许初始化的环境中创建或补齐。
 
 在第二个终端启动后端：
 
@@ -345,3 +358,106 @@ docker exec iot-redis redis-cli GET "iot:indicator:latest:INDICATOR_PUMP_EFF_B1"
 可用异常记录的 `ts` 再查询
 `iot_telemetry.st_indicator_minute`，确认该时间没有 `PUMP_EFF`，而另外三个指标
 均存在。不要用默认值补齐缺失功率；缺失必须保持可见并可审计。
+
+### 5. 验证历史 Q0 补发和异步人工重算
+
+历史补发只发送一个测点一次，不会伪造整批 19 点数据。时间必须位于目标旧分钟
+内，数值必须通过该测点的量程校验：
+
+```powershell
+$env:HVAC_ONLY_POINT = "PUMP1_Power"
+$env:HVAC_EVENT_TIME_MS = "目标旧分钟内的Unix毫秒"
+$env:HVAC_VALUE_OVERRIDE = "10.0"
+try {
+  node .scripts/simulate-hvac-19-points.mjs
+} finally {
+  Remove-Item Env:HVAC_ONLY_POINT -ErrorAction SilentlyContinue
+  Remove-Item Env:HVAC_EVENT_TIME_MS -ErrorAction SilentlyContinue
+  Remove-Item Env:HVAC_VALUE_OVERRIDE -ErrorAction SilentlyContinue
+}
+```
+
+`HVAC_ONLY_POINT` 必须是冻结协议中的外部别名；指定后脚本只发布一条。
+`HVAC_EVENT_TIME_MS` 必须是正的安全整数，`HVAC_VALUE_OVERRIDE` 必须是有限数。
+后两个变量只用于定点模式，防止误把整批当前数据写入历史分钟。
+
+人工重算的两个 POST 都只创建 MySQL 批次并立即返回 job，不等待 TDengine
+作废、Q0/Q1/Q2 选择和公式修正完成：
+
+```text
+POST /api/iot/data-quality/recalculate
+POST /api/iot/data-quality/fill-tasks/{taskId}/void-and-recalculate
+```
+
+范围重算示例中的 `pointIds` 是平台内部测点 ID，不是 MQTT 外部别名：
+
+```powershell
+$request = @{
+  buildingId = "BLD001"
+  pointIds = @("目标平台内部测点ID")
+  fromInclusive = 目标起始分钟Unix毫秒
+  toExclusive = 目标结束分钟Unix毫秒
+  reason = "历史原始数据补发后重新核算"
+} | ConvertTo-Json
+
+$accepted = Invoke-RestMethod -Method Post -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/iot/data-quality/recalculate" `
+  -ContentType "application/json" -Body $request
+$jobId = $accepted.data.jobId
+```
+
+作废某个异常 Q1/Q2 任务并按原范围重算：
+
+```powershell
+$taskId = "待作废补全任务ID"
+$voidRequest = @{ reason = "测点绑定修正后作废并重算" } | ConvertTo-Json
+$accepted = Invoke-RestMethod -Method Post -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/iot/data-quality/fill-tasks/$taskId/void-and-recalculate" `
+  -ContentType "application/json" -Body $voidRequest
+$jobId = $accepted.data.jobId
+```
+
+使用详情接口轮询，直到 `SUCCEEDED` 或 `FAILED`。`WAITING` 和 `RUNNING` 都是
+正常异步状态：
+
+```powershell
+do {
+  $detail = Invoke-RestMethod -Headers $headers `
+    -Uri "http://127.0.0.1:8081/api/iot/data-quality/recalculation-jobs/$jobId"
+  $job = $detail.data.job
+  $job | Select-Object jobId,status,phase,cursorMinute,
+    q0Count,q1Count,q2Count,missingCount,voidedCount,replacedCount,lastError
+  if ($job.status -in @("WAITING", "RUNNING")) {
+    Start-Sleep -Seconds 2
+  }
+} while ($job.status -in @("WAITING", "RUNNING"))
+```
+
+如果状态为 `FAILED`，先处理 `lastError` 对应的外部资源或配置问题，再由同一
+平台管理员原样重发完全相同的 POST（建筑、排序后的测点集合、时间范围、原因均
+保持不变）。系统会把原批次恢复为 `WAITING` 并从原 `cursorMinute` 续跑，不会
+新建重复批次；修改原因表示新的审计请求，会创建新批次。
+
+例如范围任务失败后，修复故障并再次执行上面的同一个 `$request`：
+
+```powershell
+$accepted = Invoke-RestMethod -Method Post -Headers $headers `
+  -Uri "http://127.0.0.1:8081/api/iot/data-quality/recalculate" `
+  -ContentType "application/json" -Body $request
+$jobId = $accepted.data.jobId
+```
+
+完成后按以下规则核验：
+
+1. `q0Count/q1Count/q2Count/missingCount` 之和等于已处理的“测点分钟”数；
+2. `detail.data.childTasks` 由批次关联关系查询，只返回本批次生成的 Q1/Q2；
+   分别检查 `dataQuality=1/2`、来源类型和证据快照；
+3. TDengine 正式分钟中，真实原始证据生成 Q0；两个当前 Q0 端点之间不超过
+   `data-quality.interpolation.max-gap-minutes`（默认五分钟）的缺口生成 Q1；
+   其余缺口仅在存在当分钟有效且已批准的典型值时生成 Q2；
+4. 没有合法来源的分钟保持 missing，不能套用 `default_value`；
+5. 每个目标分钟都会触发公式权威修正。输入齐全时指标按当前最高质量重算；输入
+   仍缺失时，旧的成功指标必须从 `st_indicator_minute` 删除，并在
+   `st_formula_calc_exception` 留下 `MISSING_INPUT`，避免继续展示失效结果；
+6. 对应 API、Redis 最新状态和 WebSocket `HVAC_INDICATOR` 消息应与修正后的
+   Q0/Q1/Q2 或缺失状态一致。

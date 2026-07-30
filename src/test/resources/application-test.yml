@@ -31,6 +31,13 @@ aggregation:
   recovery-enabled: false
   scan-initial-delay-ms: 3600000
 
+# 普通自动化测试不注册质量补全和跨库收口任务；专项测试会显式开启并使用 Fake/Mock。
+data-quality:
+  enabled: false
+  reconciliation-enabled: false
+  # 普通自动化测试不启动人工重算调度；专项测试使用 Mock/Fake 后显式开启。
+  recalculation-enabled: false
+
 formula:
   enabled: true
   atmospheric-pressure-kpa: 101.325

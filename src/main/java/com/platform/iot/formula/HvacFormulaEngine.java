@@ -4,11 +4,14 @@ import com.platform.cache.IndicatorLatestCacheService;
 import com.platform.config.FormulaProperties;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.model.entity.BizIndicator;
-import com.platform.iot.aggregation.HvacMinuteBatchFrozenEvent;
+import com.platform.iot.dataquality.event.HvacMinuteQualityReadyEvent;
+import com.platform.iot.dataquality.model.QualityEventSource;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
+import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
@@ -30,7 +33,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * HVAC 冻结分钟到指标结果的核心编排器。
+ * HVAC 质量完成分钟到指标结果的核心编排器。
  *
  * <p>它位于分钟聚合事件与 TDengine 指标仓储之间：选择活动指标、组装输入、
  * 调用纯公式、持久化成功或失败审计，然后以最佳努力更新 Redis 和 WebSocket。
@@ -54,6 +57,7 @@ public class HvacFormulaEngine {
     private final IndicatorLatestCacheService cache;
     private final IndicatorRealtimePublisher publisher;
     private final FormulaInputAssembler assembler;
+    private final FormulaDependencyResolver dependencyResolver;
     private final Map<String, IndicatorFormula> formulas;
 
     @Autowired
@@ -63,9 +67,12 @@ public class HvacFormulaEngine {
             IndicatorMinuteRepository indicatorRepository,
             IndicatorLatestCacheService cache,
             IndicatorRealtimePublisher publisher,
+            DataPointConfigProvider pointConfigProvider,
             FormulaProperties properties) {
         this(configProvider, minuteRepository, indicatorRepository, cache, publisher,
-                new FormulaInputAssembler(), List.of(
+                new FormulaInputAssembler(),
+                new FormulaDependencyResolver(pointConfigProvider),
+                List.of(
                         new ChillerCopFormula(),
                         new CoolingTowerEfficiencyFormula(
                                 new PsychrometricWetBulbCalculator(), properties),
@@ -80,6 +87,7 @@ public class HvacFormulaEngine {
             IndicatorLatestCacheService cache,
             IndicatorRealtimePublisher publisher,
             FormulaInputAssembler assembler,
+            FormulaDependencyResolver dependencyResolver,
             Collection<IndicatorFormula> formulas) {
         this.configProvider = Objects.requireNonNull(configProvider, "configProvider");
         this.minuteRepository = Objects.requireNonNull(minuteRepository, "minuteRepository");
@@ -88,26 +96,38 @@ public class HvacFormulaEngine {
         this.cache = Objects.requireNonNull(cache, "cache");
         this.publisher = Objects.requireNonNull(publisher, "publisher");
         this.assembler = Objects.requireNonNull(assembler, "assembler");
+        this.dependencyResolver = Objects.requireNonNull(
+                dependencyResolver, "dependencyResolver");
         this.formulas = indexFormulas(formulas);
     }
 
     /**
-     * 消费原始分钟已成功落库后的冻结事件。
+     * 消费分钟质量选择已经完成的 READY 事件。
      *
-     * <p>只有上游持久化完成才会进入这里，因此指标不会领先于源分钟。恢复事件
-     * 可能只携带本次补写的测点，必须从 TDengine 重新读取该分钟完整输入。</p>
+     * <p>首次冻结直接使用事件快照；恢复或历史修正携带受影响点位，必须从
+     * TDengine 重新读取该建筑完整分钟，避免用局部修正输入计算错误结果。</p>
      */
     @EventListener
-    public void onMinuteFrozen(HvacMinuteBatchFrozenEvent event) {
-        Set<String> buildingIds = event.aggregates().stream()
-                .map(RawMinuteAggregate::buildingId)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
-        List<RawMinuteAggregate> inputs = event.recovery()
-                ? minuteRepository.findByMinute(event.minuteStart(), buildingIds)
+    public void onMinuteQualityReady(HvacMinuteQualityReadyEvent event) {
+        Collection<BizIndicator> activeIndicators = configProvider.findAllActive();
+        boolean authoritativeCorrection =
+                authoritativeCorrection(event.source());
+        Set<String> onlyIndicatorIds = null;
+        if (authoritativeCorrection
+                && !event.affectedPointIds().isEmpty()) {
+            onlyIndicatorIds = dependencyResolver.resolve(
+                    activeIndicators, event.affectedPointIds(), formulas.values());
+            if (onlyIndicatorIds.isEmpty()) {
+                return;
+            }
+        }
+        List<RawMinuteAggregate> inputs = !event.affectedPointIds().isEmpty()
+                ? minuteRepository.findByMinute(event.minuteStart(), event.buildingIds())
                 : event.aggregates();
         calculateAndPersist(
-                event.minuteStart(), event.finalizedAt(), inputs, buildingIds, null);
+                event.minuteStart(), event.finalizedAt(), inputs,
+                event.buildingIds(), onlyIndicatorIds, activeIndicators,
+                authoritativeCorrection);
     }
 
     void calculateAndPersist(
@@ -121,7 +141,8 @@ public class HvacFormulaEngine {
                 .collect(Collectors.toCollection(LinkedHashSet::new));
         calculateAndPersist(
                 minuteStart, calculatedAt, aggregates,
-                affectedBuildings, onlyIndicatorIds);
+                affectedBuildings, onlyIndicatorIds,
+                configProvider.findAllActive(), false);
     }
 
     /**
@@ -152,13 +173,28 @@ public class HvacFormulaEngine {
         return calculation;
     }
 
+    /**
+     * 复用公式引擎的依赖口径定位受影响指标。
+     *
+     * <p>迟到 Q0 补偿用该结果检查 calculatedAt 水位，避免因为同建筑无关指标
+     * 缺失而重复发布修正 READY。</p>
+     */
+    public Set<String> resolveAffectedIndicatorIds(
+            Collection<BizIndicator> activeIndicators,
+            Set<String> affectedPointIds) {
+        return dependencyResolver.resolve(
+                activeIndicators, affectedPointIds, formulas.values());
+    }
+
     private void calculateAndPersist(
             long minuteStart,
             long calculatedAt,
             List<RawMinuteAggregate> aggregates,
             Set<String> affectedBuildings,
-            Set<String> onlyIndicatorIds) {
-        List<BizIndicator> indicators = configProvider.findAllActive().stream()
+            Set<String> onlyIndicatorIds,
+            Collection<BizIndicator> activeIndicators,
+            boolean allowSuccessInvalidation) {
+        List<BizIndicator> indicators = activeIndicators.stream()
                 .filter(indicator -> affectedBuildings.contains(indicator.getBuildingId()))
                 .filter(indicator -> onlyIndicatorIds == null
                         || onlyIndicatorIds.contains(indicator.getIndicatorId()))
@@ -200,17 +236,26 @@ public class HvacFormulaEngine {
             }
         }
 
-        // TDengine 是指标真相来源；只有批量写入成功后，才允许刷新最新状态。
+        // TDengine 是指标真相来源；本事件所有写入/删除全部成功后才允许刷新缓存。
         if (!successes.isEmpty()) {
             indicatorRepository.saveSuccesses(
                     successes.stream().map(CalculatedSuccess::row).toList());
-            successes.forEach(success -> notifyLatest(success.state()));
+        }
+        if (allowSuccessInvalidation && !failures.isEmpty()) {
+            indicatorRepository.deleteSuccesses(failures.stream()
+                    .map(failure -> new IndicatorMinuteKey(
+                            failure.row().indicatorId(),
+                            failure.row().minuteStart()))
+                    .collect(Collectors.toCollection(LinkedHashSet::new)));
         }
         if (!failures.isEmpty()) {
             indicatorRepository.saveExceptions(
                     failures.stream().map(CalculatedFailure::row).toList());
-            failures.forEach(failure -> notifyLatest(failure.state()));
         }
+        successes.forEach(success ->
+                notifyLatest(success.state(), allowSuccessInvalidation));
+        failures.forEach(failure ->
+                notifyLatest(failure.state(), allowSuccessInvalidation));
     }
 
     private void validateCalculation(
@@ -262,11 +307,19 @@ public class HvacFormulaEngine {
         return value;
     }
 
-    private void notifyLatest(IndicatorLatestState state) {
+    private void notifyLatest(
+            IndicatorLatestState state,
+            boolean allowEqualMinuteSuccessInvalidation) {
         // 缓存拒绝旧分钟后也不推送，避免前端被补算结果回拨到更早状态。
-        if (cache.setIfNotOlder(state)) {
+        if (cache.setIfNotOlder(state, allowEqualMinuteSuccessInvalidation)) {
             publisher.publish(state);
         }
+    }
+
+    private boolean authoritativeCorrection(QualityEventSource source) {
+        return source == QualityEventSource.INTERPOLATION_CORRECTION
+                || source == QualityEventSource.LATE_REAL_CORRECTION
+                || source == QualityEventSource.MANUAL_RECALCULATION;
     }
 
     private CalculatedFailure failure(

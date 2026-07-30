@@ -11,10 +11,12 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowCallbackHandler;
 
 import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -130,6 +132,37 @@ class TdengineIndicatorMinuteRepositoryTest {
     void emptyBatchesDoNotTouchTdengine() {
         repository.saveSuccesses(List.of());
         repository.saveExceptions(List.of());
+        repository.deleteSuccesses(Set.of());
+        verifyNoInteractions(template);
+    }
+
+    @Test
+    void batchDeleteOnlyTargetsExplicitIndicatorMinuteKeys() {
+        long nextMinute = MINUTE + 60_000L;
+
+        repository.deleteSuccesses(Set.of(
+                new IndicatorMinuteKey("INDICATOR_A", MINUTE),
+                new IndicatorMinuteKey("INDICATOR_B", nextMinute)));
+
+        ArgumentCaptor<String[]> sqlCaptor = ArgumentCaptor.forClass(String[].class);
+        verify(template).batchUpdate(sqlCaptor.capture());
+        assertThat(sqlCaptor.getValue()).containsExactly(
+                "DELETE FROM iot_telemetry.st_indicator_minute_INDICATOR_A"
+                        + " WHERE ts='" + new Timestamp(MINUTE) + "'",
+                "DELETE FROM iot_telemetry.st_indicator_minute_INDICATOR_B"
+                        + " WHERE ts='" + new Timestamp(nextMinute) + "'");
+        assertThat(sqlCaptor.getValue())
+                .allSatisfy(sql -> assertThat(sql)
+                        .doesNotContain("building_id")
+                        .doesNotContain("ts>="));
+    }
+
+    @Test
+    void rejectsUnsafeDeleteIdentifierBeforeCallingTdengine() {
+        assertThatThrownBy(() -> repository.deleteSuccesses(Set.of(
+                new IndicatorMinuteKey("INDICATOR;DROP", MINUTE))))
+                .isInstanceOf(IllegalArgumentException.class);
+
         verifyNoInteractions(template);
     }
 
@@ -225,5 +258,27 @@ class TdengineIndicatorMinuteRepositoryTest {
                 .contains("st_indicator_minute")
                 .contains("INDICATOR_A", "INDICATOR_B")
                 .contains("ORDER BY indicator_id, ts");
+    }
+
+    @Test
+    void latestAttemptTimeReadsBothSuccessAndExceptionTables() {
+        doNothing().when(template).query(
+                anyString(), any(RowCallbackHandler.class));
+
+        assertThat(repository.findLatestAttemptAt(Set.of(
+                new IndicatorMinuteKey("INDICATOR_A", MINUTE))))
+                .isEqualTo(Map.of());
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template, times(2)).query(
+                sql.capture(), any(RowCallbackHandler.class));
+        assertThat(sql.getAllValues().get(0))
+                .contains("st_indicator_minute")
+                .contains("indicator_id='INDICATOR_A'")
+                .contains("calculated_at");
+        assertThat(sql.getAllValues().get(1))
+                .contains("st_formula_calc_exception")
+                .contains("indicator_id='INDICATOR_A'")
+                .contains("calculated_at");
     }
 }

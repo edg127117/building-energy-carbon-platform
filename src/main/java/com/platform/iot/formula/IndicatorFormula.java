@@ -2,6 +2,8 @@ package com.platform.iot.formula;
 
 import com.platform.iot.formula.model.FormulaCalculation;
 
+import java.util.Set;
+
 /**
  * 单一 HVAC 指标的纯计算策略。
  *
@@ -15,6 +17,15 @@ public interface IndicatorFormula {
 
     /** 返回写入历史结果的公式版本；历史解释必须按该版本匹配。 */
     String formulaVersion();
+
+    /**
+     * 返回可能参与本公式的全部标准语义键。
+     *
+     * <p>存在主备输入时必须同时声明，例如冷机的实测功率和电参数估算输入、
+     * 冷却塔的实测湿球与干球/相对湿度换算输入。该集合只用于缩小重算范围，
+     * 实际采用哪组输入仍由公式自身决定。</p>
+     */
+    Set<String> requiredInputKeys();
 
     /**
      * 使用一个冻结分钟的输入计算指标。

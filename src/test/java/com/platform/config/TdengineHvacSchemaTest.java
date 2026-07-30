@@ -39,7 +39,8 @@ class TdengineHvacSchemaTest {
         assertThat(allSql).contains("add column avg_val", "add column min_val",
                 "add column max_val", "add column sample_count",
                 "add column first_received_time", "add column last_received_time",
-                "add column finalized_at", "add tag building_id",
+                "add column finalized_at", "add column quality_task_id nchar(32)",
+                "quality_task_id nchar(32)", "add tag building_id",
                 "add tag point_id", "add tag family_code");
     }
 

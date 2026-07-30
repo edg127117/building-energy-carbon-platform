@@ -7,6 +7,7 @@ import com.platform.iot.formula.model.FormulaCalculation.Step;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * 计算冷水机组制冷量和 COP，对应设计公式 5-1、5-2。
@@ -31,6 +32,18 @@ public final class ChillerCopFormula implements IndicatorFormula {
     @Override
     public String formulaVersion() {
         return VERSION;
+    }
+
+    @Override
+    public Set<String> requiredInputKeys() {
+        return Set.of(
+                FormulaKeys.CHILLER_T_IN,
+                FormulaKeys.CHILLER_T_OUT,
+                FormulaKeys.CHILLER_FLOW,
+                FormulaKeys.CHILLER_PPE,
+                FormulaKeys.CHILLER_VOLTAGE,
+                FormulaKeys.CHILLER_CURRENT,
+                FormulaKeys.CHILLER_PF);
     }
 
     @Override

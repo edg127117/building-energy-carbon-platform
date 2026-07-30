@@ -65,6 +65,17 @@ public class IndicatorLatestCacheService {
      * Lua/CAS 或分布式锁。</p>
      */
     public synchronized boolean setIfNotOlder(IndicatorLatestState state) {
+        return setIfNotOlder(state, false);
+    }
+
+    /**
+     * 仅在权威质量修正时允许同一分钟的失败状态覆盖旧成功状态。
+     *
+     * <p>该开关不放宽时间单调性：任何模式都拒绝更早分钟覆盖更新分钟。</p>
+     */
+    public synchronized boolean setIfNotOlder(
+            IndicatorLatestState state,
+            boolean allowEqualMinuteSuccessInvalidation) {
         String key = key(state.indicatorId());
         try {
             String payload = redis.opsForValue().get(key);
@@ -76,7 +87,8 @@ public class IndicatorLatestCacheService {
                 }
                 if (current.minuteStart() == state.minuteStart()
                         && current.status() == FormulaCalculation.Status.SUCCESS
-                        && state.status() != FormulaCalculation.Status.SUCCESS) {
+                        && state.status() != FormulaCalculation.Status.SUCCESS
+                        && !allowEqualMinuteSuccessInvalidation) {
                     return false;
                 }
             }

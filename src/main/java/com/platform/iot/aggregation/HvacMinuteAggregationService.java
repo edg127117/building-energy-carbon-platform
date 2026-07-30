@@ -6,15 +6,15 @@ import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
+import com.platform.iot.temporal.model.MinuteQualityWriteResult;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.DoubleSummaryStatistics;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -38,6 +38,7 @@ public class HvacMinuteAggregationService {
     private final HvacRawEventRepository rawRepository;
     private final HvacMinuteRepository minuteRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final HvacPointMinuteAggregator pointMinuteAggregator;
     private final long finalizationDelayMillis;
     private final int catchUpMinutes;
 
@@ -49,17 +50,20 @@ public class HvacMinuteAggregationService {
      */
     private final AtomicLong lastProcessedMinute = new AtomicLong(Long.MIN_VALUE);
 
+    @Autowired
     public HvacMinuteAggregationService(
             DataPointConfigProvider configProvider,
             HvacRawEventRepository rawRepository,
             HvacMinuteRepository minuteRepository,
             ApplicationEventPublisher eventPublisher,
+            HvacPointMinuteAggregator pointMinuteAggregator,
             @Value("${aggregation.finalization-delay-seconds:30}") int finalizationDelaySeconds,
             @Value("${aggregation.catch-up-minutes:10}") int catchUpMinutes) {
         this.configProvider = configProvider;
         this.rawRepository = rawRepository;
         this.minuteRepository = minuteRepository;
         this.eventPublisher = eventPublisher;
+        this.pointMinuteAggregator = pointMinuteAggregator;
         this.finalizationDelayMillis = finalizationDelaySeconds * 1_000L;
         this.catchUpMinutes = Math.max(1, catchUpMinutes);
     }
@@ -145,27 +149,57 @@ public class HvacMinuteAggregationService {
             long finalizedAt,
             boolean recovery,
             Set<String> onlyPointIds) {
+        Map<String, PointRuntimeConfig> activePoints = activePoints();
+        Set<String> buildingIds = activePoints.values().stream()
+                .filter(point -> onlyPointIds == null
+                        || onlyPointIds.contains(point.pointId()))
+                .filter(point -> point.isForCalc() == 1)
+                .filter(point -> "ANALOG".equalsIgnoreCase(point.dataType()))
+                .map(PointRuntimeConfig::buildingId)
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         List<RawTelemetryEvent> rawEvents = rawRepository.findWindow(
                 minuteStart, minuteStart + MINUTE_MILLIS, false);
         List<RawMinuteAggregate> aggregates =
-                aggregate(rawEvents, minuteStart, finalizedAt, onlyPointIds);
+                aggregate(rawEvents, minuteStart, finalizedAt, onlyPointIds, activePoints);
         if (aggregates.isEmpty()) {
+            // 即使整分钟没有真实行，也要把活动计算建筑交给质量层即时尝试 Q2。
+            if (!buildingIds.isEmpty()) {
+                publishFrozenEvent(
+                        minuteStart, finalizedAt, recovery, buildingIds, List.of());
+            }
             return;
         }
 
         // 先持久化再通知公式模块，保证事件中的每个输入都能在st_raw_minute复审。
-        minuteRepository.saveAll(aggregates);
-        publishFrozenEvent(minuteStart, finalizedAt, recovery, aggregates);
+        List<MinuteQualityWriteResult> writeResults =
+                minuteRepository.saveAllWithQualityPriority(aggregates, null);
+        Set<MinuteKey> acceptedKeys = writeResults.stream()
+                .filter(result -> switch (result.outcome()) {
+                    case INSERTED, UPGRADED, UPDATED_REAL, IDEMPOTENT -> true;
+                    case REJECTED_HIGHER_QUALITY, REJECTED_SAME_QUALITY -> false;
+                })
+                .map(result -> new MinuteKey(result.pointId(), result.minuteStart()))
+                .collect(java.util.stream.Collectors.toSet());
+        List<RawMinuteAggregate> accepted = aggregates.stream()
+                .filter(row -> acceptedKeys.contains(
+                        new MinuteKey(row.pointId(), row.minuteStart())))
+                .toList();
+        if (accepted.isEmpty()) {
+            return;
+        }
+        publishFrozenEvent(
+                minuteStart, finalizedAt, recovery, buildingIds, accepted);
         log.info("HVAC分钟批量数据已冻结: minute={}, points={}, recovery={}",
-                minuteStart, aggregates.size(), recovery);
+                minuteStart, accepted.size(), recovery);
     }
 
     private List<RawMinuteAggregate> aggregate(
             List<RawTelemetryEvent> events,
             long minuteStart,
             long finalizedAt,
-            Set<String> onlyPointIds) {
-        Map<String, PointRuntimeConfig> activePoints = activePoints();
+            Set<String> onlyPointIds,
+            Map<String, PointRuntimeConfig> activePoints) {
         Map<String, List<RawTelemetryEvent>> grouped = new LinkedHashMap<>();
         for (RawTelemetryEvent event : events) {
             if (!activePoints.containsKey(event.pointId())) {
@@ -185,46 +219,10 @@ public class HvacMinuteAggregationService {
             if (pointEvents == null || pointEvents.isEmpty()) {
                 continue;
             }
-            aggregates.add(toAggregate(
-                    pointEntry.getValue(), pointEvents, minuteStart, finalizedAt));
+            aggregates.add(pointMinuteAggregator.aggregate(
+                    pointEntry.getValue(), minuteStart, pointEvents, finalizedAt));
         }
         return aggregates;
-    }
-
-    private RawMinuteAggregate toAggregate(
-            PointRuntimeConfig point,
-            List<RawTelemetryEvent> events,
-            long minuteStart,
-            long finalizedAt) {
-        DoubleSummaryStatistics statistics = events.stream()
-                .mapToDouble(RawTelemetryEvent::value).summaryStatistics();
-        int worstQuality = events.stream()
-                .mapToInt(RawTelemetryEvent::dataQuality).max().orElse(0);
-        long firstReceived = events.stream().map(RawTelemetryEvent::receivedTime)
-                .min(Comparator.naturalOrder()).orElseThrow();
-        long lastReceived = events.stream().map(RawTelemetryEvent::receivedTime)
-                .max(Comparator.naturalOrder()).orElseThrow();
-        return new RawMinuteAggregate(
-                point.pointId(),
-                point.pointCode(),
-                point.buildingId(),
-                point.systemGroupId(),
-                point.equipId(),
-                point.equipCode(),
-                point.familyCode(),
-                point.componentCode(),
-                point.suffixCode(),
-                point.isForCalc(),
-                minuteStart,
-                statistics.getAverage(),
-                statistics.getMin(),
-                statistics.getMax(),
-                Math.toIntExact(statistics.getCount()),
-                worstQuality,
-                firstReceived,
-                lastReceived,
-                finalizedAt
-        );
     }
 
     private Map<String, PointRuntimeConfig> activePoints() {
@@ -241,10 +239,11 @@ public class HvacMinuteAggregationService {
             long minuteStart,
             long finalizedAt,
             boolean recovery,
+            Set<String> buildingIds,
             List<RawMinuteAggregate> aggregates) {
         try {
             eventPublisher.publishEvent(new HvacMinuteBatchFrozenEvent(
-                    minuteStart, finalizedAt, recovery, aggregates));
+                    minuteStart, finalizedAt, recovery, buildingIds, aggregates));
         } catch (RuntimeException exception) {
             // 分钟批次已经成功落盘，不能因未来某个公式监听器异常而反复覆盖分钟数据。
             // 公式结果可通过低频补偿或人工重算从st_raw_minute恢复。
@@ -259,5 +258,8 @@ public class HvacMinuteAggregationService {
         long currentEffectiveMinute =
                 effectiveNow - Math.floorMod(effectiveNow, MINUTE_MILLIS);
         return currentEffectiveMinute - MINUTE_MILLIS;
+    }
+
+    private record MinuteKey(String pointId, long minuteStart) {
     }
 }

@@ -4,6 +4,7 @@ import com.platform.config.TdengineProperties;
 import com.platform.iot.temporal.impl.TdengineHvacRawEventRepository;
 import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
+import com.platform.iot.temporal.model.PointMinuteKey;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -111,6 +112,49 @@ class TdengineHvacRawEventRepositoryTest {
                 .contains("ts < '2027-01-15 16:01:00.0'")
                 .contains("late_flag=0")
                 .doesNotContain("st_raw_event_WCR1_TWin");
+    }
+
+    @Test
+    void scansLateEvidenceInTdengineWithGroupingSeekAndLimit() {
+        when(template.queryForList(anyString())).thenReturn(List.of());
+
+        repository.findLateMinuteEvidence(
+                1_800_000_000_000L,
+                1_800_086_400_000L,
+                1_800_000_060_000L,
+                "POINT'001",
+                100);
+
+        var sql = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(template).queryForList(sql.capture());
+        assertThat(sql.getValue())
+                .contains("late_flag = 1")
+                .contains("PARTITION BY point_id")
+                .contains("INTERVAL(1m)")
+                .contains(") grouped_late")
+                .doesNotContain("MAX(received_time)")
+                .contains("minute_start >")
+                .contains("point_id > 'POINT''001'")
+                .contains("LIMIT 100");
+    }
+
+    @Test
+    void verifiesExactLatePointMinuteKeysInOneBoundedQuery() {
+        when(template.queryForList(anyString())).thenReturn(List.of());
+
+        repository.findLateEvidenceKeys(List.of(
+                new PointMinuteKey("POINT'001", 1_800_000_000_000L),
+                new PointMinuteKey("POINT002", 1_800_000_060_000L)));
+
+        var sql = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(template).queryForList(sql.capture());
+        assertThat(sql.getValue())
+                .contains("late_flag = 1")
+                .contains("point_id='POINT''001'")
+                .contains("point_id='POINT002'")
+                .contains("COUNT(*) AS evidence_count")
+                .contains("PARTITION BY point_id")
+                .contains("INTERVAL(1m)");
     }
 
     private Map<String, Object> row(

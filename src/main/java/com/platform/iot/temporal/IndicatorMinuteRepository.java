@@ -5,6 +5,7 @@ import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -22,6 +23,13 @@ public interface IndicatorMinuteRepository {
 
     /** 批量写入失败审计，使缺失或非法输入不会静默丢失。 */
     void saveExceptions(List<FormulaCalculationException> exceptions);
+
+    /**
+     * 删除明确指标分钟键对应的旧成功结果。
+     *
+     * <p>只用于质量修正后公式已不再成功的失效处理；不得按建筑或时间范围扩大删除。</p>
+     */
+    void deleteSuccesses(Set<IndicatorMinuteKey> keys);
 
     /** 查询指定指标在来源分钟的成功结果。 */
     Optional<IndicatorMinuteResult> findSuccess(String indicatorId, long minuteStart);
@@ -42,4 +50,10 @@ public interface IndicatorMinuteRepository {
     /** 返回时间窗口内已成功的指标分钟键，供缺口恢复一次性判断。 */
     Set<IndicatorMinuteKey> findSuccessfulKeys(
             List<String> indicatorIds, long fromInclusive, long toExclusive);
+
+    /**
+     * 批量读取精确指标分钟键在成功表或异常表中的最新尝试时间。
+     */
+    Map<IndicatorMinuteKey, Long> findLatestAttemptAt(
+            Set<IndicatorMinuteKey> keys);
 }

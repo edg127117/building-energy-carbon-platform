@@ -5,6 +5,7 @@ import com.platform.iot.formula.model.FormulaCalculation.Input;
 import com.platform.iot.formula.model.FormulaCalculation.Step;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * 计算 AHU 风机单位风量功率指标，对应设计公式 5-7。
@@ -28,6 +29,11 @@ public final class AhuPowerEfficiencyFormula implements IndicatorFormula {
     @Override
     public String formulaVersion() {
         return VERSION;
+    }
+
+    @Override
+    public Set<String> requiredInputKeys() {
+        return Set.copyOf(REQUIRED);
     }
 
     @Override
