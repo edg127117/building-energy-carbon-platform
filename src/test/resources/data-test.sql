@@ -82,7 +82,7 @@ VALUES
 ('POINT004', 'WCR1_PPE', '一号机组瞬时功率', 'BLD001', 'GROUP001', 'EQUIP_WCR_B1', 'RULE_WCR_MAIN', 'WCR', 'MAIN', 'PPE', 'ANALOG', 'kW', 1, 'ONLINE', 0),
 ('POINT005', 'WCR1_Voltage', '一号机组压缩机电压', 'BLD001', 'GROUP001', 'EQUIP_WCR_B1', 'RULE_WCR_MAIN', 'WCR', 'MAIN', 'Voltage', 'ANALOG', 'V', 1, 'ONLINE', 0),
 ('POINT006', 'WCR1_Current', '一号机组压缩机电流', 'BLD001', 'GROUP001', 'EQUIP_WCR_B1', 'RULE_WCR_MAIN', 'WCR', 'MAIN', 'Current', 'ANALOG', 'A', 1, 'ONLINE', 0),
-('POINT007', 'WCR1_PF', '一号机组功率因数', 'BLD001', 'GROUP001', 'EQUIP_WCR_B1', 'RULE_WCR_MAIN', 'WCR', 'MAIN', 'PF', 'ANALOG', NULL, 1, 'ONLINE', 0),
+('POINT007', 'WCR1_PF', '一号机组功率因数', 'BLD001', 'GROUP001', 'EQUIP_WCR_B1', 'RULE_WCR_MAIN', 'WCR', 'MAIN', 'PF', 'ANALOG', '1', 1, 'ONLINE', 0),
 ('POINT008', 'WCR1_CT_TWin', '一号冷却塔冷却水进水温度', 'BLD001', 'GROUP001', 'EQUIP_TOWER_B1', 'RULE_WCR_CT', 'WCR', 'CT', 'TWin', 'ANALOG', '℃', 1, 'ONLINE', 0),
 ('POINT009', 'WCR1_CT_TWout', '一号冷却塔冷却水出水温度', 'BLD001', 'GROUP001', 'EQUIP_TOWER_B1', 'RULE_WCR_CT', 'WCR', 'CT', 'TWout', 'ANALOG', '℃', 1, 'ONLINE', 0),
 ('POINT010', 'WCR1_CT_TWB', '一号冷却塔室外湿球温度', 'BLD001', 'GROUP001', 'EQUIP_TOWER_B1', 'RULE_WCR_CT', 'WCR', 'CT', 'TWB', 'ANALOG', '℃', 1, 'ONLINE', 0),
