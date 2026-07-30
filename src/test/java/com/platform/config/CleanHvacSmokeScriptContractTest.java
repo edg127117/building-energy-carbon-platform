@@ -44,6 +44,12 @@ class CleanHvacSmokeScriptContractTest {
     @Test
     void scriptRequiresAllRuntimeAndLegacyAssertions() {
         assertThat(script).contains(
+                "MySqlPort",
+                "RedisPort",
+                "Wait-PortAvailable",
+                "Wait-TdengineSchema",
+                "No such object",
+                "source_point_code",
                 "iot_device",
                 "iot_device_status_log",
                 "control_commands",
@@ -52,6 +58,8 @@ class CleanHvacSmokeScriptContractTest {
                 "st_raw_minute",
                 "st_indicator_minute",
                 "st_formula_calc_exception",
+                "/api/auth/login",
+                "Authorization",
                 "CLEAN_HVAC_SMOKE_SUCCESS");
     }
 

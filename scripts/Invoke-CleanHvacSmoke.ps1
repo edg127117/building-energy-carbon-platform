@@ -2,6 +2,8 @@
 param(
     [switch]$ResetData,
     [string]$LegacyEnvRoot,
+    [int]$MySqlPort = 13306,
+    [int]$RedisPort = 16379,
     [int]$InfrastructureTimeoutSeconds = 240,
     [int]$ApplicationTimeoutSeconds = 180
 )
@@ -102,24 +104,50 @@ function Invoke-Docker {
         [switch]$Capture
     )
 
-    $output = & $script:dockerCli @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        $detail = ($output | Out-String).Trim()
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        # Docker Compose 会把正常进度写到 stderr，不能让 PowerShell 5 将其误判为异常。
+        $ErrorActionPreference = 'Continue'
+        $output = & $script:dockerCli @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    $normalizedOutput = @($output | ForEach-Object {
+        $_.ToString()
+    })
+    if ($exitCode -ne 0) {
+        $detail = ($normalizedOutput | Out-String).Trim()
         throw "Docker 命令执行失败。$detail"
     }
 
     if ($Capture) {
-        return $output
+        return $normalizedOutput
     }
-    $output | ForEach-Object { Write-Output $_ }
+    $normalizedOutput | ForEach-Object { Write-Output $_ }
 }
 
 function Get-ContainerInspection([string]$Container) {
-    $json = & $script:dockerCli inspect $Container 2>$null
-    if ($LASTEXITCODE -ne 0) {
-        return $null
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        # “容器不存在”是清理流程的正常状态，不能让 PowerShell 5
+        # 把 Docker 写入 stderr 的提示提升成终止异常。
+        $ErrorActionPreference = 'Continue'
+        $output = & $script:dockerCli inspect $Container 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
     }
-    return ($json | ConvertFrom-Json)[0]
+
+    if ($exitCode -ne 0) {
+        $detail = ($output | Out-String).Trim()
+        if ($detail -match '(?i)No such object|No such container') {
+            return $null
+        }
+        throw "无法检查容器 $Container。$detail"
+    }
+
+    return (($output | Out-String) | ConvertFrom-Json)[0]
 }
 
 function Assert-ContainerDataMounts(
@@ -171,6 +199,24 @@ function Test-PortListening([int]$Port) {
         -ErrorAction SilentlyContinue)
 }
 
+function Wait-PortAvailable(
+    [int]$Port,
+    [string]$Resource,
+    [int]$TimeoutSeconds = 30
+) {
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (-not (Test-PortListening $Port)) {
+            Write-Output "端口已释放: $Resource $Port"
+            return
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+    throw "$Resource 冒烟端口被未知进程持续占用: $Port"
+}
+
 function Wait-ContainerHealthy(
     [string]$Container,
     [datetime]$Deadline
@@ -204,14 +250,34 @@ function Wait-ContainerHealthy(
 }
 
 function Wait-ApplicationHealthy([datetime]$Deadline) {
+    $loginUrl = 'http://127.0.0.1:8081/api/auth/login'
     $healthUrl = 'http://127.0.0.1:8081/api/actuator/health'
+    $loginBody = @{
+        username = 'admin'
+        password = '123456'
+    } | ConvertTo-Json -Compress
+
     while ((Get-Date) -lt $Deadline) {
         if ($script:applicationProcess.HasExited) {
             throw 'Spring Boot 在健康检查通过前退出'
         }
         try {
+            # 健康接口沿用生产鉴权，不为冒烟测试放宽 SecurityConfig。
+            $login = Invoke-RestMethod `
+                -Method Post `
+                -Uri $loginUrl `
+                -ContentType 'application/json' `
+                -Body $loginBody `
+                -TimeoutSec 5
+            $token = $login.data.token
+            if (-not $token) {
+                throw '管理员登录未返回 JWT'
+            }
             $response = Invoke-RestMethod `
                 -Uri $healthUrl `
+                -Headers @{
+                    Authorization = "Bearer $token"
+                } `
                 -TimeoutSec 3
             if ($response.status -eq 'UP') {
                 Write-Output 'Spring Boot 健康检查通过'
@@ -258,6 +324,38 @@ function Invoke-Taos([string]$Sql) {
     return ($lines | Out-String)
 }
 
+function Wait-TdengineSchema([datetime]$Deadline) {
+    $expectedStables = @(
+        'st_raw_event',
+        'st_raw_minute',
+        'st_indicator_minute',
+        'st_formula_calc_exception'
+    )
+    $lastMissing = $expectedStables
+    $lastError = $null
+
+    while ((Get-Date) -lt $Deadline) {
+        try {
+            $stables = Invoke-Taos 'USE iot_telemetry; SHOW STABLES;'
+            $lastMissing = @($expectedStables | Where-Object {
+                $stables -notmatch [regex]::Escape($_)
+            })
+            if ($lastMissing.Count -eq 0) {
+                return $stables
+            }
+        } catch {
+            $lastError = $_.Exception.Message
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+    if ($lastError) {
+        throw "等待 TDengine HVAC 结构失败。最后错误: $lastError"
+    }
+    throw "等待 TDengine HVAC 结构超时，缺少: $($lastMissing -join ', ')"
+}
+
 function Assert-DatabaseBoundaries {
     $formalCount = Invoke-MySqlScalar @"
 SELECT COUNT(*)
@@ -289,17 +387,9 @@ WHERE table_schema='iot_platform'
         throw "MySQL 仍存在旧电表表，数量 $legacyCount"
     }
 
-    $stables = Invoke-Taos 'USE iot_telemetry; SHOW STABLES;'
-    foreach ($stable in @(
-        'st_raw_event',
-        'st_raw_minute',
-        'st_indicator_minute',
-        'st_formula_calc_exception'
-    )) {
-        if ($stables -notmatch [regex]::Escape($stable)) {
-            throw "TDengine 缺少 HVAC 超级表: $stable"
-        }
-    }
+    # HTTP 健康接口可能先于启动初始化任务可用，因此等待四张正式超级表全部就绪。
+    $stables = Wait-TdengineSchema `
+        -Deadline ((Get-Date).AddSeconds(60))
     if ($stables -match 'st_electric_data') {
         throw 'TDengine 仍存在旧电表超级表 st_electric_data'
     }
@@ -319,7 +409,7 @@ function Publish-And-AssertFrozenPoints {
     $deadline = (Get-Date).AddSeconds(90)
     while ((Get-Date) -lt $deadline) {
         $rawPoints = Invoke-Taos @"
-SELECT DISTINCT point_code
+SELECT DISTINCT source_point_code
 FROM iot_telemetry.st_raw_event;
 "@
         $missing = @($expectedPointCodes | Where-Object {
@@ -347,6 +437,14 @@ if (Test-PortListening 8081) {
 
 $dockerCli = Resolve-DockerCli
 Import-ServerEnvironment $serverEnvFile
+
+# 冒烟端口覆盖只作用于当前进程，不修改用户的 server.env。
+[Environment]::SetEnvironmentVariable(
+    'MYSQL_PORT', $MySqlPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'REDIS_PORT', $RedisPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'MQTT_ENABLED', 'true', 'Process')
 
 $allowedTargets = @(
     Resolve-AllowedDataTargets $currentEnvRoot
@@ -385,6 +483,13 @@ foreach ($target in $allowedTargets) {
         -Target $target `
         -AllowedTargets $allowedTargets
 }
+
+# Docker 删除容器后，Windows 的端口代理可能还需要数秒才会释放。
+# 这里等待已知测试端口恢复可用，避免把正常的清理延迟误判成外部端口冲突。
+Wait-PortAvailable -Port $MySqlPort -Resource 'MySQL'
+Wait-PortAvailable -Port $RedisPort -Resource 'Redis'
+Wait-PortAvailable -Port 1883 -Resource 'MQTT'
+Wait-PortAvailable -Port 6041 -Resource 'TDengine REST'
 
 Invoke-Docker -Arguments @(
     'compose',
