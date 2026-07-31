@@ -254,3 +254,78 @@ Redis 重建失败不能触发 MySQL、TDengine 或 EMQX 重建。
 - TDengine 与 EMQX 未被重建；
 - 完整自动化测试通过；
 - Git 提交不包含数据、备份、日志或无关文件。
+
+## 12. 实施决策与结果附录
+
+本节记录 2026-07-31 的真实迁移结果。第 1—11 节继续保留为原始设计目标，
+但不得用其中“现有业务数据完整保留”的表述推断已经找回迁移前的旧业务行。
+
+### 12.1 MySQL 源数据事故与基线决策
+
+在本任务开始前清理 `d9a9` worktree 时，仍由 MySQL bind mount 使用的数据
+文件随 worktree 一并被删除。Task 3 执行 `COUNT(*)` 时暴露了缺失的 InnoDB
+`.ibd` 文件；随后 `iot-mysql` 因 `restart: always` 于 15:54 自动重启，并
+在空 bind 目录上重新执行初始化。
+
+重置前和重置后都曾观测到 21 张表、数据与索引约 1.06 MiB，但重置前没有
+取得逐表准确行数，因此不能证明原有业务行被完整保留。用户已明确选择方案
+1，批准把重初始化后的数据库作为迁移新基线。该决定覆盖第 2、3、6、11 节
+中“旧库现有业务数据完整保留”和“源库与新卷一致”的原完成标准；本次能够
+证明的是“用户批准的新基线、预恢复卷、正式卷及重启后数据一致”。
+
+新基线的逐表准确计数记录在仓库外
+`migration-notes.txt` 和 `source-table-counts.tsv`。摘要如下：
+
+- 非空业务及权限表：`biz_data_point=19`、`biz_equipment=4`、
+  `biz_equipment_type=6`、`biz_indicator=4`、`biz_point_alias=19`、
+  `biz_point_naming_rule=7`、`biz_space=1`、`biz_system_group=1`、
+  `building=1`、`sys_menu=26`、`sys_role=4`、`sys_role_menu=50`、
+  `sys_user=1`、`sys_user_role=1`；
+- 空表：`biz_data_quality_fill_task`、`biz_data_quality_recalc_job`、
+  `biz_point_typical_value_config`、`gen_column`、`gen_table`、
+  `sys_building_access_request`、`sys_user_building`；
+- 建筑、设备、测点和用户四组代表性中文 UTF-8 十六进制证据均匹配。
+
+### 12.2 MySQL 备份、预恢复与正式切换
+
+新基线逻辑备份保存在仓库外：
+
+```text
+D:\word\iot-platform-demo-runtime-backups\
+  2026-07-31-mysql-redis-stable-volumes\iot_platform.sql
+```
+
+备份大小为 45,407 bytes，SHA-256 为
+`B21629959F125F26FEE2AE8CF4BA0CF536C7602BE356ED64BFAFCE2F6A48712B`，
+未加入 Git。最终命名卷预恢复验证通过：21 张表、全部逐表计数以及四组
+中文 UTF-8 证据均与批准的新基线匹配。
+
+Task 3 子代理偏离计划，使用未持久化的随机 32 位密码初始化目标卷。正式
+Compose 切换后因此出现 MySQL `1045` 认证错误。修复时使用无网络连接且
+启用 `skip-grant-tables` 的临时容器，只把现存 `root@%` 和
+`root@localhost` 的密码校正为 Compose 配置值：
+
+- 没有新增或删除 root Host；
+- `caching_sha2_password` plugin 保持不变；
+- 账号权限保持不变；
+- 临时修复容器已删除。
+
+正式 MySQL 使用 `iot-platform-demo-mysql-data`，切换后和单独重启后的
+21 张表、逐表计数及中文证据均与批准的新基线一致。
+
+### 12.3 Redis 结果
+
+迁移时旧 Redis 实际有 25 个键，按用户批准范围全部丢弃。新 Redis 使用
+`iot-platform-demo-redis-data`，空卷启动后由 HVAC 链路生成 4 个带
+120 秒 TTL 的最新指标键；单独重启后这 4 个键从 AOF 成功恢复。后续键数
+自然变为 0 是 TTL 到期的预期结果，不代表命名卷或 AOF 丢失数据。
+
+### 12.4 保护边界
+
+MySQL 正式切换完成后的容器 ID 为
+`5747acbcbf7d7c4661da53dbd4616036f53e9d371de70af752d2f8307f5b32fd`；
+Redis 迁移期间该 MySQL 容器、TDengine
+`32a1006186e313f593b9cf1c8b23564643170de1f253b79c8b02f7a19f766d28`
+和 EMQX
+`1754ed6e3763aafea6f8678cdfaaf41a839ba8966a11817e167cbd2e8381297c`
+均作为保护对象，容器 ID 未变化。TDengine 数据和 EMQX 均未被重置或迁移。

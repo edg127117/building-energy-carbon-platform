@@ -1250,3 +1250,83 @@ PR 说明必须包含：
 - 不包含 Java 生产代码、数据库结构、TDengine 数据和用户主目录改动；
 - 当前无冲突、无无关文件；
 - 状态为等待用户创建并合并 PR。
+
+---
+
+## 执行偏差与完成记录
+
+本节记录 2026-07-31 的实际执行情况。上面的任务步骤保留为计划原文；若与
+本节冲突，以本节记录的用户决策和真实结果为准。
+
+### 1. MySQL 旧库完整保留目标被用户决策覆盖
+
+- 在本迁移开始前，清理 `d9a9` worktree 已删除仍由 MySQL bind mount 使用
+  的数据文件。
+- Task 3 的 `COUNT(*)` 查询暴露了缺失的 InnoDB `.ibd` 文件；随后容器因
+  `restart: always` 于 15:54 自动重启，并在空 bind 目录重新初始化。
+- 重置前后均观测到 21 张表、约 1.06 MiB，但没有取得重置前的逐表准确
+  行数，故不能声称旧业务行完整保留。
+- 用户明确选择方案 1，批准以重初始化后的数据库为新基线。因此计划中的
+  “保留旧库全部数据”门槛被覆盖，实际一致性比较从批准的新基线开始。
+
+批准的新基线共有 21 张表。逐表计数完整记录在仓库外
+`source-table-counts.tsv` 和 `migration-notes.txt`；摘要为：
+
+- 非零：`biz_data_point=19`、`biz_equipment=4`、
+  `biz_equipment_type=6`、`biz_indicator=4`、`biz_point_alias=19`、
+  `biz_point_naming_rule=7`、`biz_space=1`、`biz_system_group=1`、
+  `building=1`、`sys_menu=26`、`sys_role=4`、`sys_role_menu=50`、
+  `sys_user=1`、`sys_user_role=1`；
+- 为零：`biz_data_quality_fill_task`、`biz_data_quality_recalc_job`、
+  `biz_point_typical_value_config`、`gen_column`、`gen_table`、
+  `sys_building_access_request`、`sys_user_building`；
+- 建筑、设备、测点、用户四组 UTF-8 十六进制证据均已记录。
+
+### 2. Task 3 备份与预恢复
+
+- 备份：
+  `D:\word\iot-platform-demo-runtime-backups\2026-07-31-mysql-redis-stable-volumes\iot_platform.sql`
+- 大小：45,407 bytes。
+- SHA-256：
+  `B21629959F125F26FEE2AE8CF4BA0CF536C7602BE356ED64BFAFCE2F6A48712B`。
+- 备份及迁移记录均位于仓库外，未提交。
+- `iot-platform-demo-mysql-data` 预恢复后，21 张表、每表准确行数和四组
+  UTF-8 证据均与批准的新基线匹配。
+
+### 3. Task 3 密码偏差与校正
+
+Task 3 子代理没有沿用计划中的 Compose 密码，而是用未持久化的随机 32 位
+密码初始化最终卷，导致正式 Compose 切换时返回 MySQL `1045`。实际修复
+采用无网络的 `skip-grant-tables` 临时容器，只校正现存
+`root@%`、`root@localhost` 的密码为 Compose 配置值。校正过程中：
+
+- Host 集合没有变化；
+- plugin 保持 `caching_sha2_password`；
+- 权限没有变化；
+- 临时容器已删除。
+
+校正后 TCP root 认证通过；正式 MySQL 单独重启前后的表清单、逐表计数和
+四组 UTF-8 证据一致。
+
+### 4. Redis 实际结果
+
+- 迁移时旧 Redis 实际键数为 25，不是设计阶段早先观测的 24；全部旧键按
+  用户批准范围丢弃。
+- 新卷 `iot-platform-demo-redis-data` 从空缓存启动，HVAC 模拟链路生成
+  4 个最新指标键。
+- Redis 单独重启后，4 个键从 AOF 恢复，API 仍返回 19 个测点和 4 个指标。
+- 这些键的 TTL 为 120 秒；验证完成后自然过期为 0 是预期缓存行为，不是
+  AOF 或命名卷迁移失败。
+
+### 5. 最终保护边界
+
+- MySQL 正式容器：
+  `5747acbcbf7d7c4661da53dbd4616036f53e9d371de70af752d2f8307f5b32fd`；
+- TDengine：
+  `32a1006186e313f593b9cf1c8b23564643170de1f253b79c8b02f7a19f766d28`；
+- EMQX：
+  `1754ed6e3763aafea6f8678cdfaaf41a839ba8966a11817e167cbd2e8381297c`。
+
+Redis 迁移期间上述三个保护容器 ID 均未变化；TDengine 与 EMQX 未被停止、
+删除、重建或迁移。最终书面结论只证明批准的新 MySQL 基线完成稳定卷迁移，
+不表示被删除的旧 MySQL 业务行已经恢复。
