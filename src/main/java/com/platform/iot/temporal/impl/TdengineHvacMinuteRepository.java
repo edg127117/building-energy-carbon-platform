@@ -102,21 +102,21 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
             return List.of();
         }
         String stable = stable();
-        // PARTITION BY 先按 point_id 分区，随后每个分区各取时间倒序第一条；
-        // 因此 LIMIT 1 表示“每个测点一条”，不是整批查询全局只返回一条。
+        // TDengine 3.2.3 的普通 LIMIT 会限制整批分区结果，并不是“每个分区一条”。
+        // 使用 LAST_ROW 按完整测点身份聚合，才能一次批量返回每个测点的最新分钟值。
         String sql = """
                 SELECT point_id,
-                       ts AS bucket_time,
-                       avg_val AS average_value,
-                       min_val AS minimum_value,
-                       max_val AS maximum_value,
-                       sample_count,
-                       data_quality
+                       LAST_ROW(ts) AS bucket_time,
+                       LAST_ROW(avg_val) AS average_value,
+                       LAST_ROW(min_val) AS minimum_value,
+                       LAST_ROW(max_val) AS maximum_value,
+                       LAST_ROW(sample_count) AS sample_count,
+                       LAST_ROW(data_quality) AS data_quality
                 FROM %s
                 WHERE point_id IN (%s)
-                PARTITION BY point_id
-                ORDER BY ts DESC
-                LIMIT 1
+                PARTITION BY point_id, point_code, building_id, system_group_id,
+                             equip_id, equip_code, family_code, component_code,
+                             suffix_code, is_for_calc
                 """.formatted(stable, pointIdIn(pointIds));
         return template.query(sql, this::mapQueryRow);
     }
