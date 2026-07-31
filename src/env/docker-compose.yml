@@ -51,14 +51,19 @@ services:
   tdengine:
     image: tdengine/tdengine:3.2.3.0
     container_name: iot-tdengine
+    # TDengine 会把 FQDN 写入 dnode 元数据；容器重建后 hostname 变化会拒绝启动。
+    hostname: iot-tdengine
     restart: always
     ports:
       - "6030-6049:6030-6049"
       - "6041:6041"       # REST API 端口 (Java JDBC 使用此端口通信)
     environment:
       TZ: Asia/Shanghai
+      TAOS_FQDN: iot-tdengine
+      TAOS_FIRST_EP: iot-tdengine:6030
     volumes:
-      - ./taos-data:/var/lib/taos        # 时序数据持久化
+      # 固定名称 Volume 不依赖短期 Git worktree，删除 worktree 不会删除时序数据。
+      - tdengine-data:/var/lib/taos
     healthcheck:
       test: ["CMD-SHELL", "taos -s 'SHOW DATABASES;' >/dev/null 2>&1"]
       interval: 5s
@@ -82,3 +87,8 @@ services:
       timeout: 5s
       retries: 30
       start_period: 5s
+
+volumes:
+  tdengine-data:
+    # 显式名称保证从不同目录执行 Compose 时仍使用同一个 TDengine 数据卷。
+    name: iot-platform-demo-tdengine-data

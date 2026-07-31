@@ -34,6 +34,19 @@ class DockerComposeConfigurationTest {
         assertThat(countOccurrences(compose, "healthcheck:")).isEqualTo(4);
     }
 
+    @Test
+    void tdengineUsesStableIdentityAndProjectIndependentVolume() {
+        assertThat(compose)
+                .contains(
+                        "hostname: iot-tdengine",
+                        "TAOS_FQDN: iot-tdengine",
+                        "TAOS_FIRST_EP: iot-tdengine:6030",
+                        "- tdengine-data:/var/lib/taos",
+                        "name: iot-platform-demo-tdengine-data")
+                .doesNotContain("- ./taos-data:/var/lib/taos");
+        assertThat(countOccurrences(compose, "tdengine-data:")).isEqualTo(2);
+    }
+
     private int countOccurrences(String text, String needle) {
         return (text.length() - text.replace(needle, "").length())
                 / needle.length();
