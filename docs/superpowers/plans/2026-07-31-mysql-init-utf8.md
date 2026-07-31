@@ -349,12 +349,16 @@ Run:
 docker exec iot-mysql mysql --default-character-set=utf8mb4 `
   -uroot -pchange-me -D iot_platform -N -e "
 SELECT COUNT(*) FROM building
-WHERE building_name LIKE '%è%' OR building_name LIKE '%å%';
+WHERE building_name LIKE _utf8mb4'%è%' COLLATE utf8mb4_bin
+   OR building_name LIKE _utf8mb4'%å%' COLLATE utf8mb4_bin;
 SELECT COUNT(*) FROM biz_data_point
-WHERE point_name LIKE '%è%' OR point_name LIKE '%å%';"
+WHERE point_name LIKE _utf8mb4'%è%' COLLATE utf8mb4_bin
+   OR point_name LIKE _utf8mb4'%å%' COLLATE utf8mb4_bin;"
 ```
 
-Expected: both counts are `0`.
+Expected: both counts are `0`. Binary collation is required here because
+`utf8mb4_unicode_ci` can treat some Latin characters as equivalent and produce
+false-positive substring matches.
 
 ---
 
