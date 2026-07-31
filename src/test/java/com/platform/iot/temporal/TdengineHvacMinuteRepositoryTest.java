@@ -368,9 +368,17 @@ class TdengineHvacMinuteRepositoryTest {
         verify(template).query(sql.capture(), any(RowMapper.class));
         assertThat(sql.getValue())
                 .contains("point_id IN ('POINT001','POINT002')")
-                .contains("PARTITION BY point_id")
-                .contains("ORDER BY ts DESC")
-                .contains("LIMIT 1");
+                .contains("LAST_ROW(ts) AS bucket_time")
+                .contains("LAST_ROW(avg_val) AS average_value")
+                .contains("LAST_ROW(min_val) AS minimum_value")
+                .contains("LAST_ROW(max_val) AS maximum_value")
+                .contains("LAST_ROW(sample_count) AS sample_count")
+                .contains("LAST_ROW(data_quality) AS data_quality")
+                .contains("PARTITION BY point_id, point_code, building_id, system_group_id,")
+                .contains("equip_id, equip_code, family_code, component_code,")
+                .contains("suffix_code, is_for_calc")
+                .doesNotContain("ORDER BY ts DESC")
+                .doesNotContain("LIMIT 1");
     }
 
     @Test
