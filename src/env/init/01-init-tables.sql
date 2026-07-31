@@ -1,3 +1,7 @@
+-- Docker entrypoint 的 MySQL 客户端可能默认使用 latin1。
+-- 必须在首个中文 DDL/DML 前明确客户端字符集，否则种子中文会被双重编码成乱码。
+SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
+
 -- 切换到自动创建的数据库
 USE `iot_platform`;
 
