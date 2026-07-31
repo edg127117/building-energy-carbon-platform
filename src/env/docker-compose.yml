@@ -11,7 +11,8 @@ services:
       MYSQL_DATABASE: iot_platform       # 启动时自动创建此数据库
       TZ: Asia/Shanghai
     volumes:
-      - ./mysql-data:/var/lib/mysql      # 数据持久化，重启不丢数据
+      # 固定名称 Volume 不依赖 Git worktree；删除分支目录不会删除 MySQL 业务数据。
+      - mysql-data:/var/lib/mysql
       # 仅自动执行全新 MySQL 所需脚本。已有数据卷不会重跑 init 目录。
       # 04/06/07/09 属于 TDengine，05/08/10 属于旧库手工迁移；
       # 这些脚本都不能挂入 MySQL 首次启动目录。
@@ -80,7 +81,8 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
-      - ./redis-data:/data
+      # Redis 缓存允许重建，但固定名称 Volume 可避免普通容器重建产生无意义的缓存空窗。
+      - redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -89,6 +91,12 @@ services:
       start_period: 5s
 
 volumes:
+  mysql-data:
+    # 显式名称保证从不同目录执行 Compose 时仍使用同一个 MySQL 数据卷。
+    name: iot-platform-demo-mysql-data
+  redis-data:
+    # 显式名称保证 Redis 缓存卷不随短期 worktree 或 Compose 项目名称变化。
+    name: iot-platform-demo-redis-data
   tdengine-data:
     # 显式名称保证从不同目录执行 Compose 时仍使用同一个 TDengine 数据卷。
     name: iot-platform-demo-tdengine-data
