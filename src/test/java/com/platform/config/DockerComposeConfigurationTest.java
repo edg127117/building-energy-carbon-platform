@@ -47,6 +47,21 @@ class DockerComposeConfigurationTest {
         assertThat(countOccurrences(compose, "tdengine-data:")).isEqualTo(2);
     }
 
+    @Test
+    void mysqlAndRedisUseProjectIndependentVolumes() {
+        assertThat(compose)
+                .contains(
+                        "- mysql-data:/var/lib/mysql",
+                        "name: iot-platform-demo-mysql-data",
+                        "- redis-data:/data",
+                        "name: iot-platform-demo-redis-data")
+                .doesNotContain(
+                        "- ./mysql-data:/var/lib/mysql",
+                        "- ./redis-data:/data");
+        assertThat(countOccurrences(compose, "mysql-data:")).isEqualTo(2);
+        assertThat(countOccurrences(compose, "redis-data:")).isEqualTo(2);
+    }
+
     private int countOccurrences(String text, String needle) {
         return (text.length() - text.replace(needle, "").length())
                 / needle.length();
