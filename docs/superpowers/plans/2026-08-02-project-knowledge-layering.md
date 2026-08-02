@@ -206,7 +206,7 @@ Run:
 ```powershell
 rg -n "^## " PROJECT_STATUS.md
 rg -n "WebSocket|公式计算详情|文档健康|现场" PROJECT_STATUS.md
-rg -n -i "localhost|127\.0\.0\.1|password\s*[:=]|secret\s*[:=]|123456" PROJECT_STATUS.md
+rg -n -i "localhost|127\.0\.0\.1|password\s*[:=]|secret\s*[:=]|[1]23456" PROJECT_STATUS.md
 ```
 
 Expected: 显示九个章节和四类未完成事项；敏感或本机运行信息扫描无输出。
@@ -286,7 +286,7 @@ Run:
 
 ```powershell
 rg -n "^## " PROJECT_GUIDE.md PROJECT_STATUS.md AGENTS.md
-rg -n -i "password\s*[:=]|passwd\s*[:=]|secret\s*[:=]|api[_-]?key\s*[:=]|123456" PROJECT_GUIDE.md PROJECT_STATUS.md docs/superpowers/specs/2026-08-02-project-knowledge-layering-design.md docs/superpowers/plans/2026-08-02-project-knowledge-layering.md
+rg -n -i "password\s*[:=]|passwd\s*[:=]|secret\s*[:=]|api[_-]?key\s*[:=]|[1]23456" PROJECT_GUIDE.md PROJECT_STATUS.md docs/superpowers/specs/2026-08-02-project-knowledge-layering-design.md docs/superpowers/plans/2026-08-02-project-knowledge-layering.md
 git diff main...HEAD --check
 git status --short --branch
 ```
