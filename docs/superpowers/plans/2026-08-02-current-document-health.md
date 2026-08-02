@@ -1,5 +1,12 @@
 # 当前文档健康与历史任务文档治理实施计划
 
+> **文档状态：历史任务实施计划**
+>
+> 本文保留任务当时计划的步骤、命令和验收方式，部分内容可能已被后续提交替代。
+> 文中的复选框表示原计划步骤，不代表当前完成状态；执行任何命令前必须重新核验。
+> 判断当前状态前，请先查看 [历史文档目录](../README.md)、
+> [项目指南](../../../PROJECT_GUIDE.md) 和 [项目状态](../../../PROJECT_STATUS.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 为全部历史任务文档建立可追踪的状态目录和文件级警告，并依据当前代码证据修正六份面向当前读者的文档。

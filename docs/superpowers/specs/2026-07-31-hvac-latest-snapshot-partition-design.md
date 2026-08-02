@@ -1,5 +1,11 @@
 # HVAC 最新测点快照 TDengine 分区查询修复设计
 
+> **文档状态：历史任务设计记录**
+>
+> 本文保留任务当时确认的设计、假设和取舍，部分内容可能已被后续提交替代。
+> 判断当前状态前，请先查看 [历史文档目录](../README.md)、
+> [项目指南](../../../PROJECT_GUIDE.md) 和 [项目状态](../../../PROJECT_STATUS.md)。
+
 ## 1. 问题
 
 `TdengineHvacMinuteRepository.findLatestByPointIds()` 当前使用：
