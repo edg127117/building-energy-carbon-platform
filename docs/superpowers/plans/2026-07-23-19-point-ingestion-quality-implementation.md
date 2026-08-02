@@ -1,5 +1,14 @@
 # 19 Point Ingestion and Data Quality Implementation Plan
 
+> **文档状态：历史任务实施计划**
+>
+> 本文保留任务当时计划的步骤、命令和验收方式，部分内容可能已被后续提交替代。
+> 文中的复选框表示原计划步骤，不代表当前完成状态；执行任何命令前必须重新核验。
+> 判断当前状态前，请先查看 [历史文档目录](../README.md)、
+> [项目指南](../../../PROJECT_GUIDE.md) 和 [项目状态](../../../PROJECT_STATUS.md)。
+>
+> **已知替代：** 本文中“保留现有电表链”的前提已由[旧电表 Demo 下线任务](../README.md#已确认的替代关系)替代。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a validated, auditable 19-point HVAC ingestion path that persists accepted source events in TDengine and produces frozen event-time minute aggregates without enabling simulated, interpolated, or defaulted data.

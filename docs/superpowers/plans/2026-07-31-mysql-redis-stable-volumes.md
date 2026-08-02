@@ -1,5 +1,12 @@
 # MySQL and Redis Stable Volumes Implementation Plan
 
+> **文档状态：历史任务实施计划**
+>
+> 本文保留任务当时计划的步骤、命令和验收方式，部分内容可能已被后续提交替代。
+> 文中的复选框表示原计划步骤，不代表当前完成状态；执行任何命令前必须重新核验。
+> 判断当前状态前，请先查看 [历史文档目录](../README.md)、
+> [项目指南](../../../PROJECT_GUIDE.md) 和 [项目状态](../../../PROJECT_STATUS.md)。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将本地 MySQL 和 Redis 从短期 Git worktree 绑定目录迁移到固定 Docker 命名卷，同时完整保留 MySQL 数据并重新生成 Redis 缓存。

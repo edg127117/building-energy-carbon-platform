@@ -120,23 +120,28 @@
 
 ### 7.1 当前项目入口
 
-- [`AGENTS.md`](AGENTS.md)：固定工作规则。
-- [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md)：稳定架构、边界、链路和文档导航。
-- [`PROJECT_STATUS.md`](PROJECT_STATUS.md)：当前 Git 版本状态、风险、技术债和下一步。
+| 入口 | 状态 | 用途 | 判断当前事实时的来源 |
+|---|---|---|---|
+| 当前代码与自动化测试 | 当前证据 | 判断当前实现、接口和行为 | 当前 Git 版本中的实现、配置和测试结果 |
+| [`AGENTS.md`](AGENTS.md) | 当前有效 | 固定 Git 流程、架构边界和注释规则 | 文件正文；只有规则变更时更新 |
+| [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | 当前有效 | 稳定架构、模块职责、数据链路和文档导航 | 代码结构与长期设计边界 |
+| [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | 动态更新 | 已完成、未完成、风险、技术债和下一步 | 本文件所在 Git 版本的代码、测试和已合并决策 |
 
 ### 7.2 当前专题说明
 
-- [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md)：V1 业务与技术设计基线。
-- [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md)：19 测点 MQTT 硬件契约。
-- [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md)：未来控制能力的安全边界，控制不属于当前 V1。
-- [`docs/development/java21.md`](docs/development/java21.md)：Java 21 开发环境。
+| 文档 | 状态 | 用途 | 不用于判断 |
+|---|---|---|---|
+| [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) | V1 设计基线 | 冻结范围、测点、公式和安全边界 | 当前完成进度和仍待实施事项 |
+| [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前硬件契约 | 19 测点上行载荷、确认语义和接口边界 | 现场设备已经完成验收 |
+| [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来安全约束 | 未来控制能力必须满足的安全和审计边界 | 当前已经存在控制功能 |
+| [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | Java 21、Maven Wrapper 和 CI 验证 | 某台电脑已经正确配置环境 |
 
 ### 7.3 历史任务记录
 
-- `docs/superpowers/specs` 保存任务当时确认的设计和取舍。
-- `docs/superpowers/plans` 保存任务当时的实施步骤和验证方案。
+- [`docs/superpowers/README.md`](docs/superpowers/README.md) 是历史任务中央目录，记录 spec/plan 配对、命名差异和已知替代关系。
+- `docs/superpowers/specs` 保存任务当时确认的设计和取舍；`docs/superpowers/plans` 保存任务当时的实施步骤和验证方案。
 - 设计与计划成对存在不属于重复：设计回答“为什么和做什么”，计划回答“如何实施和验证”。
-- 早期文档允许包含当时仍存在、后来已经删除或替代的能力。它们用于审计演进过程，不是当前完成状态来源。
+- 每份历史文件顶部都有状态警告；早期正文允许包含当时存在、后来已经删除或替代的能力。
 - 需要判断当前行为时，先查代码、测试和 `PROJECT_STATUS.md`；需要理解演进原因时，再查相关历史任务文档和 Git 历史。
 
 ## 8. 维护规则

@@ -1,5 +1,9 @@
 # HVAC 19 测点 MQTT 硬件数据对接说明
 
+> **文档状态：当前静态硬件契约**
+>
+> 本文已对照当前 MQTT 配置、接入代码、测试数据和 WebSocket 端点核验；它不代表真实硬件、网络和长时间运行已经完成现场验收。
+
 ## 1. 适用范围
 
 本文档描述中央空调 V1 的 MQTT 上行契约。当前运行系统只接收 HVAC 19 测点，
@@ -22,7 +26,7 @@ EMQX 上行主题
 |---|---|---|
 | Broker | `tcp://127.0.0.1:1883` | 由 `MQTT_BROKER_URL` 覆盖 |
 | Username | `admin` | 由 `MQTT_USER` 覆盖 |
-| Password | `change-me` | 由 `MQTT_PASSWORD` 覆盖，生产必须修改 |
+| Password | `change-me` | 仅为非生产示例占位值；必须由 `MQTT_PASSWORD` 覆盖，生产不得沿用 |
 | Topic | `device/data/up` | 服务端 `mqtt.topics.upstream` 配置 |
 | QoS | `1` | 至少一次投递，服务端手动确认 |
 | Retain | `false` | 避免历史测点值在重连时被当成新事件 |

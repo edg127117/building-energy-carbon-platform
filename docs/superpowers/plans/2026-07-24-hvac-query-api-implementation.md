@@ -1,5 +1,12 @@
 # HVAC Query API Implementation Plan
 
+> **文档状态：历史任务实施计划**
+>
+> 本文保留任务当时计划的步骤、命令和验收方式，部分内容可能已被后续提交替代。
+> 文中的复选框表示原计划步骤，不代表当前完成状态；执行任何命令前必须重新核验。
+> 判断当前状态前，请先查看 [历史文档目录](../README.md)、
+> [项目指南](../../../PROJECT_GUIDE.md) 和 [项目状态](../../../PROJECT_STATUS.md)。
+
 > **For Codex:** REQUIRED SUB-SKILL: Use `executing-plans` to implement this plan task-by-task.
 
 **Goal:** 在现有 Spring Boot 单体项目中增加建筑 HVAC 最新快照和 1～8 测点历史趋势两个只读 API，查询 `st_raw_minute` 冻结分钟数据，支持最长 31 天与 1/5/30 分钟自动分辨率，不实现 COP/效率计算和前端页面。

@@ -1,5 +1,11 @@
 # 一键启动脚本 Compose 路径兼容设计
 
+> **文档状态：历史任务设计记录**
+>
+> 本文保留任务当时确认的设计、假设和取舍，部分内容可能已被后续提交替代。
+> 判断当前状态前，请先查看 [历史文档目录](../README.md)、
+> [项目指南](../../../PROJECT_GUIDE.md) 和 [项目状态](../../../PROJECT_STATUS.md)。
+
 ## 目标
 
 修复 `start-server.sh` 引用仓库根目录下不存在的 `docker-compose.yml`，使脚本能够使用实际位于 `src/env/docker-compose.yml` 的基础设施编排文件。
