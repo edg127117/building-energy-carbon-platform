@@ -59,8 +59,12 @@ public class HvacMinuteQualityCompletionService {
     }
 
     /**
-     * 同步处理冻结事件，READY 发布返回后 Task 7 才会追加历史 Q1 回溯，
-     * 从而确保当前分钟公式结果优先产生。
+     * 接收分钟冻结事件，先确定本分钟的正式输入，再触发公式和历史短缺口修正。
+     *
+     * <p>恢复事件会先从 TDengine 回读建筑完整分钟，普通冻结事件直接使用聚合结果；
+     * 对仍缺失的活动计算点才尝试写入 Q2。READY 采用同步事件发布，因此只有本分钟
+     * 公式处理返回后，才把其中的 Q0 交给 {@link InterpolationFillService} 回溯 Q1，
+     * 避免历史修正拖慢或抢先于当前分钟结果。</p>
      */
     @EventListener
     public void onMinuteFrozen(HvacMinuteBatchFrozenEvent event) {
@@ -124,6 +128,7 @@ public class HvacMinuteQualityCompletionService {
                 event.finalizedAt());
     }
 
+    /** 只选择事件建筑内在线、模拟量且参与计算的测点，作为本分钟完整性集合。 */
     private Map<String, PointRuntimeConfig> targetPoints(
             Set<String> buildingIds,
             Collection<PointRuntimeConfig> points) {

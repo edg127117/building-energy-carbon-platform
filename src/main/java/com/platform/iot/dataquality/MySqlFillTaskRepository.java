@@ -31,8 +31,9 @@ import java.util.UUID;
  * 使用 MyBatis Mapper 持久化补全任务的 MySQL 仓储。
  *
  * <p>任务与 TDengine 分钟行通过 taskId 关联，但这里不会注入 TDengine
- * JdbcTemplate。跨库一致性依靠确定性幂等键、原子状态更新和后续恢复收口完成，
- * 不伪装成数据库分布式事务。</p>
+ * JdbcTemplate。跨库一致性依靠确定性幂等键、原子状态更新以及
+ * {@link DataQualityRecoveryService}、{@link FillTaskReconciliationService} 的
+ * 现有恢复与收口流程完成，不伪装成数据库分布式事务。</p>
  */
 @Repository
 public class MySqlFillTaskRepository implements FillTaskRepository {
@@ -271,6 +272,11 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         }
     }
 
+    /**
+     * 将一次恢复的最终结果原子写回 FAILED 任务。
+     * 状态更新同时清空失败分钟证据并计入本任务被更高质量占用的分钟；条件更新失败
+     * 表示任务已被其他恢复或人工流程改变，调用方必须重新读取而不能覆盖新状态。
+     */
     @Override
     public void markRetryRecovered(
             String taskId,
@@ -293,6 +299,11 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         }
     }
 
+    /**
+     * 按旧 taskId 汇总 TDengine 实际升级结果，更新被替代任务计数。
+     * 这里不根据目标任务的计划分钟数推算，因为热路径中的 Q2 小时任务尚未收口，
+     * {@code minuteCount} 可能仍为零。
+     */
     @Override
     public void recordReplacements(
             Map<String, Integer> countsByOldTaskId) {
@@ -355,6 +366,11 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         mapper.markVoidedAtomic(taskId, operatorId, normalizedReason, at);
     }
 
+    /**
+     * 以重新计算后的精确计数将旧任务收口为 VOIDED。
+     * 与普通幂等作废不同，此入口用于跨库删除恢复：分钟总数必须严格等于失败、替换
+     * 与作废之和，任何并发状态变化都会使条件更新失败。
+     */
     @Override
     public void markVoidedExact(
             String taskId,
@@ -461,6 +477,11 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         return task;
     }
 
+    /**
+     * 保证 MySQL 可查询列与冻结证据描述的是同一种生成规则。
+     * Q2 绑定典型值配置 ID/版本，Q1 固定为插值质量；不一致的任务不能进入
+     * TDengine 写入或自动恢复链路。
+     */
     private void validateEvidenceMatchesTask(
             BizDataQualityFillTask task,
             FillTaskEvidence evidence) {

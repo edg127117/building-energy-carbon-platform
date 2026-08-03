@@ -120,6 +120,13 @@ public class LateRealMinuteCorrectionService {
         correct(event);
     }
 
+    /**
+     * 校验迟到事件仍在自动修正窗口内，并按当前 MySQL 测点档案锁定目标分钟。
+     *
+     * <p>事件中的建筑归属可能已过时，只作为诊断信息；正式 Q0 必须使用当前档案。
+     * 同一测点分钟通过共享锁串行处理，实时异步入口与低频证据重放因此具有相同的
+     * 幂等边界。</p>
+     */
     private void correct(HvacLateRealEventStoredEvent event) {
         Objects.requireNonNull(event, "event 不能为空");
         requireText(event.pointId(), "pointId");
@@ -232,7 +239,7 @@ public class LateRealMinuteCorrectionService {
                     List.of(aggregate), finalizedAt);
         } catch (RuntimeException exception) {
             // 当前 Q0 和公式 READY 已经成功，历史插值失败单独计量，后续由
-            // Task 10 的迟到 Q0 派生扫描再次触发短缺口修复。
+            // DataQualityRecoveryService 的迟到 Q0 扫描再次触发短缺口修复。
             meterRegistry.counter(
                     "iot.hvac.late_real.interpolation_failed").increment();
             log.error("迟到 Q0 已完成公式修正，但历史质量1回溯失败: pointId={}, minute={}",
@@ -242,6 +249,10 @@ public class LateRealMinuteCorrectionService {
                 "iot.hvac.late_real.corrected").increment();
     }
 
+    /**
+     * 回读建筑完整分钟并发布迟到修正 READY，供公式只重算受该测点影响的指标。
+     * 目标 Q0 若尚不可见则抛错，由外层短重试处理，不能发布缺少新事实的事件。
+     */
     private void publishReady(
             PointRuntimeConfig point,
             HvacLateRealEventStoredEvent event,
@@ -290,7 +301,7 @@ public class LateRealMinuteCorrectionService {
     }
 
     /**
-     * 异步通知可能乱序执行；正式分钟的修正时间必须单调递增，Task 10 才能用它
+     * 异步通知可能乱序执行；正式分钟的修正时间必须单调递增，后台恢复才能用它
      * 与指标 calculatedAt 比较并识别下游是否过期。
      */
     private long nextFinalizedAt(

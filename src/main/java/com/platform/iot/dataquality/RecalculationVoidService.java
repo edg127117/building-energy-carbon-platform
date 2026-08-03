@@ -156,6 +156,11 @@ public class RecalculationVoidService {
         return new VoidResult(voidedCount, replacedCount);
     }
 
+    /**
+     * 首次执行时冻结仍由旧 taskId 持有的分钟，重启后只读取该冻结清单。
+     * 冻结记录必须先于任何 TDengine 删除提交，否则进程中断后无法区分“原本不存在”
+     * 与“已经被本批删除”，也就不能精确恢复作废和替换计数。
+     */
     private List<Long> resolveFrozenTargets(
             BizDataQualityRecalcJob job,
             BizDataQualityFillTask oldTask,
@@ -238,6 +243,11 @@ public class RecalculationVoidService {
         return new IllegalStateException(TD_FAILURE_SUMMARY);
     }
 
+    /**
+     * 确认作废批次、旧任务、建筑和时间范围完全一致。
+     * 该入口一次最多处理 60 个分钟，并要求范围为左闭右开且分钟对齐，避免扩大
+     * TDengine 条件删除边界或将其他任务的正式分钟纳入作废统计。
+     */
     private VoidContext validate(
             BizDataQualityRecalcJob job,
             BizDataQualityFillTask oldTask,

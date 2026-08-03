@@ -147,6 +147,13 @@ public class DataQualityRecalculationService {
         }
     }
 
+    /**
+     * 从持久化游标开始执行至多一小时的 Q0 聚合、Q1/Q2 选择和公式重算。
+     *
+     * <p>TDengine 上下文会向两侧扩展一个最大插值窗口，但只写当前块及未来右端
+     * Q0；随后按同一正式快照选择 Q1、Q2，并为目标区间每一分钟发布 READY。
+     * 只有统计完整、事件全部返回后才原子推进 MySQL 游标，失败可从原块重放。</p>
+     */
     private void processChunk(
             BizDataQualityRecalcJob job,
             String expectedJobId,
@@ -218,6 +225,11 @@ public class DataQualityRecalculationService {
                 toLocal(now));
     }
 
+    /**
+     * 校验已领取批次的阶段、分钟边界和当前测点资格，并形成不可变执行上下文。
+     * 受理后若测点被停用、迁移建筑或取消计算资格，整块失败等待管理员处理，不能
+     * 静默缩小范围而使审计计数失真。
+     */
     private ValidatedJob validateJob(
             BizDataQualityRecalcJob job,
             String expectedJobId,
@@ -277,6 +289,10 @@ public class DataQualityRecalculationService {
         }
     }
 
+    /**
+     * 将受理时的有序测点 ID 映射到当前运行档案，并逐个复核建筑和计算资格。
+     * 返回顺序与请求一致，保证后续统计、事件和审计结果可重复。
+     */
     private Map<String, PointRuntimeConfig> loadEligiblePoints(
             String buildingId,
             List<String> requestedPointIds) {
@@ -349,6 +365,11 @@ public class DataQualityRecalculationService {
         }
     }
 
+    /**
+     * 为目标区间逐分钟发布人工重算 READY，包括没有任何输入行的分钟。
+     * 空事件用于让公式把旧成功结果改写为缺失；若只发布有数据分钟，历史结果会
+     * 在源数据被作废后错误保留。
+     */
     private void publishTargetMinutes(
             ValidatedJob context,
             long targetFrom,

@@ -136,6 +136,10 @@ public class InterpolationFillService {
         return grouped;
     }
 
+    /**
+     * 对同一分钟的全部右端点执行一次 TDengine 范围查询，再按测点独立处理缺口。
+     * 共享查询避免冻结批次按测点放大读取，单点失败则不会中断同批其他测点。
+     */
     private void fillRightMinute(
             long rightMinute,
             LinkedHashMap<String, RawMinuteAggregate> rightByPoint,
@@ -180,6 +184,13 @@ public class InterpolationFillService {
         }
     }
 
+    /**
+     * 为单个测点识别一段由两个 Q0 包围的连续缺口，并以一个任务写入整段 Q1。
+     *
+     * <p>候选分钟只能为空或为 Q2；Q0、既有 Q1 以及超量程插值均保持不变。MySQL
+     * 任务先冻结左右端点证据，TDengine 再按质量优先级写入；只有实际新增或升级的
+     * 分钟发布 READY，保证公式修正与最终正式事实一致。</p>
+     */
     private void fillOneGap(
             PointRuntimeConfig point,
             RawMinuteAggregate right,
@@ -424,7 +435,8 @@ public class InterpolationFillService {
         try {
             fillTaskRepository.markFirstApplied(taskId);
         } catch (RuntimeException exception) {
-            // 后续 reconcile 或 Task 10 跨库补偿仍可恢复 MySQL 状态。
+            // 后续即时 reconcile 或 FillTaskReconciliationService 的跨库收口
+            // 仍可根据 TDengine 中的 quality_task_id 恢复 MySQL 状态。
             log.error("质量1分钟已写入，但任务首次应用状态推进失败: taskId={}",
                     taskId, exception);
         }
