@@ -144,7 +144,18 @@
 - 每份历史文件顶部都有状态警告；早期正文允许包含当时存在、后来已经删除或替代的能力。
 - 需要判断当前行为时，先查代码、测试和 `PROJECT_STATUS.md`；需要理解演进原因时，再查相关历史任务文档和 Git 历史。
 
-## 8. 维护规则
+## 8. 仓库工程防护
+
+仓库通过本地 Git Hook、任务预检、PR 模板和 GitHub Actions 防止开发流程与注释质量回退：
+
+- 安装、预检、注释报告生成、PR 检查和合并后清理的命令查看 [`repository-guardrails.md`](docs/development/repository-guardrails.md)；
+- 后端 CI 入口是 [`.github/workflows/backend-ci.yml`](.github/workflows/backend-ci.yml)；
+- 前端 CI 入口是 [`.github/workflows/frontend-ci.yml`](.github/workflows/frontend-ci.yml)；
+- PR 范围和注释证据检查入口是 [`.github/workflows/repository-guardrails.yml`](.github/workflows/repository-guardrails.yml)。
+
+本地与 CI 检查不能代替业务语义复核。GitHub `main` 分支保护属于仓库外部设置，必须在 GitHub 页面单独启用并现场验证。
+
+## 9. 维护规则
 
 - 项目定位、模块职责、数据源边界、核心链路、长期运行入口或文档入口变化时，更新本文件。
 - 项目阶段、完成项、阻塞、技术债或下一步变化时，只更新 `PROJECT_STATUS.md`。

@@ -1,0 +1,25 @@
+#!/bin/sh
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+if [ "$branch" = "main" ]; then
+  echo "GIT_GUARDRAIL_BLOCKED: commits on main are forbidden" >&2
+  exit 1
+fi
+
+if command -v pwsh >/dev/null 2>&1; then
+  shell=pwsh
+elif command -v powershell.exe >/dev/null 2>&1; then
+  shell=powershell.exe
+else
+  echo "GIT_GUARDRAIL_BLOCKED: PowerShell is required" >&2
+  exit 1
+fi
+
+repository_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$repository_root" ]; then
+  echo "GIT_GUARDRAIL_BLOCKED: unable to resolve repository root" >&2
+  exit 1
+fi
+
+cd "$repository_root" || exit 1
+"$shell" -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RepositoryGuardrails.ps1 -Mode Staged

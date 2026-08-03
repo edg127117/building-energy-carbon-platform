@@ -47,6 +47,7 @@
 | TDengine 稳定 hostname 与数据卷 | [设计](specs/2026-07-31-tdengine-stable-hostname-design.md) | [计划](plans/2026-07-31-tdengine-stable-hostname-plan.md) | 成对历史记录 | 当前 hostname 和卷名以 Compose 与本机环境为准。 |
 | 项目信息分层与维护机制 | [设计](specs/2026-08-02-project-knowledge-layering-design.md) | [计划](plans/2026-08-02-project-knowledge-layering.md) | 成对历史记录 | 形成 `PROJECT_GUIDE.md` 和 `PROJECT_STATUS.md`；当前治理规则以这些入口为准。 |
 | 当前文档健康治理 | [设计](specs/2026-08-02-current-document-health-design.md) | [计划](plans/2026-08-02-current-document-health.md) | 成对历史记录 | 说明本目录、历史文件警告和六份当前文档核验的治理依据。 |
+| 仓库开发流程与注释质量防回退 | [设计](specs/2026-08-03-repository-workflow-quality-guardrails-design.md) | [计划](plans/2026-08-03-repository-workflow-quality-guardrails.md) | 成对历史记录 | 当前入口以 `AGENTS.md` 和 `docs/development/repository-guardrails.md` 为准；GitHub 分支保护仍需仓库页面现场验证。 |
 
 ## 已确认的替代关系
 

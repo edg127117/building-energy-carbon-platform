@@ -1,0 +1,40 @@
+name: Repository Guardrails
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - edited
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-guardrails-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  guardrails:
+    name: Repository guardrails
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Validate repository and PR contract
+        shell: pwsh
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: >-
+          ./scripts/Test-RepositoryGuardrails.ps1
+          -Mode PullRequest
+          -BaseRef '${{ github.event.pull_request.base.sha }}'
+          -HeadRef '${{ github.event.pull_request.head.sha }}'
