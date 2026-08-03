@@ -27,8 +27,9 @@ import java.util.List;
 /**
  * 面向公开认证接口的注册与登录服务。
  *
- * <p>注册账号固定获得最低权限 {@code BUILDING_OWNER}，但不会自动获得任何建筑。
- * 登录时只把四类正式角色写入 JWT；历史普通角色账号必须由平台管理员重新分配正式角色。</p>
+ * <p>上游是公开认证 Controller，下游写入 MySQL 用户/角色关系并调用 JWT、Redis 登录态服务。
+ * 注册账号固定获得 {@code BUILDING_OWNER}，但不会自动获得任何建筑。登录只把四类正式角色
+ * 写入 JWT；建筑范围保持在 MySQL/Redis 范围服务中，避免每次授权变化都要求重新签发 Token。</p>
  */
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
@@ -62,6 +63,12 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         this.buildingScopeService = buildingScopeService;
     }
 
+    /**
+     * 在一个 MySQL 事务中创建账号并绑定默认角色。
+     *
+     * <p>用户名对逻辑删除记录仍保持唯一；成功后清理同 ID 菜单和建筑范围缓存，防止数据库
+     * 恢复或主键复用时继承旧权限。注册不接受客户端角色和建筑字段。</p>
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void register(RegisterRequest request) {
@@ -71,7 +78,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             throw new BusinessException(400, "用户名已存在");
         }
 
-        // 2) 保存用户基础信息（密码使用 BCrypt）
+        // 密码只以 BCrypt 哈希写入 MySQL，响应和日志均不回传密码字段。
         SysUser user = new SysUser();
         user.setUsername(request.getUsername());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
@@ -92,9 +99,16 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         buildingScopeService.evict(user.getId());
     }
 
+    /**
+     * 校验 MySQL 账号状态、密码和正式角色并签发登录结果。
+     *
+     * <p>初始化数据中的历史明文密码仅在本次校验成功后升级为 BCrypt。角色列表写入 JWT，
+     * Token 随后覆盖 Redis 白名单，从而使同账号上一枚 Token 失效。Redis 写入失败不阻断
+     * 登录，但会进入仅校验 JWT 的降级状态。</p>
+     */
     @Override
     public LoginResponse login(String username, String password) {
-        // 1) 查用户
+        // 默认查询会排除逻辑删除账号，避免向外区分“用户不存在”和“密码错误”。
         SysUser user = this.getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, username));
         if (user == null) {
             throw new BusinessException(401, "用户名或密码错误");
@@ -103,7 +117,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             throw new BusinessException(403, "账号已被禁用");
         }
 
-        // 2) 校验密码（兼容初始化脚本里“明文密码”的历史数据，首次登录成功后自动升级为 BCrypt）
+        // 兼容初始化脚本中的历史明文；只有匹配成功才原地升级，失败时不改数据库。
         boolean ok;
         String stored = user.getPassword();
         if (stored != null && (stored.startsWith("$2a$") || stored.startsWith("$2b$") || stored.startsWith("$2y$"))) {
@@ -137,7 +151,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         // 正式角色写入 JWT claims，供 @PreAuthorize 使用；建筑权限不写入 JWT，可动态生效。
         String token = jwtService.generateToken(user.getId(), user.getUsername(), roleKeys);
 
-        // 旁路写入 Redis 白名单（冻结书 D-010：Token 缓存，Redis 不可用时不影响登录）
+        // 写入单账号白名单；Redis 故障由缓存服务记录并按可用性优先策略降级。
         tokenCacheService.addToWhitelist(user.getId(), token);
 
         return LoginResponse.builder()

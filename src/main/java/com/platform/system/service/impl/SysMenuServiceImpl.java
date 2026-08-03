@@ -27,8 +27,9 @@ import java.util.Map;
 /**
  * 动态菜单服务实现。
  *
- * <p>用户菜单由“用户 → 正式角色 → 角色菜单”关系合并生成。直接授权到子菜单时会自动补齐
- * 所有父级目录，再按 {@code sortOrder/id} 构造成树。生成结果写入 Redis，菜单配置变化时统一失效。</p>
+ * <p>上游是菜单 Controller，下游是 MySQL 菜单/角色关系和 Redis 菜单缓存。用户菜单由
+ * “用户 → 正式角色 → 角色菜单”关系合并，直接授权到叶子时补齐父目录并按
+ * {@code sortOrder/id} 构树。菜单只决定前端导航内容，不能替代接口上的后端角色校验。</p>
  */
 @Slf4j
 @Service
@@ -39,6 +40,7 @@ public class SysMenuServiceImpl extends ServiceImpl<SysMenuMapper, SysMenu> impl
     private final MenuCacheService menuCacheService;
     private final ObjectMapper objectMapper;
 
+    /** 查询全部启用菜单并构造成平台管理员使用的完整树，不读取个人菜单缓存。 */
     @Override
     public Result<List<SysMenu>> buildTree() {
         List<SysMenu> menus = list(new LambdaQueryWrapper<SysMenu>()
@@ -46,11 +48,17 @@ public class SysMenuServiceImpl extends ServiceImpl<SysMenuMapper, SysMenu> impl
         return Result.success(buildTree(menus));
     }
 
+    /** 按角色读取 MySQL 授权菜单，补齐父目录后构树，供平台管理员检查角色配置。 */
     @Override
     public Result<List<SysMenu>> listByRole(String roleKey) {
         return Result.success(buildTree(withAncestors(roleMenuMapper.selectMenusByRoleKey(roleKey))));
     }
 
+    /**
+     * 返回当前用户的导航树。
+     * 缓存命中时直接反序列化；未命中、损坏或 Redis 故障时查询 MySQL 角色菜单关系，
+     * 构树后尽力写回缓存。空树是合法结果，例如没有内部菜单的第三方账号。
+     */
     @Override
     public Result<List<SysMenu>> currentMenu(Long userId) {
         // 优先读取用户菜单缓存；缓存不存在或反序列化失败时回源角色菜单关系。

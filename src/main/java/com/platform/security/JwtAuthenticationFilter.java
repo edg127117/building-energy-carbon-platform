@@ -22,12 +22,15 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * JWT 鉴权过滤器
- * 作用：从请求头 {@code Authorization: Bearer <token>} 解析用户身份和正式角色，
- * 校验 Redis 当前登录态，并写入 Spring Security 上下文。
+ * 把 Bearer JWT 转换成 Spring Security 当前用户的请求过滤器。
  *
- * <p>过滤器只建立“是谁、拥有什么角色”的认证上下文。建筑范围等数据权限由业务服务继续校验。
- * Redis 不可用时按设计降级为 JWT 签名与有效期校验；Redis 明确拒绝时则按未登录处理。</p>
+ * <p>请求先在这里校验 JWT 签名、有效期和四类正式角色，再由
+ * {@link TokenCacheService} 检查 Redis 中的单账号登录态。通过后写入的
+ * {@link JwtUserPrincipal} 和 {@code ROLE_*} 权限会被控制器的 {@code @PreAuthorize}
+ * 使用；建筑范围不在 JWT 中，由业务服务按 MySQL 授权单独校验。</p>
+ *
+ * <p>Redis 明确返回白名单不匹配或黑名单命中时，Token 视为失效；只有 Redis
+ * 访问失败时才降级为仅信任已通过密码学校验的 JWT，避免缓存故障阻断全部请求。</p>
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -42,6 +45,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 为一次 HTTP 请求建立认证上下文。
+     *
+     * <p>无 Bearer 头时直接交给安全链决定该路由是否允许匿名访问。Token 无效时只清空
+     * 上下文并记录失败原因，仍继续过滤链：公开登录接口可以正常处理，受保护接口最终由
+     * {@link RestAuthenticationEntryPoint} 返回 401。</p>
+     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
         // 只认 Bearer Token，其它情况交给后续链路处理（最终由 SecurityConfig 决定是否放行）
@@ -55,7 +65,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = authHeader.substring(7);
 
         try {
-            // 解析并校验 Token（含签名与过期时间）
+            // parseToken 同时校验签名和过期时间，不能只解码 claims 后直接建立身份。
             Jws<Claims> jws = jwtService.parseToken(token);
             Claims claims = jws.getPayload();
             String username = claims.getSubject();
@@ -79,27 +89,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     .map(r -> new SimpleGrantedAuthority("ROLE_" + r))
                     .collect(Collectors.toList());
 
-            // principal 放入最小信息（userId/username），避免把敏感信息塞进上下文
+            // principal 只保留 userId/username，密码、手机号等账号资料不进入请求上下文。
             JwtUserPrincipal principal = new JwtUserPrincipal(userId, username);
             UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(principal, null, authorities);
             authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
             // 写入上下文后，@PreAuthorize 才能识别角色
             SecurityContextHolder.getContext().setAuthentication(authentication);
-            // 解析成功，必须放行
+            // 认证成功后仍需继续执行路由规则、方法权限和业务数据范围校验。
             filterChain.doFilter(request, response);
         } catch (Exception e) {
-            // Token 无效时清空认证；是否返回 401 由后续安全链根据当前路由是否需要登录统一决定。
-
-            // 1. 清空上下文，将其降级为“未登录的匿名用户”
+            // Token 无效时降级为匿名请求；是否返回 401 由当前路由的安全规则统一决定。
             SecurityContextHolder.clearContext();
-            // 2. 将真实的错误信息塞入 request，方便后续的 EntryPoint 获取真实死因
+            // 保留内部失败原因便于安全入口诊断，但响应仍使用统一脱敏文案。
             request.setAttribute("jwt_error", e.getMessage());
-
-            // 3. 绝对不要在这里 response.write 401！必须 doFilter 放行！
-            // 如果请求是 /auth/login (permitAll)，由于不需要身份，Spring Security 会让它通过。
-            // 例如访问受保护的 /api/hvac/buildings/{id}/snapshot 时，
-            // Spring Security 会把没有有效 JWT 的请求交给统一 401 入口。
+            // 不在过滤器直接写响应，否则携带过期 Token 的 /auth/login 也会被错误拦截。
             filterChain.doFilter(request, response);
         }
     }

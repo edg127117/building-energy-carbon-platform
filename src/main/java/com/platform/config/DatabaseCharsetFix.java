@@ -8,13 +8,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * 修复 MySQL 数据库级字符集为 utf8mb4
- * 原因：docker-compose 首次创建 iot_platform 库时可能使用了非 utf8mb4 的默认字符集，
- * 即使容器命令里加了 --character-set-server=utf8mb4，已存在的库不会自动变更。
- * 这个组件在应用启动时执行一次 ALTER DATABASE，确保后续写入的中文不变成乱码。
+ * 应用启动时修正既有 {@code iot_platform} MySQL 库的默认字符集。
  *
- * <p>配置 {@code database.charset-fix.enabled=false} 时，这个组件不会创建，
- * 因此也不会执行 ALTER DATABASE。自动化测试会关闭它，避免测试修改真实数据库。</p>
+ * <p>容器服务端改成 utf8mb4 不会自动改变已经创建的数据库，本组件因此通过明确限定为
+ * {@code mysqlJdbcTemplate} 的连接执行 {@code ALTER DATABASE}，只影响此后新建表/字段采用的
+ * 默认字符集，不转换已有列和历史数据。</p>
+ *
+ * <p>{@code database.charset-fix.enabled=false} 时组件完全不创建；自动化测试关闭该开关，避免
+ * 测试启动时连接或修改真实 MySQL。执行失败只记录告警，不阻断其他不依赖该修正的模块启动。</p>
  */
 @Component
 @Slf4j
@@ -34,6 +35,10 @@ public class DatabaseCharsetFix {
         this.jdbcTemplate = jdbcTemplate;
     }
 
+    /**
+     * 在 Bean 初始化后执行一次 MySQL 数据库级字符集声明。
+     * 权限不足或数据库不可用时保留启动流程并记录原因；该降级不代表已有乱码已经被修复。
+     */
     @PostConstruct
     public void fixDatabaseCharset() {
         try {

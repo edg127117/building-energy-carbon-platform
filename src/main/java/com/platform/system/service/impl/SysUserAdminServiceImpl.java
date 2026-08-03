@@ -31,8 +31,12 @@ import java.util.Set;
 /**
  * 平台管理端人员服务实现。
  *
- * <p>除基础 CRUD 外，本类还承担三项安全职责：只接受四类正式角色；保护当前管理员和
- * 系统最后一个有效平台管理员；在角色、密码、状态或删除变化后撤销旧 Token 和相关缓存。</p>
+ * <p>上游是 PLATFORM_ADMIN 人员管理接口，下游写入 MySQL 用户、角色和建筑关联表，并协调
+ * Token、菜单、建筑范围三类 Redis 状态。除资料维护外，本类还保护当前操作者和系统最后一个
+ * 有效平台管理员，避免后台失去管理入口。</p>
+ *
+ * <p>角色属于 JWT 快照，变更后必须撤销 Token；建筑范围不写入 JWT，只清范围缓存即可动态生效。
+ * 逻辑删除会同时清除角色和建筑关系，恢复账号不会恢复旧权限。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -47,6 +51,13 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
     private final MenuCacheService menuCacheService;
     private final BuildingScopeService buildingScopeService;
 
+    /**
+     * 分页返回人员及其正式角色、建筑范围。
+     *
+     * <p>普通列表使用 MyBatis-Plus 分页并自动排除逻辑删除记录；管理员明确要求包含删除记录时，
+     * 改用专用 Mapper 绕过 {@code @TableLogic}，再在内存中筛选和分页，避免把“查不到”误当作
+     * 已删除账号不存在。每页最多 100 条。</p>
+     */
     @Override
     public Page<UserAdminDtos.UserView> page(int page, int size, String keyword, Integer status, boolean includeDeleted) {
         int safeSize = Math.min(Math.max(size, 1), 100);
@@ -85,6 +96,11 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         return toView(user);
     }
 
+    /**
+     * 在一个事务中创建账号并整体写入角色、建筑关系。
+     * 未指定角色时使用 BUILDING_OWNER；建筑可以为空。所有关系写入前先验证正式角色和建筑存在，
+     * 任一步失败都会回滚账号，避免留下无法登录或部分授权的人员记录。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public UserAdminDtos.UserView create(UserAdminDtos.CreateRequest request) {
@@ -118,6 +134,11 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         return toView(user);
     }
 
+    /**
+     * 逻辑删除人员并撤销其全部授权和登录态。
+     * 禁止删除当前操作者或最后一个有效平台管理员；删除成功后清理角色、建筑关系以及三类缓存，
+     * 恢复时必须由管理员重新确认权限。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void delete(Long currentUserId, Long id) {
@@ -142,6 +163,10 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         return toView(requireAnyUser(id));
     }
 
+    /**
+     * 启用或禁用账号。禁用当前管理员和最后一个有效平台管理员会被拒绝；禁用其他账号后撤销
+     * 当前 Token，使已经签发的 JWT 不能继续访问受保护接口。
+     */
     @Override
     public void updateStatus(Long currentUserId, Long id, Integer status) {
         if (status == null || (status != 0 && status != 1)) throw new BusinessException(400, "状态只能是0或1");
@@ -153,6 +178,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         if (status == 0) tokenCacheService.revokeActiveToken(id);
     }
 
+    /** 重置 BCrypt 密码并撤销当前 Token，防止密码变更后旧登录态继续有效。 */
     @Override
     public void resetPassword(Long id, String password) {
         SysUser user = requireActiveUser(id);
@@ -161,6 +187,12 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         tokenCacheService.revokeActiveToken(id);
     }
 
+    /**
+     * 全量替换用户正式角色。
+     *
+     * <p>先规范化并验证四类角色，再保护当前管理员和最后管理员约束。角色写入 JWT claims，
+     * 因此事务完成后撤销旧 Token 并清理菜单缓存，用户重新登录后才能取得新权限。</p>
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void replaceRoles(Long currentUserId, Long id, List<String> roleKeys) {
@@ -180,6 +212,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         menuCacheService.evict(id);
     }
 
+    /** 全量替换 MySQL 用户建筑关系，并清理范围缓存使新范围在下一次请求立即生效。 */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void replaceBuildings(Long id, List<String> buildingIds) {
@@ -209,6 +242,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         }
     }
 
+    /** 去重并统一角色键大小写；空集合、旧角色和未知角色都在写库前按 400 拒绝。 */
     private Set<String> normalizeRoles(List<String> roleKeys) {
         if (roleKeys == null || roleKeys.isEmpty()) throw new BusinessException(400, "用户至少需要一个正式角色");
         Set<String> result = new LinkedHashSet<>();
@@ -220,6 +254,10 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         return result;
     }
 
+    /**
+     * 实现建筑关系的事务内全量替换：先验证所有建筑，再删除旧关系和写入新关系。
+     * 先校验可避免无效建筑导致用户原授权被提前清空。
+     */
     private void replaceBuildingsInternal(Long userId, List<String> buildingIds) {
         // 建筑采用全量替换语义：先验证所有目标建筑，再删除旧关系并写入新关系。
         Set<String> ids = buildingIds == null ? Set.of() : new LinkedHashSet<>(buildingIds);
@@ -264,6 +302,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         return value != null && value.toLowerCase().contains(normalizedKeyword);
     }
 
+    /** 删除、禁用或降级前保护最后一个有效 PLATFORM_ADMIN，保证系统始终保留管理入口。 */
     private void protectLastAdmin(SysUser user) {
         if (hasRole(user.getId(), FormalRole.PLATFORM_ADMIN.name()) && userMapper.countActivePlatformAdmins() <= 1) {
             throw new BusinessException(409, "系统必须保留至少一个有效平台管理员");

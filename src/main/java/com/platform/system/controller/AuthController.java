@@ -24,8 +24,11 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * 登录/注册相关接口
- * 约定：登录成功后前端保存 token，并在后续请求头携带 Authorization: Bearer <token>
+ * 浏览器和外部客户端进入账号认证链路的 HTTP 入口。
+ *
+ * <p>注册、登录由 {@link SysUserService} 校验 MySQL 账号和正式角色；登录结果携带 JWT，客户端
+ * 在后续请求中使用 {@code Authorization: Bearer <token>}。当前用户接口读取认证过滤器建立的
+ * {@link JwtUserPrincipal}，退出接口同时撤销 Redis 登录态和个人菜单缓存。</p>
  */
 @RestController
 @RequestMapping("/auth")
@@ -44,18 +47,14 @@ public class AuthController {
         this.menuCacheService = menuCacheService;
     }
 
-    /**
-     * 用户注册（默认授予 BUILDING_OWNER，不授予建筑）
-     */
+    /** 注册普通账号；服务层固定分配 BUILDING_OWNER，但不会授予任何建筑范围。 */
     @PostMapping("/register")
     public Result<String> register(@Valid @RequestBody RegisterRequest request) {
         sysUserService.register(request);
         return Result.success("注册成功");
     }
 
-    /**
-     * 用户登录（返回 JWT）
-     */
+    /** 校验账号密码和正式角色，返回已写入 Redis 单账号白名单的 JWT。 */
     @PostMapping("/login")
     public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
         LoginResponse response = sysUserService.login(request.getUsername(), request.getPassword());
@@ -63,7 +62,8 @@ public class AuthController {
     }
 
     /**
-     * 获取当前登录用户信息（用于前端判断“是谁 + 有什么角色”）
+     * 返回安全上下文中的用户 ID、用户名和角色快照，供前端恢复登录展示状态。
+     * 该响应不包含建筑范围，也不是后端授权依据。
      */
     @GetMapping("/me")
     public Result<LoginResponse.UserInfo> me(Authentication authentication) {

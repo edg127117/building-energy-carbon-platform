@@ -14,8 +14,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 已登录但无权限的统一处理器
- * 作用：当 Token 有效但角色不满足权限要求时，返回标准 JSON 结构。
+ * Spring Security 对“身份有效但权限不足”的请求返回 403 的处理器。
+ *
+ * <p>主要承接路由或方法角色校验拒绝，与未登录的 401 分开。建筑范围越权由业务服务抛出
+ * 403 {@code BusinessException}，虽然经过不同入口，二者对前端保持一致的错误字段。</p>
  */
 @Component
 public class RestAccessDeniedHandler implements AccessDeniedHandler {
@@ -26,9 +28,9 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         this.objectMapper = objectMapper;
     }
 
+    /** 写入统一 403 JSON，供前端展示无权限状态而不是误清登录 Token。 */
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response, AccessDeniedException accessDeniedException) throws IOException, ServletException {
-        // 统一 403 JSON 结构，便于前端做“无权限提示”
         Map<String, Object> body = new HashMap<>();
         body.put("code", 403);
         body.put("msg", "无权限访问");

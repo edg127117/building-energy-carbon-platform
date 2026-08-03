@@ -10,17 +10,14 @@ import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Token 缓存服务
- * 冻结书 D-010：Redis 用于 Token 缓存
+ * Redis 中单账号登录态和 Token 撤销记录的适配器。
  *
- * 本期用途：
- * - 白名单：登录成功后将 userId→token 写入 Redis，配合 JWT 过期时间设置 TTL
- * - 黑名单：登出/踢人时将 token 加入黑名单，Filter 检测到黑名单直接拒登（预留）
+ * <p>白名单以用户 ID 保存最后一次登录签发的 Token，因此新登录会使旧 Token 失效；黑名单
+ * 保存已登出或被管理员撤销的 Token。两类键的 TTL 都不超过 JWT 有效期，避免 Token 过期后
+ * 留下永久状态。认证过滤器通过三态结果区分“确实失效”和“Redis 故障”。</p>
  *
- * 设计要点：
- * - 白名单 TTL 与 JWT expire-seconds 对齐，自动过期无需手动清理
- * - 黑名单 TTL 设为 JWT 剩余有效期（token 过期后黑名单也过期，自动释放内存）
- * - 降级：Redis 不可用时不影响登录（白名单写失败只打日志，不影响 Token 生成）
+ * <p>Redis 访问失败只记录告警：登录仍可签发 JWT，请求鉴权退化为签名和有效期校验。
+ * 这意味着缓存故障期间无法保证立即踢下线，是可用性优先降级的明确代价。</p>
  */
 @Service
 public class TokenCacheService {
@@ -38,10 +35,7 @@ public class TokenCacheService {
 
     // ──────────── 白名单（登录时写入）────────────
 
-    /**
-     * 将 Token 加入白名单
-     * 登录成功后调用，TTL 与 JWT 过期时间对齐
-     */
+    /** 登录成功后覆盖用户白名单，使该账号只保留最后签发的一个有效 Token。 */
     public void addToWhitelist(Long userId, String token) {
         String key = CacheConstants.TOKEN_WHITELIST + userId;
         try {
@@ -52,9 +46,7 @@ public class TokenCacheService {
         }
     }
 
-    /**
-     * 从白名单获取 Token（校验当前请求 Token 是否与登录时的一致）
-     */
+    /** 读取用户白名单原值；返回 {@code null} 可能是未命中，也可能是 Redis 读取失败。 */
     public String getFromWhitelist(Long userId) {
         try {
             return redis.opsForValue().get(CacheConstants.TOKEN_WHITELIST + userId);
@@ -104,9 +96,7 @@ public class TokenCacheService {
         }
     }
 
-    /**
-     * 从白名单移除（登出时调用）
-     */
+    /** 删除当前用户白名单项；登出流程会先把原 Token 加入黑名单。 */
     public void removeFromWhitelist(Long userId) {
         try {
             redis.delete(CacheConstants.TOKEN_WHITELIST + userId);
@@ -118,10 +108,7 @@ public class TokenCacheService {
 
     // ──────────── 黑名单（登出/踢人时写入）────────────
 
-    /**
-     * 将 Token 加入黑名单（登出或强制踢人时调用）
-     * TTL = token 剩余有效期，过期后自动清除
-     */
+    /** 按 JWT 剩余秒数记录撤销 Token，供认证过滤器在自然过期前拒绝它。 */
     public void addToBlacklist(String token, long remainingSeconds) {
         try {
             redis.opsForValue().set(
@@ -136,9 +123,7 @@ public class TokenCacheService {
         }
     }
 
-    /**
-     * 判断 Token 是否在黑名单中
-     */
+    /** 查询黑名单；Redis 故障时返回 {@code false}，与系统的 JWT 降级策略一致。 */
     public boolean isBlacklisted(String token) {
         try {
             return Boolean.TRUE.equals(redis.hasKey(CacheConstants.TOKEN_BLACKLIST + token));
