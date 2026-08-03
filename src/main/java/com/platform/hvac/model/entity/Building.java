@@ -11,6 +11,13 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.Date;
 
+/**
+ * MySQL {@code building} 表中的建筑业务档案。
+ *
+ * <p>建筑是用户数据范围、设备与测点归属、HVAC 查询和数据质量任务的共同边界；
+ * Controller/Service 将该实体用于档案维护和权限过滤。它只描述结构化配置，
+ * 不包含 TDengine 分钟数据或实时指标值。</p>
+ */
 @Data
 @TableName("building")
 public class Building implements Serializable {

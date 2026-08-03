@@ -2,6 +2,12 @@ import axios, { AxiosHeaders } from 'axios'
 import { message } from 'ant-design-vue'
 import type { ApiResult } from '@/types/api'
 
+/**
+ * 全站 HTTP 客户端的认证与错误副作用边界。
+ *
+ * API 基地址来自 Vite 环境变量；请求统一读取 localStorage JWT，响应统一处理业务码、
+ * 网络错误和 401 清理。该客户端只负责前端会话体验，不能替代后端权限校验。
+ */
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8081/api'
 
 export const http = axios.create({
@@ -9,6 +15,7 @@ export const http = axios.create({
   timeout: 15000,
 })
 
+/** 为每次 API 请求注入浏览器中现存的 Bearer Token；无 Token 时保持匿名请求。 */
 http.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
@@ -20,6 +27,10 @@ http.interceptors.request.use((config) => {
   return config
 })
 
+/**
+ * 统一处理后端 Result 业务失败和 HTTP 网络失败。
+ * 任一 401 都清除 Token/用户视图并跳转登录页；其他失败显示消息并向调用方拒绝 Promise。
+ */
 http.interceptors.response.use(
   (resp) => {
     const data = resp.data as ApiResult<unknown>

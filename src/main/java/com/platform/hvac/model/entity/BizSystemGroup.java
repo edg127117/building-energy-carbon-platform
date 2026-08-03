@@ -11,6 +11,13 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.Date;
 
+/**
+ * MySQL 中建筑内机电系统的业务分组档案。
+ *
+ * <p>设备和测点通过 {@code systemGroupId} 归入同一 HVAC 系统，档案服务据此校验
+ * 跨表归属，指标配置也可引用该作用域。该实体保存设计参数和关系标识，
+ * 不代表系统实时运行状态。</p>
+ */
 @Data
 @TableName("biz_system_group")
 public class BizSystemGroup implements Serializable {

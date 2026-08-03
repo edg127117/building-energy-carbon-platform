@@ -15,6 +15,12 @@ import java.util.regex.Pattern;
 @Component
 public class EquipmentCodeAllocator {
 
+    /**
+     * 根据同建筑、同类型的全部历史编码分配下一个正整数编号。
+     *
+     * <p>调用方必须传入包含逻辑删除记录的编码集合；不符合“前缀 + 正整数”的历史值
+     * 会被忽略。若最大编号溢出则让算术异常向上抛出，不能静默复用旧编号。</p>
+     */
     public String next(String prefix, Collection<String> historicalCodes) {
         if (prefix == null || prefix.isBlank()) {
             throw new IllegalArgumentException("设备编码前缀不能为空");

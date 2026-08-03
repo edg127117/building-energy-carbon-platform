@@ -8,9 +8,10 @@ import java.io.Serial;
 import java.io.Serializable;
 
 /**
- * 物理设备类型字典。
+ * MySQL 中的物理设备类型字典。
  *
- * <p>assetCodePrefix 只用于生成现场资产编号，不等同于标准测点前缀。
+ * <p>设备服务读取启用类型的 {@code assetCodePrefix} 和设备分类，为新增设备生成
+ * 建筑内资产编号。{@code assetCodePrefix} 不等同于标准测点前缀；
  * 例如 WCT 类型生成 TOWER1，但它的标准测点仍可归属于 WCR1_CT_*。</p>
  */
 @Data

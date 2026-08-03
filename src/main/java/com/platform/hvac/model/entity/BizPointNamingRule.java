@@ -8,7 +8,13 @@ import lombok.Data;
 import java.io.Serial;
 import java.io.Serializable;
 
-/** 标准测点命名模板及其规范来源。 */
+/**
+ * MySQL 中的标准测点命名模板及规范来源。
+ *
+ * <p>测点档案服务把规则中的设备族、部件角色和编码模板交给命名校验器，防止
+ * 非标准编码进入配置快照并影响 MQTT 身份解析。该实体不保存外部协议别名，
+ * 也不负责执行正则校验。</p>
+ */
 @Data
 @TableName("biz_point_naming_rule")
 public class BizPointNamingRule implements Serializable {

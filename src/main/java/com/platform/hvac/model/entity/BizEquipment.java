@@ -11,6 +11,13 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 import java.util.Date;
 
+/**
+ * MySQL 中 HVAC 物理设备的台账实体。
+ *
+ * <p>设备服务维护建筑内唯一业务编码，并校验设备类型、系统分组和空间均属于同一
+ * 建筑；测点和指标通过内部 ID 关联设备。该实体保存额定参数和档案关系，
+ * 不保存设备实时值或控制状态。</p>
+ */
 @Data
 @TableName("biz_equipment")
 public class BizEquipment implements Serializable {

@@ -1,4 +1,9 @@
 <template>
+  <!--
+    认证入口通过 auth Store 串联 /auth/register、/auth/login 和 /auth/me。
+    注册账号只有 BUILDING_OWNER 角色且没有建筑范围；登录成功后按 redirect 参数或
+    /hvac-demo 进入应用。页面只负责交互，JWT 与角色的最终校验由后端完成。
+  -->
   <div class="relative min-h-screen bg-[#070B14] text-zinc-100">
     <div class="pointer-events-none absolute inset-0">
       <div class="absolute inset-0 bg-[radial-gradient(1200px_700px_at_20%_10%,rgba(47,125,255,0.24),transparent_60%),radial-gradient(900px_520px_at_85%_35%,rgba(29,214,164,0.12),transparent_65%),radial-gradient(800px_560px_at_55%_92%,rgba(255,77,109,0.10),transparent_70%)]" />
@@ -110,6 +115,10 @@ const form = reactive({
 const loading = ref(false)
 
 const apiBase = computed(() => import.meta.env.VITE_API_BASE ?? 'http://localhost:8081/api')
+/**
+ * 提交登录或“先注册后登录”流程。
+ * 成功后保留原受保护页面 redirect；失败由 API/Store 抛出并在表单显示，不自行伪造会话。
+ */
 async function onSubmit() {
   loading.value = true
   try {

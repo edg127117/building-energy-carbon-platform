@@ -15,8 +15,11 @@ import com.platform.framework.exception.BusinessException;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * HVAC 设备台账管理接口。
- * 建筑业主和能效管理方只能读取获授权建筑设备，设备 CRUD 仅允许 PLATFORM_ADMIN。
+ * HVAC 设备台账的 HTTP 管理入口。
+ *
+ * <p>列表和详情先以 {@link BuildingScopeService} 执行建筑范围校验，再通过
+ * {@link BizEquipmentService} 读取 MySQL；平台管理员写入时，Service 负责设备类型、
+ * 系统分组和空间关系以及业务编码分配。该入口不读取设备实时测点或下发控制命令。</p>
  */
 @Slf4j
 @RestController
@@ -27,7 +30,12 @@ public class BizEquipmentController {
     private final BizEquipmentService equipmentService;
     private final BuildingScopeService buildingScopeService;
 
-    /** 分页查询设备列表 */
+    /**
+     * 在当前用户获权建筑内分页查询设备。
+     *
+     * <p>指定建筑时先做单建筑权限校验；未指定时仍把完整授权集合传给 Service，
+     * 因而普通角色不能通过省略参数绕过范围过滤。</p>
+     */
     @GetMapping("/list")
     @PreAuthorize("hasAnyRole('BUILDING_OWNER','ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<IPage<BizEquipment>> list(
@@ -41,7 +49,12 @@ public class BizEquipmentController {
                 buildingScopeService.getAccessibleBuildingIds(SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
     }
 
-    /** 查看设备详情 */
+    /**
+     * 查询设备档案并按其建筑归属校验访问权限。
+     *
+     * <p>设备不存在返回 404，存在但用户无建筑权限返回 403；不会泄露其他建筑的
+     * 设备内容。</p>
+     */
     @GetMapping("/detail/{equipId}")
     @PreAuthorize("hasAnyRole('BUILDING_OWNER','ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<BizEquipment> detail(@PathVariable String equipId, Authentication authentication) {
@@ -51,21 +64,21 @@ public class BizEquipmentController {
         return Result.success(equipment);
     }
 
-    /** 新增设备 */
+    /** 新增设备，由 Service 校验 MySQL 关联并生成不复用的建筑内业务编码。 */
     @PostMapping("/add")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<BizEquipment> add(@Valid @RequestBody BizEquipment equipment) {
         return equipmentService.add(equipment);
     }
 
-    /** 更新设备 */
+    /** 更新设备可编辑档案；设备 ID、建筑、类型和业务编码保持原值。 */
     @PutMapping("/update")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<BizEquipment> update(@Valid @RequestBody BizEquipment equipment) {
         return equipmentService.update(equipment);
     }
 
-    /** 删除设备 */
+    /** 逻辑删除设备台账；本入口不级联删除测点或时序数据。 */
     @DeleteMapping("/delete/{equipId}")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<Void> delete(@PathVariable String equipId) {

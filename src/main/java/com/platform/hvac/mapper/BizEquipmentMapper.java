@@ -8,6 +8,13 @@ import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 
+/**
+ * HVAC 设备台账的 MySQL 持久化入口。
+ *
+ * <p>设备服务使用 MyBatis-Plus 完成台账读写，并通过自定义历史编码查询为新设备
+ * 分配不复用的建筑内编号。该接口不校验设备与空间、系统分组的关系，
+ * 也不访问设备测点或 TDengine 时序数据。</p>
+ */
 @Mapper
 public interface BizEquipmentMapper extends BaseMapper<BizEquipment> {
 

@@ -36,6 +36,7 @@ export const FROZEN_POINT_DEFINITIONS = [
 export type FrozenPointCode =
   (typeof FROZEN_POINT_DEFINITIONS)[number]['displayCode']
 
+/** 页面固定展示的四项指标及格式，不代表后端接口只返回四条配置。 */
 export const INDICATOR_DEFINITIONS = [
   { indicatorCode: 'WCR_COP', label: '冷水机组 COP', precision: 2, unit: '', tone: 'blue' },
   { indicatorCode: 'TOWER_EFF', label: '冷却塔效率', precision: 1, unit: '%', tone: 'green' },
@@ -76,6 +77,7 @@ export type DashboardIndicatorView = {
 
 export type DashboardPointMap = Record<FrozenPointCode, DashboardPointView>
 
+/** 将后端 Q0/Q1/Q2 质量等级转换为页面文案，空值或未知等级显示“无数据”。 */
 function qualityLabel(quality: number | null): string {
   if (quality === 0) return '实测'
   if (quality === 1) return '插值'
@@ -83,6 +85,7 @@ function qualityLabel(quality: number | null): string {
   return '无数据'
 }
 
+/** 将公式引擎状态转换为用户可读文案，未知状态保留后端原值便于排查。 */
 function indicatorStatusLabel(status: string): string {
   const labels: Record<string, string> = {
     SUCCESS: '计算成功',
@@ -168,6 +171,7 @@ export function buildIndicatorViews(
   })
 }
 
+/** 按 19 个冻结槽位中状态为 NORMAL 且有平均值的数量计算完整率。 */
 export function calculatePointCoverage(points: DashboardPointMap): number {
   const normal = Object.values(points).filter(
     (point) => point.status === 'NORMAL' && point.value !== null,

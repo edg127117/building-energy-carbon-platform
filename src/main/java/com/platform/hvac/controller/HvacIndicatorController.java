@@ -14,11 +14,12 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * HVAC 公式指标的内部只读 API 入口。
+ * HVAC 公式指标的只读 HTTP API 入口。
  *
  * <p>Controller 只提取参数和登录身份，建筑范围、时间区间、缓存回退和 TDengine
  * 异常转换由查询 Service 处理。三个接口仅允许业主、能效管理方和平台管理员，
- * 角色校验之后仍会执行建筑数据范围校验。</p>
+ * 角色校验之后仍会执行建筑数据范围校验。{@code formula.enabled=false} 时整个入口
+ * 不装配，调用方不能把“接口类存在”视为运行环境一定启用了指标查询。</p>
  */
 @RestController
 @RequestMapping("/hvac")
@@ -33,7 +34,12 @@ public class HvacIndicatorController {
         this.queryService = queryService;
     }
 
-    /** 查询一个建筑全部活动指标的最新成功或失败状态。 */
+    /**
+     * 查询一个建筑全部活动指标的最新成功、失败或无数据状态。
+     *
+     * <p>Service 先以 MySQL 活动配置确定返回范围，Redis 未命中的指标再回退到
+     * TDengine；结果供 HVAC 页面四项指标卡片展示，缓存不能扩大用户的建筑权限。</p>
+     */
     @GetMapping("/buildings/{buildingId}/indicators/latest")
     @PreAuthorize("hasAnyRole('BUILDING_OWNER','ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<HvacIndicatorDtos.LatestResponse> latest(
