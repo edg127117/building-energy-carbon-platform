@@ -22,10 +22,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 /**
- * TDengine HVAC 原始事件仓储。
+ * 使用专用 TDengine {@link JdbcTemplate} 保存和读取 HVAC 逐条真实事件。
  *
- * <p>每个测点使用独立子表，同一子表内事件时间是天然唯一键。
- * TDengine 3 对相同时间戳的再次插入执行更新，因此可实现“最后冲突值生效”。</p>
+ * <p>每个标准测点使用独立子表，设备采集时间 {@code ts} 是子表内唯一键；相同
+ * 时间戳再次写入会更新旧行，因此仓储先比较值与来源身份，区分完全重复和“最后上报
+ * 生效”的冲突更新。分钟冻结从超级表按半开区间批量取样，迟到恢复则在 TDengine
+ * 侧按测点和分钟分组，避免把大窗口原始样本全部拉回 JVM。</p>
  */
 @Repository
 public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
@@ -48,6 +50,10 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
         this.properties = properties;
     }
 
+    /**
+     * 先确保带完整标准身份标签的测点子表存在，再按事件时间执行幂等写入。
+     * 首条事件不能先查询不存在的子表，否则会把正常首报误判为存储失败。
+     */
     @Override
     public RawEventWriteResult upsert(RawTelemetryEvent event) {
         String table = qualifiedChild(event.pointId());
@@ -85,6 +91,10 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 ? RawEventWriteResult.INSERTED : RawEventWriteResult.CONFLICT_UPDATED;
     }
 
+    /**
+     * 为首次出现的标准测点创建子表，并只在 DDL 成功后缓存“已确认存在”。
+     * TDengine 暂时不可用时异常交给接入层重试，不能污染本进程缓存。
+     */
     private void ensureChildTable(RawTelemetryEvent event, String table) {
         if (ensuredChildren.contains(table)) {
             return;

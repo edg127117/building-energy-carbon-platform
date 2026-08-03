@@ -23,10 +23,15 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 按设备采集时间批量生成正式分钟汇总。
+ * 将 TDengine 逐条真实事件冻结为可供质量与公式链路使用的正式分钟数据。
  *
- * <p>正常运行时，一个到期分钟只查询一次 TDengine 原始事件超级表。
- * 查询结果只在本次计算期间临时驻留 Java 内存，不维护容易在重启时丢失的长期分钟桶。</p>
+ * <p>正常调度按设备采集时间查询一个半开分钟 {@code [minute, minute + 60s)}，并排除
+ * 冻结边界后到达的迟到事件；每个到期分钟只查询一次原始事件超级表，再按活动测点
+ * 生成 Q0 平均值、极值和样本数。写入 {@code st_raw_minute} 成功后才发布
+ * {@link HvacMinuteBatchFrozenEvent}，由质量层决定是否补 Q1/Q2，再进入四类指标公式。</p>
+ *
+ * <p>进程内水位只减少重复扫描，不是持久化事实；启动和低频恢复会从 TDengine
+ * 核对缺失测点，因此服务不维护重启即丢失的长期内存桶。</p>
  */
 @Slf4j
 @Service
@@ -144,6 +149,13 @@ public class HvacMinuteAggregationService {
         }
     }
 
+    /**
+     * 完成一个到期分钟的查询、聚合、质量优先写入和冻结通知。
+     *
+     * <p>恢复模式通过 {@code onlyPointIds} 只补缺失测点；整分钟没有真实行时仍发布
+     * 活动计算建筑范围，让质量层有机会生成 Q2。仓储拒绝的低可信写入不会出现在
+     * 事件快照中，避免下游公式使用未真正落盘的数据。</p>
+     */
     private void processMinute(
             long minuteStart,
             long finalizedAt,
@@ -194,6 +206,12 @@ public class HvacMinuteAggregationService {
                 minuteStart, accepted.size(), recovery);
     }
 
+    /**
+     * 按活动测点过滤并分组原始事件，再复用单测点 Q0 聚合口径。
+     *
+     * <p>停用或已删除测点的原始证据继续留在 TDengine 供审计，但不会进入正式分钟；
+     * 输出按配置快照顺序稳定排列，便于事件消费与问题复现。</p>
+     */
     private List<RawMinuteAggregate> aggregate(
             List<RawTelemetryEvent> events,
             long minuteStart,
@@ -225,6 +243,7 @@ public class HvacMinuteAggregationService {
         return aggregates;
     }
 
+    /** 读取当前完整配置快照，并只保留可参与分钟冻结的在线测点。 */
     private Map<String, PointRuntimeConfig> activePoints() {
         Map<String, PointRuntimeConfig> result = new LinkedHashMap<>();
         for (PointRuntimeConfig point : configProvider.findAll()) {
@@ -235,6 +254,12 @@ public class HvacMinuteAggregationService {
         return result;
     }
 
+    /**
+     * 以最佳努力通知质量层正式分钟已经落盘。
+     *
+     * <p>监听器异常不能回滚或反复覆盖 TDengine 分钟行；缺失的质量/公式派生结果
+     * 由低频恢复或人工重算从 {@code st_raw_minute} 重建。</p>
+     */
     private void publishFrozenEvent(
             long minuteStart,
             long finalizedAt,
@@ -245,13 +270,14 @@ public class HvacMinuteAggregationService {
             eventPublisher.publishEvent(new HvacMinuteBatchFrozenEvent(
                     minuteStart, finalizedAt, recovery, buildingIds, aggregates));
         } catch (RuntimeException exception) {
-            // 分钟批次已经成功落盘，不能因未来某个公式监听器异常而反复覆盖分钟数据。
+            // 分钟批次已经成功落盘，不能因下游监听器异常而反复覆盖分钟数据。
             // 公式结果可通过低频补偿或人工重算从st_raw_minute恢复。
             log.error("HVAC分钟冻结事件发布失败，分钟数据已持久化: minute={}, error={}",
                     minuteStart, exception.getMessage(), exception);
         }
     }
 
+    /** 计算已经越过“分钟结束 + 冻结等待时间”的最后一个自然分钟。 */
     private long latestDueMinute(long now) {
         // 先减去等待时间再取自然分钟；30秒只决定何时冻结，不会扩大统计窗口。
         long effectiveNow = now - finalizationDelayMillis;

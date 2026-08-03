@@ -10,7 +10,7 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 
 /**
- * 把最新指标状态转换成前端约定的 WebSocket 消息。
+ * 把最新指标状态转换成实时通道的 WebSocket 消息信封。
  *
  * <p>该适配层只在 TDengine 已成功持久化且 Redis 接受最新分钟后调用。
  * 序列化或广播失败只记录告警，不回滚历史数据，也不让实时通道故障阻断
@@ -32,7 +32,10 @@ public class IndicatorRealtimePublisher {
         this.gateway = gateway;
     }
 
-    /** 以 {@code HVAC_INDICATOR} 消息类型广播成功或失败状态。 */
+    /**
+     * 以 {@code HVAC_INDICATOR} 类型广播成功或失败状态；该方法只负责尽力提交到
+     * 后端网关，不负责客户端是否订阅或最终展示。
+     */
     public void publish(IndicatorLatestState state) {
         final String message;
         try {

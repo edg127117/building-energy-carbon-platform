@@ -112,7 +112,7 @@ public class MqttConfig {
                 log.info("MQTT HVAC 客户端已连接至 {}，上行主题={}",
                         brokerUrl, Arrays.toString(upstreamTopics));
             } catch (MqttException e) {
-                // MQTT 暂时不可用时允许平台其他模块启动，Paho 连接恢复由后续运维处理。
+                // 首次连接失败不阻断平台启动；该分支没有后台重试，需由进程重启或外部运维恢复。
                 log.error("MQTT HVAC 客户端初始化失败", e);
             }
         };
@@ -185,7 +185,7 @@ public class MqttConfig {
 
             @Override
             public void deliveryComplete(IMqttDeliveryToken token) {
-                // V1 没有控制下行，保留空实现只为满足 Paho 回调契约。
+                // 本客户端只订阅设备上行，没有平台下行发布，空实现仅满足 Paho 回调契约。
             }
         };
     }

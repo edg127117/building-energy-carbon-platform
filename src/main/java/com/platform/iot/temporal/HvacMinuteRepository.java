@@ -9,11 +9,11 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * HVAC 正式分钟汇总数据的存储边界。
+ * HVAC 正式 Q0/Q1/Q2 分钟数据的存储边界。
  *
- * <p>聚合任务通过该接口写入已经冻结的分钟结果；查询 API 通过同一接口批量读取
- * 最新快照和历史趋势。业务层只依赖此契约，不感知底层使用 TDengine 的超级表、
- * 子表或 SQL 语法。</p>
+ * <p>正常聚合写入真实 Q0，质量服务按优先级补写或升级 Q1/Q2；公式引擎和补算任务
+ * 读取完整冻结分钟，查询 API 则读取最新快照和历史趋势。业务层只依赖此契约，
+ * 不感知 TDengine 超级表、子表、分区或降采样 SQL。</p>
  */
 public interface HvacMinuteRepository {
     /**

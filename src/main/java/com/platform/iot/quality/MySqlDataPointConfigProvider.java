@@ -36,11 +36,19 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
     private final BizEquipmentMapper equipmentMapper;
     private volatile ConfigSnapshot snapshot = ConfigSnapshot.empty();
 
+    /** 在定时任务启动前构建首份测点身份快照。 */
     @PostConstruct
     public void initialize() {
         refreshAll();
     }
 
+    /**
+     * 从 MySQL 批量重建外部别名索引和标准测点配置。
+     *
+     * <p>设备表补充测点的上报设备编码，别名表只接收启用且能关联到标准测点的记录。
+     * 两张新索引全部构建完成后才原子替换 {@code volatile} 快照，因此 MQTT 热路径
+     * 不会观察到半刷新状态；任一查询失败时继续使用上一完整版本。</p>
+     */
     @Scheduled(fixedDelayString = "${ingestion.point-config-refresh-ms:60000}")
     public void refreshAll() {
         try {
