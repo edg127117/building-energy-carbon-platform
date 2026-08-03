@@ -9,10 +9,11 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * 一个自然分钟已经完成持久化的通知。
+ * 一个自然分钟完成质量优先写入后的边界事件。
  *
- * <p>后续 COP 公式可以直接使用 {@link #aggregates()} 中的正式分钟输入，
- * 正常计算链路不需要为了取得相同数据再次查询 TDengine。</p>
+ * <p>质量完成服务或质量旁路监听器消费该事件，并在 Q0/Q1/Q2 选择结束后发布公式
+ * READY 事件。{@link #aggregates()} 只包含仓储已经接受的 Q0 行；正常链路可复用
+ * 这份快照，恢复或修正链路则会回查 TDengine 的完整分钟，避免局部输入计算。</p>
  *
  * @param minuteStart 该批分钟结果对应的设备时间分钟起点
  * @param finalizedAt 实际完成冻结的服务器时间
@@ -33,7 +34,9 @@ public record HvacMinuteBatchFrozenEvent(
         aggregates = List.copyOf(aggregates);
     }
 
-    /** 兼容仍由真实聚合行推导建筑范围的调用点。 */
+    /**
+     * 从已落盘聚合行推导建筑范围；空分钟无法推导建筑时应使用完整构造器显式传入。
+     */
     public HvacMinuteBatchFrozenEvent(
             long minuteStart,
             long finalizedAt,

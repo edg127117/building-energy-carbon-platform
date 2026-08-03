@@ -28,11 +28,15 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
- * 使用 TDengine 实现 HVAC 正式分钟汇总的读写仓储。
+ * 使用专用 TDengine 数据源读写 HVAC 正式分钟和降采样趋势。
  *
- * <p>查询 API 只读取已经冻结的 {@code st_raw_minute} 数据，不回查逐条原始事件。
- * 数据库名和超级表名作为标识符进行白名单校验；测点 ID 作为 SQL 值进行转义，
- * 防止把外部值误当成 TDengine 标识符拼接。</p>
+ * <p>正常聚合写入 Q0，质量补全写入 Q1/Q2；本仓储在“测点 + 分钟”进程锁内比较
+ * 已有质量和任务所有权，阻止生成数据覆盖真实值。公式、质量恢复和查询 API 都只读取
+ * 已冻结的 {@code st_raw_minute}，不会在各自流程中重复解释逐条事件。</p>
+ *
+ * <p>每个测点使用独立子表，分钟起点是行时间戳；批量最新值使用 {@code LAST_ROW}
+ * 按完整测点身份分区，5/30 分钟趋势在 TDengine 侧加权降采样。数据库名和表名按
+ * 标识符白名单校验，测点与建筑 ID 则作为 SQL 值转义，避免混淆两类输入边界。</p>
  */
 @Slf4j
 @Repository
@@ -269,6 +273,10 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
         });
     }
 
+    /**
+     * 在全部目标键已加锁后一次读取现状、判定每行结果，并用单条多子表 INSERT 写入
+     * 被接受的分钟。批量预读避免逐测点 N+1，也让本轮所有质量决策基于同一份快照。
+     */
     private List<MinuteQualityWriteResult> compareAndWrite(
             List<RawMinuteAggregate> ordered, String supersedesTaskId) {
         List<RawMinuteAggregate> currentRows = readCurrentBatch(ordered);
@@ -307,6 +315,10 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
                 this::mapAggregate);
     }
 
+    /**
+     * 应用分钟质量覆盖规则：Q0 可刷新旧 Q0，较小质量数字可升级较差数据；Q1/Q2
+     * 同质量只能幂等重试或显式替代指定旧任务，不能互相静默覆盖。
+     */
     private MinuteQualityWriteResult decide(
             RawMinuteAggregate incoming,
             RawMinuteAggregate current,
@@ -356,6 +368,10 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
         };
     }
 
+    /**
+     * 将已通过质量判定的多测点分钟拼成一条 TDengine 多子表写入。
+     * 同一子表同一分钟时间戳重写保持幂等，不会追加重复行。
+     */
     private void insertBatch(List<RawMinuteAggregate> aggregates) {
         String stable = safe(properties.getDatabase()) + "." + safe(properties.getStRawMinute());
         StringBuilder sql = new StringBuilder("INSERT INTO ");
@@ -393,6 +409,10 @@ public class TdengineHvacMinuteRepository implements HvacMinuteRepository {
         template.execute(sql.toString().trim());
     }
 
+    /**
+     * 在访问 TDengine 前验证批次唯一键和 Q0/Q1/Q2 证据契约。
+     * 真实 Q0 不绑定任务；生成 Q1/Q2 必须有任务 ID、零样本且没有接收时间。
+     */
     private void validateBatch(List<RawMinuteAggregate> aggregates) {
         Set<MinuteKey> keys = new LinkedHashSet<>();
         for (RawMinuteAggregate aggregate : aggregates) {

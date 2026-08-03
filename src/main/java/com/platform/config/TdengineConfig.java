@@ -34,6 +34,12 @@ public class TdengineConfig {
         this.properties = properties;
     }
 
+    /**
+     * 创建只服务时序仓储的连接池，并允许 TDengine 不可用时平台其他模块先启动。
+     *
+     * <p>最小空闲连接设为 0，避免应用启动时无业务访问也建立外部连接；Bean 名称固定为
+     * {@code taosDataSource}，与 MySQL 数据源保持物理和注入边界。</p>
+     */
     @Bean( name="taosDataSource")
     public DataSource taosDataSource() {
         HikariConfig config = new HikariConfig();
@@ -52,15 +58,18 @@ public class TdengineConfig {
         return new HikariDataSource(config);
     }
 
+    /** 为时序 Repository 提供必须通过 {@code taosJdbcTemplate} 限定注入的访问入口。 */
     @Bean(name = "taosJdbcTemplate")
     public JdbcTemplate taosJdbcTemplate(@Qualifier("taosDataSource") DataSource dataSource) {
         return new JdbcTemplate(dataSource);
     }
 
     /**
-     * 指数退避重试机制 (应对 Docker 启动竞态条件)
-     * 在 Docker Compose 环境下，Spring Boot 启动速度远快于 TDengine 数据库。
-     * 如果直连会报错崩溃。这里引入了 RetryTemplate，采用“指数退避”算法（等1秒、2秒、4秒...最大30秒），
+     * 应用启动时以有限重试初始化 TDengine Schema。
+     *
+     * <p>Docker Compose 中应用可能早于 TDengine 就绪，因此初始化最多尝试两次，
+     * 两次之间按指数退避等待；仍失败时只记录告警，让登录和 MySQL 查询等无关模块
+     * 保持可用。该降级不代表时序功能可用，后续时序读写仍会显式失败。</p>
      *
      * <p>{@code tdengine.initialization-enabled=false} 时不会创建这个启动任务，
      * 也就不会在应用启动阶段连接 TDengine、建库或建表。普通自动化测试会关闭它。</p>
@@ -94,7 +103,8 @@ public class TdengineConfig {
     }
 
     /**
-     * 初始化业务逻辑 (建库、建表、验证)
+     * 创建时序数据库及原始事件、正式分钟、指标成功和公式异常四张超级表，并执行
+     * 非破坏式字段补齐与存在性验证。
      */
     private void doInitialize(JdbcTemplate template) {
         String database = properties.getDatabase();
@@ -231,6 +241,12 @@ public class TdengineConfig {
         return tags;
     }
 
+    /**
+     * 通过 {@code DESCRIBE} 只补充缺失列和标签，不改写已有字段。
+     *
+     * <p>迁移失败被记录但不阻断启动；这只保证其他模块可用，依赖缺失字段的时序功能
+     * 仍会在实际访问时暴露错误，不能把告警理解为迁移成功。</p>
+     */
     private void ensureFields(
             JdbcTemplate template,
             String qualified,
@@ -322,9 +338,7 @@ public class TdengineConfig {
         log.info("超级表 [{}] 已创建/已存在", stable);
     }
 
-    /**
-     * 验证数据库和超级表是否真的创建成功
-     */
+    /** 验证目标数据库和超级表可被查询；失败只记录启动诊断，不改变初始化结果。 */
     private void verifyInitialization(JdbcTemplate template, String database, String stableName) {
         try {
             // 检查数据库

@@ -13,8 +13,12 @@ import java.util.concurrent.CopyOnWriteArraySet;
 /**
  * HVAC 指标实时广播端点。
  *
- * <p>该端点只承载公式模块生成的 {@code HVAC_INDICATOR} 消息。当前任务只清理
- * 业务边界；JWT 握手、建筑订阅和广播隔离由后续正式实时功能单独实现。</p>
+ * <p>{@link com.platform.iot.formula.IndicatorRealtimePublisher} 将指标状态序列化后，
+ * 经网关调用 {@link #broadcastMessage(String)} 向所有已连接的 {@code /ws/hvac}
+ * 会话广播。端点不解析指标内容，也不影响 TDengine 或 Redis 的提交结果。</p>
+ *
+ * <p>该端点目前没有 JWT 握手校验、建筑订阅或按权限隔离，所有连接共享同一会话池；
+ * 因而它只适合受控网络中的大屏实时通道，不能把广播范围理解为后端数据权限校验。</p>
  */
 @ServerEndpoint("/ws/hvac")
 @Component
@@ -27,9 +31,7 @@ public class WebSocketServer {
     // 记录已正常关闭/异常的 SessionId，防止 remove 后残余线程往已关闭连接写数据
     private static final Set<String> closedSessionIds = ConcurrentHashMap.newKeySet();
 
-    /**
-     * 当 HVAC 实时客户端建立连接时触发。
-     */
+    /** 注册新连接；相同会话 ID 重连时先清除旧关闭标记，恢复广播资格。 */
     @OnOpen
     public void onOpen(Session session) {
         closedSessionIds.remove(session.getId()); // 重连时清除关闭标记
@@ -38,9 +40,7 @@ public class WebSocketServer {
                 session.getId(), sessionPool.size());
     }
 
-    /**
-     * 当 HVAC 实时客户端关闭或刷新时触发。
-     */
+    /** 标记并移除正常关闭的连接，防止并发广播继续写入失效 Session。 */
     @OnClose
     public void onClose(Session session) {
         closedSessionIds.add(session.getId()); // 标记已关闭，防止 broadcastMessage 再往里写
@@ -49,9 +49,7 @@ public class WebSocketServer {
                 session.getId(), sessionPool.size());
     }
 
-    /**
-     * 发生网络异常时触发
-     */
+    /** 记录连接异常并清理对应会话；空 Session 异常只记录日志。 */
     @OnError
     public void onError(Session session, Throwable error) {
         log.error("[WebSocket] HVAC 实时连接异常", error);

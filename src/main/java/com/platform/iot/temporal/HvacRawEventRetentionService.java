@@ -9,9 +9,11 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 
 /**
- * HVAC 逐条原始事件保留策略。
+ * 定时执行 HVAC 逐条原始事件的保留期清理。
  *
- * <p>只清理 st_raw_event，不接触正式分钟汇总和后续指标结果。</p>
+ * <p>保留天数和 Cron 均由配置提供，任务只删除 {@code st_raw_event} 中设备采集时间
+ * 早于截止点的证据，不接触正式分钟、质量任务或指标结果。关闭
+ * {@code data-retention.cleanup-enabled} 后不注册该外部资源任务。</p>
  */
 @Slf4j
 @Service
@@ -37,6 +39,7 @@ public class HvacRawEventRetentionService {
         cleanup(System.currentTimeMillis());
     }
 
+    /** 使用同一个服务器时间计算本轮保留截止点，并交由原始事件仓储执行删除。 */
     public void cleanup(long now) {
         long cutoff = now - Duration.ofDays(retentionDays).toMillis();
         log.info("开始清理HVAC逐条原始事件: retentionDays={}, cutoff={}", retentionDays, cutoff);

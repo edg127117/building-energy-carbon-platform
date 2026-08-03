@@ -18,9 +18,16 @@ import org.springframework.stereotype.Service;
 import java.util.Map;
 
 /**
- * HVAC 真实数据接入编排服务。
+ * 把 MQTT 上报转换为可进入分钟链路的 HVAC 原始真实事件。
  *
- * <p>该服务是“未校验 MQTT 数据”和“TDengine 正常数据”之间的唯一入口。</p>
+ * <p>上游 {@link HvacMqttMessageHandler} 传入未校验载荷；本服务先调用
+ * {@link TelemetryQualityValidator} 解析 19 测点身份和质量边界，再按设备采集时间
+ * 判断所属分钟及是否迟到，最后通过 {@link HvacRawEventRepository} 幂等写入
+ * TDengine。返回结果由 MQTT 回调决定 QoS 1 确认：业务拒绝、重复和冲突更新均可
+ * 确认，只有原始事件存储失败保留重投机会。</p>
+ *
+ * <p>成功写入的迟到事件还会发布 {@link HvacLateRealEventStoredEvent}，触发质量修正
+ * 链路重新聚合受影响分钟；事件通知失败不会否定已经完成的原始证据落盘。</p>
  */
 @Slf4j
 @Service
@@ -55,6 +62,13 @@ public class HvacIngestionService {
                 .build();
     }
 
+    /**
+     * 执行单条设备上报的校验、迟到判定和 TDengine 幂等写入。
+     *
+     * <p>设备只能提供建筑、设备、来源点码、数值和采集时间；可信来源命名空间由
+     * 服务端配置注入。TDengine 写入最多重试三次，仍失败时返回
+     * {@link IngestionOutcome#STORAGE_FAILED}，让 MQTT 不确认并等待 Broker 重投。</p>
+     */
     public HvacIngestionResult ingest(Map<String, Object> payload, long receivedTime) {
         // 来源系统由服务端配置，不允许设备载荷伪造命名空间。
         TelemetryValidationResult validation = validator.validate(payload, receivedTime, sourceSystem);
@@ -93,6 +107,12 @@ public class HvacIngestionService {
         }
     }
 
+    /**
+     * 把 TDengine 的幂等写入语义转换为 MQTT 可消费的业务结果。
+     *
+     * <p>新插入和同时间戳冲突更新会触发迟到修正通知；完全重复的数据已经存在，
+     * 只需确认而不重复发布修正事件。</p>
+     */
     private HvacIngestionResult mapOutcome(RawEventWriteResult result, RawTelemetryEvent event) {
         return switch (result) {
             case INSERTED -> {
@@ -114,6 +134,12 @@ public class HvacIngestionService {
         };
     }
 
+    /**
+     * 在迟到真实事件已经落盘后发布精确到“测点 + 分钟”的修正线索。
+     *
+     * <p>通知属于落盘后的派生副作用；发布失败只记录指标和日志，由低频迟到证据
+     * 扫描补偿，不能改写为存储失败，否则 MQTT 重投只会命中重复行。</p>
+     */
     private void publishLateStored(RawTelemetryEvent event) {
         if (!event.late()) {
             return;

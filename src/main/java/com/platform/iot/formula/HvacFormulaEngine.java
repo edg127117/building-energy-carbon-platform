@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
 /**
  * HVAC 质量完成分钟到指标结果的核心编排器。
  *
- * <p>它位于分钟聚合事件与 TDengine 指标仓储之间：选择活动指标、组装输入、
+ * <p>它位于分钟质量 READY 事件与 TDengine 指标仓储之间：选择活动指标、组装输入、
  * 调用纯公式、持久化成功或失败审计，然后以最佳努力更新 Redis 和 WebSocket。
  * 正常冻结事件直接使用事件快照，避免重复查询；恢复事件必须回查完整分钟，
  * 防止只用部分补写测点计算出错误结果。</p>
@@ -186,6 +186,16 @@ public class HvacFormulaEngine {
                 activeIndicators, affectedPointIds, formulas.values());
     }
 
+    /**
+     * 为受影响建筑筛选指标，逐个计算后按“TDengine → Redis → WebSocket”顺序提交结果。
+     *
+     * <p>单个公式缺失、输入失败或策略异常只生成该指标的异常审计，不阻断同分钟其他
+     * 指标。迟到、插值或人工修正属于权威修正：如果新计算由成功变为失败，必须先删除
+     * 同一指标分钟的旧成功行，再保存失败审计，防止趋势查询继续返回已经失效的值。</p>
+     *
+     * <p>本轮所有 TDengine 写入均成功后才更新最新缓存；缓存接受该分钟后才广播，
+     * 从而保证查询真相先于实时状态，并阻止历史补算把页面最新状态回拨到旧分钟。</p>
+     */
     private void calculateAndPersist(
             long minuteStart,
             long calculatedAt,
@@ -258,6 +268,12 @@ public class HvacFormulaEngine {
                 notifyLatest(failure.state(), allowSuccessInvalidation));
     }
 
+    /**
+     * 校验公式策略返回值与当前指标实例的代码、版本和成功/失败契约一致。
+     *
+     * <p>策略返回畸形结果时将由外层转换为可审计的引擎错误；不能把非有限值、非法
+     * 质量等级或空失败原因写入 TDengine，也不能让一个策略冒充其他指标或版本。</p>
+     */
     private void validateCalculation(
             BizIndicator indicator,
             IndicatorFormula formula,
@@ -307,6 +323,10 @@ public class HvacFormulaEngine {
         return value;
     }
 
+    /**
+     * 仅在 Redis 接受该状态为当前最新事实后广播 WebSocket 消息。
+     * 权威修正允许同分钟成功状态被失败状态覆盖，普通冻结则不允许等分钟失效。
+     */
     private void notifyLatest(
             IndicatorLatestState state,
             boolean allowEqualMinuteSuccessInvalidation) {
@@ -316,6 +336,7 @@ public class HvacFormulaEngine {
         }
     }
 
+    /** 判断事件是否可以推翻同一指标分钟已经存在的成功结果。 */
     private boolean authoritativeCorrection(QualityEventSource source) {
         return source == QualityEventSource.INTERPOLATION_CORRECTION
                 || source == QualityEventSource.LATE_REAL_CORRECTION

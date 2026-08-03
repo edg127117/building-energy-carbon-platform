@@ -9,10 +9,12 @@ import java.util.Map;
 import static com.platform.iot.quality.TelemetryRejectionReason.*;
 
 /**
- * HVAC 真实遥测质量入口。
+ * 将不可信 MQTT 载荷校验并映射为平台标准测点身份。
  *
- * <p>负责把不可信 MQTT 载荷转换为可信内部数据。本阶段只接收真实数据，
- * 因此通过校验后统一写成质量等级 0，不接受设备自行声明插值或典型值。</p>
+ * <p>校验顺序覆盖必填字段、13 位整数毫秒时间、
+ * {@code buildingId + sourceSystem + pointCode} 别名、测点启用状态、设备归属和
+ * MySQL 配置的数值上下限。通过后输出 {@link ValidatedHvacTelemetry}，并统一标记为
+ * 真实质量 Q0；插值 Q1 和典型值 Q2 只能由平台质量补全流程生成，设备无权声明。</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -23,6 +25,13 @@ public class TelemetryQualityValidator {
 
     private final DataPointConfigProvider configProvider;
 
+    /**
+     * 按服务端可信来源解析一条设备上报。
+     *
+     * <p>环境测点允许没有设备归属；其余测点的 {@code deviceId} 必须匹配 MySQL
+     * 设备编码，防止同建筑内串点。任何预期的脏数据都返回固定拒绝码，不以异常
+     * 中断 MQTT 消费；只有完整通过后才携带可写入 TDengine 的标准身份。</p>
+     */
     public TelemetryValidationResult validate(
             Map<String, Object> payload,
             long receivedTime,
@@ -113,7 +122,8 @@ public class TelemetryQualityValidator {
     }
 
     /**
-     * 测试和非MQTT调用的兼容入口；正式MQTT链路显式传入可信来源配置。
+     * 使用默认冻结协议命名空间校验载荷，供不负责选择来源系统的内部调用方使用。
+     * MQTT 主链路调用三参数重载，来源系统始终取服务端配置。
      */
     public TelemetryValidationResult validate(Map<String, Object> payload, long receivedTime) {
         return validate(payload, receivedTime, "MQTT_FREEZE_V1");
