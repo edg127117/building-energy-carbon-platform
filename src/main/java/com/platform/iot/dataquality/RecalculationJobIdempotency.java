@@ -28,11 +28,19 @@ public final class RecalculationJobIdempotency {
     private RecalculationJobIdempotency() {
     }
 
+    /** 以被作废的旧补全任务 ID 生成稳定键，使同一作废请求只创建一个重算批次。 */
     public static String voidJob(String oldTaskId) {
         return verifyLength("VOID_RECALC:"
                 + requireText(oldTaskId, "oldTaskId"));
     }
 
+    /**
+     * 为人工范围重算生成规范化键。
+     *
+     * <p>测点先去重排序，时间必须分钟对齐并采用 {@code [fromInclusive,toExclusive)}；
+     * 操作人、建筑和审计原因都参与摘要，因此完全相同的请求复用任务，不同责任人或原因
+     * 不会被错误合并。</p>
+     */
     public static String rangeJob(
             long operatorId,
             String buildingId,

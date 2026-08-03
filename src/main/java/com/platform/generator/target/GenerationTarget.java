@@ -7,8 +7,8 @@ import java.util.Map;
 /**
  * 可插拔的代码输出目标。
  *
- * <p>输入统一的 {@link GenerationContext}，输出相对路径与文本内容。V1 实现 Java ZIP，
- * 后续可以增加前端代码、SQL 或其他语言目标，而不改变配置导入服务。</p>
+ * <p>输入经过服务层完整校验的 {@link GenerationContext}，输出“安全相对路径到文本内容”
+ * 的内存集合。输出目标只负责选择模板和组装文件，不读取数据库，也不得覆盖工作区源码。</p>
  */
 public interface GenerationTarget {
     /** 输出模式的稳定标识，用于持久化配置和目标选择。 */

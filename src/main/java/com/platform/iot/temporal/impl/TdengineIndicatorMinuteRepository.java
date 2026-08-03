@@ -46,6 +46,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         this.properties = properties;
     }
 
+    /**
+     * 按指标子表批量写成功分钟；来源分钟是主时间戳，同键补算覆盖旧值而不追加重复行。
+     */
     @Override
     public void saveSuccesses(List<IndicatorMinuteResult> results) {
         if (results.isEmpty()) {
@@ -76,6 +79,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         template.execute(sql.toString().trim());
     }
 
+    /**
+     * 把非成功计算写入独立异常子表，保留原因和缺失输入而不污染成功趋势序列。
+     */
     @Override
     public void saveExceptions(List<FormulaCalculationException> exceptions) {
         if (exceptions.isEmpty()) {
@@ -110,6 +116,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         template.execute(sql.toString().trim());
     }
 
+    /** 只删除调用方给出的“指标 + 来源分钟”成功键，质量修正时不会扩大到整段历史。 */
     @Override
     public void deleteSuccesses(Set<IndicatorMinuteKey> keys) {
         if (keys.isEmpty()) {
@@ -126,6 +133,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         template.batchUpdate(statements);
     }
 
+    /** 从成功超级表读取一个精确指标分钟；不存在表示该分钟没有成功公式结果。 */
     @Override
     public Optional<IndicatorMinuteResult> findSuccess(String indicatorId, long minuteStart) {
         String sql = successSelect()
@@ -135,6 +143,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return template.query(sql, this::mapSuccess).stream().findFirst();
     }
 
+    /** 从异常超级表读取一个精确指标分钟的最后一次失败尝试。 */
     @Override
     public Optional<FormulaCalculationException> findException(
             String indicatorId, long minuteStart) {
@@ -145,6 +154,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return template.query(sql, this::mapException).stream().findFirst();
     }
 
+    /**
+     * 使用 TDengine {@code LAST_ROW} 按完整指标身份取各指标最新成功值，供缓存回源使用。
+     */
     @Override
     public List<IndicatorMinuteResult> findLatestSuccesses(List<String> indicatorIds) {
         if (indicatorIds.isEmpty()) {
@@ -160,6 +172,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                 .toList();
     }
 
+    /** 使用与成功表一致的身份分区读取最新失败，避免缓存回源漏掉当前异常指标。 */
     @Override
     public List<FormulaCalculationException> findLatestExceptions(List<String> indicatorIds) {
         if (indicatorIds.isEmpty()) {
@@ -174,6 +187,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                 .toList();
     }
 
+    /** 按 {@code [fromInclusive,toExclusive)} 返回单指标成功趋势，并按来源分钟升序排列。 */
     @Override
     public List<IndicatorMinuteResult> findHistory(
             String indicatorId, long fromInclusive, long toExclusive) {
@@ -184,6 +198,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return template.query(sql, this::mapSuccess);
     }
 
+    /** 批量返回窗口内已有成功结果的精确键，恢复服务据此只补真正缺失的分钟。 */
     @Override
     public Set<IndicatorMinuteKey> findSuccessfulKeys(
             List<String> indicatorIds, long fromInclusive, long toExclusive) {
@@ -200,6 +215,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                         resultSet.getTimestamp("ts").getTime())));
     }
 
+    /**
+     * 合并成功表与异常表的 {@code calculated_at}，返回每个精确键最后一次计算尝试时间。
+     */
     @Override
     public Map<IndicatorMinuteKey, Long> findLatestAttemptAt(
             Set<IndicatorMinuteKey> keys) {
@@ -219,6 +237,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return Map.copyOf(calculatedAt);
     }
 
+    /** 将一个超级表的尝试时间合并到结果，同键只保留较晚时间。 */
     private void collectAttemptTimes(
             String stable,
             String predicates,

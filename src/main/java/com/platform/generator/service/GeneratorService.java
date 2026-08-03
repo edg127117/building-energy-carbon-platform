@@ -9,7 +9,7 @@ import com.platform.generator.model.meta.GeneratorMetadata.GenerationContext;
 import java.util.List;
 
 /**
- * V1 后端代码生成器的核心用例接口。
+ * 后端代码生成器的核心用例接口。
  *
  * <p>负责数据库表发现、生成配置生命周期和中立生成上下文构建；
  * 预览、ZIP 等具体输出形式由 {@code GenerationTarget} 负责。</p>

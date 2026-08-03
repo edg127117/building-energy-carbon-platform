@@ -6,8 +6,9 @@ import java.util.Set;
 /**
  * 与数据库实体、HTTP DTO 和具体模板引擎解耦的中立生成模型。
  *
- * <p>生成服务先把持久化配置转换为这里的不可变模型，再交给不同
- * {@code GenerationTarget}。因此 V2 可以增加新的输出目标而无需复制数据库读取逻辑。</p>
+ * <p>{@code GeneratorService} 先把 {@code gen_table/gen_column} 转换为这里的不可变模型，
+ * 再交给 {@code GenerationTarget}。这样模板层只消费已经校验的业务描述，不依赖
+ * MyBatis 实体、HTTP 请求对象或数据库连接。</p>
  */
 public final class GeneratorMetadata {
     private GeneratorMetadata() {}

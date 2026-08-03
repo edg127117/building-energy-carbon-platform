@@ -391,6 +391,33 @@ git diff --check 通过，无跳过项。
     Assert-True ($stagedResult.ExitCode -ne 0) 'staged local configuration must fail'
     Assert-Contains $stagedResult.Output 'FORBIDDEN_PATH' 'failure must identify forbidden path'
     Complete-Case 'staged sensitive local configuration fails'
+
+    $sourceTargetRoot = New-TestRepository 'source-target-package'
+    Set-Utf8File $sourceTargetRoot 'README.md' "baseline`n"
+    Commit-All $sourceTargetRoot 'baseline'
+    Invoke-GitChecked $sourceTargetRoot @('switch', '-c', 'docs/source-target') | Out-Null
+    Set-Utf8File $sourceTargetRoot 'src/main/java/com/example/target/SourceTarget.java' @'
+package com.example.target;
+
+/** 合法源码包中的 target 类。 */
+public class SourceTarget {
+}
+'@
+    Invoke-GitChecked $sourceTargetRoot @('add', '--', 'src/main/java/com/example/target/SourceTarget.java') | Out-Null
+    $sourceTargetResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'Staged') $sourceTargetRoot $null
+    Assert-True ($sourceTargetResult.ExitCode -eq 0) "source target package should pass: $($sourceTargetResult.Output)"
+    Complete-Case 'source target package is not treated as build output'
+
+    $buildTargetRoot = New-TestRepository 'build-target-directory'
+    Set-Utf8File $buildTargetRoot 'README.md' "baseline`n"
+    Commit-All $buildTargetRoot 'baseline'
+    Invoke-GitChecked $buildTargetRoot @('switch', '-c', 'test/build-target') | Out-Null
+    Set-Utf8File $buildTargetRoot 'target/generated.txt' "generated`n"
+    Invoke-GitChecked $buildTargetRoot @('add', '--', 'target/generated.txt') | Out-Null
+    $buildTargetResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'Staged') $buildTargetRoot $null
+    Assert-True ($buildTargetResult.ExitCode -ne 0) 'real build target directory must fail'
+    Assert-Contains $buildTargetResult.Output 'FORBIDDEN_PATH' 'build target failure must identify forbidden path'
+    Complete-Case 'real build target directory remains forbidden'
 }
 
 function Invoke-CiContractTests {

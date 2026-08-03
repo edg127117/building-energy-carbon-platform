@@ -27,6 +27,10 @@ public class FillTaskEvidenceCodec {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
     }
 
+    /**
+     * 校验来源与强类型证据的一致性后编码为 MySQL 审计 JSON。
+     * 无效证据不会进入持久化层，避免产生无法安全恢复的补全任务。
+     */
     public String encode(FillSourceType sourceType, FillTaskEvidence evidence) {
         try {
             validate(sourceType, evidence);
@@ -38,6 +42,10 @@ public class FillTaskEvidenceCodec {
         }
     }
 
+    /**
+     * 按任务来源恢复对应证据类型，并再次执行区间、版本和必填字段校验。
+     * 空白、损坏或来源不匹配的 JSON 一律失败，不为恢复流程提供猜测值。
+     */
     public FillTaskEvidence decode(FillSourceType sourceType, String evidenceJson) {
         if (evidenceJson == null || evidenceJson.isBlank()) {
             throw new IllegalArgumentException("补全任务 evidenceJson 不能为空");
@@ -54,6 +62,7 @@ public class FillTaskEvidenceCodec {
         }
     }
 
+    /** 来源类型决定唯一合法证据结构，再由各结构校验其审计边界。 */
     private void validate(FillSourceType sourceType, FillTaskEvidence evidence) {
         Objects.requireNonNull(sourceType, "sourceType 不能为空");
         Objects.requireNonNull(evidence, "evidence 不能为空");
