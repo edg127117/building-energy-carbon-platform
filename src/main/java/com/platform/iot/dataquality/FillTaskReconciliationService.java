@@ -88,6 +88,12 @@ public class FillTaskReconciliationService {
         }
     }
 
+    /**
+     * 以 TDengine 中仍由 taskId 持有的正式分钟重建一条 MySQL 任务。
+     *
+     * <p>Q2 会把离散分钟压缩为 evidence 中的实际应用区间；Q1 保留冻结端点不变。
+     * 失败、替换和作废计数沿用 MySQL 审计事实，最终状态由四类计数共同决定。</p>
+     */
     private void reconcileTask(
             BizDataQualityFillTask task, LocalDateTime closedAt) {
         Objects.requireNonNull(task, "task 不能为空");
@@ -149,6 +155,10 @@ public class FillTaskReconciliationService {
                 closedAt));
     }
 
+    /**
+     * 拒绝 TDengine 返回的越界、错归属、错质量或重复分钟。
+     * 收口结果会覆盖 MySQL 计数，因此不能在查询异常时静默忽略可疑行。
+     */
     private void validateTaskRows(
             BizDataQualityFillTask task,
             long from,

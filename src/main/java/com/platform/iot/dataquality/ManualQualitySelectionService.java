@@ -144,6 +144,13 @@ public class ManualQualitySelectionService {
                         currentByMinute));
     }
 
+    /**
+     * 在上下文快照中按相邻 Q0 端点寻找短缺口，并只写入目标分块内的 Q1。
+     *
+     * <p>端点可以位于分块外，因此读取范围会多带最大缺口长度；但子任务边界保留
+     * 完整 gap 与重算区间的交集，使后续分块复用同一幂等任务。Q1 只允许填空或
+     * 升级 Q2，不能覆盖 Q0 或既有 Q1。</p>
+     */
     private void selectQ1(
             ValidatedContext context,
             Map<PointMinute, RawMinuteAggregate> currentByMinute,
@@ -225,6 +232,13 @@ public class ManualQualitySelectionService {
         }
     }
 
+    /**
+     * 对 Q1 选择后仍缺失的目标分钟应用当时有效的批准典型值。
+     *
+     * <p>分钟按“测点、配置版本、自然小时”合并为子任务，任务范围再与重算区间和
+     * 配置有效期取交集；这样跨分块执行仍复用同一审计记录，且不会把一个版本的值
+     * 写到另一版本生效区间。</p>
+     */
     private void selectQ2(
             ValidatedContext context,
             Map<PointMinute, RawMinuteAggregate> currentByMinute,
@@ -301,6 +315,13 @@ public class ManualQualitySelectionService {
         }
     }
 
+    /**
+     * 将一个 Q1/Q2 子任务批量写入 TDengine，并同步维护 MySQL 审计状态。
+     *
+     * <p>写入携带旧任务 ID 作为允许替换边界；任一技术失败都把本批分钟逐项记入
+     * 冻结失败证据后抛给重算批次。成功只推进首次应用和旧任务替换计数，精确分钟
+     * 数由跨库收口根据正式事实重建。</p>
+     */
     private List<MinuteQualityWriteResult> persistChildBatch(
             BizDataQualityRecalcJob job,
             BizDataQualityFillTask child,
@@ -423,6 +444,10 @@ public class ManualQualitySelectionService {
         }
     }
 
+    /**
+     * 按最终内存快照对目标笛卡尔积逐分钟分类，生成批次推进所需的精确统计。
+     * Q0、Q1、Q2 与缺失之和若不等于“测点数 × 分钟数”则拒绝推进游标。
+     */
     private RecalculationChunkStats classifyTarget(
             Set<String> pointIds,
             long targetFrom,
@@ -608,6 +633,10 @@ public class ManualQualitySelectionService {
         return new MinuteBounds(from, to);
     }
 
+    /**
+     * 复核运行时提供的典型值仍为本建筑、本测点、目标分钟有效的批准版本。
+     * 受理后配置若发生归属或有效期变化，当前块失败而不是静默换用其他历史值。
+     */
     private BizPointTypicalValueConfig requireApprovedConfig(
             BizDataQualityRecalcJob job,
             PointRuntimeConfig point,
@@ -648,6 +677,11 @@ public class ManualQualitySelectionService {
         return numeric;
     }
 
+    /**
+     * 固定本分块可参与补全的测点集合及任务边界。
+     * 只接受当前仍在线、模拟量且参与计算的同建筑测点，防止批次执行期间的档案变化
+     * 造成请求范围与最终审计数量不一致。
+     */
     private ValidatedContext validate(
             BizDataQualityRecalcJob job,
             Map<String, PointRuntimeConfig> points,

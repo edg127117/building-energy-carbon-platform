@@ -45,11 +45,13 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 低频恢复数据质量链路中遗漏的迟到 Q0、下游修正和 FAILED 补全任务。
+ * 低频恢复数据质量链路中遗漏的迟到 Q0、下游修正和补全任务。
  *
- * <p>服务严格按“raw late 证据、迟到 Q0 下游、补全任务”顺序执行。前两段只
- * 派生现有 TDengine 事实，不创建明细任务；后一段复用原 taskId 和冻结证据，
- * 以质量优先写入口保证重试不会把高质量分钟降级。</p>
+ * <p>{@link DataQualityRecoveryScheduler} 和管理端重试入口调用本服务。自动轮次依次
+ * 重放 TDengine 迟到原始证据、修复已落盘 Q0 的公式/插值下游，再处理 MySQL 中
+ * 卡住或失败的补全任务；任务恢复始终复用原 taskId 和冻结证据，不重新选择典型值
+ * 或创建新任务。MySQL 与 TDengine 间没有分布式事务，是否完成以正式分钟回读、
+ * READY 发布及最终任务状态共同确认。</p>
  */
 @Slf4j
 @Service
@@ -134,7 +136,11 @@ public class DataQualityRecoveryService {
     }
 
     /**
-     * 执行一轮有界恢复；单个坏任务或单个坏点不会中止后续项目。
+     * 执行一轮最多 100 项的恢复，并按数据产生顺序推进各类补偿。
+     *
+     * <p>先重放迟到原始证据，再补发已存在 Q0 的下游，最后处理非法来源、陈旧
+     * WAITING Q1 和 FAILED 任务。各段分别捕获故障，避免一次 TDengine 查询或一条
+     * 损坏 MySQL 证据让其他可恢复项目饥饿。</p>
      */
     public synchronized void recover(long now) {
         long windowMillis = Math.multiplyExact(
@@ -180,6 +186,10 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 隔离 sourceType 已损坏的 MySQL 任务，只增加重试证据而不访问 TDengine。
+     * 来源不明时无法判断应生成 Q1 还是 Q2，自动猜测会污染正式分钟。
+     */
     private int recoverInvalidSourceTasks(
             LocalDateTime retryBefore) {
         List<String> taskIds;
@@ -207,6 +217,10 @@ public class DataQualityRecoveryService {
         return taskIds.size();
     }
 
+    /**
+     * 恢复超过重试间隔仍停在 WAITING 的 Q1，并把单任务异常转为可重试 FAILED。
+     * 返回已占用的批次配额，使后续 FAILED 扫描仍受本轮总上限约束。
+     */
     private int recoverWaitingInterpolationTasks(
             LocalDateTime updatedBefore,
             int limit,
@@ -235,6 +249,12 @@ public class DataQualityRecoveryService {
         return tasks.size();
     }
 
+    /**
+     * 从冻结端点重放陈旧 WAITING Q1 的完整缺口。
+     *
+     * <p>该状态可能停在建任务、部分 TDengine 写入或 READY 发布之后任意位置；
+     * 全段重放配合质量优先写可同时覆盖首次写、幂等命中和被更高质量替代的情况。</p>
+     */
     private void recoverWaitingInterpolationTask(
             BizDataQualityFillTask task, long now) {
         FillTaskEvidence evidence = evidenceCodec.decode(
@@ -303,6 +323,10 @@ public class DataQualityRecoveryService {
         return evidence;
     }
 
+    /**
+     * 分页扫描窗口内带迟到特征的正式 Q0；游标到达末尾后回绕，避免固定首页
+     * 长期遮蔽后续测点。查询失败只跳过本轮下游补偿，不影响补全任务重试。
+     */
     private List<RawMinuteAggregate> findNextLateRealMinutes(
             long fromInclusive, long toExclusive) {
         try {
@@ -360,6 +384,10 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 将 TDengine 中的迟到原始证据逐条交给实时修正服务重放。
+     * 每条证据独立失败，避免一个已删除测点阻断同批其他 Q0 重聚合。
+     */
     private void replayLateEvidence(
             List<LateRawMinuteEvidence> lateEvidence,
             long now) {
@@ -378,6 +406,12 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 为确认具有迟到原始证据的 Q0 补齐公式 READY 与历史 Q1 回溯。
+     *
+     * <p>公式事件只在指标最近尝试时间早于 Q0 finalizedAt 时补发，避免每轮重复
+     * 计算；插值判断始终幂等重跑，因为水位追平并不能证明右端点之前没有短缺口。</p>
+     */
     private void recoverLateDownstream(
             List<RawMinuteAggregate> formalCandidates) {
         if (formalCandidates.isEmpty()) {
@@ -487,6 +521,10 @@ public class DataQualityRecoveryService {
         });
     }
 
+    /**
+     * 为定时批次隔离单个 FAILED 任务：先原子增加重试次数，再恢复；失败时只更新
+     * 该任务的公开错误状态，下一任务继续执行。
+     */
     private void recoverTaskSafely(
             BizDataQualityFillTask task, long now) {
         String taskId = task == null ? null : task.getTaskId();
@@ -511,6 +549,10 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 按任务冻结证据恢复 Q1 或 Q2，而不是重新读取当前业务配置来改写历史选择。
+     * 写入前同时校验当前测点归属、任务字段和证据；Q1 还要求两个端点仍为原 Q0。
+     */
     private void recoverTaskInternal(
             BizDataQualityFillTask task, long now) {
         FillSourceType sourceType = Objects.requireNonNull(
@@ -528,6 +570,7 @@ public class DataQualityRecoveryService {
         applyRecoveryOutcome(task, batch, now);
     }
 
+    /** 仅按失败分钟清单和冻结典型值生成 Q2，不扩展到小时内其他缺失分钟。 */
     private RecoveryBatch recoverTypical(
             BizDataQualityFillTask task,
             FillTaskEvidence.Typical evidence,
@@ -546,6 +589,7 @@ public class DataQualityRecoveryService {
         return writeBatch(generated, null);
     }
 
+    /** 重新核验两个 Q0 端点后重算完整 Q1 缺口，端点变化时转交人工重算。 */
     private RecoveryBatch recoverInterpolation(
             BizDataQualityFillTask task,
             FillTaskEvidence.Interpolation evidence,
@@ -578,6 +622,10 @@ public class DataQualityRecoveryService {
         return writeBatch(generated, null);
     }
 
+    /**
+     * 通过 TDengine 质量优先入口批量写入，并验证结果与请求数量、顺序完全一致。
+     * 结果错位时不能继续计算替换计数或发布 READY。
+     */
     private RecoveryBatch writeBatch(
             List<RawMinuteAggregate> generated,
             String supersedesTaskId) {
@@ -602,6 +650,12 @@ public class DataQualityRecoveryService {
         return new RecoveryBatch(generated, List.copyOf(results));
     }
 
+    /**
+     * 将 TDengine 批量写结果转换为旧任务替换计数、下游 READY 和任务终态。
+     *
+     * <p>只有 READY 已成功发布或指标水位证明无需发布后，才把 MySQL 的 FAILED
+     * 清理为 APPLIED/REPLACED；否则保留失败态，让下轮用原 finalizedAt 幂等补发。</p>
+     */
     private void applyRecoveryOutcome(
             BizDataQualityFillTask task,
             RecoveryBatch batch,
@@ -639,6 +693,13 @@ public class DataQualityRecoveryService {
                 task.getTaskId(), status, ownReplacementIncrement);
     }
 
+    /**
+     * 回读本 taskId 实际持有的分钟，并仅为仍过期的公式结果发布修正事件。
+     *
+     * <p>Q1 只计算依赖该测点的指标；Q2 需覆盖建筑全部活动指标，因为缺失输入恢复
+     * 可能改变任一公式的完整性状态。写入已接受但正式行不可见会直接失败，防止
+     * MySQL 先标记恢复完成。</p>
+     */
     private void publishRecoveredDownstream(
             BizDataQualityFillTask task,
             RecoveryBatch batch,
@@ -730,6 +791,10 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 从 MySQL 失败证据提取可重试分钟，并限制在任务、配置有效期和已完成时间内。
+     * 任一越界或无错误说明的记录都会阻止自动历史写入。
+     */
     private List<Long> decodeFailedMinutes(
             BizDataQualityFillTask task,
             FillTaskEvidence.Typical evidence,
@@ -781,6 +846,13 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 阻止过期或被篡改的 MySQL 任务向 TDengine 写入。
+     *
+     * <p>Q2 必须仍对应同一配置版本和自然小时；Q1 的任务区间必须与冻结端点严格
+     * 对齐且不超过当前最大缺口。测点已迁移建筑或任务已越过当前完成分钟时均要求
+     * 人工重算，不能自动猜测新的历史语义。</p>
+     */
     private void validateTaskConsistency(
             BizDataQualityFillTask task,
             FillTaskEvidence evidence,
@@ -841,6 +913,10 @@ public class DataQualityRecoveryService {
         }
     }
 
+    /**
+     * 从 TDengine 回读冻结的左右端点，要求它们仍是数值一致且不带 taskId 的 Q0。
+     * 端点已被修正时，沿用旧插值会产生不可审计的历史值，因此拒绝自动恢复。
+     */
     private void validateInterpolationEndpoints(
             FillTaskEvidence.Interpolation evidence,
             PointRuntimeConfig point) {

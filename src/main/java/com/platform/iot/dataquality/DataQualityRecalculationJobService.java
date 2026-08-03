@@ -181,6 +181,13 @@ public class DataQualityRecalculationJobService {
         return new DataQualityRecalculationDtos.Detail(toResponse(job), children);
     }
 
+    /**
+     * 在 MySQL 事务内创建、复用或恢复一个人工重算批次。
+     *
+     * <p>幂等键快速查询后仍需锁定建筑并做当前读，防止 REPEATABLE READ 快照漏掉
+     * 等锁期间插入的同任务；同建筑中测点与时间同时重叠的活动批次返回 409。
+     * FAILED 批次保留原 jobId 和游标恢复，其他幂等命中直接返回现有进度。</p>
+     */
     private DataQualityRecalculationDtos.Response submit(
             String key,
             RecalculationJobType type,
