@@ -12,6 +12,8 @@
 *.vue text eol=lf
 *.css text eol=lf
 *.md text eol=lf
+.githooks/* text eol=lf
+*.ps1 text eol=crlf
 
 # Impeccable 为上游原样引入的 Skill，保留其源码空白格式。
 .agents/skills/impeccable/** -whitespace
