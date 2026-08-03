@@ -24,8 +24,9 @@ import java.util.Set;
 /**
  * 正式角色管理实现。
  *
- * <p>本期角色本身是冻结的四类角色，因此这里只提供查询和菜单分配，不开放任意创建角色。
- * 菜单关系采用全量替换，并清理该角色下所有用户的动态菜单缓存。</p>
+ * <p>系统角色固定为 {@link FormalRole} 四类，本服务只提供查询和菜单分配，不创建或删除角色。
+ * 菜单关系保存到 MySQL，采用全量替换语义；事务成功后清理该角色下所有用户的 Redis 菜单缓存。
+ * 角色菜单控制导航可见性，接口访问仍由后端 {@code @PreAuthorize} 独立保证。</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -43,6 +44,11 @@ public class SysRoleAdminServiceImpl implements SysRoleAdminService {
     @Override public RoleAdminDtos.RoleView detail(Long id) { return view(requireRole(id)); }
     @Override public List<Long> menuIds(Long id) { requireRole(id); return roleMenuMapper.selectMenuIdsByRoleId(id); }
 
+    /**
+     * 在一个 MySQL 事务中全量替换指定正式角色的菜单关系。
+     * 先去重并验证全部菜单存在，避免删除旧关系后才发现请求包含无效 ID；成功后逐用户清缓存，
+     * 使下一次菜单请求按新授权重新构树。
+     */
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void replaceMenus(Long id, List<Long> menuIds) {

@@ -14,11 +14,11 @@ import java.util.Date;
 import java.util.List;
 
 /**
- * JWT 颁发与解析服务
- * 约定：
- * - subject：用户名
- * - uid：用户ID
- * - roles：角色列表（配合 Spring Security 的 ROLE_ 前缀做 RBAC）
+ * 登录 Token 的签发与密码学校验边界。
+ *
+ * <p>Token 的 {@code subject} 保存用户名，{@code uid} 保存用户 ID，{@code roles}
+ * 保存登录时的正式角色快照。JWT 只承载身份和角色，不承载建筑授权；建筑授权变更因此可在
+ * 清理范围缓存后立即生效，而角色变更必须撤销旧 Token 并要求用户重新登录。</p>
  */
 @Service
 public class JwtService {
@@ -30,8 +30,8 @@ public class JwtService {
     private long expireSeconds;
 
     /**
-     * 生成 Token
-     * 角色信息会写入 身份声明claims，供后续鉴权与 @PreAuthorize 使用。
+     * 为已完成账号、密码和正式角色校验的用户签发 JWT。
+     * 返回值由登录服务写入 Redis 单账号白名单并交给前端作为 Bearer Token。
      */
     public String generateToken(Long userId, String username, List<String> roles) {
         Date now = new Date();
@@ -48,7 +48,8 @@ public class JwtService {
     }
 
     /**
-     * 解析 Token（含签名校验与过期校验）
+     * 验证 Token 的签名和有效期并返回 claims；校验失败直接抛出 JWT 异常，
+     * 由认证过滤器把当前请求按未登录处理。
      */
     public Jws<Claims> parseToken(String token) {
         return Jwts.parser()
@@ -61,9 +62,7 @@ public class JwtService {
         return expireSeconds;
     }
 
-    /**
-     * 从 claims 中提取角色列表
-     */
+    /** 从已验证 claims 中提取登录时的角色快照；字段缺失或类型错误时返回空集合。 */
     @SuppressWarnings("unchecked")
     public List<String> getRoles(Claims claims) {
         Object roles = claims.get("roles");
@@ -73,9 +72,7 @@ public class JwtService {
         return Collections.emptyList();
     }
 
-    /**
-     * 从 claims 中提取用户ID
-     */
+    /** 从已验证 claims 中提取用户 ID；无法转换时返回 {@code null}，使过滤器拒绝建立身份。 */
     public Long getUserId(Claims claims) {
         Object uid = claims.get("uid");
         if (uid instanceof Number) {
@@ -92,7 +89,7 @@ public class JwtService {
     }
 
     private SecretKey getKey() {
-        // HS256/HS512 等 HMAC 算法要求密钥有足够长度，太短会降低安全性且可能直接报错
+        // HMAC 密钥不足 32 字节时拒绝启动签发/校验，避免使用可被轻易猜测的弱密钥。
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         if (keyBytes.length < 32) {
             throw new IllegalStateException("security.jwt.secret 长度不足，至少需要 32 字节");

@@ -13,27 +13,26 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 /**
  * Spring Security 核心配置。
  *
- * <p>负责全局无状态安全链、JWT 过滤器顺序以及 401/403 JSON 响应。
- * 具体四角色权限由控制器上的 {@code @PreAuthorize} 定义，建筑数据范围由业务服务校验。</p>
+ * <p>负责全局无状态安全链、JWT 过滤器顺序以及 401/403 JSON 响应。这里仅定义匿名入口和
+ * “其余请求必须认证”的粗粒度边界；四角色权限由控制器上的 {@code @PreAuthorize} 执行，
+ * 建筑范围由服务层根据 MySQL 授权执行。前端菜单和路由隐藏都不能替代这两层后端校验。</p>
  */
 @Configuration
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    /**
-     * 密码加密器
-     * 说明：注册时写入 BCrypt 哈希；老数据若是明文密码，会在首次登录成功后自动升级为 BCrypt。
-     */
+    /** 注册和管理员重置密码统一写入 BCrypt；历史明文仅由登录服务在校验成功后升级。 */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
     /**
-     * 安全过滤链
-     * - /auth/** 放行：用于注册/登录
-     * - 其它接口默认需要登录（携带 Bearer Token）
-     * - 使用 JWT 无状态鉴权，因此关闭 Session
+     * 装配无状态 HTTP 安全链。
+     *
+     * <p>{@code /auth/**} 允许匿名注册和登录；WebSocket 握手路径按当前实现匿名放行；其余
+     * HTTP 请求必须先由 JWT 过滤器建立身份。认证失败交给 401 入口，已认证但角色不足交给
+     * 403 处理器，业务层抛出的建筑越权则由全局异常处理器映射为 403。</p>
      */
     @Bean
     public SecurityFilterChain securityFilterChain(
@@ -57,7 +56,7 @@ public class SecurityConfig {
         http.authorizeHttpRequests(auth -> auth
                 // 1. 放行登录与注册相关接口
                 .requestMatchers("/auth/**", "/api/auth/**").permitAll()
-                // 2. HVAC 实时端点暂时放行；正式多建筑推送前需补 JWT 握手和建筑订阅隔离。
+                // HVAC WebSocket 握手当前匿名放行，因此它不具备 HTTP 接口相同的 JWT/建筑范围保护。
                 .requestMatchers("/ws/**", "/api/ws/**").permitAll()
                 // 3. 其他所有请求必须携带 Token 并通过鉴权
                 .anyRequest().authenticated()

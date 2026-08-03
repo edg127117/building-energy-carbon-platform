@@ -22,8 +22,12 @@ import java.util.Set;
 /**
  * 面向第三方系统的建筑只读开放接口。
  *
- * <p>与内部管理接口分开使用 {@code /open-api/**} 路径，便于后续独立限流、审计和编写接口文档。
- * THIRD_PARTY 只能读取管理员已授权的建筑；PLATFORM_ADMIN 调用时可读取全部建筑。</p>
+ * <p>该入口与内部页面接口分离为 {@code /open-api/**}，只暴露建筑、设备和测点定义的读取能力。
+ * 类级角色校验只允许 THIRD_PARTY/PLATFORM_ADMIN；每个建筑资源还会通过
+ * {@link BuildingScopeService} 执行服务端范围校验，不能依赖调用方自行过滤。</p>
+ *
+ * <p>THIRD_PARTY 的范围来自 MySQL 用户建筑授权及 Redis 旁路缓存；PLATFORM_ADMIN 以
+ * {@code null} 表示全量范围。接口不提供写入、控制命令、指标计算或 Token 签发。</p>
  */
 @RestController
 @RequestMapping("/open-api/buildings")
@@ -35,7 +39,7 @@ public class OpenBuildingController {
     private final BizDataPointService dataPointService;
     private final BuildingScopeService scopeService;
 
-    /** 分页查询调用方有权访问的建筑。 */
+    /** 分页查询调用方有权访问的建筑；每页最多 100 条，普通第三方只返回授权集合。 */
     @GetMapping
     public Result<IPage<Building>> buildings(@RequestParam(defaultValue="1") int page,
                                              @RequestParam(defaultValue="20") int size,

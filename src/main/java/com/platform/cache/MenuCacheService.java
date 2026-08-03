@@ -9,17 +9,14 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 
 /**
- * 动态菜单缓存服务
- * 冻结书 D-010 + 10.1.7：借鉴 Enjoy-IoT，菜单树存 MySQL → Redis 缓存 → 按需刷新
+ * 动态菜单 JSON 的 Redis 读写适配器。
  *
- * 设计要点：
- * - 全量菜单树：存一份全局菜单 JSON，角色变更时刷新
- * - 用户菜单树：按 userId 缓存个性化菜单，首次登录时从全量树裁剪后写入
- * - TTL：设 30 分钟，角色变更时主动清除对应 Key 触发重建
- * - 降级：Redis 不可用时回退 MySQL 直查（由调用方处理）
+ * <p>{@code SysMenuServiceImpl} 的主流程按 userId 缓存已经合并角色、补齐父级并排好序的菜单树，
+ * TTL 为 30 分钟。类中同时保留全量菜单树键的显式读写接口，但用户菜单生成不会从该键裁剪，
+ * 仍以 MySQL 用户角色和角色菜单关系为事实来源。</p>
  *
- * 当前由 {@code SysMenuServiceImpl} 接入：缓存未命中或 Redis 故障时回源 MySQL，
- * 角色、菜单或用户角色发生变化时主动清理对应用户缓存。
+ * <p>缓存未命中和 Redis 故障都向调用方返回 {@code null}，由菜单服务回源 MySQL；角色、菜单
+ * 或用户角色变化时主动删除受影响键。缓存只影响导航生成性能，不是接口权限边界。</p>
  */
 @Service
 public class MenuCacheService {
@@ -35,9 +32,7 @@ public class MenuCacheService {
 
     // ──────────── 全量菜单树 ────────────
 
-    /**
-     * 缓存全量菜单树 JSON
-     */
+    /** 写入全量菜单树 JSON；该键与用户个性化菜单键相互独立。 */
     public void setFullMenuTree(String menuTreeJson) {
         try {
             redis.opsForValue().set(CacheConstants.MENU_ALL, menuTreeJson, MENU_TTL);
@@ -47,10 +42,7 @@ public class MenuCacheService {
         }
     }
 
-    /**
-     * 获取全量菜单树 JSON
-     * @return null=缓存未命中，调用方应回退 MySQL
-     */
+    /** @return 全量树 JSON；未命中或 Redis 不可用时返回 {@code null} */
     public String getFullMenuTree() {
         try {
             return redis.opsForValue().get(CacheConstants.MENU_ALL);
@@ -62,9 +54,7 @@ public class MenuCacheService {
 
     // ──────────── 用户菜单树 ────────────
 
-    /**
-     * 缓存用户个性化菜单
-     */
+    /** 缓存已经按用户角色生成的完整菜单树，不在缓存层重新裁剪权限。 */
     public void setUserMenu(Long userId, String menuJson) {
         try {
             redis.opsForValue().set(CacheConstants.MENU_USER + userId, menuJson, MENU_TTL);
@@ -74,10 +64,7 @@ public class MenuCacheService {
         }
     }
 
-    /**
-     * 获取用户菜单 JSON
-     * @return null=缓存未命中
-     */
+    /** @return 用户菜单 JSON；未命中或 Redis 不可用时返回 {@code null}，调用方应回源 MySQL */
     public String getUserMenu(Long userId) {
         try {
             return redis.opsForValue().get(CacheConstants.MENU_USER + userId);
@@ -90,8 +77,8 @@ public class MenuCacheService {
     // ──────────── 缓存失效 ────────────
 
     /**
-     * 角色/菜单变更后，清除相关缓存
-     * @param userId 受影响的用户ID，传 null 则仅清全量树
+     * 清理全量树和指定用户树；{@code userId=null} 时只清全量键。
+     * 角色菜单批量变化由调用方枚举受影响用户，避免使用 Redis {@code KEYS *} 扫描。
      */
     public void evict(Long userId) {
         try {

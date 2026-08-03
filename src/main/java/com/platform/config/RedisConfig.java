@@ -15,11 +15,12 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.serializer.StringRedisSerializer;
 
 /**
- * Redis 配置层
- * - StringRedisTemplate：Key/Value 均为 String，用于设备状态/COP 值/Token/菜单等纯文本缓存
- * - RedissonClient：仅预留，通过 redisson.enabled=true 开启（多实例部署时启用分布式锁）
+ * Redis 字符串缓存与可选 Redisson 客户端的装配入口。
  *
- * 冻结书 D-010：Redis 不进入数据写入热路径，数据写入直连 TDengine
+ * <p>{@link StringRedisTemplate} 始终创建，承载 Token、菜单、建筑范围和指标最新状态等可重建
+ * 数据；Redis 不是 MySQL/TDengine 的事实数据源。{@link RedissonClient} 仅在
+ * {@code redisson.enabled=true} 时创建，供明确注入它的分布式协调逻辑使用；关闭时这些 Bean
+ * 不存在，但普通字符串缓存不受影响。</p>
  */
 @Configuration
 public class RedisConfig {
@@ -37,13 +38,11 @@ public class RedisConfig {
         template.setValueSerializer(StringRedisSerializer.UTF_8);
         template.setHashKeySerializer(StringRedisSerializer.UTF_8);
         template.setHashValueSerializer(StringRedisSerializer.UTF_8);
-        // 如果将来需要存对象，可改为以下配置：
-        // template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
         log.info("✅ StringRedisTemplate 已就绪");
         return template;
     }
 
-    // ──────────── RedissonClient（分布式锁预留，默认关闭）────────────
+    // ──────────── RedissonClient（按配置启用，默认关闭）────────────
 
     @Value("${spring.data.redis.host:127.0.0.1}")
     private String redisHost;
@@ -58,9 +57,9 @@ public class RedisConfig {
     private int redisDatabase;
 
     /**
-     * RedissonClient Bean
-     * 仅当 redisson.enabled=true 时创建（多实例部署时启用以保护定时任务）
-     * 本期默认 false，不影响单实例正常运行
+     * 根据当前 Redis 单节点配置创建 RedissonClient。
+     * 只有 {@code redisson.enabled=true} 时 Bean 才存在；密码为空时不发送 AUTH。关闭该开关会
+     * 停用依赖 Redisson Bean 的能力，不会停用 StringRedisTemplate 缓存。
      */
     @Bean(destroyMethod = "shutdown")
     @ConditionalOnProperty(name = "redisson.enabled", havingValue = "true")

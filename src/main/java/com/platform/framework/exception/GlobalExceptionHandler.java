@@ -29,7 +29,8 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /**
-     * 1. 拦截参数校验异常 (比如输入了超长字符串、乱码)
+     * 把 Bean Validation、绑定和参数类型错误统一转换为 400。
+     * 具体框架异常不直接返回前端，避免泄露字段绑定和内部类型信息。
      */
     @ExceptionHandler({
             MethodArgumentNotValidException.class,
@@ -43,10 +44,11 @@ public class GlobalExceptionHandler {
         response.put("code", 400);
         response.put("msg", "您输入的格式不正确，请检查后重试");
         response.put("success", false);
-        return response; // 永远返回 JSON
+        return response;
     }
     /**
-     * 2. 拦截自定义异常
+     * 把 Service 抛出的脱敏业务码映射为相同语义的 HTTP 状态。
+     * 401/403 供前端区分重新登录和权限不足，404/409 表示资源或状态冲突，503 表示依赖暂不可用。
      */
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Map<String, Object>> handleBusinessException(BusinessException e) {
@@ -69,6 +71,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(response);
     }
 
+    /** 处理进入 MVC 后抛出的认证异常；安全过滤链之前的失败由认证入口返回同结构 401。 */
     @ExceptionHandler(AuthenticationException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
     public Map<String, Object> handleAuthenticationException(AuthenticationException e) {
@@ -79,6 +82,7 @@ public class GlobalExceptionHandler {
         return response;
     }
 
+    /** 处理方法调用期间的角色拒绝；安全过滤链中的拒绝由 AccessDeniedHandler 返回同结构 403。 */
     @ExceptionHandler(AccessDeniedException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public Map<String, Object> handleAccessDeniedException(AccessDeniedException e) {
@@ -107,7 +111,8 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * 3. 拦截所有未知的致命报错 (NullPointer, 数据库宕机等)
+     * 兜底处理未分类异常并返回脱敏 500。
+     * 完整堆栈只写服务端日志，前端不会看到 SQL、连接信息或实现类名。
      */
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)

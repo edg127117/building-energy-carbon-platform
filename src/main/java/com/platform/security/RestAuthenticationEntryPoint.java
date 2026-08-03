@@ -14,8 +14,11 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 未登录/未认证的统一处理器
- * 作用：当请求未携带有效 Token 时，返回标准 JSON，避免默认跳转/HTML 响应影响前端展示。
+ * Spring Security 对未建立有效身份的受保护请求返回 401 的入口。
+ *
+ * <p>无 Token、JWT 签名/有效期失败、Redis 明确判定 Token 已撤销，都会由过滤器留下匿名上下文，
+ * 最终进入这里。响应保持 {@code code/msg/success} JSON，前端据此清理登录态并跳转登录页；
+ * 公开 {@code /auth/**} 请求不会因附带失效 Token 而在过滤器中被提前拦截。</p>
  */
 @Component
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
@@ -26,9 +29,9 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         this.objectMapper = objectMapper;
     }
 
+    /** 写入脱敏的 401 JSON，不把 JWT 解析失败原因和安全异常细节暴露给客户端。 */
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException {
-        // 统一 401 JSON 结构，便于前端识别后跳转登录页
         Map<String, Object> body = new HashMap<>();
         body.put("code", 401);
         body.put("msg", "未登录或登录已过期");

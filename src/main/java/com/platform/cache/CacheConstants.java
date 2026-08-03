@@ -1,8 +1,9 @@
 package com.platform.cache;
 
 /**
- * Redis 缓存 Key 前缀常量
- * 冻结书 D-010：Redis 仅用于缓存，Key 前缀统一管理便于后期清理与监控
+ * 各业务 Redis 键的统一命名入口。
+ * 统一 {@code iot:} 前缀便于隔离环境、定向失效和观察缓存；常量只描述键结构，
+ * TTL、事实数据来源和降级策略由各缓存服务负责。
  */
 public final class CacheConstants {
 
@@ -38,7 +39,7 @@ public final class CacheConstants {
     /** 设备心跳时间戳 Sorted Set：score=最近上报时间(ms)，member=deviceId */
     public static final String HEARTBEAT_TIMESTAMPS = PREFIX + "heartbeat:timestamps";
 
-    // ──────────── 分布式锁（Redisson 预留） ────────────
+    // ──────────── Redisson 分布式锁键（仅在对应能力启用时使用） ────────────
     /** COP 定时任务锁：iot:lock:cop-engine */
     public static final String LOCK_COP_ENGINE = PREFIX + "lock:cop-engine";
     /** 设备状态同步锁：iot:lock:device-status:{deviceId} */

@@ -12,15 +12,17 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 
 /**
- * MySQL 主数据源配置
- * 作用：解决“双数据源冲突”，明确告诉 Spring Boot 和 MyBatis，
- * 绝大部分业务的增删改查默认走 MySQL，只有被特殊指定的才走 TDengine。
+ * 业务主数据 MySQL 的数据源和 JdbcTemplate 装配。
+ *
+ * <p>项目同时连接 MySQL 与 TDengine：用户、权限、设备档案等结构化数据默认使用这里的
+ * {@code @Primary} 数据源；时序查询必须显式使用 TDengine 组件。命名 Bean 和 Qualifier 共同
+ * 防止 MySQL SQL 被发送到 TDengine，或因同类型 Bean 歧义导致应用启动失败。</p>
  */
 @Configuration
 public class MysqlConfig {
     /**
-     * 1. 引入 Spring 的数据源属性配置类
-     * 这一步极其关键：它能充当“翻译官”，自动把 application.yml 里的 url 映射成 HikariCP 需要的 jdbcUrl
+     * 绑定 {@code spring.datasource}，由 Spring Boot 负责把通用 {@code url} 等属性转换成
+     * 实际连接池需要的配置字段。
      */
     @Primary
     @Bean
@@ -29,9 +31,7 @@ public class MysqlConfig {
         return new DataSourceProperties();
     }
 
-    /**
-     * 2. 利用配置类去构建真正的 MySQL 主数据源
-     */
+    /** 构建并标记默认 MySQL DataSource，供 MyBatis 和未显式限定的数据访问组件使用。 */
     @Primary
     @Bean(name = "dataSource")
     public DataSource dataSource(DataSourceProperties properties) {
@@ -42,9 +42,8 @@ public class MysqlConfig {
      * 显式创建 MySQL 专用的 JdbcTemplate。
      *
      * <p>项目里同时存在 MySQL 和 TDengine 两个 JdbcTemplate。如果不指定名称，
-     * Spring 可能不知道该注入哪一个。这里用 {@code @Qualifier("dataSource")}
-     * 把它固定到 MySQL，并用 {@code @Primary} 表示：普通业务没有特别指定时，
-     * 默认使用这个 MySQL JdbcTemplate。</p>
+     * Spring 无法仅按类型可靠判断目标数据库。这里用 {@code @Qualifier("dataSource")}
+     * 固定到 MySQL，并用 {@code @Primary} 作为结构化业务数据的默认 JdbcTemplate。</p>
      */
     @Primary
     @Bean(name = "mysqlJdbcTemplate")

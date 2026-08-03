@@ -3,8 +3,11 @@ package com.platform.framework.common;
 import lombok.Data;
 
 /**
- * 全局统一 API 响应格式 (系统的第一道防线)
- * 无论后端发生什么，都必须以这个格式返回给前端。前端只要认准 code == 200 就是成功，否则直接弹窗显示 msg。
+ * 业务 Controller 的统一 JSON 响应体。
+ *
+ * <p>成功响应使用 {@code code=200, success=true}；业务失败通常由异常处理器返回相同的
+ * {@code code/msg/success} 结构并同步设置 HTTP 状态。Spring Security 的 401/403 入口也保持
+ * 这些字段，便于前端统一识别，但并非所有框架级响应都由本类实例生成。</p>
  */
 @Data
 public class Result<T> {
@@ -13,7 +16,7 @@ public class Result<T> {
     private T data;
     private boolean success;
 
-    // 成功响应
+    /** 包装带数据的成功结果，供 Controller 返回给调用方。 */
     public static <T> Result<T> success(T data) {
         Result<T> result = new Result<>();
         result.setCode(200);
@@ -27,7 +30,7 @@ public class Result<T> {
         return success(null);
     }
 
-    // 失败响应 (用于全局异常拦截器调用)
+    /** 包装不抛异常的显式失败结果；HTTP 状态是否变化由调用该方法的 Controller 决定。 */
     public static <T> Result<T> error(Integer code, String msg) {
         Result<T> result = new Result<>();
         result.setCode(code);
