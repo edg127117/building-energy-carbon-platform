@@ -31,6 +31,7 @@
 - `scripts/Install-GitGuardrails.ps1`：安装并回读当前仓库 `core.hooksPath`。
 - `scripts/Invoke-TaskPreflight.ps1`：验证规则入口、任务分支、干净工作区、基线和 Hook。
 - `scripts/Invoke-PostMergeCleanup.ps1`：预览或安全执行合并后同步与清理。
+- `scripts/tests/Invoke-LocalGitGuardrailTests.ps1`：验证 Hook、安装、预检和清理的独立临时仓库用例。
 
 ### 注释与 PR 防回退
 
@@ -56,8 +57,7 @@
 - Create: `.githooks/pre-push`
 - Create: `scripts/Install-GitGuardrails.ps1`
 - Create: `scripts/Invoke-TaskPreflight.ps1`
-- Create: `scripts/Test-RepositoryGuardrails.ps1`
-- Create: `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`
+- Create: `scripts/tests/Invoke-LocalGitGuardrailTests.ps1`
 - Modify: `.gitattributes`
 
 **Interfaces:**
@@ -86,7 +86,7 @@ function Invoke-GuardrailCase {
 Run:
 
 ```powershell
-pwsh -NoProfile -File scripts/tests/Invoke-RepositoryGuardrailTests.ps1 -Group LocalWorkflow
+pwsh -NoProfile -File scripts/tests/Invoke-LocalGitGuardrailTests.ps1 -Group LocalWorkflow
 ```
 
 Expected: FAIL，错误明确指出 `.githooks/pre-commit` 或安装脚本不存在。
@@ -162,14 +162,7 @@ if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
 Write-Output 'TASK_PREFLIGHT_OK'
 ```
 
-同时为 `scripts/Test-RepositoryGuardrails.ps1` 建立可执行的 `Staged` 入口；当前任务先保证 Hook 调用链完整，Task 4 再加入全部文件与 PR 合同规则：
-
-```powershell
-[CmdletBinding()]
-param([Parameter(Mandatory)][ValidateSet('Staged', 'PullRequest')][string]$Mode)
-if ($Mode -ne 'Staged') { throw 'PULL_REQUEST_GUARDRAILS_NOT_AVAILABLE' }
-Write-Output 'REPOSITORY_GUARDRAILS_OK'
-```
+本地 Hook 测试仓库放置可控的 `scripts/Test-RepositoryGuardrails.ps1` stub，验证 task 分支的 pre-commit 确实调用 `-Mode Staged`；正式检查器由 Task 4 实现，并在最终安装 Hook 前完成集成。
 
 - [ ] **Step 5: 固定换行并运行定向测试**
 
@@ -183,7 +176,7 @@ Write-Output 'REPOSITORY_GUARDRAILS_OK'
 Run:
 
 ```powershell
-pwsh -NoProfile -File scripts/tests/Invoke-RepositoryGuardrailTests.ps1 -Group LocalWorkflow
+pwsh -NoProfile -File scripts/tests/Invoke-LocalGitGuardrailTests.ps1 -Group LocalWorkflow
 ```
 
 Expected: 所有 `LocalWorkflow` 用例输出 `CASE_PASSED`，结尾输出 `GUARDRAIL_TESTS_PASSED`。
@@ -191,7 +184,7 @@ Expected: 所有 `LocalWorkflow` 用例输出 `CASE_PASSED`，结尾输出 `GUAR
 - [ ] **Step 6: 提交本地流程防护**
 
 ```powershell
-git add -- .githooks/pre-commit .githooks/pre-push .gitattributes scripts/Install-GitGuardrails.ps1 scripts/Invoke-TaskPreflight.ps1 scripts/Test-RepositoryGuardrails.ps1 scripts/tests/Invoke-RepositoryGuardrailTests.ps1
+git add -- .githooks/pre-commit .githooks/pre-push .gitattributes scripts/Install-GitGuardrails.ps1 scripts/Invoke-TaskPreflight.ps1 scripts/tests/Invoke-LocalGitGuardrailTests.ps1
 git diff --cached --check
 git commit -m "chore(workflow): add local git guardrails"
 ```
@@ -200,7 +193,7 @@ git commit -m "chore(workflow): add local git guardrails"
 
 **Files:**
 - Create: `scripts/Invoke-PostMergeCleanup.ps1`
-- Modify: `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`
+- Modify: `scripts/tests/Invoke-LocalGitGuardrailTests.ps1`
 
 **Interfaces:**
 - Consumes: 字符串参数 `-TaskBranch`、可选绝对路径参数 `-WorktreePath`、开关 `-Apply`。
@@ -215,7 +208,7 @@ git commit -m "chore(workflow): add local git guardrails"
 Run:
 
 ```powershell
-pwsh -NoProfile -File scripts/tests/Invoke-RepositoryGuardrailTests.ps1 -Group Cleanup
+pwsh -NoProfile -File scripts/tests/Invoke-LocalGitGuardrailTests.ps1 -Group Cleanup
 ```
 
 Expected: FAIL with `Invoke-PostMergeCleanup.ps1` missing.
@@ -267,8 +260,8 @@ Write-Output 'POST_MERGE_CLEANUP_OK'
 Run:
 
 ```powershell
-pwsh -NoProfile -File scripts/tests/Invoke-RepositoryGuardrailTests.ps1 -Group Cleanup
-pwsh -NoProfile -File scripts/tests/Invoke-RepositoryGuardrailTests.ps1 -Group All
+pwsh -NoProfile -File scripts/tests/Invoke-LocalGitGuardrailTests.ps1 -Group Cleanup
+pwsh -NoProfile -File scripts/tests/Invoke-LocalGitGuardrailTests.ps1 -Group All
 ```
 
 Expected: 两次均输出 `GUARDRAIL_TESTS_PASSED`，且测试仅删除自己创建的系统临时目录。
@@ -276,7 +269,7 @@ Expected: 两次均输出 `GUARDRAIL_TESTS_PASSED`，且测试仅删除自己创
 - [ ] **Step 6: 提交安全清理脚本**
 
 ```powershell
-git add -- scripts/Invoke-PostMergeCleanup.ps1 scripts/tests/Invoke-RepositoryGuardrailTests.ps1
+git add -- scripts/Invoke-PostMergeCleanup.ps1 scripts/tests/Invoke-LocalGitGuardrailTests.ps1
 git diff --cached --check
 git commit -m "chore(workflow): add safe post-merge cleanup"
 ```
@@ -285,7 +278,7 @@ git commit -m "chore(workflow): add safe post-merge cleanup"
 
 **Files:**
 - Create: `scripts/New-CommentAuditReport.ps1`
-- Modify: `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`
+- Create: `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`
 
 **Interfaces:**
 - Consumes: Git 引用参数 `-BaseRef`、`-HeadRef`、格式参数 `-Format Markdown|Json`。
@@ -396,7 +389,7 @@ git commit -m "feat(workflow): generate complete comment audit reports"
 ### Task 4: 暂存差异和 PR 合同校验器
 
 **Files:**
-- Modify: `scripts/Test-RepositoryGuardrails.ps1`
+- Create: `scripts/Test-RepositoryGuardrails.ps1`
 - Modify: `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`
 
 **Interfaces:**

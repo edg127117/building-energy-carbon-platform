@@ -214,7 +214,8 @@ Hook 使用 Git 可直接执行的 shell 包装器，并调用 PowerShell 检查
 - `scripts/Invoke-PostMergeCleanup.ps1`：默认只读的合并后安全清理。
 - `scripts/New-CommentAuditReport.ps1`：为全部变化生产文件生成完整方法/函数审查表。
 - `scripts/Test-RepositoryGuardrails.ps1`：暂存差异或 PR 差异检查。
-- `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`：在临时 Git 仓库中验证 Hook、预检、PR 合同和失败边界。
+- `scripts/tests/Invoke-LocalGitGuardrailTests.ps1`：在临时 Git 仓库中验证 Hook、预检和合并后清理边界。
+- `scripts/tests/Invoke-RepositoryGuardrailTests.ps1`：验证注释扫描、PR 合同和 CI 契约，并在全量模式调用本地 Git 防护测试。
 - `docs/development/repository-guardrails.md`：安装、使用、故障处理和 GitHub 设置说明。
 - `docs/superpowers/plans/2026-08-03-repository-workflow-quality-guardrails.md`：实施计划。
 
@@ -256,7 +257,7 @@ GitHub Actions 失败只阻止合并，不自动修改代码或 PR 正文。
 
 ### 9.1 脚本与 Hook 测试
 
-`scripts/tests/Invoke-RepositoryGuardrailTests.ps1` 在系统临时目录创建独立 Git 仓库，覆盖：
+两个 PowerShell 测试入口在系统临时目录创建独立 Git 仓库；`Invoke-LocalGitGuardrailTests.ps1` 覆盖本地流程和清理，`Invoke-RepositoryGuardrailTests.ps1 -Group All` 汇总执行全部检查。用例覆盖：
 
 - `main` 上 pre-commit 失败；
 - 任务分支 pre-commit 允许通过；

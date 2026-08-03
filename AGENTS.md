@@ -44,6 +44,20 @@ git merge --ff-only origin/main
 git switch -c feature/hvac-export
 ```
 
+首次使用仓库或本地 Hook 未安装时，在当前仓库执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Install-GitGuardrails.ps1
+```
+
+创建任务分支且工作区仍然干净时，执行统一预检：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight.ps1
+```
+
+预检失败时必须先修复报告的问题。预检成功只证明分支、基线、工作区、规则入口和 Hook 状态符合机械条件，不能替代 AI 实际阅读并理解规则。
+
 如果本地 `main` 与远程分叉、有未推送提交或工作区存在不明改动：
 
 - 不得直接覆盖、重置、变基或合并；
@@ -141,6 +155,8 @@ git diff --cached --check
 - 不包含生成文件、临时文件或无关文件；
 - 提交前完成对应测试。
 
+仓库 Hook 会拒绝在 `main` 提交，并对暂存差异执行机械检查；pre-push 会拒绝任何目标为远程 `main` 的更新。不得使用 `--no-verify` 绕过失败；如果 Hook 报错，应根据具体规则修复代码、差异或本地安装状态。
+
 ### 7. 测试要求
 
 提交前至少执行与改动直接相关的定向测试。
@@ -182,6 +198,14 @@ git push -u origin <branch-name>
 - 测试命令、通过数量、跳过项和未执行项；
 - 当前是否存在合并冲突；
 - 无关文件检查结果。
+
+生产 Java、Vue 或 TypeScript 文件发生变化时，PR 的“注释检查”还必须包含以下命令生成并人工填写的完整报告：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-CommentAuditReport.ps1 -BaseRef origin/main -HeadRef HEAD
+```
+
+报告必须覆盖每个变化生产文件和扫描器识别出的全部方法、构造器及函数。不能保留“待填写”或“待核验”；关键项填写注释处理结果和业务说明，简单项填写具体免注释原因。CI 通过只代表结构和证据完整，不能代替主代理判断注释是否真实、准确并与当前实现一致。
 
 PR 创建链接格式：
 
@@ -240,6 +264,15 @@ git branch -d <branch-name>
 - 先报告本地和远程的分叉提交。
 
 远程任务分支是否删除由用户的 GitHub 合并设置或用户操作决定。AI 默认只清理本地任务分支，不擅自删除远程分支。
+
+使用仓库清理脚本时，必须先运行默认预览，再在全部检查通过后显式执行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-PostMergeCleanup.ps1 -TaskBranch chore/example -WorktreePath C:\absolute\registered\worktree
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-PostMergeCleanup.ps1 -TaskBranch chore/example -WorktreePath C:\absolute\registered\worktree -Apply
+```
+
+脚本路径参数必须是 Git 已登记任务 worktree 的精确绝对路径；不得用通配符或宽泛目录代替。
 
 ### 11. 禁止操作
 
@@ -771,8 +804,9 @@ AI 生成或修改代码时，必须把实现过程中掌握的设计上下文�
 
 如果代码本身已经通过清晰命名和简单结构完整表达用途，可以不增加重复注释，但 AI 应在交付结果中如实说明已完成注释检查。
 
-提交或 PR 说明中还应列出本次完成注释检查的类和关键方法，并说明哪些简单方法被有意判定为
-不需要注释。不能只用“类上有 Javadoc”“公开方法有注释”或注释行数比例作为合格证据。
+只要生产文件发生变化，就必须检查该文件的完整当前内容，而不是只检查 diff 新增行。文件内全部可识别方法、构造器和函数都必须进入审查清单，包括私有方法；已有历史注释也必须复核时效，已经实现的目标改写为当前真实行为，已经取消或过期的承诺删除。
+
+提交或 PR 说明中还应列出每个变化生产文件、完整方法清单和逐项判定，并说明哪些简单方法被有意判定为不需要注释及具体原因。不能只用“类上有 Javadoc”“公开方法有注释”或注释行数比例作为合格证据，也不能把扫描器生成的“待填写”报告直接作为审查结果。
 
 ### 11. 完成标准
 
