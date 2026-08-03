@@ -267,12 +267,23 @@ public class ContractService {
     }
 }
 '@
+    Set-Utf8File $root 'web/src/types/ContractTypes.ts' @'
+export interface ContractRecord {
+  id: string
+}
+'@
     Commit-All $root 'baseline'
     Invoke-GitChecked $root @('switch', '-c', 'feature/contract') | Out-Null
     $file = Join-Path $root 'src/main/java/com/example/ContractService.java'
     $content = Get-Content -Raw -LiteralPath $file
     $content = $content.Replace('return id;', 'return allowed(id) ? id : "";')
     Set-Content -LiteralPath $file -Value $content -Encoding UTF8
+    Set-Utf8File $root 'web/src/types/ContractTypes.ts' @'
+export interface ContractRecord {
+  id: string
+  name?: string
+}
+'@
     Commit-All $root 'change service'
     return $root
 }
@@ -315,6 +326,14 @@ function Invoke-RepositoryContractTests {
     Assert-True (Test-Path $scannerScript) 'New-CommentAuditReport.ps1 must exist'
     $root = New-ContractFixture
     $body = New-CompletedAuditBody $root
+    $scannerResult = Invoke-PowerShellScript $scannerScript @('-BaseRef', 'main', '-HeadRef', 'HEAD', '-Format', 'Json') $root $null
+    Assert-True ($scannerResult.ExitCode -eq 0) "empty-symbol scanner JSON should succeed: $($scannerResult.Output)"
+    $reports = $scannerResult.Output | ConvertFrom-Json
+    $emptyReports = @($reports | Where-Object { $_.path -eq 'web/src/types/ContractTypes.ts' })
+    Assert-True ($emptyReports.Count -eq 1) 'changed type-only production file must be listed'
+    $emptySymbolCount = @($emptyReports[0].symbols).Count
+    $emptySymbolsJson = $emptyReports[0].symbols | ConvertTo-Json -Depth 4 -Compress
+    Assert-True ($emptySymbolCount -eq 0) "type-only production file symbols must be an empty array, actual: $emptySymbolsJson"
     $valid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
     Assert-True ($valid.ExitCode -eq 0) "complete PR contract should pass: $($valid.Output)"
     Assert-Contains $valid.Output 'REPOSITORY_GUARDRAILS_OK' 'success marker must be emitted'

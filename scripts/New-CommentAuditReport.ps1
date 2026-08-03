@@ -232,12 +232,14 @@ foreach ($file in (Get-ChangedProductionFiles $BaseRef $HeadRef)) {
     $absolutePath = Join-Path $repositoryRoot $file.path
     if (-not (Test-Path -LiteralPath $absolutePath)) { continue }
     $content = Get-Content -Raw -Encoding UTF8 -LiteralPath $absolutePath
-    $symbols = if ($file.path -match '\.java$') {
-        @(Get-JavaSymbols $content)
-    }
-    else {
-        @(Get-FrontendSymbols $content)
-    }
+    $symbols = @(
+        if ($file.path -match '\.java$') {
+            Get-JavaSymbols $content
+        }
+        else {
+            Get-FrontendSymbols $content
+        }
+    )
     $findings = @(Get-CommentFindings $content)
     $reports.Add([pscustomobject]@{
         path = $file.path
