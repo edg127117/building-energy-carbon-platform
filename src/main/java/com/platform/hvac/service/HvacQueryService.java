@@ -145,6 +145,12 @@ public class HvacQueryService {
                 buildingId, from, to, resolutionMinutes, series);
     }
 
+    /**
+     * 在访问任何测点配置或时序数据前确认建筑存在并校验用户范围。
+     *
+     * <p>先查 MySQL 区分 404，再调用建筑范围服务决定 403；Controller 的角色白名单
+     * 不能替代具体建筑授权。</p>
+     */
     private void checkBuildingAccess(
             String buildingId, Long userId, Set<String> roles) {
         // 先区分建筑不存在，再校验当前用户的数据范围；Controller 的角色白名单
@@ -155,6 +161,11 @@ public class HvacQueryService {
         buildingScopeService.checkAccess(userId, roles, buildingId);
     }
 
+    /**
+     * 校验历史查询采用有效的半开区间 {@code [from,to)}，并返回安全计算的跨度。
+     *
+     * <p>缺参、逆序、算术溢出或超过 31 天均转换为 400，避免无界 TDengine 查询。</p>
+     */
     private long validateTimeRange(Long from, Long to) {
         // 所有历史查询统一使用半开区间 [from, to)，相邻时间段不会重复边界数据。
         if (from == null || to == null) {
@@ -176,6 +187,12 @@ public class HvacQueryService {
         return span;
     }
 
+    /**
+     * 将 Controller 传入的逗号分隔测点 ID 清理为稳定查询顺序。
+     *
+     * <p>空白项被忽略、重复项保留第一次出现的位置；最终必须包含 1 至 8 个测点，
+     * 该顺序随后同时用于 TDengine 查询参数和前端曲线序列。</p>
+     */
     private List<String> parsePointIds(String rawPointIds) {
         if (rawPointIds == null) {
             throw new BusinessException(400, "pointIds 不能为空");
@@ -197,6 +214,12 @@ public class HvacQueryService {
         return List.copyOf(unique);
     }
 
+    /**
+     * 从 MySQL 批量加载所选测点，并校验它们全部在线且属于路径建筑。
+     *
+     * <p>返回映射供历史 DTO 补充名称和单位；任一 ID 不存在、停用或跨建筑时整批
+     * 拒绝，不能让部分合法 ID 掩盖越权选择。</p>
+     */
     private Map<String, BizDataPoint> validateConfiguredPoints(
             String buildingId, List<String> pointIds) {
         List<BizDataPoint> points = dataPointService.listByIds(pointIds);
@@ -221,12 +244,22 @@ public class HvacQueryService {
         return byId;
     }
 
+    /**
+     * 生成统一的测点选择错误，不向调用方区分“其他建筑存在”与“完全不存在”。
+     * 这样可以在返回 400 的同时避免通过 ID 探测跨建筑档案。
+     */
     private BusinessException invalidPointSelection() {
         // 使用统一提示，不向调用方泄露某个测点是否存在于其他建筑。
         return new BusinessException(
                 400, "测点不存在、已停用或不属于目标建筑");
     }
 
+    /**
+     * 按查询跨度选择 TDengine 历史降采样分辨率。
+     *
+     * <p>24 小时内返回 1 分钟，7 天内返回 5 分钟，更长返回 30 分钟，在保留趋势的
+     * 同时限制单条曲线的数据量和前端绘制成本。</p>
+     */
     private int resolution(long span) {
         // 查询越长返回粒度越粗，控制单条曲线的数据点数量和前端绘制成本。
         if (span <= Duration.ofHours(24).toMillis()) {
@@ -238,6 +271,12 @@ public class HvacQueryService {
         return 30;
     }
 
+    /**
+     * 批量读取测点关联设备的业务编码，供快照页面显示设备身份。
+     *
+     * <p>先去空和去重，再一次访问 MySQL，避免逐测点 N+1；环境测点等无设备记录
+     * 不会产生映射。</p>
+     */
     private Map<String, String> equipmentCodes(List<BizDataPoint> points) {
         // 设备编码只用于快照展示；先去重后批量读取，避免逐测点查询 MySQL。
         Set<String> equipmentIds = points.stream()
@@ -254,6 +293,12 @@ public class HvacQueryService {
                         (left, right) -> left));
     }
 
+    /**
+     * 将 MySQL 测点元数据与 TDengine 最新分钟行合并为单个快照 DTO。
+     *
+     * <p>没有时序行时仍保留测点、设备和单位，并以 {@code NO_DATA}、空数值和
+     * 0 样本返回；前端据此保留冻结槽位而不制造默认业务值。</p>
+     */
     private HvacQueryDtos.SnapshotPoint snapshotPoint(
             BizDataPoint point,
             String equipmentCode,
@@ -291,6 +336,10 @@ public class HvacQueryService {
                 "NORMAL");
     }
 
+    /**
+     * 将一个测点的 TDengine 历史行转换为按时间升序的接口序列。
+     * 合法测点没有数据时仍返回含元数据的空 {@code records}，供前端保留曲线选择。
+     */
     private HvacQueryDtos.HistorySeries historySeries(
             BizDataPoint point, List<HvacMinuteQueryRow> rows) {
         // Repository 不承诺返回顺序，DTO 层统一按窗口起始时间升序输出。
@@ -312,6 +361,12 @@ public class HvacQueryService {
                 records);
     }
 
+    /**
+     * 执行 HVAC 分钟 Repository 查询并稳定外部资源失败语义。
+     *
+     * <p>只把 JDBC/TDengine 的 {@link DataAccessException} 转换为可重试的 503；
+     * MySQL、权限和代码异常继续原样传播，避免掩盖非时序库故障。</p>
+     */
     private <T> T queryTdengine(Supplier<T> query) {
         try {
             return query.get();

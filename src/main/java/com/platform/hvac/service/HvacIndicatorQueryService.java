@@ -33,7 +33,10 @@ import java.util.function.Supplier;
  * HVAC 公式指标的只读查询编排。
  *
  * <p>MySQL 指标配置决定可见范围和稳定输出顺序，Redis 只承担最新状态加速，
- * TDengine 是成功趋势和异常审计的长期真相来源。</p>
+ * TDengine 是成功趋势和异常审计的长期真相来源。上游由指标 Controller 调用，
+ * 结果返回 HVAC 页面最新卡片、历史趋势或计算详情。本类按“权限与活动配置 →
+ * 缓存/时序回退 → 成功和异常合并 → DTO 组装”组织流程，不负责执行在线指标计算
+ * 或持久化公式结果。</p>
  */
 @Service
 @ConditionalOnProperty(
@@ -209,6 +212,12 @@ public class HvacIndicatorQueryService {
         return noDataDetail(indicator, minuteStart);
     }
 
+    /**
+     * 从 MySQL 活动配置中取得指标，并按其建筑归属校验当前用户数据范围。
+     *
+     * <p>指标不存在或停用返回 404，存在但建筑未授权返回 403；历史和计算详情入口
+     * 共用该边界，不能仅凭调用方提供的指标 ID 读取 TDengine。</p>
+     */
     private BizIndicator requireAccessibleIndicator(
             String indicatorId, Long userId, Set<String> roles) {
         BizIndicator indicator = configProvider.findActive(indicatorId)
@@ -219,6 +228,10 @@ public class HvacIndicatorQueryService {
         return indicator;
     }
 
+    /**
+     * 在查询指标缓存或时序结果前区分建筑不存在与建筑未授权。
+     * MySQL 建筑缺失返回 404，建筑范围服务拒绝时返回 403。
+     */
     private void checkBuildingAccess(
             String buildingId, Long userId, Set<String> roles) {
         if (buildingService.getById(buildingId) == null) {
@@ -227,6 +240,10 @@ public class HvacIndicatorQueryService {
         buildingScopeService.checkAccess(userId, roles, buildingId);
     }
 
+    /**
+     * 校验指标历史查询的半开区间 {@code [from,to)}。
+     * 缺参、逆序、跨度运算溢出或超过 31 天均返回 400，避免无界扫描 TDengine。
+     */
     private void validateHistoryRange(Long from, Long to) {
         if (from == null || to == null) {
             throw new BusinessException(400, "from 和 to 为必填毫秒时间戳");
@@ -245,6 +262,12 @@ public class HvacIndicatorQueryService {
         }
     }
 
+    /**
+     * 确认 Redis 最新状态仍属于当前 MySQL 指标身份。
+     *
+     * <p>指标编码、建筑或设备变化以及缺少状态时视为缓存未命中，防止陈旧缓存把
+     * 其他作用域结果返回给当前配置。</p>
+     */
     private boolean cacheMatches(
             BizIndicator indicator, IndicatorLatestState state) {
         return Objects.equals(indicator.getIndicatorId(), state.indicatorId())
@@ -254,6 +277,7 @@ public class HvacIndicatorQueryService {
                 && state.status() != null;
     }
 
+    /** 校验 TDengine 成功行的指标、建筑和设备身份与当前 MySQL 配置完全一致。 */
     private boolean successMatches(
             BizIndicator indicator, IndicatorMinuteResult row) {
         return Objects.equals(indicator.getIndicatorId(), row.indicatorId())
@@ -262,6 +286,7 @@ public class HvacIndicatorQueryService {
                 && Objects.equals(indicator.getEquipId(), row.equipId());
     }
 
+    /** 校验 TDengine 异常行的指标、建筑和设备身份与当前 MySQL 配置完全一致。 */
     private boolean exceptionMatches(
             BizIndicator indicator, FormulaCalculationException row) {
         return Objects.equals(indicator.getIndicatorId(), row.indicatorId())
@@ -270,6 +295,10 @@ public class HvacIndicatorQueryService {
                 && Objects.equals(indicator.getEquipId(), row.equipId());
     }
 
+    /**
+     * 过滤身份不匹配的 TDengine 成功行，并为每个缺失指标选出最新一次成功。
+     * 返回映射随后与异常映射合并为最新状态。
+     */
     private Map<String, IndicatorMinuteResult> latestSuccessesById(
             List<IndicatorMinuteResult> rows, List<BizIndicator> indicators) {
         Map<String, BizIndicator> metadata = indicators.stream().collect(
@@ -285,6 +314,10 @@ public class HvacIndicatorQueryService {
         return result;
     }
 
+    /**
+     * 过滤身份不匹配的 TDengine 异常行，并为每个缺失指标选出最新一次失败。
+     * 返回映射随后与成功映射合并为最新状态。
+     */
     private Map<String, FormulaCalculationException> latestExceptionsById(
             List<FormulaCalculationException> rows, List<BizIndicator> indicators) {
         Map<String, BizIndicator> metadata = indicators.stream().collect(
@@ -300,6 +333,10 @@ public class HvacIndicatorQueryService {
         return result;
     }
 
+    /**
+     * 在同一指标的重复成功行中选择业务上更新的一条：先比较来源分钟，
+     * 同一分钟再比较计算时间，以保留最近一次补算结果。
+     */
     private IndicatorMinuteResult newerSuccess(
             IndicatorMinuteResult left, IndicatorMinuteResult right) {
         if (left.minuteStart() != right.minuteStart()) {
@@ -308,6 +345,10 @@ public class HvacIndicatorQueryService {
         return left.calculatedAt() >= right.calculatedAt() ? left : right;
     }
 
+    /**
+     * 在同一指标的重复异常行中选择业务上更新的一条：先比较来源分钟，
+     * 同一分钟再比较计算时间，以保留最近一次失败审计。
+     */
     private FormulaCalculationException newerException(
             FormulaCalculationException left,
             FormulaCalculationException right) {
@@ -317,6 +358,12 @@ public class HvacIndicatorQueryService {
         return left.calculatedAt() >= right.calculatedAt() ? left : right;
     }
 
+    /**
+     * 合并一个指标在 TDengine 中最新的成功与异常事实。
+     *
+     * <p>同一分钟同时存在时表示后续补算已经成功，成功优先；不同分钟则取来源分钟
+     * 较新的状态。两者都没有时返回 {@code NO_DATA}。</p>
+     */
     private HvacIndicatorDtos.LatestIndicator mergeLatest(
             BizIndicator indicator,
             IndicatorMinuteResult success,
@@ -336,6 +383,10 @@ public class HvacIndicatorQueryService {
                 : fromSuccess(indicator, success);
     }
 
+    /**
+     * 将已通过身份校验的 Redis 最新状态转换为列表 DTO。
+     * 只有成功状态携带数值和质量，失败状态保留原因与缺失输入。
+     */
     private HvacIndicatorDtos.LatestIndicator fromCache(
             BizIndicator indicator, IndicatorLatestState state) {
         return new HvacIndicatorDtos.LatestIndicator(
@@ -354,6 +405,7 @@ public class HvacIndicatorQueryService {
                 state.missingInputs());
     }
 
+    /** 将 TDengine 成功结果转换为最新指标 DTO，并补充配置对应的展示单位。 */
     private HvacIndicatorDtos.LatestIndicator fromSuccess(
             BizIndicator indicator, IndicatorMinuteResult row) {
         return new HvacIndicatorDtos.LatestIndicator(
@@ -370,6 +422,7 @@ public class HvacIndicatorQueryService {
                 List.of());
     }
 
+    /** 将 TDengine 失败审计转换为无数值的最新指标 DTO，保留原因和缺失输入。 */
     private HvacIndicatorDtos.LatestIndicator latestFromException(
             BizIndicator indicator, FormulaCalculationException row) {
         return new HvacIndicatorDtos.LatestIndicator(
@@ -386,6 +439,7 @@ public class HvacIndicatorQueryService {
                 row.missingInputs());
     }
 
+    /** 为已配置但 Redis、TDengine 均无结果的指标生成稳定 {@code NO_DATA} 槽位。 */
     private HvacIndicatorDtos.LatestIndicator noData(BizIndicator indicator) {
         return new HvacIndicatorDtos.LatestIndicator(
                 indicator.getIndicatorId(),
@@ -401,6 +455,10 @@ public class HvacIndicatorQueryService {
                 List.of());
     }
 
+    /**
+     * 将 Redis 中同一分钟的最新状态转换为计算详情。
+     * 缓存保存的输入和步骤会原样返回，失败状态不暴露无效数值与质量。
+     */
     private HvacIndicatorDtos.CalculationDetail fromCacheDetail(
             BizIndicator indicator, IndicatorLatestState state) {
         return new HvacIndicatorDtos.CalculationDetail(
@@ -421,6 +479,10 @@ public class HvacIndicatorQueryService {
                 state.missingInputs());
     }
 
+    /**
+     * 将指定历史公式版本的重放结果转换为计算详情。
+     * 成功时返回值和质量，失败时保留重放得到的原因、输入、步骤及缺失项。
+     */
     private HvacIndicatorDtos.CalculationDetail fromCalculation(
             BizIndicator indicator,
             long minuteStart,
@@ -443,6 +505,10 @@ public class HvacIndicatorQueryService {
                 calculation.missingInputs());
     }
 
+    /**
+     * 将 TDengine 持久化异常转换为计算详情。
+     * 异常事实只保存原因和缺失输入，因此输入与步骤返回空列表而不是伪造过程。
+     */
     private HvacIndicatorDtos.CalculationDetail fromException(
             BizIndicator indicator, FormulaCalculationException row) {
         return new HvacIndicatorDtos.CalculationDetail(
@@ -461,6 +527,7 @@ public class HvacIndicatorQueryService {
                 row.missingInputs());
     }
 
+    /** 为合法指标但指定分钟无缓存、成功或异常记录的情况生成 {@code NO_DATA} 详情。 */
     private HvacIndicatorDtos.CalculationDetail noDataDetail(
             BizIndicator indicator, long minuteStart) {
         return new HvacIndicatorDtos.CalculationDetail(
@@ -479,6 +546,10 @@ public class HvacIndicatorQueryService {
                 List.of());
     }
 
+    /**
+     * 将四类稳定指标编码映射为接口展示单位。
+     * COP 无量纲返回 {@code null}，未知编码也不猜测单位。
+     */
     private String unit(String indicatorCode) {
         return switch (indicatorCode) {
             case "WCR_COP" -> null;
@@ -488,6 +559,12 @@ public class HvacIndicatorQueryService {
         };
     }
 
+    /**
+     * 执行指标或分钟 Repository 查询并稳定外部资源失败语义。
+     *
+     * <p>只将 JDBC/TDengine 的 {@link DataAccessException} 转换为可重试的 503，
+     * 不吞掉权限、MySQL 配置和公式版本等业务异常。</p>
+     */
     private <T> T queryTdengine(Supplier<T> query) {
         try {
             return query.get();

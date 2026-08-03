@@ -40,7 +40,8 @@ function errorMessage(error: unknown): string {
  * 编排 HVAC 大屏的建筑选择、两类独立数据请求和刷新生命周期。
  *
  * 快照与指标互不清空，单个请求失败时保留该部分最后一次成功数据，页面才能
- * 如实提示过期状态，而不会把外部时序库的短暂故障伪装成“没有历史数据”。
+ * 如实提示过期状态，而不会把外部时序库的短暂故障伪装成“没有数据”。建筑选择
+ * 持久化到浏览器；切换建筑会先清除旧建筑数据，防止跨建筑短暂混显。
  */
 export function useHvacDashboard(
   dependencies: HvacDashboardDependencies = defaultDependencies,
@@ -75,6 +76,12 @@ export function useHvacDashboard(
     calculatePointCoverage(pointViews.value),
   )
 
+  /**
+   * 并行刷新所选建筑的测点快照和最新指标。
+   *
+   * 同一时刻复用一个 Promise，避免轮询与手动刷新重叠；请求完成时若建筑已经切换，
+   * 旧结果会被丢弃。两部分独立成功或失败，失败时保留各自上一次成功数据并记录错误。
+   */
   async function refresh(): Promise<void> {
     if (!selectedBuildingId.value) return
     if (refreshPromise) return refreshPromise
@@ -114,6 +121,10 @@ export function useHvacDashboard(
     }
   }
 
+  /**
+   * 只接受授权建筑列表中的 ID，并将选择写入 localStorage。
+   * 切换时先清空旧建筑快照、指标和错误，再请求所选建筑，避免跨建筑状态混显。
+   */
   async function selectBuilding(buildingId: string): Promise<void> {
     if (!buildings.value.some((item) => item.buildingId === buildingId)) {
       return
@@ -127,6 +138,12 @@ export function useHvacDashboard(
     await refresh()
   }
 
+  /**
+   * 加载授权建筑并选择首个可用建筑。
+   *
+   * 浏览器记忆的建筑仍在授权列表时优先恢复，否则回退第一条；无授权时保持空选择，
+   * 建筑列表请求失败则只设置入口错误，不启动虚假数据。
+   */
   async function initialize(): Promise<void> {
     initializing.value = true
     buildingError.value = null
@@ -150,8 +167,8 @@ export function useHvacDashboard(
   }
 
   /**
-   * 后端当前提供分钟级快照，本期尚未接入 WebSocket；30 秒轮询既能及时显示
-   * 新分钟数据，也避免浏览器高频重复查询时序库。
+   * 页面尚未消费后端 WebSocket，使用默认 30 秒的非重叠轮询刷新分钟数据。
+   * 该间隔兼顾分钟级更新与时序库查询压力，重复启动不会创建第二个定时器。
    */
   function startPolling(): void {
     if (pollingTimer !== null) return
@@ -160,6 +177,7 @@ export function useHvacDashboard(
     }, refreshIntervalMs)
   }
 
+  /** 页面卸载时清除轮询定时器，防止离开大屏后继续请求外部数据源。 */
   function stopPolling(): void {
     if (pollingTimer === null) return
     window.clearInterval(pollingTimer)

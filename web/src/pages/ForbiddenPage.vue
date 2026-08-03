@@ -1,4 +1,8 @@
 <template>
+  <!--
+    前端 403 提示页只提供导航和本地退出操作，不代表后端授权结果可以由页面修改；
+    受保护接口仍以服务端角色和建筑范围校验为准。
+  -->
   <div class="min-h-screen bg-[#070B14] px-6 py-14 text-zinc-100">
     <div class="mx-auto max-w-[720px]">
       <div class="rounded-3xl border border-white/10 bg-white/[0.04] p-7 backdrop-blur-xl">
@@ -32,4 +36,3 @@ function goLogin() {
   router.replace('/login')
 }
 </script>
-

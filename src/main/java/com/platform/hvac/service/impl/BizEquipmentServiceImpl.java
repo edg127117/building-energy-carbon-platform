@@ -24,7 +24,11 @@ import org.springframework.util.StringUtils;
 import java.util.Set;
 
 /**
- * 设备业务实现类
+ * HVAC 设备台账的 MySQL 查询、关系校验与编号分配实现。
+ *
+ * <p>Controller 传入授权建筑范围进行查询；新增时依次校验启用设备类型、系统分组
+ * 与空间归属，再扫描含逻辑删除记录的历史编码并写入设备。并发唯一键冲突最多重试
+ * 三次。更新保持身份和分类字段不变；本类不访问实时测点或发送控制命令。</p>
  */
 @Slf4j
 @Service
@@ -38,6 +42,10 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     private final BizSpaceMapper spaceMapper;
     private final EquipmentCodeAllocator codeAllocator;
 
+    /**
+     * 在调用方传入的建筑范围内分页查询 MySQL 设备，可进一步按建筑、分类和关键字筛选。
+     * 空授权集合直接返回空页。
+     */
     @Override
     public Result<IPage<BizEquipment>> list(Integer page, Integer size, String buildingId, String equipCategory, String keyword, Set<String> accessibleBuildingIds) {
         Page<BizEquipment> pageParam = new Page<>(page, size);
@@ -59,6 +67,12 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
         return Result.success(result);
     }
 
+    /**
+     * 新增带后端分配业务编码的设备。
+     *
+     * <p>设备类型必须启用，系统分组和空间必须与建筑一致；每次尝试都重新查询历史
+     * 编码并生成下一个编号。并发插入冲突重试三次后返回 409，避免覆盖或复用编号。</p>
+     */
     @Override
     public Result<BizEquipment> add(BizEquipment equipment) {
         BizEquipmentType type = equipmentTypeMapper.selectById(equipment.getTypeCode());
@@ -84,6 +98,12 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
         throw new BusinessException(409, "设备编号分配冲突，请稍后重试");
     }
 
+    /**
+     * 更新设备可编辑档案并保持内部 ID 之外的受控身份不变。
+     *
+     * <p>记录不存在返回 404；恢复原编码、建筑、类型和分类后再校验系统分组与空间，
+     * 防止部分更新把设备移入不一致的关系。</p>
+     */
     @Override
     public Result<BizEquipment> update(BizEquipment equipment) {
         BizEquipment existing = this.getById(equipment.getEquipId());
@@ -98,12 +118,17 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
         return Result.success(equipment);
     }
 
+    /** 逻辑删除设备台账；测点配置和 TDengine 数据不在此方法处理。 */
     @Override
     public Result<Void> delete(String equipId) {
         this.removeById(equipId);
         return Result.success();
     }
 
+    /**
+     * 校验设备引用的系统分组和空间都存在且属于设备声明的建筑。
+     * 新增、更新写库前均执行，任一关系不一致返回 400。
+     */
     private void validateBuildingRelationships(BizEquipment equipment) {
         BizSystemGroup group = systemGroupMapper.selectById(equipment.getSystemGroupId());
         if (group == null || !equipment.getBuildingId().equals(group.getBuildingId())) {

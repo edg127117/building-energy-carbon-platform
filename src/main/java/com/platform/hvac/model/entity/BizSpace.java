@@ -14,6 +14,13 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
+/**
+ * MySQL 中建筑楼层、区域和房间的空间档案。
+ *
+ * <p>空间服务按 {@code parentSpaceId} 组装树，设备档案通过 {@code spaceId}
+ * 标记物理位置；{@code children} 仅用于接口返回，不写入数据库。该实体不承担
+ * 建筑权限判断，也不表达 HVAC 时序状态。</p>
+ */
 @Data
 @TableName("biz_space")
 public class BizSpace implements Serializable {
@@ -28,7 +35,7 @@ public class BizSpace implements Serializable {
     /** 外键→building.building_id */
     private String buildingId;
 
-    /** 父空间ID，顶级=0 */
+    /** 父空间 ID；顶级空间为 NULL，树形查询从 NULL 根开始组装 */
     private String parentSpaceId;
 
     /** 如"核心冷源机房A" */

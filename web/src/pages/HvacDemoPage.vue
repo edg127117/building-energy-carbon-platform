@@ -1,4 +1,9 @@
 <template>
+  <!--
+    HVAC V1 大屏只展示后端真实建筑、最新分钟快照和最新指标状态。
+    useHvacDashboard 负责请求编排、建筑切换和轮询；缺失或失败数据保留固定槽位并显示
+    --/错误提示，不生成随机测点、虚假历史曲线或公式计算详情。
+  -->
   <div class="hvac-demo">
     <div class="ambient ambient-a" />
     <div class="ambient ambient-b" />
@@ -62,6 +67,7 @@
         :message="`性能指标刷新失败：${indicatorError}`"
       />
 
+      <!-- 建筑选择、19 槽位完整率和最近一次前端刷新时间的汇总。 -->
       <section class="summary-strip">
         <div>
           <div class="eyebrow">SYSTEM OVERVIEW</div>
@@ -81,6 +87,7 @@
         </div>
       </section>
 
+      <!-- 拓扑中的温度、流量、功率和环境值均来自 19 个领域映射槽位。 -->
       <section class="main-grid">
         <article class="panel topology-panel">
           <div class="panel-heading">
@@ -159,6 +166,7 @@
           </div>
         </article>
 
+        <!-- 四张指标卡从后端活动指标中按稳定编码筛选，并保留失败原因与缺失输入。 -->
         <aside class="indicators">
           <div class="aside-heading">
             <div><span class="section-index">02</span><span class="panel-title">实时能效指标</span></div>
@@ -198,6 +206,7 @@
         </aside>
       </section>
 
+      <!-- 公式区是冻结业务公式的静态目录，不代表页面已接入逐分钟计算详情。 -->
       <section class="panel formula-catalog">
         <div class="panel-heading formula-catalog-heading">
           <div>
@@ -225,6 +234,7 @@
         </div>
       </section>
 
+      <!-- 历史趋势尚未接入；测点列表仍按冻结顺序展示真实快照或明确空值。 -->
       <section class="bottom-grid">
         <article class="panel trend-panel">
           <div class="panel-heading compact">
@@ -279,6 +289,10 @@ import {
 const clock = ref('')
 let clockTimer: number | null = null
 
+/**
+ * 大屏数据状态由 Composable 提供：建筑来自 MySQL 授权范围，测点来自 MySQL 元数据与
+ * TDengine 分钟行，指标优先 Redis 并回退 TDengine。页面只负责展示和生命周期绑定。
+ */
 const {
   buildings,
   selectedBuildingId,
@@ -318,6 +332,10 @@ function updateClock(): void {
     .replace(/\//g, '-')
 }
 
+/**
+ * 显示快照或指标最近一次成功完成前端刷新的时间。
+ * 该时间不等于后端测点的分钟时间，也不把失败请求计为更新成功。
+ */
 const lastUpdatedText = computed(() => {
   const latest = Math.max(
     snapshotUpdatedAt.value ?? 0,
@@ -328,6 +346,10 @@ const lastUpdatedText = computed(() => {
     : '--'
 })
 
+/**
+ * 汇总两类 HTTP 查询的页面状态。
+ * “真实分钟数据已连接”只表示至少一次查询成功，不代表 MQTT 或 WebSocket 长连接状态。
+ */
 const linkStatusText = computed(() => {
   if (initializing.value) return '正在加载授权建筑'
   if (refreshing.value) return '正在刷新分钟数据'
@@ -352,6 +374,7 @@ const indicatorIcons = {
   AHU_POW_EFF: Fan,
 } as const
 
+/** 为四项指标视图补充展示图标；业务值、单位和失败状态仍来自领域映射。 */
 const indicatorCards = computed(() =>
   indicatorViews.value.map((indicator) => ({
     ...indicator,
@@ -362,12 +385,17 @@ const indicatorCards = computed(() =>
   })),
 )
 
+/** 按冻结书定义顺序展开全部 19 个槽位，接口缺项也不会改变列表结构。 */
 const allPoints = computed(() =>
   FROZEN_POINT_DEFINITIONS.map((definition) => ({
     ...pointViews.value[definition.displayCode],
   })),
 )
 
+/**
+ * 冻结书公式的静态概览文案，只用于说明业务口径。
+ * 实际指标值由后端公式引擎产生，本数组不参与计算，也不展示历史计算步骤。
+ */
 const formulaCards = [
   { key: 'chillerCooling', group: '冷水机组', title: '制冷量计算', formula: 'Q₀ = V × ρ × c × ΔT / 3600', tone: 'blue', icon: Snowflake },
   { key: 'chillerPower', group: '冷水机组', title: '电功率计算', formula: 'Nᵢ = PPE ｜ U × I × cosφ × √3', tone: 'blue', icon: Activity },
@@ -377,6 +405,7 @@ const formulaCards = [
   { key: 'ahuPower', group: '风系统', title: '单位风量耗功值', formula: 'Wₛ = P / (3600 × ηₜ)', tone: 'yellow', icon: Fan },
 ] as const
 
+/** 页面挂载时启动时钟、加载授权建筑与首屏数据，完成后开启非重叠轮询。 */
 onMounted(async () => {
   updateClock()
   clockTimer = window.setInterval(updateClock, 1000)
@@ -384,6 +413,7 @@ onMounted(async () => {
   startPolling()
 })
 
+/** 页面卸载时同时清理本地时钟和数据轮询，避免后台继续刷新。 */
 onBeforeUnmount(() => {
   if (clockTimer !== null) window.clearInterval(clockTimer)
   stopPolling()

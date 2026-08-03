@@ -8,7 +8,12 @@ import lombok.Data;
 import java.io.Serial;
 import java.io.Serializable;
 
-/** 外部协议测点地址到平台标准测点的映射。 */
+/**
+ * MySQL 中外部协议测点地址到平台标准测点的映射。
+ *
+ * <p>MQTT 接入前由测点配置提供者加载启用映射，报文中的来源编码据此转换为
+ * {@link BizDataPoint} 的内部标识。该实体只描述身份映射，不保存上报值或质量结果。</p>
+ */
 @Data
 @TableName("biz_point_alias")
 public class BizPointAlias implements Serializable {

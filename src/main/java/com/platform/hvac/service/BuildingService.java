@@ -7,7 +7,11 @@ import com.platform.hvac.model.entity.Building;
 import java.util.Set;
 
 /**
- * 建筑业务接口
+ * 建筑档案的业务边界。
+ *
+ * <p>建筑 Controller 用它完成 MySQL 档案维护和范围内分页查询；数据质量模块也通过
+ * 行锁方法串行化同一建筑的重算受理。实现不计算建筑权限，调用方必须传入已经解析的
+ * 可访问建筑集合或在调用前完成单建筑校验。</p>
  */
 public interface BuildingService extends IService<Building> {
 
@@ -22,22 +26,18 @@ public interface BuildingService extends IService<Building> {
     void lockExistingForUpdate(String buildingId);
 
     /**
-     * 按名称/编码模糊搜索分页查询建筑列表
+     * 按名称或编码分页查询可访问建筑。
+     *
+     * @param accessibleBuildingIds {@code null} 表示平台管理员不过滤，空集合表示无权建筑
      */
     Result<IPage<Building>> list(Integer page, Integer size, String keyword, Set<String> accessibleBuildingIds);
 
-    /**
-     * 新增建筑
-     */
+    /** 将调用方校验后的建筑档案写入 MySQL。 */
     Result<Building> add(Building building);
 
-    /**
-     * 更新建筑
-     */
+    /** 按建筑 ID 更新 MySQL 档案。 */
     Result<Building> update(Building building);
 
-    /**
-     * 逻辑删除建筑
-     */
+    /** 通过 MyBatis-Plus 逻辑删除建筑，不清理关联时序数据。 */
     Result<Void> delete(String buildingId);
 }

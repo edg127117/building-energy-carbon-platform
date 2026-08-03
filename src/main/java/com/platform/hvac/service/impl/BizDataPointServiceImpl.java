@@ -26,6 +26,10 @@ import java.util.List;
  *
  * <p>通用代码生成器只能提供单表 CRUD，不能表达在线计算模拟量必须配置单位等
  * HVAC 业务规则，因此生成结果只能选择性合并，不能整体覆盖本实现。</p>
+ *
+ * <p>新增、更新和删除成功后会刷新 {@link MySqlDataPointConfigProvider} 的运行时快照，
+ * 使 MQTT 身份解析与质量校验看到最新配置；本类只维护 MySQL 档案，不改写既有
+ * TDengine 时序事实。</p>
  */
 @Slf4j
 @Service
@@ -38,6 +42,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
     private final BizPointNamingRuleMapper namingRuleMapper;
     private final PointCodeNamingValidator namingValidator;
 
+    /** 按设备 ID 从 MySQL 返回测点档案；设备存在性和建筑权限由 Controller 校验。 */
     @Override
     public Result<List<BizDataPoint>> listByEquip(String equipId) {
         LambdaQueryWrapper<BizDataPoint> wrapper = new LambdaQueryWrapper<>();
@@ -46,6 +51,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         return Result.success(list);
     }
 
+    /** 按建筑 ID 从 MySQL 返回测点档案；建筑权限由 Controller 校验。 */
     @Override
     public Result<List<BizDataPoint>> listByBuilding(String buildingId) {
         LambdaQueryWrapper<BizDataPoint> wrapper = new LambdaQueryWrapper<>();
@@ -54,6 +60,12 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         return Result.success(list);
     }
 
+    /**
+     * 新增标准测点并刷新运行时配置快照。
+     *
+     * <p>先清除客户端内部 ID，再校验命名规则、建筑关系和在线计算模拟量单位；
+     * 任一校验失败都不会写库或刷新快照。</p>
+     */
     @Override
     public Result<BizDataPoint> add(BizDataPoint point) {
         point.setPointId(null);
@@ -64,6 +76,12 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         return Result.success(point);
     }
 
+    /**
+     * 更新测点可编辑字段并刷新运行时配置快照。
+     *
+     * <p>先读取旧档案形成数据库最终状态，再复用新增校验；记录不存在返回 404，
+     * 标准身份和归属字段不能通过普通更新改变。</p>
+     */
     @Override
     public Result<BizDataPoint> update(BizDataPoint point) {
         BizDataPoint existing = this.getById(point.getPointId());
@@ -106,6 +124,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         }
     }
 
+    /** 逻辑删除 MySQL 测点后刷新配置快照，不删除 TDengine 中的历史分钟数据。 */
     @Override
     public Result<Void> delete(String pointId) {
         this.removeById(pointId);
@@ -128,6 +147,12 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         }
     }
 
+    /**
+     * 校验测点标准命名及建筑、系统分组、设备归属的一致性。
+     *
+     * <p>环境测点不得绑定设备；设备测点必须同时绑定设备和系统分组，且三者属于
+     * 同一建筑和系统。校验失败返回 400，避免错误身份进入 MQTT、质量和公式链路。</p>
+     */
     private void validateRelationships(BizDataPoint point) {
         BizPointNamingRule rule = namingRuleMapper.selectById(point.getNamingRuleId());
         if (rule == null || !Integer.valueOf(1).equals(rule.getStatus())) {

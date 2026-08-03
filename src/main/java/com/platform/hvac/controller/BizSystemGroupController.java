@@ -14,8 +14,11 @@ import com.platform.system.service.BuildingScopeService;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * 系统分组管理接口。
- * 列表按建筑范围过滤，系统分组 CRUD 仅允许 PLATFORM_ADMIN。
+ * 建筑内 HVAC 系统分组的 HTTP 管理入口。
+ *
+ * <p>查询时先用 {@link BuildingScopeService} 限定当前用户的建筑集合，再由
+ * {@link BizSystemGroupService} 访问 MySQL；指定建筑筛选时还会立即校验该建筑权限。
+ * 写操作只允许平台管理员，本 Controller 不维护设备或测点档案。</p>
  */
 @Slf4j
 @RestController
@@ -26,7 +29,12 @@ public class BizSystemGroupController {
     private final BizSystemGroupService systemGroupService;
     private final BuildingScopeService buildingScopeService;
 
-    /** 分页查询系统分组 */
+    /**
+     * 在用户获权建筑内分页查询系统分组。
+     *
+     * <p>显式传入 {@code buildingId} 时先返回 403 或继续查询，未传时则由 Service
+     * 使用完整可访问建筑集合过滤，避免跨建筑枚举系统档案。</p>
+     */
     @GetMapping("/list")
     @PreAuthorize("hasAnyRole('BUILDING_OWNER','ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<IPage<BizSystemGroup>> list(
@@ -39,21 +47,21 @@ public class BizSystemGroupController {
                 buildingScopeService.getAccessibleBuildingIds(SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
     }
 
-    /** 新增系统分组 */
+    /** 将平台管理员提交的系统分组写入 MySQL，内部 ID 由后端生成。 */
     @PostMapping("/add")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<BizSystemGroup> add(@Valid @RequestBody BizSystemGroup group) {
         return systemGroupService.add(group);
     }
 
-    /** 更新系统分组 */
+    /** 更新系统分组的可编辑字段，建筑归属和业务编码由 Service 保持不变。 */
     @PutMapping("/update")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<BizSystemGroup> update(@Valid @RequestBody BizSystemGroup group) {
         return systemGroupService.update(group);
     }
 
-    /** 删除系统分组 */
+    /** 逻辑删除指定系统分组；本入口不级联删除设备或测点。 */
     @DeleteMapping("/delete/{id}")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<Void> delete(@PathVariable String id) {
