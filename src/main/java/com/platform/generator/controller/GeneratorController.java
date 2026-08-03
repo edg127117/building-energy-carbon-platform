@@ -27,7 +27,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
-/** 平台管理员使用的后端代码生成器入口，V1 只生成内存预览或 ZIP，不写入工作区。 */
+/**
+ * 平台管理员维护代码生成配置并取得生成结果的 HTTP 入口。
+ *
+ * <p>请求先交给 {@link GeneratorService} 读取业务库元数据或校验持久化配置，再由
+ * {@link JavaZipGenerationTarget} 渲染后端源码。预览直接返回“路径到内容”的内存结果，
+ * 下载再交给 {@link ZipArchiveWriter} 封装；两条路径都不会写入服务器工作区。</p>
+ */
 @RestController
 @RequestMapping("/system/generator")
 @RequiredArgsConstructor
@@ -37,7 +43,7 @@ public class GeneratorController {
     private final JavaZipGenerationTarget javaZipTarget;
     private final ZipArchiveWriter zipArchiveWriter;
 
-    /** 获取可导入业务表，供未来可视化界面的表选择器使用。 */
+    /** 列出当前业务库中的可导入表，并标明哪些表已有生成配置。 */
     @GetMapping("/tables")
     public Result<List<TableSummary>> tables() {
         return Result.success(generatorService.listTables());

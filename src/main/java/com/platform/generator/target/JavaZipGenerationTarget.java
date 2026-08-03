@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * V1 的 Java 后端源码输出目标。
+ * Java 后端源码的内存输出目标。
  *
  * <p>根据同一份中立上下文生成 Entity、Mapper、Service、ServiceImpl、Controller 和 README。
  * 返回值仍是内存文件集合，ZIP 封装由 {@code ZipArchiveWriter} 独立负责。</p>
@@ -38,8 +38,8 @@ public class JavaZipGenerationTarget implements GenerationTarget {
         String basePackage = context.table().packageName() + "." + context.table().moduleName();
         String basePath = "src/main/java/" + GeneratorNames.packagePath(basePackage) + "/";
         Map<String, Object> model = new LinkedHashMap<>();
-        // FreeMarker treats Java record component methods as callable methods. Converting the
-        // neutral metadata records to maps keeps the template contract stable and target-agnostic.
+        // FreeMarker 会把 Java record 访问器识别为可调用方法；先转为 Map，模板才能按普通属性
+        // 稳定取值，同时避免模板直接绑定中立模型的 Java 实现细节。
         model.put("table", objectMapper.convertValue(context.table(), MAP_TYPE));
         model.put("primaryKey", objectMapper.convertValue(context.primaryKey(), MAP_TYPE));
         model.put("basePackage", basePackage);
@@ -67,7 +67,7 @@ public class JavaZipGenerationTarget implements GenerationTarget {
         return renderer.render(TEMPLATE_ROOT + template, model);
     }
 
-    /** V1 的 keyword 通用查询只生成 String 类型的 LIKE 字段。 */
+    /** 通用 keyword 只覆盖显式配置为 LIKE 的字符串字段，避免对数值和日期生成无效模糊查询。 */
     private List<ColumnMeta> queryColumns(GenerationContext context) {
         List<ColumnMeta> columns = new ArrayList<>();
         for (ColumnMeta column : context.table().columns()) {

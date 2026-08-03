@@ -11,8 +11,9 @@ import java.io.Serializable;
 /**
  * 已导入字段的代码生成配置，对应 {@code gen_column}。
  *
- * <p>一条记录同时保留数据库原始信息和可编辑的 Java/UI 配置。V1 只使用其中的
- * Java 类型、查询方式等后端属性；列表、编辑和组件属性为后续可视化及 V2 预留。</p>
+ * <p>一条记录同时保留导入时的数据库字段事实和管理员可调整的生成选项。当前 Java
+ * 后端模板消费字段名、Java 类型、主键、逻辑删除和通用查询配置；列表、编辑、必填及
+ * 组件类型仍作为配置元数据持久化，但不改变当前 ZIP 中的模板输出。</p>
  */
 @Data
 @TableName("gen_column")
@@ -45,7 +46,7 @@ public class GenColumn implements Serializable {
     private String queryType;
     private Integer isEdit;
     private Integer isRequired;
-    /** 预留的表单组件类型，例如 TEXT、NUMBER、DATETIME。 */
+    /** 字段的表单组件配置，例如 TEXT、NUMBER、DATETIME；当前后端模板不消费该值。 */
     private String componentType;
     /** 字段生成顺序，默认沿用数据库字段顺序。 */
     private Integer sortOrder;

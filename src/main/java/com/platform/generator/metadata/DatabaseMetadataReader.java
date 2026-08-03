@@ -7,8 +7,9 @@ import java.util.List;
 /**
  * 数据库结构发现的抽象入口。
  *
- * <p>生成器服务只依赖本接口，不直接依赖某一种数据库。V1 提供 JDBC/MySQL 兼容实现，
- * 后续若支持其他数据库，可以新增实现而不改动生成流程。</p>
+ * <p>生成器服务通过本接口取得原始表、主键和字段信息，不接触 JDBC 细节；当前实现
+ * {@link MysqlDatabaseMetadataReader} 从业务 {@code DataSource} 读取标准 JDBC 元数据。
+ * 该边界只负责结构发现，不保存生成配置，也不渲染模板。</p>
  */
 public interface DatabaseMetadataReader {
     /** 返回当前业务库中可供导入的表，不包含系统库和生成器自身配置表。 */

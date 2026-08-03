@@ -62,7 +62,9 @@ function Get-FileContent {
 
 function Test-ForbiddenPath {
     param([string]$Path)
-    if ($Path -match '(^|/)(?:target|node_modules|\.tools|\.npm-cache)(/|$)') { return $true }
+    $isJavaSourceTargetPackage = $Path -match '^src/(?:main|test)/java/.+/target(/|$)'
+    if ($Path -match '(^|/)target(/|$)' -and -not $isJavaSourceTargetPackage) { return $true }
+    if ($Path -match '(^|/)(?:node_modules|\.tools|\.npm-cache)(/|$)') { return $true }
     if ($Path -match '^web/dist(/|$)') { return $true }
     if ($Path -match '^src/env/(?:mysql-data|taos-data|redis-data)(/|$)') { return $true }
     if ($Path -in @('server.env', 'web/.env', 'token.txt')) { return $true }

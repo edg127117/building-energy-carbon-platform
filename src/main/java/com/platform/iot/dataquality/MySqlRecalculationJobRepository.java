@@ -20,7 +20,8 @@ import java.util.UUID;
 /**
  * 使用 MyBatis Mapper 持久化低频人工重算批次。
  *
- * <p>这里明确只访问 MySQL。TDengine 分钟写入由后续重算服务通过时序仓储完成，
+ * <p>这里明确只访问 MySQL。TDengine 分钟读写由 {@link DataQualityRecalculationService}
+ * 和 {@link RecalculationVoidService} 通过时序仓储完成，
  * 两个数据库之间不伪装成分布式事务，而是依靠确定性任务键、持久化游标和条件
  * 状态更新实现恢复。</p>
  */

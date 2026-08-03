@@ -27,7 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * <p>本服务位于典型值内存快照、MySQL 补全任务和 TDengine 质量优先写入口之间。
  * 同点、同配置版本、同自然小时只取得一次任务；成功分钟不逐分钟更新 MySQL 计数，
- * 小时实际区间由后续收口任务统一重建。</p>
+ * {@link FillTaskReconciliationService} 再按 TDengine 正式事实重建小时实际区间。</p>
  */
 @Slf4j
 @Service
@@ -115,6 +115,12 @@ public class TypicalValueFillService {
         }
     }
 
+    /**
+     * 以“测点 + 批准配置版本 + 自然小时”复用 MySQL 补全任务。
+     *
+     * <p>本地缓存仅减少热路径查询，最终幂等性仍由仓储的确定性任务键保证；缓存只保留
+     * 当前和上一小时，防止常驻进程随历史分钟持续增长。</p>
+     */
     private CachedTask taskFor(
             PointRuntimeConfig point,
             BizPointTypicalValueConfig config,
@@ -166,7 +172,7 @@ public class TypicalValueFillService {
         task.setPointId(point.pointId());
         task.setStartMinute(toLocalDateTime(hourStart));
         task.setEndMinute(toLocalDateTime(hourStart + HOUR_MILLIS));
-        // 小时任务的实际分钟数和区间由收口服务按 TDengine 事实一次性重建。
+        // 热路径先建立小时审计边界，不猜测实际应用数量；跨库收口再按 TDengine 事实重建。
         task.setMinuteCount(0);
         task.setDataQuality(2);
         task.setSourceType(FillSourceType.TYPICAL_VALUE);
@@ -220,6 +226,12 @@ public class TypicalValueFillService {
         };
     }
 
+    /**
+     * 首个 Q2 分钟写入 TDengine 后，尽力把 MySQL 任务推进到已应用。
+     *
+     * <p>两库没有分布式事务，状态更新失败不能撤销已落库分钟；重置本地标记后，下一次
+     * 同小时写入会继续补记，小时收口也会处理遗留窗口。</p>
+     */
     private void markFirstAppliedOnce(CachedTask cachedTask) {
         if (!cachedTask.appliedMarked().compareAndSet(false, true)) {
             return;

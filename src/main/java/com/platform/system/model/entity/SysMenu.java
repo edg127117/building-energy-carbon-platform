@@ -11,6 +11,12 @@ import java.io.Serializable;
 import java.util.Date;
 import java.util.List;
 
+/**
+ * MySQL {@code sys_menu} 中的前端菜单树节点。
+ *
+ * <p>菜单服务按角色关系组装 {@link #children} 返回前端路由菜单；该树只控制可见导航，
+ * 后端 Controller 仍必须独立执行角色和建筑范围校验。</p>
+ */
 @Data
 @TableName("sys_menu")
 public class SysMenu implements Serializable {

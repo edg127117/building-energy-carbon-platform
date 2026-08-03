@@ -47,7 +47,7 @@ public class GenTable implements Serializable {
     private String readRoles;
     /** 允许新增、修改和删除的四类正式角色，JSON 数组格式。 */
     private String writeRoles;
-    /** 输出模式；V1 固定为 JAVA_ZIP。 */
+    /** 输出模式；当前唯一合法值为 JAVA_ZIP。 */
     private String generateMode;
     /** 配置状态：1 表示正常。 */
     private Integer status;

@@ -53,7 +53,7 @@ public class TdengineConfig {
         // TDengine 暂时不可用时仍允许应用先启动，避免创建连接池阶段直接失败。
         config.setInitializationFailTimeout(-1);
         config.setConnectionTimeout(30000);
-        // 可选：连接池名称，方便后期使用 Prometheus 监控时定位排查
+        // 固定连接池名称，便于当前日志、线程和连接池指标直接定位 TDengine 连接。
         config.setPoolName("TDengine-HikariPool");
         return new HikariDataSource(config);
     }

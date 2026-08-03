@@ -45,13 +45,15 @@ import java.util.stream.Collectors;
 /**
  * 代码生成器配置与元数据编排服务。
  *
- * <p>它把数据库发现结果转换成可编辑配置，并在生成前执行白名单、主键、字段、角色和
- * 建筑数据范围校验。该服务只维护 {@code gen_table/gen_column}，从不更新真实业务表。</p>
+ * <p>上游是管理员生成器接口，下游依次调用 {@link DatabaseMetadataReader}、
+ * {@code gen_table/gen_column} Mapper 和输出目标需要的中立模型。它把数据库发现结果转换成
+ * 可编辑配置，并在生成前校验白名单、主键、字段、角色和建筑数据范围；整个流程从不更新
+ * 真实业务表，也不负责模板渲染或 ZIP 写出。</p>
  */
 @Service
 @RequiredArgsConstructor
 public class GeneratorServiceImpl implements GeneratorService {
-    /** V1 明确支持的有限选项，使用白名单避免任意文本进入模板和安全表达式。 */
+    /** 当前明确支持的有限选项，使用白名单避免任意文本进入模板和安全表达式。 */
     private static final Set<String> ID_TYPES = Set.of("AUTO", "ASSIGN_ID", "INPUT");
     private static final Set<String> SCOPE_TYPES = Set.of("NONE", "BUILDING");
     private static final Set<String> ROLES = Set.of(
@@ -306,13 +308,13 @@ public class GeneratorServiceImpl implements GeneratorService {
                 .eq(GenColumn::getTableId, tableId).orderByAsc(GenColumn::getSortOrder));
     }
 
-    /** V1 生成模板只支持单列主键，避免输出错误的 MyBatis-Plus 主键代码。 */
+    /** 当前生成模板只支持单列主键，避免输出错误的 MyBatis-Plus 主键代码。 */
     private void requireSinglePrimaryKey(DiscoveredTable table) {
         if (table.primaryKeys().isEmpty()) throw new BusinessException(400, "业务表没有主键: " + table.tableName());
         if (table.primaryKeys().size() > 1) throw new BusinessException(400, "暂不支持联合主键: " + table.tableName());
     }
 
-    /** 将角色规范化为大写，并限制为冻结书定义的四类正式角色。 */
+    /** 将角色规范化为大写，并限制为系统授权链实际识别的四类正式角色。 */
     private List<String> validateRoles(List<String> roles, String label) {
         if (roles == null || roles.isEmpty()) throw new BusinessException(400, label + "不能为空");
         List<String> normalized = roles.stream().map(role -> role == null ? "" : role.toUpperCase(Locale.ROOT))
@@ -348,7 +350,7 @@ public class GeneratorServiceImpl implements GeneratorService {
         catch (JsonProcessingException e) { throw new BusinessException(500, "角色配置格式损坏"); }
     }
 
-    /** 根据 Java 类型给后续可视化配置提供一个保守的默认组件类型。 */
+    /** 根据 Java 类型初始化保守的组件配置，供配置详情和更新接口保持字段元数据完整。 */
     private String defaultComponent(String javaType) {
         if ("java.lang.Boolean".equals(javaType)) return "SWITCH";
         if ("java.util.Date".equals(javaType)) return "DATETIME";
