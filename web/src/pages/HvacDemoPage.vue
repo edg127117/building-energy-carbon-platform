@@ -462,7 +462,7 @@ onMounted(async () => {
   startPolling()
 })
 
-/** 页面卸载时同时清理本地时钟和数据轮询，避免后台继续刷新。 */
+/** 页面卸载时清理时钟、数据轮询和详情请求状态，避免后台刷新或迟到结果写回。 */
 onBeforeUnmount(() => {
   if (clockTimer !== null) window.clearInterval(clockTimer)
   closeCalculationDetail()
