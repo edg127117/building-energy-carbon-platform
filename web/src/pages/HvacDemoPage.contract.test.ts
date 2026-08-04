@@ -15,12 +15,17 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).not.toContain('前端效果演示数据')
   })
 
-  it('does not render fake history or fake calculation details', () => {
+  it('connects real calculation details without adding fake history', () => {
     expect(source).not.toContain("from 'echarts'")
     expect(source).not.toContain('formulaMap')
     expect(source).not.toContain('selectedFormula')
     expect(source).toContain('历史曲线将在下一迭代接入')
-    expect(source).toContain('计算详情将在下一迭代接入')
+    expect(source).not.toContain('计算详情将在下一迭代接入')
+    expect(source).toContain('useHvacCalculationDetail')
+    expect(source).toContain('HvacCalculationDetailDrawer')
+    expect(source).toContain('openCalculationDetail')
+    expect(source).toContain('@click="openCalculationDetail(card)"')
+    expect(source).not.toMatch(/class="indicator-card"[^>]*\bdisabled\b/)
   })
 
   it('shows real loading, empty, partial-error and refresh states', () => {
@@ -33,5 +38,10 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain('refresh')
     expect(source).toContain('FROZEN_POINT_DEFINITIONS')
     expect(source).toContain('missingInputs.join')
+  })
+
+  it('closes calculation evidence when the building changes or the page unmounts', () => {
+    expect(source).toContain('handleBuildingChange')
+    expect(source).toContain('closeCalculationDetail()')
   })
 })

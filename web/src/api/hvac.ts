@@ -2,6 +2,7 @@ import { http } from '@/utils/request'
 import type { ApiResult } from '@/types/api'
 import type {
   Building,
+  HvacCalculationDetail,
   HvacLatestResponse,
   HvacSnapshotResponse,
   PageResult,
@@ -47,6 +48,22 @@ export async function getLatestHvacIndicators(
 ): Promise<HvacLatestResponse> {
   const response = await http.get<ApiResult<HvacLatestResponse>>(
     `/hvac/buildings/${encodeURIComponent(buildingId)}/indicators/latest`,
+  )
+  return response.data.data
+}
+
+/**
+ * 查询一个指标来源分钟的真实计算解释或失败审计。
+ *
+ * 后端先校验指标所属建筑权限；最新分钟可以来自 Redis，历史成功结果由 TDengine
+ * 分钟输入按已持久化公式版本重放。前端只展示返回证据，不重新执行公式。
+ */
+export async function getIndicatorCalculationDetail(
+  indicatorId: string,
+  minuteStart: number,
+): Promise<HvacCalculationDetail> {
+  const response = await http.get<ApiResult<HvacCalculationDetail>>(
+    `/hvac/indicators/${encodeURIComponent(indicatorId)}/calculations/${minuteStart}`,
   )
   return response.data.data
 }

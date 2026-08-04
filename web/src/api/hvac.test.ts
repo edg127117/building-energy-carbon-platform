@@ -9,6 +9,7 @@ vi.mock('@/utils/request', () => ({
 }))
 
 import {
+  getIndicatorCalculationDetail,
   getHvacSnapshot,
   getLatestHvacIndicators,
   listAccessibleBuildings,
@@ -77,6 +78,34 @@ describe('HVAC API client', () => {
     await expect(getLatestHvacIndicators('BLD001')).resolves.toEqual(payload)
     expect(get).toHaveBeenCalledWith(
       '/hvac/buildings/BLD001/indicators/latest',
+    )
+  })
+
+  it('queries one real indicator calculation detail', async () => {
+    const payload = {
+      indicatorId: 'WCR/COP 01',
+      indicatorCode: 'WCR_COP',
+      equipId: 'WCR001',
+      minuteStart: 1_754_208_000_000,
+      status: 'SUCCESS',
+      value: 4.2,
+      unit: null,
+      dataQuality: 1,
+      formulaVersion: 'WCR_COP_V1',
+      inputs: [],
+      steps: [],
+      reasonCode: null,
+      missingInputs: [],
+    }
+    get.mockResolvedValue({
+      data: { success: true, code: 200, msg: 'success', data: payload },
+    })
+
+    await expect(
+      getIndicatorCalculationDetail('WCR/COP 01', payload.minuteStart),
+    ).resolves.toEqual(payload)
+    expect(get).toHaveBeenCalledWith(
+      `/hvac/indicators/WCR%2FCOP%2001/calculations/${payload.minuteStart}`,
     )
   })
 })

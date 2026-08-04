@@ -1,8 +1,8 @@
 <template>
   <!--
-    HVAC V1 大屏只展示后端真实建筑、最新分钟快照和最新指标状态。
-    useHvacDashboard 负责请求编排、建筑切换和轮询；缺失或失败数据保留固定槽位并显示
-    --/错误提示，不生成随机测点、虚假历史曲线或公式计算详情。
+    HVAC V1 大屏展示后端真实建筑、最新分钟快照、最新指标状态和逐分钟计算证据。
+    useHvacDashboard 负责大屏数据，useHvacCalculationDetail 负责详情请求与竞态隔离；
+    缺失或失败数据保持明确状态，不生成随机测点、虚假历史曲线或前端公式结果。
   -->
   <div class="hvac-demo">
     <div class="ambient ambient-a" />
@@ -25,7 +25,7 @@
           :loading="initializing"
           class="building-select"
           placeholder="选择建筑"
-          @change="(value: string) => selectBuilding(value)"
+          @change="handleBuildingChange"
         />
         <a-button
           size="small"
@@ -178,8 +178,9 @@
             :key="card.indicatorCode"
             class="indicator-card"
             :class="card.tone"
-            disabled
-            title="计算详情将在下一迭代接入"
+            type="button"
+            :aria-label="`查看${card.label}计算详情`"
+            @click="openCalculationDetail(card)"
           >
             <span class="indicator-icon"><component :is="card.icon" :size="19" /></span>
             <span class="indicator-main">
@@ -192,6 +193,7 @@
               <small v-if="card.missingInputs.length">
                 缺少：{{ card.missingInputs.join('、') }}
               </small>
+              <small class="indicator-detail-hint">查看计算详情</small>
             </span>
           </button>
 
@@ -206,7 +208,7 @@
         </aside>
       </section>
 
-      <!-- 公式区是冻结业务公式的静态目录，不代表页面已接入逐分钟计算详情。 -->
+      <!-- 公式区仍是冻结业务公式的静态目录；真实逐分钟证据只从四项指标卡进入。 -->
       <section class="panel formula-catalog">
         <div class="panel-heading formula-catalog-heading">
           <div>
@@ -229,7 +231,7 @@
               <b>{{ item.title }}</b>
               <code>{{ item.formula }}</code>
             </span>
-            <span class="formula-card-result"><small>计算详情将在下一迭代接入</small></span>
+            <span class="formula-card-result"><small>冻结业务公式口径</small></span>
           </div>
         </div>
       </section>
@@ -263,6 +265,17 @@
         </article>
       </section>
     </main>
+
+    <HvacCalculationDetailDrawer
+      :open="calculationDetailVisible"
+      :target="calculationDetailTarget"
+      :detail="calculationDetail"
+      :loading="calculationDetailLoading"
+      :error="calculationDetailError"
+      :local-no-data="calculationDetailLocalNoData"
+      @close="closeCalculationDetail"
+      @retry="retryCalculationDetail"
+    />
   </div>
 </template>
 
@@ -280,6 +293,8 @@ import {
   Waves,
   Wind,
 } from 'lucide-vue-next'
+import HvacCalculationDetailDrawer from '@/components/hvac/HvacCalculationDetailDrawer.vue'
+import { useHvacCalculationDetail } from '@/composables/useHvacCalculationDetail'
 import { useHvacDashboard } from '@/composables/useHvacDashboard'
 import {
   FROZEN_POINT_DEFINITIONS,
@@ -313,6 +328,22 @@ const {
   startPolling,
   stopPolling,
 } = useHvacDashboard()
+
+/**
+ * 计算详情状态独立于大屏轮询：页面只传入指标实例和来源分钟，API 错误不会阻断主体。
+ * 关闭、切换指标和切换建筑时的迟到响应由 Composable 的请求版本统一失效。
+ */
+const {
+  visible: calculationDetailVisible,
+  selected: calculationDetailTarget,
+  detail: calculationDetail,
+  loading: calculationDetailLoading,
+  error: calculationDetailError,
+  localNoData: calculationDetailLocalNoData,
+  open: openCalculationDetailState,
+  retry: retryCalculationDetail,
+  close: closeCalculationDetail,
+} = useHvacCalculationDetail()
 
 function pointText(code: FrozenPointCode): string {
   return pointViews.value[code].displayValue
@@ -385,6 +416,24 @@ const indicatorCards = computed(() =>
   })),
 )
 
+/** 将用户点击的指标实例和来源分钟交给详情状态层；空槽位会打开本地无记录状态。 */
+function openCalculationDetail(
+  card: (typeof indicatorCards.value)[number],
+): void {
+  void openCalculationDetailState({
+    indicatorId: card.indicatorId,
+    indicatorCode: card.indicatorCode,
+    label: card.label,
+    minuteStart: card.minuteStart,
+  })
+}
+
+/** 切换建筑前关闭详情，使旧建筑证据和在途响应不能停留在新建筑页面。 */
+async function handleBuildingChange(buildingId: string): Promise<void> {
+  closeCalculationDetail()
+  await selectBuilding(buildingId)
+}
+
 /** 按冻结书定义顺序展开全部 19 个槽位，接口缺项也不会改变列表结构。 */
 const allPoints = computed(() =>
   FROZEN_POINT_DEFINITIONS.map((definition) => ({
@@ -413,9 +462,10 @@ onMounted(async () => {
   startPolling()
 })
 
-/** 页面卸载时同时清理本地时钟和数据轮询，避免后台继续刷新。 */
+/** 页面卸载时清理时钟、数据轮询和详情请求状态，避免后台刷新或迟到结果写回。 */
 onBeforeUnmount(() => {
   if (clockTimer !== null) window.clearInterval(clockTimer)
+  closeCalculationDetail()
   stopPolling()
 })
 </script>
@@ -551,12 +601,14 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .minute-tag { color: #597089; font-size: 8px; }
 .indicator-card { position: relative; width: calc(100% - 20px); min-height: 72px; margin: 0 10px 8px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid rgba(127, 167, 201, .12); background: rgba(7, 21, 37, .72); color: #dce8f5; text-align: left; cursor: pointer; overflow: hidden; transition: border-color .2s ease, transform .2s ease; }
 .indicator-card:hover { transform: translateX(-3px); border-color: rgba(80, 168, 235, .35); }
+.indicator-card:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; border-color: var(--tone); }
 .indicator-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--tone); background: color-mix(in srgb, var(--tone) 10%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 25%, transparent); }
 .indicator-main { display: flex; flex-direction: column; flex: 1; }
 .indicator-label { color: #70859b; font-size: 9px; }
 .indicator-number { line-height: 1.1; color: #edf6ff; font-size: 23px; font-weight: 560; font-variant-numeric: tabular-nums; }
 .indicator-number small { font-size: 8px; color: #6d8298; font-weight: 400; margin-left: 4px; }
 .indicator-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+.indicator-detail-hint { color: var(--tone); font-weight: 600; }
 .grade { color: var(--tone); font-size: 9px; }
 .delta { display: flex; gap: 2px; align-items: center; color: #4bbf98; font-size: 8px; }
 .indicator-progress { position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: rgba(255,255,255,.025); }
@@ -565,8 +617,6 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .indicator-card.green { --tone: #37d4a2; }
 .indicator-card.orange { --tone: #ffab55; }
 .indicator-card.yellow { --tone: #e6c45d; }
-.indicator-card:disabled { cursor: default; opacity: 1; }
-.indicator-card:disabled:hover { transform: none; border-color: rgba(127, 167, 201, .12); }
 .quality-card { margin: 12px 10px 0; padding: 12px; border: 1px solid rgba(127, 167, 201, .1); background: rgba(5, 17, 30, .6); }
 .quality-head { display: flex; justify-content: space-between; color: #778ca4; font-size: 9px; }
 .quality-head strong { color: #4fdaa9; font-size: 12px; }

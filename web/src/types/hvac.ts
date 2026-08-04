@@ -1,7 +1,7 @@
 /**
  * HVAC 页面使用的后端 DTO。
  *
- * 这些类型只描述现有建筑、分钟快照和最新指标接口，不混入颜色、图标或布局，
+ * 这些类型只描述现有建筑、分钟快照、最新指标和计算详情接口，不混入颜色、图标或布局，
  * 以免接口协议与大屏展示实现互相耦合。
  */
 export type PageResult<T> = {
@@ -79,4 +79,49 @@ export type HvacLatestResponse = {
   buildingId: string
   generatedAt: number
   indicators: LatestIndicator[]
+}
+
+/** 计算详情中的一个分钟输入，质量等级沿用后端 Q0/Q1/Q2 语义。 */
+export type HvacCalculationInput = {
+  key: string
+  pointId: string
+  pointCode: string
+  value: number
+  unit: string | null
+  dataQuality: number
+}
+
+/** 后端公式引擎返回的一个有序计算步骤；表达式只展示，不在浏览器求值。 */
+export type HvacCalculationStep = {
+  code: string
+  expression: string
+  value: number
+  unit: string | null
+}
+
+/**
+ * `/hvac/indicators/{indicatorId}/calculations/{minuteStart}` 返回的计算证据。
+ * 成功状态包含值、质量、版本、输入和步骤；失败状态保留审计原因和缺失语义键，
+ * 页面不得用默认值补齐可空字段。
+ */
+export type HvacCalculationDetail = {
+  indicatorId: string
+  indicatorCode: string
+  equipId: string
+  minuteStart: number
+  status:
+    | 'SUCCESS'
+    | 'MISSING_INPUT'
+    | 'INVALID_INPUT'
+    | 'ENGINE_ERROR'
+    | 'NO_DATA'
+    | string
+  value: number | null
+  unit: string | null
+  dataQuality: number | null
+  formulaVersion: string | null
+  inputs: HvacCalculationInput[]
+  steps: HvacCalculationStep[]
+  reasonCode: string | null
+  missingInputs: string[]
 }
