@@ -40,6 +40,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Lint frontend sources
+        run: npm run lint
+
       - name: Run frontend tests
         run: npm run test:run
 
