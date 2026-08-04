@@ -47,6 +47,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 - 普通后端测试已与真实 MySQL、TDengine、MQTT 和 Redis 隔离。
 - 后端开发和 CI 已统一到 Java 21。
+- 前端已建立 Vue 3 + TypeScript ESLint 实用基线，`npm run lint` 会扫描当前 `.ts`/`.vue` 源码，并已进入 GitHub 前端 CI 合并检查。
 - 仓库已提供本地 Git Hook 安装、任务预检、合并后安全清理、PR 模板、前端 CI 和 PR 注释防回退检查。
 - MySQL、Redis 和 TDengine 的本地稳定卷、可配置端口、MySQL UTF-8 初始化和启动脚本 Compose 路径已形成仓库配置。
 - 旧电表前后端、控制、模拟器、数据库结构和运行入口已经从当前有效项目中下线。

@@ -434,7 +434,7 @@ function Invoke-CiContractTests {
     Assert-Contains $templateText 'New-CommentAuditReport.ps1' 'PR template must identify report command'
 
     $frontendText = Get-Content -Raw -Encoding UTF8 -LiteralPath $frontend
-    foreach ($command in 'npm ci', 'npm run test:run', 'npm run check', 'npm run build') {
+    foreach ($command in 'npm ci', 'npm run lint', 'npm run test:run', 'npm run check', 'npm run build') {
         Assert-Contains $frontendText $command "frontend workflow must run $command"
     }
     Assert-Contains $frontendText 'name: Frontend verify' 'frontend job name must be stable'

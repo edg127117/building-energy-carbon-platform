@@ -129,8 +129,11 @@ async function onSubmit() {
     message.success('登录成功')
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/hvac-demo'
     router.replace(redirect)
-  } catch (e: any) {
-    message.error(e?.message || '操作失败')
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error && error.message
+      ? error.message
+      : '操作失败'
+    message.error(errorMessage)
   } finally {
     loading.value = false
   }
