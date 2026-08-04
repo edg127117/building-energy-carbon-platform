@@ -49,6 +49,7 @@
 | 当前文档健康治理 | [设计](specs/2026-08-02-current-document-health-design.md) | [计划](plans/2026-08-02-current-document-health.md) | 成对历史记录 | 说明本目录、历史文件警告和六份当前文档核验的治理依据。 |
 | 仓库开发流程与注释质量防回退 | [设计](specs/2026-08-03-repository-workflow-quality-guardrails-design.md) | [计划](plans/2026-08-03-repository-workflow-quality-guardrails.md) | 成对历史记录 | 当前入口以 `AGENTS.md` 和 `docs/development/repository-guardrails.md` 为准；GitHub 分支保护仍需仓库页面现场验证。 |
 | HVAC 公式计算详情前端接入 | [设计](specs/2026-08-04-hvac-calculation-detail-frontend-design.md) | [计划](plans/2026-08-04-hvac-calculation-detail-frontend.md) | 成对历史记录 | 当前详情入口、状态与展示以 API、Composable、抽屉组件和页面测试为准。 |
+| 前端 ESLint 基线与 CI 门禁 | [设计](specs/2026-08-04-frontend-eslint-baseline-design.md) | — | 仅设计记录 | 当前仅冻结治理范围；实施须在设计复核和计划确认后继续。 |
 
 ## 已确认的替代关系
 
