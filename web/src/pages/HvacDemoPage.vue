@@ -82,7 +82,7 @@
             <span>固定测点</span><strong>19</strong><small>冻结展示槽位</small>
           </div>
           <div class="summary-stat">
-            <span>测点数据完整率</span><strong>{{ coveragePercent }}%</strong><small>最近刷新 {{ lastUpdatedText }}</small>
+            <span>当前有效测点完整率</span><strong>{{ coveragePercent }}%</strong><small>最近刷新 {{ lastUpdatedText }}</small>
           </div>
         </div>
       </section>
@@ -126,7 +126,10 @@
               <span class="device-icon"><Waves :size="26" /></span>
               <span class="device-meta"><b>CT-01</b><em>冷却塔</em></span>
               <span class="device-value"><b>进水</b> {{ pointText('TOWER1_TCWin') }}{{ pointUnit('TOWER1_TCWin') }} · <b>出水</b> {{ pointText('TOWER1_TCWout') }}{{ pointUnit('TOWER1_TCWout') }}</span>
-              <span class="device-state"><i />{{ pointStatus('TOWER1_TCWin') }}</span>
+              <span class="device-state" :class="{ 'is-stale': pointViews.TOWER1_TCWin.status === 'STALE' }">
+                <span class="device-state-label"><i />{{ pointStatus('TOWER1_TCWin') }}</span>
+                <small v-if="stalePointDetail(pointViews.TOWER1_TCWin)">{{ stalePointDetail(pointViews.TOWER1_TCWin) }}</small>
+              </span>
             </div>
 
             <div class="device-card chiller">
@@ -134,7 +137,10 @@
               <span class="device-icon"><Snowflake :size="28" /></span>
               <span class="device-meta"><b>WCR-01</b><em>水冷冷水机组</em></span>
               <span class="device-value"><b>出水</b> {{ pointText('WCR1_TWout') }}{{ pointUnit('WCR1_TWout') }} · <b>功率</b> {{ pointText('WCR1_PPE') }} {{ pointUnit('WCR1_PPE') }}</span>
-              <span class="device-state"><i />{{ pointStatus('WCR1_TWout') }}</span>
+              <span class="device-state" :class="{ 'is-stale': pointViews.WCR1_TWout.status === 'STALE' }">
+                <span class="device-state-label"><i />{{ pointStatus('WCR1_TWout') }}</span>
+                <small v-if="stalePointDetail(pointViews.WCR1_TWout)">{{ stalePointDetail(pointViews.WCR1_TWout) }}</small>
+              </span>
             </div>
 
             <div class="device-card pump">
@@ -142,7 +148,10 @@
               <span class="device-icon"><Gauge :size="27" /></span>
               <span class="device-meta"><b>P-01</b><em>冷冻水泵</em></span>
               <span class="device-value">{{ pointText('PUMP1_Flow') }} {{ pointUnit('PUMP1_Flow') }}</span>
-              <span class="device-state"><i />{{ pointStatus('PUMP1_Flow') }}</span>
+              <span class="device-state" :class="{ 'is-stale': pointViews.PUMP1_Flow.status === 'STALE' }">
+                <span class="device-state-label"><i />{{ pointStatus('PUMP1_Flow') }}</span>
+                <small v-if="stalePointDetail(pointViews.PUMP1_Flow)">{{ stalePointDetail(pointViews.PUMP1_Flow) }}</small>
+              </span>
             </div>
 
             <div class="device-card ahu">
@@ -150,7 +159,10 @@
               <span class="device-icon fan-icon"><Fan :size="29" /></span>
               <span class="device-meta"><b>AHU-01</b><em>空气处理机组</em></span>
               <span class="device-value">全压 {{ pointText('AHU1_TotalPress') }} {{ pointUnit('AHU1_TotalPress') }}</span>
-              <span class="device-state"><i />{{ pointStatus('AHU1_TotalPress') }}</span>
+              <span class="device-state" :class="{ 'is-stale': pointViews.AHU1_TotalPress.status === 'STALE' }">
+                <span class="device-state-label"><i />{{ pointStatus('AHU1_TotalPress') }}</span>
+                <small v-if="stalePointDetail(pointViews.AHU1_TotalPress)">{{ stalePointDetail(pointViews.AHU1_TotalPress) }}</small>
+              </span>
             </div>
 
             <div class="vav-terminal">
@@ -206,11 +218,11 @@
           </button>
 
           <div class="quality-card">
-            <div class="quality-head"><span>测点数据完整率</span><strong>{{ coveragePercent }}%</strong></div>
+            <div class="quality-head"><span>当前有效测点完整率</span><strong>{{ coveragePercent }}%</strong></div>
             <div class="quality-bar"><i :style="{ width: `${coveragePercent}%` }" /></div>
             <div class="quality-items">
-              <span><i class="q-real" />基于后端 NORMAL 状态</span>
-              <span><i class="q-default" />缺失值保持 --</span>
+              <span><i class="q-real" />仅统计 NORMAL 当前值</span>
+              <span><i class="q-default" />过期或缺失保持 --</span>
             </div>
           </div>
         </aside>
@@ -263,11 +275,19 @@
             <span class="text-button">固定展示 19 个测点槽位</span>
           </div>
           <div class="point-list">
-            <div v-for="item in allPoints" :key="item.displayCode" class="point-row">
+            <div
+              v-for="item in allPoints"
+              :key="item.displayCode"
+              class="point-row"
+              :class="{ 'is-stale': item.status === 'STALE', 'is-empty': item.status === 'NO_DATA' }"
+            >
               <span class="point-status" />
               <span class="point-name"><b>{{ item.label }}</b><small>{{ item.displayCode }}</small></span>
-              <span class="point-value">{{ item.displayValue }} <small>{{ item.unit }}</small></span>
-              <span class="point-quality">{{ item.qualityLabel }} · {{ item.status }}</span>
+              <span class="point-reading">
+                <span class="point-value">{{ item.displayValue }} <small>{{ item.unit }}</small></span>
+                <small v-if="item.lastDisplayValue !== null" class="point-last-value">{{ stalePointDetail(item) }}</small>
+              </span>
+              <span class="point-quality">{{ item.qualityLabel }} · {{ item.statusLabel }}</span>
             </div>
           </div>
         </article>
@@ -306,6 +326,7 @@ import HvacCalculationDetailDrawer from '@/components/hvac/HvacCalculationDetail
 import { useHvacCalculationDetail } from '@/composables/useHvacCalculationDetail'
 import { useHvacDashboard } from '@/composables/useHvacDashboard'
 import {
+  type DashboardPointView,
   FROZEN_POINT_DEFINITIONS,
   type FrozenPointCode,
 } from '@/domain/hvacDashboard'
@@ -363,7 +384,24 @@ function pointUnit(code: FrozenPointCode): string {
 }
 
 function pointStatus(code: FrozenPointCode): string {
-  return pointViews.value[code].status
+  return pointViews.value[code].statusLabel
+}
+
+/** 格式化后端最后分钟；只作为过期证据，不把它重新解释为当前数据。 */
+function formatPointMinute(minute: number | null): string {
+  if (minute === null) return '--'
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(minute))
+}
+
+/** 过期测点保留最后值和来源分钟，主实时值仍保持 --。 */
+function stalePointDetail(point: DashboardPointView): string | null {
+  if (point.status !== 'STALE' || point.lastDisplayValue === null) return null
+  const unit = point.unit ? ` ${point.unit}` : ''
+  return `最后值 ${point.lastDisplayValue}${unit} · ${formatPointMinute(point.minute)}`
 }
 
 function updateClock(): void {
@@ -558,7 +596,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .zone-chilled { left: 44%; }
 .zone-air { right: 9%; }
 
-.device-card { position: absolute; z-index: 5; width: 155px; min-height: 118px; border: 1px solid rgba(100, 169, 219, .28); background: linear-gradient(145deg, rgba(14, 39, 64, .96), rgba(7, 24, 42, .96)); color: #dceafa; padding: 14px; text-align: left; overflow: hidden; }
+.device-card { position: absolute; z-index: 5; width: 155px; min-height: 138px; border: 1px solid rgba(100, 169, 219, .28); background: linear-gradient(145deg, rgba(14, 39, 64, .96), rgba(7, 24, 42, .96)); color: #dceafa; padding: 14px; text-align: left; overflow: hidden; }
 .device-glow { position: absolute; width: 65px; height: 65px; border-radius: 50%; right: -20px; top: -20px; background: rgba(37, 151, 237, .16); filter: blur(14px); }
 .device-icon { width: 38px; height: 38px; display: grid; place-items: center; color: #61bdff; border: 1px solid rgba(86, 183, 255, .24); background: rgba(29, 115, 183, .12); float: left; margin-right: 10px; }
 .device-meta { display: flex; flex-direction: column; min-width: 0; padding-top: 1px; }
@@ -566,8 +604,12 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .device-meta em { font-size: 12px; font-style: normal; font-weight: 550; color: #e1effc; white-space: nowrap; }
 .device-value { display: block; clear: both; padding-top: 11px; font-size: 10px; color: #85a0b8; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .device-value b { color: #5f7b94; font-size: 8px; font-weight: 500; }
-.device-state { display: flex; align-items: center; gap: 6px; margin-top: 7px; color: #41d9a5; font-size: 9px; }
+.device-state { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 7px; color: #41d9a5; font-size: 9px; }
+.device-state-label { display: flex; align-items: center; gap: 6px; }
 .device-state i { width: 5px; height: 5px; background: #3ce0a9; border-radius: 50%; box-shadow: 0 0 8px #3ce0a9; }
+.device-state small { max-width: 100%; color: #c79850; font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
+.device-state.is-stale { color: #e3ad55; }
+.device-state.is-stale i { background: #e3ad55; box-shadow: 0 0 8px rgba(227, 173, 85, .7); }
 .tower { left: 5%; top: 90px; width: 180px; border-color: rgba(54, 216, 168, .3); }
 .tower .device-icon { color: #45ddb0; border-color: rgba(69, 221, 176, .25); background: rgba(30, 128, 100, .12); }
 .tower .device-glow { background: rgba(43, 203, 155, .17); }
@@ -678,15 +720,20 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .deferred-panel span { font-size: 10px; }
 .text-button { display: flex; align-items: center; gap: 2px; color: #5e7890; }
 .point-list { padding: 7px 13px 11px; }
-.point-row { min-height: 38px; display: grid; grid-template-columns: 14px 1fr auto 96px; align-items: center; gap: 6px; border-bottom: 1px solid rgba(129, 169, 202, .08); }
+.point-row { min-height: 46px; display: grid; grid-template-columns: 14px minmax(0, 1fr) minmax(82px, auto) 104px; align-items: center; gap: 6px; border-bottom: 1px solid rgba(129, 169, 202, .08); }
 .point-row:last-child { border-bottom: 0; }
 .point-status { width: 5px; height: 5px; border-radius: 50%; background: #3cd7a4; box-shadow: 0 0 7px rgba(60, 215, 164, .65); }
 .point-name { display: flex; flex-direction: column; }
 .point-name b { font-size: 9px; color: #9badbf; font-weight: 500; }
 .point-name small { font-size: 7px; color: #40566d; }
+.point-reading { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; }
 .point-value { color: #d2e1ed; font-size: 12px; font-variant-numeric: tabular-nums; }
 .point-value small { color: #566b80; font-size: 7px; }
+.point-last-value { max-width: 128px; color: #c79850; font-size: 9px; line-height: 1.35; text-align: right; overflow-wrap: anywhere; }
 .point-quality { color: #3db78f; font-size: 7px; text-align: right; }
+.point-row.is-stale .point-status { background: #e3ad55; box-shadow: 0 0 7px rgba(227, 173, 85, .65); }
+.point-row.is-stale .point-quality { color: #d3a052; }
+.point-row.is-empty .point-status { background: #52677b; box-shadow: none; }
 
 @keyframes flowH { from { left: -30px; } to { left: 100%; } }
 @keyframes flowV { from { top: -30px; } to { top: 100%; } }
@@ -725,5 +772,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 @media (max-width: 560px) {
   .indicators { grid-template-columns: 1fr; }
   .formula-grid { grid-template-columns: 1fr; }
+  .point-row { grid-template-columns: 12px minmax(0, 1fr) minmax(86px, auto); }
+  .point-quality { grid-column: 2 / 4; font-size: 9px; }
 }
 </style>
