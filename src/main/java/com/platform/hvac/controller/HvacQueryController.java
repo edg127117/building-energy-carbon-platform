@@ -35,8 +35,8 @@ public class HvacQueryController {
     /**
      * 查询建筑内全部在线测点各自最新的冻结分钟数据。
      *
-     * <p>各测点不要求来自同一分钟；已配置但尚无分钟数据的测点仍会返回，
-     * 并标记为 {@code NO_DATA}。</p>
+     * <p>各测点不要求来自同一分钟；最后记录超过服务端新鲜度边界时标记为
+     * {@code STALE}，没有任何分钟记录时标记为 {@code NO_DATA}。</p>
      *
      * @param buildingId 目标建筑 ID
      * @param authentication 当前登录用户的认证信息
