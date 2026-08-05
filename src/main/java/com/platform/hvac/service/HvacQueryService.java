@@ -45,12 +45,14 @@ public class HvacQueryService {
     private final BizDataPointService dataPointService;
     private final BizEquipmentService equipmentService;
     private final HvacMinuteRepository minuteRepository;
+    private final HvacSnapshotFreshnessPolicy freshnessPolicy;
 
     /**
      * 生成建筑全部在线测点的最新快照。
      *
      * <p>先从 MySQL 取得完整测点配置，再批量匹配 TDengine 最新行。
-     * 因此没有时序数据的合法测点也不会丢失，而是以 {@code NO_DATA} 返回。</p>
+     * 因此没有时序数据的合法测点也不会丢失，而是以 {@code NO_DATA} 返回；
+     * 已有行超过统一新鲜度边界时保留证据并标记为 {@code STALE}。</p>
      *
      * @param buildingId 目标建筑 ID
      * @param userId 当前用户 ID
@@ -91,13 +93,15 @@ public class HvacQueryService {
                         (left, right) -> left.time() >= right.time() ? left : right));
         Map<String, String> equipmentCodes = equipmentCodes(points);
 
+        // 整份响应只取一次服务端时间，避免组装期间跨越冻结边界后同批测点状态不一致。
+        long generatedAt = System.currentTimeMillis();
         List<HvacQueryDtos.SnapshotPoint> responsePoints = points.stream()
                 .map(point -> snapshotPoint(
                         point, equipmentCodes.get(point.getEquipId()),
-                        latestByPoint.get(point.getPointId())))
+                        latestByPoint.get(point.getPointId()), generatedAt))
                 .toList();
         return new HvacQueryDtos.SnapshotResponse(
-                buildingId, System.currentTimeMillis(), responsePoints);
+                buildingId, generatedAt, responsePoints);
     }
 
     /**
@@ -297,12 +301,14 @@ public class HvacQueryService {
      * 将 MySQL 测点元数据与 TDengine 最新分钟行合并为单个快照 DTO。
      *
      * <p>没有时序行时仍保留测点、设备和单位，并以 {@code NO_DATA}、空数值和
-     * 0 样本返回；前端据此保留冻结槽位而不制造默认业务值。</p>
+     * 0 样本返回；已有行由统一服务端时间判定 {@code NORMAL} 或 {@code STALE}，
+     * 使调用方既能排除过期实时值，又能保留最后分钟证据。</p>
      */
     private HvacQueryDtos.SnapshotPoint snapshotPoint(
             BizDataPoint point,
             String equipmentCode,
-            HvacMinuteQueryRow row) {
+            HvacMinuteQueryRow row,
+            long generatedAt) {
         if (row == null) {
             // 保留测点和设备元数据，让调用方区分“没有配置”和“已配置但暂无数据”。
             return new HvacQueryDtos.SnapshotPoint(
@@ -333,7 +339,7 @@ public class HvacQueryService {
                 row.maximum(),
                 row.sampleCount(),
                 row.dataQuality(),
-                "NORMAL");
+                freshnessPolicy.status(row.time(), generatedAt));
     }
 
     /**

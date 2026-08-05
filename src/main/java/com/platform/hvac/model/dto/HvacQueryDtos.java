@@ -40,7 +40,8 @@ public final class HvacQueryDtos {
      * @param maximum 最大值；无数据时为 {@code null}
      * @param sampleCount 原始采样数；无数据时为 0
      * @param dataQuality 数据质量等级；无数据时为 {@code null}
-     * @param status {@code NORMAL} 表示存在数据，{@code NO_DATA} 表示仅有测点配置
+     * @param status {@code NORMAL} 表示记录仍可作为实时值，{@code STALE} 表示保留的
+     *               最后记录已过期，{@code NO_DATA} 表示仅有测点配置且从未查询到分钟记录
      */
     public record SnapshotPoint(
             String pointId,

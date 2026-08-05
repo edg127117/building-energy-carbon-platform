@@ -11,6 +11,7 @@ import com.platform.hvac.service.BizEquipmentService;
 import com.platform.hvac.service.BuildingService;
 import com.platform.hvac.service.HvacIndicatorQueryService;
 import com.platform.hvac.service.HvacQueryService;
+import com.platform.hvac.service.HvacSnapshotFreshnessPolicy;
 import com.platform.iot.aggregation.HvacPointMinuteAggregator;
 import com.platform.iot.aggregation.ManualRealMinuteAggregationService;
 import com.platform.iot.dataquality.mapper.BizDataQualityRecalcJobMapper;
@@ -205,7 +206,8 @@ class DataQualityRecalculationPerformanceContractTest {
                 scopeService,
                 dataPointService,
                 equipmentService,
-                queryMinuteRepository);
+                queryMinuteRepository,
+                mock(HvacSnapshotFreshnessPolicy.class));
 
         hvacQueryService.history(
                 "BLD001",

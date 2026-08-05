@@ -78,6 +78,12 @@ database:
   charset-fix:
     enabled: true
 
+# HVAC 最新快照新鲜度只判断记录是否仍可作为实时值，不推断设备或网络故障原因。
+hvac:
+  snapshot:
+    # 允许短时网络抖动落后一个已冻结分钟；超过后返回 STALE。
+    freshness-tolerance-minutes: 1
+
 # HVAC事件时间分钟聚合：窗口始终为一分钟，30秒仅是正常网络延迟的等待时间。
 aggregation:
   finalization-delay-seconds: 30

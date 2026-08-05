@@ -38,6 +38,7 @@ class HvacQueryServiceTest {
     @Mock private BizDataPointService dataPointService;
     @Mock private BizEquipmentService equipmentService;
     @Mock private HvacMinuteRepository minuteRepository;
+    @Mock private HvacSnapshotFreshnessPolicy freshnessPolicy;
 
     private HvacQueryService service;
 
@@ -48,7 +49,8 @@ class HvacQueryServiceTest {
                 buildingScopeService,
                 dataPointService,
                 equipmentService,
-                minuteRepository);
+                minuteRepository,
+                freshnessPolicy);
     }
 
     @ParameterizedTest
@@ -198,6 +200,7 @@ class HvacQueryServiceTest {
         when(minuteRepository.findLatestByPointIds(
                 List.of("POINT001", "POINT002")))
                 .thenReturn(List.of(row("POINT001", FROM, 12.3)));
+        when(freshnessPolicy.status(eq(FROM), anyLong())).thenReturn("NORMAL");
 
         HvacQueryDtos.SnapshotResponse response =
                 service.snapshot("BLD001", USER_ID, ADMIN);
@@ -210,6 +213,29 @@ class HvacQueryServiceTest {
         assertThat(response.points().get(1).status()).isEqualTo("NO_DATA");
         assertThat(response.points().get(1).minute()).isNull();
         assertThat(response.points().get(1).sampleCount()).isZero();
+        verify(freshnessPolicy).status(FROM, response.generatedAt());
+    }
+
+    @Test
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void snapshotKeepsStaleEvidenceButMarksItUnavailableForRealtimeUse() {
+        allowBuilding("BLD001");
+        BizDataPoint point = point(
+                "POINT001", "A", "BLD001", "ONLINE", "EQUIP001");
+        when(dataPointService.list(any(Wrapper.class))).thenReturn(List.of(point));
+        when(minuteRepository.findLatestByPointIds(List.of("POINT001")))
+                .thenReturn(List.of(row("POINT001", FROM, 12.3)));
+        when(freshnessPolicy.status(eq(FROM), anyLong())).thenReturn("STALE");
+
+        HvacQueryDtos.SnapshotResponse response =
+                service.snapshot("BLD001", USER_ID, ADMIN);
+
+        HvacQueryDtos.SnapshotPoint stale = response.points().getFirst();
+        assertThat(stale.status()).isEqualTo("STALE");
+        assertThat(stale.minute()).isEqualTo(FROM);
+        assertThat(stale.average()).isEqualTo(12.3);
+        assertThat(stale.dataQuality()).isZero();
+        verify(freshnessPolicy).status(FROM, response.generatedAt());
     }
 
     @Test
