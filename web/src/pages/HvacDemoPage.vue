@@ -166,7 +166,7 @@
           </div>
         </article>
 
-        <!-- 四张指标卡从后端活动指标中按稳定编码筛选，并保留失败原因与缺失输入。 -->
+        <!-- 四张指标卡先展示业务结论；原因码与缺失语义键只在计算详情抽屉中展开。 -->
         <aside class="indicators">
           <div class="aside-heading">
             <div><span class="section-index">02</span><span class="panel-title">实时能效指标</span></div>
@@ -177,23 +177,31 @@
             v-for="card in indicatorCards"
             :key="card.indicatorCode"
             class="indicator-card"
-            :class="card.tone"
+            :class="[card.tone, { 'is-failed': card.status !== 'SUCCESS' }]"
             type="button"
-            :aria-label="`查看${card.label}计算详情`"
+            :aria-label="`${card.label}，${card.statusLabel}，查看计算详情`"
             @click="openCalculationDetail(card)"
           >
-            <span class="indicator-icon"><component :is="card.icon" :size="19" /></span>
-            <span class="indicator-main">
-              <span class="indicator-label">{{ card.label }}</span>
-              <span class="indicator-number">{{ card.displayValue }}<small>{{ card.unit }}</small></span>
+            <span class="indicator-card-head">
+              <span class="indicator-identity">
+                <span class="indicator-icon"><component :is="card.icon" :size="19" /></span>
+                <span class="indicator-label">{{ card.label }}</span>
+              </span>
+              <span class="indicator-status">{{ card.statusLabel }}</span>
             </span>
-            <span class="indicator-side">
-              <small>{{ card.statusLabel }}</small>
-              <small v-if="card.reasonCode">{{ card.reasonCode }}</small>
-              <small v-if="card.missingInputs.length">
-                缺少：{{ card.missingInputs.join('、') }}
-              </small>
-              <small class="indicator-detail-hint">查看计算详情</small>
+            <span class="indicator-number">
+              {{ card.displayValue }}<small>{{ card.unit }}</small>
+            </span>
+            <span class="indicator-message">
+              <strong>{{ card.summaryText }}</strong>
+              <small v-if="card.supportingText">{{ card.supportingText }}</small>
+            </span>
+            <span class="indicator-footer">
+              <small>{{ formatIndicatorMinute(card.minuteStart) }}</small>
+              <span class="indicator-detail-hint">
+                查看计算详情
+                <ChevronRight :size="14" aria-hidden="true" />
+              </span>
             </span>
           </button>
 
@@ -285,6 +293,7 @@ import {
   Activity,
   Building2,
   Calculator,
+  ChevronRight,
   CloudSun,
   Fan,
   Gauge,
@@ -415,6 +424,19 @@ const indicatorCards = computed(() =>
       ] ?? Activity,
   })),
 )
+
+/**
+ * 格式化后端指标记录的来源分钟，只说明该次计算对应的时间，不在此判断数据是否过期。
+ * 新鲜度必须由明确的数据时间状态判断，不能把时间格式化结果误当成当前数据状态。
+ */
+function formatIndicatorMinute(minuteStart: number | null): string {
+  if (minuteStart === null) return '暂无来源分钟'
+  return `来源分钟 ${new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(minuteStart))}`
+}
 
 /** 将用户点击的指标实例和来源分钟交给详情状态层；空槽位会打开本地无记录状态。 */
 function openCalculationDetail(
@@ -599,20 +621,24 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .indicators { padding-bottom: 11px; }
 .aside-heading { margin-bottom: 9px; }
 .minute-tag { color: #597089; font-size: 8px; }
-.indicator-card { position: relative; width: calc(100% - 20px); min-height: 72px; margin: 0 10px 8px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; border: 1px solid rgba(127, 167, 201, .12); background: rgba(7, 21, 37, .72); color: #dce8f5; text-align: left; cursor: pointer; overflow: hidden; transition: border-color .2s ease, transform .2s ease; }
-.indicator-card:hover { transform: translateX(-3px); border-color: rgba(80, 168, 235, .35); }
+.indicator-card { position: relative; width: calc(100% - 20px); min-width: 0; min-height: 132px; margin: 0 10px 8px; padding: 13px 14px 11px; display: grid; grid-template-rows: auto auto minmax(32px, 1fr) auto; gap: 8px; border: 1px solid rgba(127, 167, 201, .14); background: rgba(7, 21, 37, .78); color: #dce8f5; text-align: left; cursor: pointer; overflow: hidden; transition: border-color .2s ease, transform .2s ease, background-color .2s ease; }
+.indicator-card.is-failed { background: linear-gradient(145deg, color-mix(in srgb, var(--tone) 6%, #071525), rgba(7, 21, 37, .82)); }
+.indicator-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tone) 42%, transparent); }
 .indicator-card:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; border-color: var(--tone); }
-.indicator-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--tone); background: color-mix(in srgb, var(--tone) 10%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 25%, transparent); }
-.indicator-main { display: flex; flex-direction: column; flex: 1; }
-.indicator-label { color: #70859b; font-size: 9px; }
-.indicator-number { line-height: 1.1; color: #edf6ff; font-size: 23px; font-weight: 560; font-variant-numeric: tabular-nums; }
-.indicator-number small { font-size: 8px; color: #6d8298; font-weight: 400; margin-left: 4px; }
-.indicator-side { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
-.indicator-detail-hint { color: var(--tone); font-weight: 600; }
-.grade { color: var(--tone); font-size: 9px; }
-.delta { display: flex; gap: 2px; align-items: center; color: #4bbf98; font-size: 8px; }
-.indicator-progress { position: absolute; bottom: 0; left: 0; right: 0; height: 2px; background: rgba(255,255,255,.025); }
-.indicator-progress i { display: block; height: 100%; background: var(--tone); box-shadow: 0 0 10px var(--tone); opacity: .72; }
+.indicator-card-head, .indicator-identity, .indicator-footer, .indicator-detail-hint { display: flex; align-items: center; }
+.indicator-card-head { min-width: 0; justify-content: space-between; gap: 8px; }
+.indicator-identity { min-width: 0; gap: 9px; }
+.indicator-icon { width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center; color: var(--tone); background: color-mix(in srgb, var(--tone) 10%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 25%, transparent); }
+.indicator-label { min-width: 0; color: #b8cbe0; font-size: 12px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.indicator-status { flex: 0 0 auto; padding: 3px 6px; color: color-mix(in srgb, var(--tone) 78%, #fff); border: 1px solid color-mix(in srgb, var(--tone) 25%, transparent); background: color-mix(in srgb, var(--tone) 8%, transparent); font-size: 11px; line-height: 1.3; }
+.indicator-number { min-width: 0; line-height: 1.05; color: #edf6ff; font-size: 27px; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.indicator-number small { margin-left: 5px; color: #8298ae; font-size: 11px; font-weight: 400; }
+.indicator-message { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.indicator-message strong { color: #c8d9e9; font-size: 12px; font-weight: 560; line-height: 1.45; overflow-wrap: anywhere; }
+.indicator-message small { color: #849ab0; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.indicator-footer { min-width: 0; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid rgba(127, 167, 201, .1); }
+.indicator-footer > small { min-width: 0; color: #71889f; font-size: 11px; overflow-wrap: anywhere; }
+.indicator-detail-hint { flex: 0 0 auto; gap: 2px; color: var(--tone); font-size: 11px; font-weight: 600; }
 .indicator-card.blue { --tone: #42a5ff; }
 .indicator-card.green { --tone: #37d4a2; }
 .indicator-card.orange { --tone: #ffab55; }
@@ -671,9 +697,10 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
   .topbar { grid-template-columns: 1fr auto; }
   .header-center { display: none; }
   .main-grid { grid-template-columns: 1fr; }
-  .indicators { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 10px; }
+  .indicators { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 10px; }
   .aside-heading, .quality-card { grid-column: 1 / -1; }
   .indicator-card { width: 100%; margin: 0; }
+  .quality-card { margin: 4px 0 0; }
 }
 
 @media (max-width: 900px) {
@@ -696,6 +723,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 }
 
 @media (max-width: 560px) {
+  .indicators { grid-template-columns: 1fr; }
   .formula-grid { grid-template-columns: 1fr; }
 }
 </style>

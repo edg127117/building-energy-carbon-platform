@@ -118,6 +118,10 @@ describe('HvacCalculationDetailDrawer', () => {
     })
 
     expect(wrapper.text()).toContain('缺少必要输入')
+    expect(wrapper.text()).toContain('本分钟未产生指标值')
+    expect(wrapper.text()).toContain('异常详情')
+    expect(wrapper.text()).toContain('原因码')
+    expect(wrapper.text()).toContain('缺失语义键')
     expect(wrapper.text()).toContain('MISSING_REQUIRED_INPUT')
     expect(wrapper.text()).toContain('WCR1/Flow')
     expect(wrapper.text()).toContain('WCR1/PPE')

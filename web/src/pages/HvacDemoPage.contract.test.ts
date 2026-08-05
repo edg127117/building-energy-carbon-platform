@@ -37,7 +37,12 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain('selectBuilding')
     expect(source).toContain('refresh')
     expect(source).toContain('FROZEN_POINT_DEFINITIONS')
-    expect(source).toContain('missingInputs.join')
+    expect(source).toContain('card.summaryText')
+    expect(source).toContain('card.supportingText')
+    expect(source).toContain('formatIndicatorMinute')
+    expect(source).toContain('card.statusLabel')
+    expect(source).not.toContain("card.missingInputs.join('、')")
+    expect(source).not.toContain('{{ card.reasonCode }}')
   })
 
   it('closes calculation evidence when the building changes or the page unmounts', () => {

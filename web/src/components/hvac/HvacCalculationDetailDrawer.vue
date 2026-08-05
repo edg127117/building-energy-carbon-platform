@@ -143,9 +143,12 @@
             aria-labelledby="calculation-audit-title"
           >
             <div class="section-heading">
-              <h3 id="calculation-audit-title">失败审计</h3>
+              <h3 id="calculation-audit-title">异常详情</h3>
               <span>{{ statusLabel(detail.status) }}</span>
             </div>
+            <p class="audit-summary">
+              本分钟未产生指标值，以下信息用于定位数据或公式问题。
+            </p>
             <dl class="audit-grid">
               <div>
                 <dt>原因码</dt>
@@ -375,6 +378,13 @@ function formatMinute(minuteStart: number | null): string {
   background: rgba(137, 179, 215, 0.14);
 }
 
+.audit-summary {
+  margin: 0 0 14px;
+  color: #c6d7e7;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .summary-grid > div,
 .audit-grid > div {
   min-width: 0;
@@ -527,6 +537,7 @@ function formatMinute(minuteStart: number | null): string {
   border: 1px solid rgba(224, 157, 100, 0.24);
   color: #e7b48d;
   font: 10px/1.4 'Cascadia Code', Consolas, monospace;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 560px) {
