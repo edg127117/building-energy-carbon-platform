@@ -162,7 +162,8 @@ export function buildPointViews(
 }
 
 /**
- * 按冻结顺序生成四个指标槽位，并原样保留后端失败原因和缺失输入。
+ * 按冻结顺序生成四个指标槽位：成功结果按展示口径格式化，失败结果补充业务摘要；
+ * 后端原因码和缺失语义键仍原样保留，供计算详情抽屉展示完整诊断事实。
  */
 export function buildIndicatorViews(
   latest: HvacLatestResponse | null,
