@@ -51,11 +51,13 @@ export type DashboardPointView = {
   unit: string
   value: number | null
   displayValue: string
+  lastDisplayValue: string | null
   minute: number | null
   sampleCount: number
   dataQuality: number | null
   qualityLabel: string
   status: string
+  statusLabel: string
 }
 
 export type DashboardIndicatorView = {
@@ -85,6 +87,16 @@ function qualityLabel(quality: number | null): string {
   if (quality === 1) return '插值'
   if (quality === 2) return '典型值'
   return '无数据'
+}
+
+/** 将快照新鲜度状态转换为业务文案，不根据 STALE 推断设备或网络故障。 */
+function pointStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    NORMAL: '数据正常',
+    STALE: '数据过期',
+    NO_DATA: '暂无数据',
+  }
+  return labels[status] ?? status
 }
 
 /** 将公式引擎状态转换为用户可读文案，未知状态保留后端原值便于排查。 */
@@ -126,8 +138,8 @@ function indicatorSupportingText(
 }
 
 /**
- * 生成稳定的 19 个测点槽位。接口缺项或 NO_DATA 时保留槽位并显示 `--`，
- * 这样页面不会用默认值掩盖真实的数据缺口。
+ * 生成稳定的 19 个测点槽位。只有 NORMAL 值进入实时展示和完整率；STALE 只保留
+ * 最后值证据，接口缺项或 NO_DATA 保持空槽位，避免历史值掩盖当前数据缺口。
  */
 export function buildPointViews(
   snapshot: HvacSnapshotResponse | null,
@@ -139,22 +151,28 @@ export function buildPointViews(
   return Object.fromEntries(
     FROZEN_POINT_DEFINITIONS.map((definition) => {
       const source = sourceByCode.get(definition.internalCode)
-      const available =
-        source?.status === 'NORMAL' && source.average !== null
+      const status = source?.status ?? 'NO_DATA'
+      const sourceValue = source?.average ?? null
+      const available = status === 'NORMAL' && sourceValue !== null
+      const stale = status === 'STALE' && sourceValue !== null
       const view: DashboardPointView = {
         displayCode: definition.displayCode,
         internalCode: definition.internalCode,
         label: source?.pointName || definition.label,
         unit: source?.unit || definition.unit,
-        value: available ? source.average : null,
+        value: available ? sourceValue : null,
         displayValue: available
-          ? source.average!.toFixed(definition.precision)
+          ? sourceValue!.toFixed(definition.precision)
           : '--',
+        lastDisplayValue: stale
+          ? sourceValue!.toFixed(definition.precision)
+          : null,
         minute: source?.minute ?? null,
         sampleCount: source?.sampleCount ?? 0,
         dataQuality: source?.dataQuality ?? null,
         qualityLabel: qualityLabel(source?.dataQuality ?? null),
-        status: source?.status ?? 'NO_DATA',
+        status,
+        statusLabel: pointStatusLabel(status),
       }
       return [definition.displayCode, view]
     }),
@@ -204,7 +222,7 @@ export function buildIndicatorViews(
   })
 }
 
-/** 按 19 个冻结槽位中状态为 NORMAL 且有平均值的数量计算完整率。 */
+/** 按 19 个冻结槽位中状态为 NORMAL 且有当前值的数量计算当前有效完整率。 */
 export function calculatePointCoverage(points: DashboardPointMap): number {
   const normal = Object.values(points).filter(
     (point) => point.status === 'NORMAL' && point.value !== null,

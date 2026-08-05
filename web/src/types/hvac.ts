@@ -24,8 +24,8 @@ export type Building = {
 /**
  * `/hvac/buildings/{buildingId}/snapshot` 中的单测点分钟快照。
  *
- * `minute` 是该测点最新冻结分钟，不要求与其他测点相同；`NO_DATA` 时数值、质量和
- * 分钟为空，`sampleCount` 为 0，页面必须保留空槽位而不能填入模拟值。
+ * `minute` 是该测点最新冻结分钟，不要求与其他测点相同；`STALE` 仍保留最后数值、
+ * 质量和分钟供追溯，`NO_DATA` 时这些字段为空且 `sampleCount` 为 0。
  */
 export type SnapshotPoint = {
   pointId: string
@@ -40,7 +40,7 @@ export type SnapshotPoint = {
   maximum: number | null
   sampleCount: number
   dataQuality: number | null
-  status: 'NORMAL' | 'NO_DATA' | string
+  status: 'NORMAL' | 'STALE' | 'NO_DATA' | string
 }
 
 /** 建筑快照响应；`generatedAt` 是响应组装时间，不是所有测点共同的数据时间。 */

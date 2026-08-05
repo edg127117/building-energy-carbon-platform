@@ -68,6 +68,22 @@ describe('HVAC dashboard mapping', () => {
     expect(views.WCR1_TWin.value).toBeNull()
     expect(views.WCR1_TWin.displayValue).toBe('--')
     expect(views.WCR1_TWin.status).toBe('NO_DATA')
+    expect(views.WCR1_TWin.statusLabel).toBe('暂无数据')
+    expect(views.WCR1_TWin.lastDisplayValue).toBeNull()
+    expect(calculatePointCoverage(views)).toBe(0)
+  })
+
+  it('hides stale realtime value but keeps the last value evidence', () => {
+    const views = buildPointViews(
+      snapshot([point('WCR1_TWin', 7.2, 'STALE')]),
+    )
+
+    expect(views.WCR1_TWin.value).toBeNull()
+    expect(views.WCR1_TWin.displayValue).toBe('--')
+    expect(views.WCR1_TWin.status).toBe('STALE')
+    expect(views.WCR1_TWin.statusLabel).toBe('数据过期')
+    expect(views.WCR1_TWin.lastDisplayValue).toBe('7.2')
+    expect(views.WCR1_TWin.minute).toBe(1785420000000)
     expect(calculatePointCoverage(views)).toBe(0)
   })
 
