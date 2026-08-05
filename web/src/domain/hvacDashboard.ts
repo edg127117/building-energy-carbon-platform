@@ -69,6 +69,8 @@ export type DashboardIndicatorView = {
   minuteStart: number | null
   status: string
   statusLabel: string
+  summaryText: string
+  supportingText: string | null
   dataQuality: number | null
   formulaVersion: string | null
   reasonCode: string | null
@@ -95,6 +97,32 @@ function indicatorStatusLabel(status: string): string {
     NO_DATA: '暂无数据',
   }
   return labels[status] ?? status
+}
+
+/**
+ * 为指标卡生成面向运行人员的当前结论，避免把公式引擎状态码当作主要信息。
+ * 未知状态只说明指标暂不可用，不推测后端尚未确认的故障原因。
+ */
+function indicatorSummary(status: string): string {
+  const summaries: Record<string, string> = {
+    SUCCESS: '最新分钟计算完成',
+    MISSING_INPUT: '当前分钟缺少必要输入',
+    INVALID_INPUT: '当前分钟输入数据无效',
+    ENGINE_ERROR: '当前分钟计算未完成',
+    NO_DATA: '暂无可用计算记录',
+  }
+  return summaries[status] ?? '当前指标暂不可用'
+}
+
+/**
+ * 卡片只提示缺失数量，具体语义键继续保留在详情抽屉，避免技术字段挤压大屏信息层级。
+ */
+function indicatorSupportingText(
+  status: string,
+  missingInputs: string[],
+): string | null {
+  if (status !== 'MISSING_INPUT' || missingInputs.length === 0) return null
+  return `缺少 ${missingInputs.length} 项必要输入`
 }
 
 /**
@@ -148,8 +176,10 @@ export function buildIndicatorViews(
 
   return INDICATOR_DEFINITIONS.map((definition) => {
     const source = sourceByCode.get(definition.indicatorCode)
+    const status = source?.status ?? 'NO_DATA'
+    const missingInputs = source?.missingInputs ?? []
     const successful =
-      source?.status === 'SUCCESS' && source.value !== null
+      status === 'SUCCESS' && source?.value !== null
     return {
       indicatorId: source?.indicatorId ?? null,
       indicatorCode: definition.indicatorCode,
@@ -161,12 +191,14 @@ export function buildIndicatorViews(
         : '--',
       unit: source?.unit || definition.unit,
       minuteStart: source?.minuteStart ?? null,
-      status: source?.status ?? 'NO_DATA',
-      statusLabel: indicatorStatusLabel(source?.status ?? 'NO_DATA'),
+      status,
+      statusLabel: indicatorStatusLabel(status),
+      summaryText: indicatorSummary(status),
+      supportingText: indicatorSupportingText(status, missingInputs),
       dataQuality: source?.dataQuality ?? null,
       formulaVersion: source?.formulaVersion ?? null,
       reasonCode: source?.reasonCode ?? null,
-      missingInputs: source?.missingInputs ?? [],
+      missingInputs,
     }
   })
 }
