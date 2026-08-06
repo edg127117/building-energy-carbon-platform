@@ -414,6 +414,14 @@ function Invoke-RepositoryContractTests {
     Assert-Contains $valid.Output 'REPOSITORY_GUARDRAILS_OK' 'success marker must be emitted'
     Complete-Case 'linked production audit document passes'
 
+    $bodyWithTemplateInstructions = $body.Replace(
+        '## 注释审计',
+        "## 注释审计`n<!-- [模板示例](docs/reviews/comment-audits/2026/2026-08-06-example.md) -->"
+    )
+    $withTemplateInstructions = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $bodyWithTemplateInstructions }
+    Assert-True ($withTemplateInstructions.ExitCode -eq 0) "hidden template links must be ignored: $($withTemplateInstructions.Output)"
+    Complete-Case 'hidden PR template links are not treated as audit evidence'
+
     $legacyBody = New-LegacyAuditBody $auditContent
     $legacy = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $legacyBody }
     Assert-True ($legacy.ExitCode -eq 0) "legacy inline audit should pass: $($legacy.Output)"

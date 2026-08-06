@@ -140,7 +140,9 @@ function Resolve-AuditDocumentContent {
         [string]$Body,
         [object[]]$ChangedFiles
     )
-    $auditSection = Get-PrSection $Body '注释审计'
+    # PR 模板通过 HTML 注释提供示例链接；这些隐藏说明不是用户提交的审计证据。
+    $withoutInstructions = [regex]::Replace($Body, '(?s)<!--.*?-->', '').Trim()
+    $auditSection = Get-PrSection $withoutInstructions '注释审计'
     $targets = @(Get-AuditDocumentLinkTargets $auditSection)
     if ($targets.Count -gt 1) {
         Add-GuardrailError 'AUDIT_DOCUMENT_LINK_MULTIPLE' ($targets -join ', ')
@@ -192,7 +194,7 @@ function Resolve-AuditDocumentContent {
         Add-GuardrailError 'AUDIT_DOCUMENT_UNSAFE_TYPE' $target
         return $null
     }
-    $changedDocument = @($ChangedFiles | Where-Object { $_.path -eq $target -and $_.status -like 'A*' })
+    $changedDocument = @($ChangedFiles | Where-Object { $_.path -ceq $target -and $_.status -like 'A*' })
     if ($changedDocument.Count -ne 1) {
         Add-GuardrailError 'AUDIT_DOCUMENT_NOT_ADDED' $target
         return $null
