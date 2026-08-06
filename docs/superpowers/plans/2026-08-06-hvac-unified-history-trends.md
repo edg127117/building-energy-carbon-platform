@@ -1488,9 +1488,164 @@ Stop at “等待用户创建并合并 PR”. After the user says “已合并�
 
 ---
 
+### Task 12: Clarify Four-Series Grouping and Remove Legend Overlap
+
+**Files:**
+- Modify: `web/src/components/hvac/HvacTrendChart.vue`
+- Modify: `web/src/components/hvac/HvacTrendChart.test.ts`
+- Modify: `web/src/components/hvac/HvacHistoryPanel.vue`
+- Modify: `web/src/components/hvac/HvacHistoryPanel.test.ts`
+
+**Interfaces:**
+- Consumes: existing `HvacTrendGroup[]`, stable ECharts series order, and the confirmed four-indicator/three-unit grouping.
+- Produces: external responsive series legend and a visible `${seriesCount} 项指标 · ${groupCount} 个单位图表 · 同单位合并对比` summary.
+
+- [ ] **Step 1: Write failing chart and panel tests**
+
+In `HvacTrendChart.test.ts`, add a two-series group and assert that `.trend-chart__series-item` renders both names, their swatches use different stable colors, and the ECharts option has no internal `legend` block. In `HvacHistoryPanel.test.ts`, provide four series across three groups and assert the text `4 项指标 · 3 个单位图表 · 同单位合并对比`.
+
+```ts
+const compareGroup = {
+  ...group,
+  series: [
+    group.series[0],
+    { ...group.series[0], id: 'I2', code: 'TOWER_EFF', label: '冷却塔效率' },
+  ],
+}
+const wrapper = mount(HvacTrendChart, {
+  props: { group: compareGroup, from: 0, to: 300_000, resolutionMinutes: 1 },
+})
+expect(wrapper.findAll('.trend-chart__series-item').map((item) => item.text()))
+  .toEqual(['水泵效率', '冷却塔效率'])
+expect(wrapper.findAll('.trend-chart__series-swatch')[0].attributes('style'))
+  .not.toBe(wrapper.findAll('.trend-chart__series-swatch')[1].attributes('style'))
+expect(mocks.setOption.mock.calls[0][0].legend).toBeUndefined()
+
+holder.state.groups.value = [
+  { ...dataGroup, unit: '', series: [{ ...dataGroup.series[0], id: 'I1' }] },
+  { ...dataGroup, unit: '%', series: [
+    { ...dataGroup.series[0], id: 'I2' },
+    { ...dataGroup.series[0], id: 'I3' },
+  ] },
+  { ...dataGroup, unit: 'W/(m³·h)', series: [{ ...dataGroup.series[0], id: 'I4' }] },
+]
+expect(mountPanel().text()).toContain('4 项指标 · 3 个单位图表 · 同单位合并对比')
+```
+
+- [ ] **Step 2: Run the focused tests and verify the new assertions fail**
+
+```powershell
+Set-Location web
+npm run test:run -- src/components/hvac/HvacTrendChart.test.ts src/components/hvac/HvacHistoryPanel.test.ts --maxWorkers=1 --minWorkers=1 --pool=threads
+```
+
+Expected: FAIL because the DOM series legend and grouping summary do not exist and the ECharts option still owns the legend.
+
+- [ ] **Step 3: Move the series legend outside Canvas**
+
+In `HvacTrendChart.vue`, define one `SERIES_COLORS` array shared by `buildOption().color` and `seriesColor(index)`. Render a wrapping `.trend-chart__series-legend` between the note and Canvas; each `.trend-chart__series-item` contains a stable-color line swatch and `series.label`. Remove `LegendComponent` registration and the ECharts `legend` option, but retain the Y-axis unit because the external legend removes the collision instead of hiding the engineering unit.
+
+```vue
+<div class="trend-chart__series-legend" aria-label="趋势序列图例">
+  <span
+    v-for="(series, index) in group.series"
+    :key="series.id"
+    class="trend-chart__series-item"
+  >
+    <i
+      class="trend-chart__series-swatch"
+      :style="{ backgroundColor: seriesColor(index) }"
+    />
+    {{ series.label }}
+  </span>
+</div>
+```
+
+```ts
+const SERIES_COLORS = ['#55b9ff', '#42d6a5', '#ffad5c', '#e9c85f', '#ab8cff', '#56d5d8']
+
+function seriesColor(index: number): string {
+  return SERIES_COLORS[index % SERIES_COLORS.length]
+}
+
+// buildOption
+color: SERIES_COLORS,
+```
+
+```css
+.trend-chart__series-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 8px 16px 0;
+}
+
+.trend-chart__series-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.trend-chart__series-swatch {
+  width: 18px;
+  height: 3px;
+}
+```
+
+- [ ] **Step 4: Add the grouping summary**
+
+In `HvacHistoryPanel.vue`, derive a `groupingSummary` computed value from `allSeries.length`, `groups.length`, and `mode`. Indicator mode returns `N 项指标 · M 个单位图表 · 同单位合并对比`; point mode returns `N 个测点 · M 个单位图表`. Add it to `history-meta` with the label `图表分组`.
+
+```ts
+const groupingSummary = computed(() => {
+  if (groups.value.length === 0) return '尚无图表分组'
+  const subject = mode.value === 'indicators'
+    ? `${allSeries.value.length} 项指标`
+    : `${allSeries.value.length} 个测点`
+  const comparison = mode.value === 'indicators' ? ' · 同单位合并对比' : ''
+  return `${subject} · ${groups.value.length} 个单位图表${comparison}`
+})
+```
+
+```vue
+<span><b>图表分组</b>{{ groupingSummary }}</span>
+```
+
+- [ ] **Step 5: Run focused checks and verify they pass**
+
+```powershell
+npm run test:run -- src/components/hvac/HvacTrendChart.test.ts src/components/hvac/HvacHistoryPanel.test.ts --maxWorkers=1 --minWorkers=1 --pool=threads
+npm run check
+npm run lint
+```
+
+Expected: both files pass; TypeScript and ESLint report no errors.
+
+- [ ] **Step 6: Verify the rendered desktop and 380px layouts**
+
+With the existing local Vite/backend services, inspect the four default indicators and `%` group in the browser. Confirm the page shows four series in three unit charts, all external legend labels remain readable without overlap, the `%` group lists two series, horizontal overflow is zero at 380px, and the console has no Vue/ECharts errors.
+
+- [ ] **Step 7: Run full frontend regression and commit**
+
+```powershell
+npm run test:run -- --maxWorkers=1 --minWorkers=1 --pool=threads
+npm run check
+npm run lint
+npm run build
+Set-Location ..
+git diff --check
+git add -- docs/superpowers/specs/2026-08-05-hvac-unified-history-trends-design.md docs/superpowers/plans/2026-08-06-hvac-unified-history-trends.md web/src/components/hvac/HvacTrendChart.vue web/src/components/hvac/HvacTrendChart.test.ts web/src/components/hvac/HvacHistoryPanel.vue web/src/components/hvac/HvacHistoryPanel.test.ts
+git commit -m "fix(web): prevent HVAC trend legend overlap"
+git push
+```
+
+Expected: all checks pass, the original task branch is updated, and the PR remains waiting for user review/merge.
+
+---
+
 ## Plan Self-Review Result
 
-- Spec coverage: backend batch trend, exact audit preservation, 1/5/30 resolution, both frontend modes, 1–8 point selection, persistence, gaps, quality, errors, races, performance, Docker, browser, status, comments, and Git flow all map to explicit tasks.
+- Spec coverage: backend batch trend, exact audit preservation, 1/5/30 resolution, both frontend modes, 1–8 point selection, persistence, gaps, quality, errors, races, performance, external legend layout, four-series/three-group clarity, Docker, browser, status, comments, and Git flow all map to explicit tasks.
 - Placeholder scan: no implementation placeholder remains; code-changing steps include concrete signatures, logic, commands, and expected outcomes.
 - Type consistency: backend `TrendResponse/TrendSeries/TrendRecord`, repository `IndicatorTrendQueryRow`, frontend response types, unified trend model, composable context, and component props use the same names throughout.
 - Scope check: WebSocket, exports, audit/drill-down pages, alerts, prediction, favorites, backend management, formula changes, and schema changes remain excluded.
