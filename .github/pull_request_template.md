@@ -1,31 +1,20 @@
-## 解决的问题
-
-<!-- 说明问题、用户影响及为什么需要本次修改。 -->
-
 ## 变更内容
 
-<!-- 只列出本 PR 已经完成的修改。 -->
-
-## 不包含范围
-
-<!-- 明确本 PR 没有处理的内容，避免把计划写成已经实现。 -->
-
-## 文件范围检查
-
-<!-- 说明差异中没有生成文件、凭据、运行数据或无关修改。 -->
+<!-- 只列出本 PR 已经完成的业务或工程变化，以及明确不包含的范围。 -->
 
 ## 测试
 
-<!-- 逐项填写命令、结果、通过数量、跳过项和未验证内容。 -->
+<!-- 逐项填写实际命令、结果、通过数量、跳过项和未验证内容。 -->
 
-## 注释检查
+## 注释审计
 
 <!--
 生产 Java、Vue 或 TypeScript 文件发生变化时：
-1. 运行：powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-CommentAuditReport.ps1 -BaseRef origin/main -HeadRef HEAD
-2. 将报告粘贴到本节并逐项填写，不能保留“待填写”或“待核验”。
-3. 所有方法/函数都必须分类；关键方法写业务说明，简单方法写具体免注释原因。
-4. 人工核对扫描器未识别的匿名回调，以及全部现有注释是否仍与当前行为一致。
+1. 新建路径：docs/reviews/comment-audits/<year>/<YYYY-MM-DD>-<task>.md
+2. 运行：powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-CommentAuditReport.ps1 -BaseRef origin/main -HeadRef HEAD -OutputPath docs/reviews/comment-audits/2026/2026-08-06-example.md
+3. 完成人工审查，不能保留“待填写”或“待核验”，然后提交该新增文档。
+4. 在本节保留且只保留一个仓库相对链接，例如：
+   [查看完整中文注释审计](docs/reviews/comment-audits/2026/2026-08-06-example.md)
 
-文档-only PR 在本节填写“不涉及生产代码”。
+没有生产代码变化时，在本节填写“不涉及生产代码”。
 -->

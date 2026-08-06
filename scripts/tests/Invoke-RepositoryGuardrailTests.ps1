@@ -579,14 +579,29 @@ function Invoke-CiContractTests {
     $template = Join-Path $repositoryRoot '.github\pull_request_template.md'
     $frontend = Join-Path $repositoryRoot '.github\workflows\frontend-ci.yml'
     $guardrails = Join-Path $repositoryRoot '.github\workflows\repository-guardrails.yml'
-    foreach ($path in @($template, $frontend, $guardrails)) {
+    $agents = Join-Path $repositoryRoot 'AGENTS.md'
+    $guide = Join-Path $repositoryRoot 'docs\development\repository-guardrails.md'
+    $archive = Join-Path $repositoryRoot 'docs\reviews\comment-audits\README.md'
+    foreach ($path in @($template, $frontend, $guardrails, $agents, $guide, $archive)) {
         Assert-True (Test-Path $path) "required CI contract file must exist: $path"
     }
     $templateText = Get-Content -Raw -Encoding UTF8 -LiteralPath $template
-    foreach ($heading in '## 解决的问题', '## 变更内容', '## 不包含范围', '## 文件范围检查', '## 测试', '## 注释检查') {
+    foreach ($heading in '## 变更内容', '## 测试', '## 注释审计') {
         Assert-Contains $templateText $heading "PR template must contain $heading"
     }
+    foreach ($obsoleteHeading in '## 解决的问题', '## 不包含范围', '## 文件范围检查', '## 注释检查') {
+        Assert-NotContains $templateText $obsoleteHeading "PR template must not require $obsoleteHeading"
+    }
     Assert-Contains $templateText 'New-CommentAuditReport.ps1' 'PR template must identify report command'
+    Assert-Contains $templateText '-OutputPath' 'PR template must generate a permanent document'
+
+    $archivePattern = 'docs/reviews/comment-audits/<year>/<YYYY-MM-DD>-<task>.md'
+    foreach ($contractPath in @($agents, $guide, $archive)) {
+        $contractText = Get-Content -Raw -Encoding UTF8 -LiteralPath $contractPath
+        Assert-Contains $contractText $archivePattern "repository contract must identify the permanent archive path: $contractPath"
+        Assert-Contains $contractText '-OutputPath' "repository contract must show document generation: $contractPath"
+        Assert-Contains $contractText '不能复用' "repository contract must forbid historical report reuse: $contractPath"
+    }
 
     $frontendText = Get-Content -Raw -Encoding UTF8 -LiteralPath $frontend
     foreach ($command in 'npm ci', 'npm run lint', 'npm run test:run', 'npm run check', 'npm run build') {
@@ -600,7 +615,7 @@ function Invoke-CiContractTests {
     Assert-Contains $guardrailText 'github.event.pull_request.base.sha' 'workflow must pass base SHA'
     Assert-Contains $guardrailText 'github.event.pull_request.head.sha' 'workflow must pass head SHA'
     Assert-Contains $guardrailText 'PR_BODY:' 'workflow must pass PR body'
-    Complete-Case 'PR template and GitHub Actions contract'
+    Complete-Case 'PR template, permanent audit archive, and GitHub Actions contract'
 }
 
 try {
