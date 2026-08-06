@@ -73,9 +73,15 @@ class HvacIndicatorControllerFlowTest {
     }
 
     @Test
-    void allThreeEndpointsRequireAuthentication() throws Exception {
+    void allFourEndpointsRequireAuthentication() throws Exception {
         mockMvc.perform(apiGet(
                         "/api/hvac/buildings/BLD001/indicators/latest"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(apiGet(
+                        "/api/hvac/buildings/BLD001/indicators/trends")
+                        .param("indicatorIds", INDICATOR_ID)
+                        .param("from", Long.toString(MINUTE))
+                        .param("to", Long.toString(MINUTE + 60_000L)))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/history",
@@ -90,7 +96,7 @@ class HvacIndicatorControllerFlowTest {
     }
 
     @Test
-    void ownerManagerAndAdminCanUseAllThreeEndpoints() throws Exception {
+    void ownerManagerAndAdminCanUseAllFourEndpoints() throws Exception {
         for (String token : List.of(ownerToken, managerToken, adminToken)) {
             mockMvc.perform(apiGet(
                             "/api/hvac/buildings/BLD001/indicators/latest")
@@ -100,6 +106,19 @@ class HvacIndicatorControllerFlowTest {
                     .andExpect(jsonPath("$.data.buildingId").value("BLD001"))
                     .andExpect(jsonPath("$.data.indicators.length()").value(4))
                     .andExpect(jsonPath("$.data.indicators[0].status").exists());
+
+            mockMvc.perform(apiGet(
+                            "/api/hvac/buildings/BLD001/indicators/trends")
+                            .header(auth(), bearer(token))
+                            .param("indicatorIds", INDICATOR_ID)
+                            .param("from", Long.toString(MINUTE))
+                            .param("to", Long.toString(MINUTE + 60_000L)))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.buildingId").value("BLD001"))
+                    .andExpect(jsonPath("$.data.resolutionMinutes").value(1))
+                    .andExpect(jsonPath("$.data.series[0].indicatorId")
+                            .value(INDICATOR_ID))
+                    .andExpect(jsonPath("$.data.series[0].records.length()").value(0));
 
             mockMvc.perform(apiGet(
                             "/api/hvac/indicators/{indicatorId}/history",
@@ -124,10 +143,17 @@ class HvacIndicatorControllerFlowTest {
     }
 
     @Test
-    void outOfScopeBuildingRoleIsForbiddenOnAllThreeEndpoints() throws Exception {
+    void outOfScopeBuildingRoleIsForbiddenOnAllFourEndpoints() throws Exception {
         mockMvc.perform(apiGet(
                         "/api/hvac/buildings/BLD001/indicators/latest")
                         .header(auth(), bearer(outsideOwnerToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(apiGet(
+                        "/api/hvac/buildings/BLD001/indicators/trends")
+                        .header(auth(), bearer(outsideOwnerToken))
+                        .param("indicatorIds", INDICATOR_ID)
+                        .param("from", Long.toString(MINUTE))
+                        .param("to", Long.toString(MINUTE + 60_000L)))
                 .andExpect(status().isForbidden());
         mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/history",
@@ -144,10 +170,17 @@ class HvacIndicatorControllerFlowTest {
     }
 
     @Test
-    void thirdPartyIsForbiddenOnAllThreeInternalEndpoints() throws Exception {
+    void thirdPartyIsForbiddenOnAllFourInternalEndpoints() throws Exception {
         mockMvc.perform(apiGet(
                         "/api/hvac/buildings/BLD001/indicators/latest")
                         .header(auth(), bearer(thirdPartyToken)))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(apiGet(
+                        "/api/hvac/buildings/BLD001/indicators/trends")
+                        .header(auth(), bearer(thirdPartyToken))
+                        .param("indicatorIds", INDICATOR_ID)
+                        .param("from", Long.toString(MINUTE))
+                        .param("to", Long.toString(MINUTE + 60_000L)))
                 .andExpect(status().isForbidden());
         mockMvc.perform(apiGet(
                         "/api/hvac/indicators/{indicatorId}/history",
@@ -161,6 +194,33 @@ class HvacIndicatorControllerFlowTest {
                         INDICATOR_ID, MINUTE)
                         .header(auth(), bearer(thirdPartyToken)))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void trendEndpointRejectsInvalidBatchAndRangeParameters() throws Exception {
+        mockMvc.perform(apiGet(
+                        "/api/hvac/buildings/BLD001/indicators/trends")
+                        .header(auth(), bearer(adminToken))
+                        .param("from", Long.toString(MINUTE))
+                        .param("to", Long.toString(MINUTE + 60_000L)))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(apiGet(
+                        "/api/hvac/buildings/BLD001/indicators/trends")
+                        .header(auth(), bearer(adminToken))
+                        .param("indicatorIds", "I1,I2,I3,I4,I5")
+                        .param("from", Long.toString(MINUTE))
+                        .param("to", Long.toString(MINUTE + 60_000L)))
+                .andExpect(status().isBadRequest());
+
+        mockMvc.perform(apiGet(
+                        "/api/hvac/buildings/BLD001/indicators/trends")
+                        .header(auth(), bearer(adminToken))
+                        .param("indicatorIds", INDICATOR_ID)
+                        .param("from", Long.toString(MINUTE))
+                        .param("to", Long.toString(
+                                MINUTE + java.time.Duration.ofDays(31).toMillis() + 1)))
+                .andExpect(status().isBadRequest());
     }
 
     private String createAndLogin(
