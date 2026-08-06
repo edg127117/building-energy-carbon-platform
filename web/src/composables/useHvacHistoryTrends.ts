@@ -231,12 +231,16 @@ export function useHvacHistoryTrends(
     await runQuery()
   }
 
-  /** 选择快捷时间范围并立即查询；范围结束时间在实际请求时取当前整分钟。 */
+  /**
+   * 选择快捷时间范围并立即查询；范围结束时间在实际请求时取当前整分钟。
+   * 首次进入自定义模式只等待日期输入，不把“尚未选择”误报为查询失败。
+   */
   async function setPreset(nextPreset: HvacHistoryPreset): Promise<void> {
     if (preset.value === nextPreset) return
     preset.value = nextPreset
     invalidateCondition()
     if (nextPreset === 'custom') {
+      if (customFrom.value === null || customTo.value === null) return
       const validation = validateHistoryRange(customFrom.value, customTo.value)
       if (validation) {
         error.value = { status: null, message: validation }
@@ -330,6 +334,8 @@ function restorePointSelection(
   options: HvacHistoryPointOption[],
 ): string[] {
   try {
+    // 建筑刚选中时快照可能尚未返回；此时不能用空候选覆盖已保存的有效选择。
+    if (options.length === 0) return []
     const stored = JSON.parse(
       localStorage.getItem(pointSelectionKey(buildingId)) ?? '[]',
     )

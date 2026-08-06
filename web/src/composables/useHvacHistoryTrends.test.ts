@@ -180,6 +180,25 @@ describe('useHvacHistoryTrends', () => {
     expect(api.getPointHistory).toHaveBeenCalledTimes(1)
   })
 
+  it('restores stored ids after an empty startup snapshot is replaced', async () => {
+    const points = snapshotPoints(2)
+    localStorage.setItem(
+      'hvac:history-point-ids:BLD001',
+      JSON.stringify([points[0].pointId]),
+    )
+    const api = dependencies()
+    const state = useHvacHistoryTrends(api)
+
+    await state.setBuildingContext({
+      buildingId: 'BLD001', indicatorIds: [], points: [],
+    })
+    await state.setBuildingContext({
+      buildingId: 'BLD001', indicatorIds: ['I1'], points,
+    })
+
+    expect(state.selectedPointIds.value).toEqual([points[0].pointId])
+  })
+
   it('clears old building data immediately and ignores its late response', async () => {
     const first = controlled<HvacIndicatorTrendResponse>()
     const second = controlled<HvacIndicatorTrendResponse>()
@@ -278,6 +297,22 @@ describe('useHvacHistoryTrends', () => {
     expect(api.getIndicatorTrends).not.toHaveBeenCalled()
     expect(state.groups.value).toEqual([])
     expect(state.error.value?.message).toBe('开始时间必须早于结束时间')
+  })
+
+  it('opens an empty custom range without reporting an input error', async () => {
+    const api = dependencies()
+    const state = useHvacHistoryTrends(api)
+    await state.setBuildingContext({
+      buildingId: 'BLD001', indicatorIds: ['I1'], points: snapshotPoints(),
+    })
+    api.getIndicatorTrends.mockClear()
+
+    await state.setPreset('custom')
+
+    expect(state.preset.value).toBe('custom')
+    expect(state.groups.value).toEqual([])
+    expect(state.error.value).toBeNull()
+    expect(api.getIndicatorTrends).not.toHaveBeenCalled()
   })
 
   it('dispose invalidates a request that resolves after unmount', async () => {

@@ -58,4 +58,10 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain('handleBuildingChange')
     expect(source).toContain('closeCalculationDetail()')
   })
+
+  it('keeps the history chart column shrinkable on narrow screens', () => {
+    expect(source).toContain(
+      '.bottom-grid { grid-template-columns: minmax(0, 1fr); }',
+    )
+  })
 })

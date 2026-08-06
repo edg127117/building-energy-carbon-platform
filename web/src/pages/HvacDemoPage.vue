@@ -758,7 +758,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
   .summary-stats { min-width: 0; width: 100%; overflow-x: auto; }
   .topology-canvas { min-width: 900px; }
   .topology-panel { overflow-x: auto; }
-  .bottom-grid { grid-template-columns: 1fr; }
+  .bottom-grid { grid-template-columns: minmax(0, 1fr); }
   .legend { display: none; }
   .formula-catalog-heading { height: auto; min-height: 52px; align-items: flex-start; gap: 8px; padding-top: 10px; padding-bottom: 10px; }
   .formula-count em { display: none; }
