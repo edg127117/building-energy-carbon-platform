@@ -199,13 +199,21 @@ git push -u origin <branch-name>
 - 当前是否存在合并冲突；
 - 无关文件检查结果。
 
-生产 Java、Vue 或 TypeScript 文件发生变化时，PR 的“注释检查”还必须包含以下命令生成并人工填写的完整报告：
+生产 Java、Vue 或 TypeScript 文件发生变化时，必须为本任务新增一份长期保存的中文注释审计文档。固定路径格式为：
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-CommentAuditReport.ps1 -BaseRef origin/main -HeadRef HEAD
+```text
+docs/reviews/comment-audits/<year>/<YYYY-MM-DD>-<task>.md
 ```
 
-报告必须覆盖每个变化生产文件和扫描器识别出的全部方法、构造器及函数。不能保留“待填写”或“待核验”；关键项填写注释处理结果和业务说明，简单项填写具体免注释原因。CI 通过只代表结构和证据完整，不能代替主代理判断注释是否真实、准确并与当前实现一致。
+使用以下命令生成模板：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/New-CommentAuditReport.ps1 -BaseRef origin/main -HeadRef HEAD -OutputPath docs/reviews/comment-audits/2026/2026-08-06-example.md
+```
+
+报告必须覆盖每个变化生产文件和扫描器识别出的全部方法、构造器及函数。不能保留“待填写”或“待核验”；关键项填写注释处理结果和业务说明，简单项填写具体免注释原因。文档必须在当前 PR 中相对 base 新增，不能复用已经存在于 base 的历史报告；同一 PR 后续提交改变生产代码时，必须同步更新这份文档。
+
+PR 的“注释审计”章节只放一个指向该文档的仓库相对 Markdown 链接。没有生产代码变化时填写“不涉及生产代码”，不创建空审计文档。CI 通过只代表结构和证据完整，不能代替主代理判断注释是否真实、准确并与当前实现一致。
 
 PR 创建链接格式：
 
@@ -832,6 +840,7 @@ AI 生成或修改代码时，必须把实现过程中掌握的设计上下文�
 - `PROJECT_GUIDE.md`：保存稳定项目地图，包括业务范围、模块边界、核心数据链路、数据源职责、主要入口和文档导航。
 - `PROJECT_STATUS.md`：保存其所在 Git 版本可以验证的当前阶段、完成项、未完成项、阻塞、风险、技术债和下一步。
 - `docs/superpowers/specs`、`docs/superpowers/plans`：保存具体任务在当时确认的设计、取舍、实施步骤和验证方案，属于任务级历史记录。
+- `docs/reviews/comment-audits`：保存生产代码任务合并时的完整中文注释审计快照；历史报告不能复用或回写，行号只对应当时版本。
 - 当前会话：保存正在执行的命令、错误、临时判断、排查过程和尚未进入 Git 的具体任务状态。
 
 ### 2. 任务开始时的读取顺序
@@ -852,6 +861,7 @@ AI 生成或修改代码时，必须把实现过程中掌握的设计上下文�
 - 项目定位、模块职责、数据源边界、核心数据流、长期运行入口或文档导航变化时，在同一任务分支更新 `PROJECT_GUIDE.md`。
 - 项目阶段、完成项、未完成项、阻塞、风险、技术债或下一步变化时，在同一任务分支更新 `PROJECT_STATUS.md`。
 - 新模块、新 API、数据库结构、权限、缓存、并发或数据流程变化仍按规则一先形成任务级设计和实施计划。
+- 生产 Java、Vue 或 TypeScript 发生变化时，新增并完成人工填写的任务级注释审计文档；合并后的历史文档不再修改。
 - 当前会话中的命令、错误日志和临时排查结论不得机械复制到 Git 文档；只提炼长期有效且有证据支持的结论。
 - 只有用户个人偏好或跨项目通用经验发生变化时，才允许按 Codex Memories 的受支持方式提出记忆更新。
 
