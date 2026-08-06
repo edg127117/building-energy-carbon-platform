@@ -1,8 +1,8 @@
 <template>
   <!--
-    HVAC V1 大屏展示后端真实建筑、最新分钟快照、最新指标状态和逐分钟计算证据。
-    useHvacDashboard 负责大屏数据，useHvacCalculationDetail 负责详情请求与竞态隔离；
-    缺失或失败数据保持明确状态，不生成随机测点、虚假历史曲线或前端公式结果。
+    HVAC V1 大屏展示后端真实建筑、最新分钟快照、最新指标状态、计算证据和历史趋势。
+    useHvacDashboard 负责大屏数据，历史面板与计算详情分别维护自己的请求和竞态隔离；
+    缺失或失败数据保持明确状态，不生成随机测点、虚假趋势或前端公式结果。
   -->
   <div class="hvac-demo">
     <div class="ambient ambient-a" />
@@ -256,17 +256,14 @@
         </div>
       </section>
 
-      <!-- 历史趋势尚未接入；测点列表仍按冻结顺序展示真实快照或明确空值。 -->
+      <!-- 历史面板读取真实服务端趋势；测点列表继续按冻结顺序展示最新快照或明确空值。 -->
       <section class="bottom-grid">
         <article class="panel trend-panel">
-          <div class="panel-heading compact">
-            <div><span class="section-index">04</span><span class="panel-title">能效运行趋势</span><span class="panel-subtitle">后续迭代</span></div>
-          </div>
-          <div class="deferred-panel">
-            <TrendingUp :size="22" />
-            <strong>历史曲线将在下一迭代接入</strong>
-            <span>本页面当前只展示后端最新分钟快照，不使用虚假趋势数据。</span>
-          </div>
+          <HvacHistoryPanel
+            :building-id="selectedBuildingId"
+            :indicators="indicatorViews"
+            :snapshot-points="snapshot?.points ?? []"
+          />
         </article>
 
         <article class="panel point-panel">
@@ -318,11 +315,11 @@ import {
   Fan,
   Gauge,
   Snowflake,
-  TrendingUp,
   Waves,
   Wind,
 } from 'lucide-vue-next'
 import HvacCalculationDetailDrawer from '@/components/hvac/HvacCalculationDetailDrawer.vue'
+import HvacHistoryPanel from '@/components/hvac/HvacHistoryPanel.vue'
 import { useHvacCalculationDetail } from '@/composables/useHvacCalculationDetail'
 import { useHvacDashboard } from '@/composables/useHvacDashboard'
 import {
@@ -342,6 +339,7 @@ const {
   buildings,
   selectedBuildingId,
   selectedBuilding,
+  snapshot,
   pointViews,
   indicatorViews,
   coveragePercent,
@@ -715,9 +713,6 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 
 .bottom-grid { display: grid; grid-template-columns: minmax(0, 1fr) 370px; gap: 14px; margin-top: 14px; }
 .panel-heading.compact { height: 42px; }
-.deferred-panel { min-height: 180px; display: grid; place-items: center; align-content: center; gap: 8px; color: #8191a8; text-align: center; }
-.deferred-panel strong { color: #dce8f8; }
-.deferred-panel span { font-size: 10px; }
 .text-button { display: flex; align-items: center; gap: 2px; color: #5e7890; }
 .point-list { padding: 7px 13px 11px; }
 .point-row { min-height: 46px; display: grid; grid-template-columns: 14px minmax(0, 1fr) minmax(82px, auto) 104px; align-items: center; gap: 6px; border-bottom: 1px solid rgba(129, 169, 202, .08); }

@@ -15,14 +15,18 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).not.toContain('前端效果演示数据')
   })
 
-  it('connects real calculation details without adding fake history', () => {
+  it('connects real calculation details and the unified real history panel', () => {
     expect(source).not.toContain("from 'echarts'")
     expect(source).not.toContain('formulaMap')
     expect(source).not.toContain('selectedFormula')
-    expect(source).toContain('历史曲线将在下一迭代接入')
+    expect(source).not.toContain('历史曲线将在下一迭代接入')
     expect(source).not.toContain('计算详情将在下一迭代接入')
     expect(source).toContain('useHvacCalculationDetail')
     expect(source).toContain('HvacCalculationDetailDrawer')
+    expect(source).toContain('HvacHistoryPanel')
+    expect(source).toContain(':building-id="selectedBuildingId"')
+    expect(source).toContain(':indicators="indicatorViews"')
+    expect(source).toContain(':snapshot-points="snapshot?.points ?? []"')
     expect(source).toContain('openCalculationDetail')
     expect(source).toContain('@click="openCalculationDetail(card)"')
     expect(source).not.toMatch(/class="indicator-card"[^>]*\bdisabled\b/)
