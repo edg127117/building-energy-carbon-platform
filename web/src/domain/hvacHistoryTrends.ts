@@ -119,14 +119,10 @@ export function buildHistoryPointOptions(
 export function adaptIndicatorTrends(
   response: HvacIndicatorTrendResponse,
 ): HvacTrendGroup[] {
-  const definitions = new Map(
-    INDICATOR_DEFINITIONS.map((definition) => [
-      definition.indicatorCode,
-      definition,
-    ]),
-  )
   const series = response.series.flatMap((source) => {
-    const definition = definitions.get(source.indicatorCode)
+    const definition = INDICATOR_DEFINITIONS.find(
+      (item) => item.indicatorCode === source.indicatorCode,
+    )
     if (!definition) return []
     return [{
       id: source.indicatorId,
