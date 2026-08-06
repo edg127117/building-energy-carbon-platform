@@ -1641,11 +1641,144 @@ git push
 
 Expected: all checks pass, the original task branch is updated, and the PR remains waiting for user review/merge.
 
+### Task 13: Separate Axis Unit and Restore Series Visibility Controls
+
+**Files:**
+- Modify: `web/src/components/hvac/HvacTrendChart.vue`
+- Test: `web/src/components/hvac/HvacTrendChart.test.ts`
+
+**Interfaces:**
+- Consumes: existing `HvacTrendGroup.series`, stable `SERIES_COLORS`, and one chart instance per engineering-unit group.
+- Produces: a dedicated DOM axis-unit row and accessible external legend buttons that independently control ECharts series visibility.
+
+- [ ] **Step 1: Write failing layout and interaction tests**
+
+Extend the two-series test in `HvacTrendChart.test.ts`. Assert that the unit is rendered in `.trend-chart__axis-unit`, `yAxis.name` is absent, both legend entries are buttons with `aria-pressed="true"`, and clicking the first button updates the hidden ECharts legend selection while leaving the second series visible.
+
+```ts
+expect(wrapper.find('.trend-chart__axis-unit').text()).toBe('纵轴单位：%')
+expect(mocks.setOption.mock.calls[0][0].yAxis.name).toBeUndefined()
+
+const legendButtons = wrapper.findAll('.trend-chart__series-item')
+expect(legendButtons.map((button) => button.attributes('aria-pressed')))
+  .toEqual(['true', 'true'])
+
+await legendButtons[0]!.trigger('click')
+expect(legendButtons[0]!.attributes('aria-pressed')).toBe('false')
+const updatedOption = mocks.setOption.mock.calls.at(-1)![0]
+expect(updatedOption.legend).toMatchObject({
+  show: false,
+  selected: {
+    '水泵效率': false,
+    '冷却塔效率': true,
+  },
+})
+```
+
+- [ ] **Step 2: Run the focused test and verify failure**
+
+```powershell
+Set-Location web
+npm run test:run -- src/components/hvac/HvacTrendChart.test.ts --maxWorkers=1 --minWorkers=1 --pool=threads
+```
+
+Expected: FAIL because the current legend entries are non-interactive spans, the unit remains inside ECharts, and no hidden legend selection exists.
+
+- [ ] **Step 3: Implement independent DOM regions and visibility state**
+
+In `HvacTrendChart.vue`, register `LegendComponent` only as a hidden ECharts selection controller. Replace each legend `span` with a `button`, expose the visible state through `aria-pressed`, and toggle a component-local `Set<string>` of hidden series IDs. Build the hidden legend selection from current labels and prune IDs that no longer belong to the current group.
+
+```vue
+<button
+  v-for="(series, index) in group.series"
+  :key="series.id"
+  type="button"
+  class="trend-chart__series-item"
+  :class="{ 'trend-chart__series-item--hidden': !isSeriesVisible(series.id) }"
+  :aria-pressed="isSeriesVisible(series.id)"
+  @click="toggleSeries(series.id)"
+>
+  <i
+    class="trend-chart__series-swatch"
+    :style="{ backgroundColor: seriesColor(index) }"
+  />
+  {{ series.label }}
+</button>
+</div>
+<p class="trend-chart__axis-unit">
+  纵轴单位：<b>{{ group.unit || '无量纲' }}</b>
+</p>
+```
+
+```ts
+const hiddenSeriesIds = ref<Set<string>>(new Set())
+
+function isSeriesVisible(seriesId: string): boolean {
+  return !hiddenSeriesIds.value.has(seriesId)
+}
+
+function toggleSeries(seriesId: string): void {
+  const next = new Set(hiddenSeriesIds.value)
+  if (next.has(seriesId)) next.delete(seriesId)
+  else next.add(seriesId)
+  hiddenSeriesIds.value = next
+  updateChart()
+}
+
+// buildOption
+legend: {
+  show: false,
+  selected: Object.fromEntries(props.group.series.map((series) => [
+    series.label,
+    isSeriesVisible(series.id),
+  ])),
+},
+yAxis: {
+  type: 'value',
+  axisLabel: { color: '#71889f' },
+  // no name: the dedicated DOM row owns the unit label
+},
+```
+
+Style the legend buttons with a visible focus ring, at least 36 px hit height, stable swatches, and a clearly muted hidden state. Give `.trend-chart__axis-unit` its own padding and top separation; remove the Canvas margin workaround because normal-flow regions now own spacing.
+
+- [ ] **Step 4: Run focused frontend checks**
+
+```powershell
+npm run test:run -- src/components/hvac/HvacTrendChart.test.ts src/components/hvac/HvacHistoryPanel.test.ts --maxWorkers=1 --minWorkers=1 --pool=threads
+npm run check
+npm run lint
+```
+
+Expected: all focused tests, type checking, and lint pass.
+
+- [ ] **Step 5: Verify desktop and 380 px browser behavior**
+
+Open the running HVAC page and confirm the DOM order is legend buttons → independent axis-unit row → Canvas. In the `%` chart, click 冷却塔效率 and 水泵效率 separately and verify either curve can be the only visible curve, the button state is obvious, the unit never overlaps the legend, horizontal overflow is zero at 380 px, keyboard focus is visible, and the console has no Vue/ECharts errors.
+
+- [ ] **Step 6: Run regression, comment audit, commit, and push**
+
+```powershell
+npm run test:run -- --maxWorkers=1 --minWorkers=1 --pool=threads
+npm run check
+npm run lint
+npm run build
+Set-Location ..
+./mvnw.cmd test
+node .agents/skills/impeccable/scripts/detect.mjs --json --scope layout web/src/components/hvac/HvacTrendChart.vue
+git diff --check
+git add -- docs/superpowers/specs/2026-08-05-hvac-unified-history-trends-design.md docs/superpowers/plans/2026-08-06-hvac-unified-history-trends.md web/src/components/hvac/HvacTrendChart.vue web/src/components/hvac/HvacTrendChart.test.ts
+git commit -m "fix(web): restore HVAC trend series controls"
+git push
+```
+
+Expected: all checks pass, the production-file comment audit is complete, and the original task branch is updated without creating or merging the PR.
+
 ---
 
 ## Plan Self-Review Result
 
-- Spec coverage: backend batch trend, exact audit preservation, 1/5/30 resolution, both frontend modes, 1–8 point selection, persistence, gaps, quality, errors, races, performance, external legend layout, four-series/three-group clarity, Docker, browser, status, comments, and Git flow all map to explicit tasks.
+- Spec coverage: backend batch trend, exact audit preservation, 1/5/30 resolution, both frontend modes, 1–8 point selection, persistence, gaps, quality, errors, races, performance, external legend layout, independent unit row, series visibility controls, four-series/three-group clarity, Docker, browser, status, comments, and Git flow all map to explicit tasks.
 - Placeholder scan: no implementation placeholder remains; code-changing steps include concrete signatures, logic, commands, and expected outcomes.
 - Type consistency: backend `TrendResponse/TrendSeries/TrendRecord`, repository `IndicatorTrendQueryRow`, frontend response types, unified trend model, composable context, and component props use the same names throughout.
 - Scope check: WebSocket, exports, audit/drill-down pages, alerts, prediction, favorites, backend management, formula changes, and schema changes remain excluded.
