@@ -11,6 +11,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $errors = [System.Collections.Generic.List[string]]::new()
+$script:AuditDocumentPathPattern = '^docs/reviews/comment-audits/(?<year>\d{4})/(?<dateYear>\d{4})-(?<month>\d{2})-(?<day>\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$'
 
 function Add-GuardrailError {
     param([string]$Rule, [string]$Detail)
@@ -106,12 +107,110 @@ function Test-PrSections {
         return
     }
     $withoutInstructions = [regex]::Replace($Body, '(?s)<!--.*?-->', '').Trim()
-    foreach ($heading in @('解决的问题', '变更内容', '不包含范围', '文件范围检查', '测试', '注释检查')) {
+    foreach ($heading in @('变更内容', '测试')) {
         $section = Get-PrSection $withoutInstructions $heading
         if ([string]::IsNullOrWhiteSpace($section)) {
             Add-GuardrailError 'PR_SECTION_MISSING' $heading
         }
     }
+    $auditSection = Get-PrSection $withoutInstructions '注释审计'
+    if ([string]::IsNullOrWhiteSpace($auditSection) -and $Body -match '<!--\s*comment-audit:file=') {
+        $auditSection = Get-PrSection $withoutInstructions '注释检查'
+    }
+    if ([string]::IsNullOrWhiteSpace($auditSection)) {
+        Add-GuardrailError 'PR_SECTION_MISSING' '注释审计'
+    }
+}
+
+function Get-AuditDocumentLinkTargets {
+    param([string]$AuditSection)
+    $targets = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($AuditSection)) {
+        return $targets.ToArray()
+    }
+    foreach ($match in [regex]::Matches($AuditSection, '(?m)(?<!!)\[[^\]\r\n]*\]\((?<target>[^)\r\n]+)\)')) {
+        $targets.Add($match.Groups['target'].Value.Trim())
+    }
+    return $targets.ToArray()
+}
+
+function Resolve-AuditDocumentContent {
+    param(
+        [string]$RepositoryRoot,
+        [string]$Body,
+        [object[]]$ChangedFiles
+    )
+    $auditSection = Get-PrSection $Body '注释审计'
+    $targets = @(Get-AuditDocumentLinkTargets $auditSection)
+    if ($targets.Count -gt 1) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_LINK_MULTIPLE' ($targets -join ', ')
+        return $null
+    }
+    if ($targets.Count -eq 0) {
+        if ($Body -match '<!--\s*comment-audit:file=') {
+            return $Body
+        }
+        Add-GuardrailError 'AUDIT_DOCUMENT_LINK_MISSING' 'production code changes require one linked audit document'
+        return $null
+    }
+
+    $target = $targets[0].Replace('\', '/')
+    $pathMatch = [regex]::Match($target, $script:AuditDocumentPathPattern)
+    if (-not $pathMatch.Success -or $pathMatch.Groups['year'].Value -ne $pathMatch.Groups['dateYear'].Value) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $targets[0]
+        return $null
+    }
+    try {
+        $dateText = '{0}-{1}-{2}' -f $pathMatch.Groups['dateYear'].Value, $pathMatch.Groups['month'].Value, $pathMatch.Groups['day'].Value
+        [void][DateTime]::ParseExact($dateText, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+    }
+    catch {
+        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $target
+        return $null
+    }
+
+    try {
+        $rootFullPath = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]@('\', '/'))
+        $absolutePath = [IO.Path]::GetFullPath((Join-Path $rootFullPath $target))
+    }
+    catch {
+        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $target
+        return $null
+    }
+    $rootPrefix = $rootFullPath + [IO.Path]::DirectorySeparatorChar
+    if (-not $absolutePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $target
+        return $null
+    }
+    if (-not (Test-Path -LiteralPath $absolutePath)) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_NOT_FOUND' $target
+        return $null
+    }
+
+    $item = Get-Item -Force -LiteralPath $absolutePath
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_UNSAFE_TYPE' $target
+        return $null
+    }
+    $changedDocument = @($ChangedFiles | Where-Object { $_.path -eq $target -and $_.status -like 'A*' })
+    if ($changedDocument.Count -ne 1) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_NOT_ADDED' $target
+        return $null
+    }
+
+    try {
+        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
+        $content = [IO.File]::ReadAllText($absolutePath, $strictUtf8)
+    }
+    catch {
+        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' "$target -> unreadable UTF-8"
+        return $null
+    }
+    if ([string]::IsNullOrWhiteSpace($content)) {
+        Add-GuardrailError 'AUDIT_DOCUMENT_EMPTY' $target
+        return $null
+    }
+    return $content
 }
 
 function Get-AuditBlock {
@@ -242,7 +341,10 @@ if ($Mode -eq 'PullRequest') {
             $_.path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$')
     })
     if ($productionFiles.Count -gt 0) {
-        Test-CommentAuditContract $repositoryRoot $PullRequestBody $BaseRef $HeadRef
+        $auditContent = Resolve-AuditDocumentContent $repositoryRoot $PullRequestBody $changedFiles
+        if ($null -ne $auditContent) {
+            Test-CommentAuditContract $repositoryRoot $auditContent $BaseRef $HeadRef
+        }
     }
 }
 
