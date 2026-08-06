@@ -244,6 +244,63 @@ class TdengineIndicatorMinuteRepositoryTest {
     }
 
     @Test
+    void oneMinuteTrendsReturnExactSuccessfulRowsForAllRequestedIndicators() {
+        when(template.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class)))
+                .thenReturn(List.of());
+
+        repository.findTrends(
+                List.of("INDICATOR_B", "INDICATOR_A"),
+                MINUTE,
+                MINUTE + 3_600_000L,
+                1);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class));
+        assertThat(sql.getValue())
+                .contains("indicator_id IN ('INDICATOR_A','INDICATOR_B')")
+                .contains("ts AS bucket_time", "val AS average_value")
+                .contains("val AS minimum_value", "val AS maximum_value")
+                .contains("1 AS sample_count", "data_quality")
+                .doesNotContain("INTERVAL(")
+                .contains("ORDER BY indicator_id,ts");
+    }
+
+    @Test
+    void fiveMinuteTrendsAggregatePerIndicatorAndKeepWorstQuality() {
+        when(template.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class)))
+                .thenReturn(List.of());
+
+        repository.findTrends(
+                List.of("INDICATOR_A", "INDICATOR_B"),
+                MINUTE,
+                MINUTE + 86_400_001L,
+                5);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class));
+        assertThat(sql.getValue())
+                .contains("AVG(val) AS average_value")
+                .contains("MIN(val) AS minimum_value")
+                .contains("MAX(val) AS maximum_value")
+                .contains("COUNT(*) AS sample_count")
+                .contains("MAX(data_quality) AS data_quality")
+                .contains("PARTITION BY indicator_id,indicator_code,building_id,system_group_id,equip_id")
+                .contains("INTERVAL(5m)")
+                .contains("ORDER BY indicator_id,_wstart");
+    }
+
+    @Test
+    void trendsRejectUnsupportedResolutionAndSkipEmptyIds() {
+        assertThat(repository.findTrends(List.of(), MINUTE, MINUTE + 60_000L, 1))
+                .isEmpty();
+        assertThatThrownBy(() -> repository.findTrends(
+                List.of("INDICATOR_A"), MINUTE, MINUTE + 60_000L, 15))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("1、5、30");
+        verifyNoInteractions(template);
+    }
+
+    @Test
     void successfulKeysAreReadWithOneStableQuery() {
         when(template.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class)))
                 .thenReturn(List.of(new IndicatorMinuteKey("INDICATOR_A", MINUTE)));

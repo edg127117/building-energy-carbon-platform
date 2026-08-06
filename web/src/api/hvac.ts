@@ -3,7 +3,9 @@ import type { ApiResult } from '@/types/api'
 import type {
   Building,
   HvacCalculationDetail,
+  HvacIndicatorTrendResponse,
   HvacLatestResponse,
+  HvacPointHistoryResponse,
   HvacSnapshotResponse,
   PageResult,
 } from '@/types/hvac'
@@ -48,6 +50,44 @@ export async function getLatestHvacIndicators(
 ): Promise<HvacLatestResponse> {
   const response = await http.get<ApiResult<HvacLatestResponse>>(
     `/hvac/buildings/${encodeURIComponent(buildingId)}/indicators/latest`,
+  )
+  return response.data.data
+}
+
+/**
+ * 一次查询所选建筑 1 至 4 个真实指标趋势。
+ *
+ * 后端先用 MySQL 活动指标和建筑范围校验全部 ID，再从 TDengine 成功指标表按跨度返回
+ * 1/5/30 分钟窗口；前端只消费图表 DTO，不拼 `/api`、不计算指标或降采样。
+ */
+export async function getHvacIndicatorTrends(
+  buildingId: string,
+  indicatorIds: string[],
+  from: number,
+  to: number,
+): Promise<HvacIndicatorTrendResponse> {
+  const response = await http.get<ApiResult<HvacIndicatorTrendResponse>>(
+    `/hvac/buildings/${encodeURIComponent(buildingId)}/indicators/trends`,
+    { params: { indicatorIds: indicatorIds.join(','), from, to } },
+  )
+  return response.data.data
+}
+
+/**
+ * 一次查询所选建筑 1 至 8 个原始测点历史。
+ *
+ * 后端使用 MySQL 校验当前建筑的测点身份和用户范围，再批量读取 TDengine 分钟数据；
+ * 调用方只能传入页面从当前建筑冻结 19 测点中选择出的内部 ID。
+ */
+export async function getHvacPointHistory(
+  buildingId: string,
+  pointIds: string[],
+  from: number,
+  to: number,
+): Promise<HvacPointHistoryResponse> {
+  const response = await http.get<ApiResult<HvacPointHistoryResponse>>(
+    `/hvac/buildings/${encodeURIComponent(buildingId)}/history`,
+    { params: { pointIds: pointIds.join(','), from, to } },
   )
   return response.data.data
 }

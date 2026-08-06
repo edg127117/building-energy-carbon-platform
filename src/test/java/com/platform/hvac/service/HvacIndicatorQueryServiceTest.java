@@ -13,6 +13,7 @@ import com.platform.iot.formula.model.IndicatorLatestState;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
+import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.system.service.BuildingScopeService;
 import org.junit.jupiter.api.BeforeEach;
@@ -31,6 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -181,6 +183,142 @@ class HvacIndicatorQueryServiceTest {
                 "I1", MINUTE,
                 MINUTE + Duration.ofDays(31).toMillis() + 1,
                 USER_ID, ADMIN));
+    }
+
+    @Test
+    void trendsKeepRequestedOrderDeduplicateIdsAndPreserveEmptySeries() {
+        BizIndicator cop = indicator("I1", "WCR_COP", "BLD001", "CHILLER");
+        BizIndicator pump = indicator("I2", "PUMP_EFF", "BLD001", "PUMP");
+        allowBuilding("BLD001");
+        when(configProvider.findAllActive()).thenReturn(List.of(cop, pump));
+        when(indicatorRepository.findTrends(
+                List.of("I2", "I1"),
+                MINUTE,
+                MINUTE + Duration.ofHours(24).toMillis(),
+                1))
+                .thenReturn(List.of(trend(
+                        pump, MINUTE, 58.0, 57.0, 59.0, 1, 2)));
+
+        HvacIndicatorDtos.TrendResponse response = service.trends(
+                "BLD001",
+                " I2,I1,I2 ",
+                MINUTE,
+                MINUTE + Duration.ofHours(24).toMillis(),
+                USER_ID,
+                ADMIN);
+
+        assertThat(response.resolutionMinutes()).isEqualTo(1);
+        assertThat(response.series())
+                .extracting(HvacIndicatorDtos.TrendSeries::indicatorId)
+                .containsExactly("I2", "I1");
+        assertThat(response.series().get(0).records()).singleElement().satisfies(record -> {
+            assertThat(record.average()).isEqualTo(58.0);
+            assertThat(record.minimum()).isEqualTo(57.0);
+            assertThat(record.maximum()).isEqualTo(59.0);
+            assertThat(record.sampleCount()).isEqualTo(1);
+            assertThat(record.dataQuality()).isEqualTo(2);
+        });
+        assertThat(response.series().get(1).records()).isEmpty();
+    }
+
+    @Test
+    void trendsUseOneFiveAndThirtyMinuteResolutionAtBoundaries() {
+        BizIndicator cop = indicator("I1", "WCR_COP", "BLD001", "CHILLER");
+        allowBuilding("BLD001");
+        when(configProvider.findAllActive()).thenReturn(List.of(cop));
+        when(indicatorRepository.findTrends(anyList(), anyLong(), anyLong(), anyInt()))
+                .thenReturn(List.of());
+
+        assertThat(service.trends(
+                "BLD001", "I1", MINUTE,
+                MINUTE + Duration.ofHours(24).toMillis(), USER_ID, ADMIN)
+                .resolutionMinutes()).isEqualTo(1);
+        assertThat(service.trends(
+                "BLD001", "I1", MINUTE,
+                MINUTE + Duration.ofHours(24).toMillis() + 1, USER_ID, ADMIN)
+                .resolutionMinutes()).isEqualTo(5);
+        assertThat(service.trends(
+                "BLD001", "I1", MINUTE,
+                MINUTE + Duration.ofDays(7).toMillis(), USER_ID, ADMIN)
+                .resolutionMinutes()).isEqualTo(5);
+        assertThat(service.trends(
+                "BLD001", "I1", MINUTE,
+                MINUTE + Duration.ofDays(7).toMillis() + 1, USER_ID, ADMIN)
+                .resolutionMinutes()).isEqualTo(30);
+    }
+
+    @Test
+    void trendsAllowFourIndicatorsInTheRequestedOrder() {
+        List<BizIndicator> indicators = List.of(
+                indicator("I1", "WCR_COP", "BLD001", "CHILLER"),
+                indicator("I2", "TOWER_EFF", "BLD001", "TOWER"),
+                indicator("I3", "PUMP_EFF", "BLD001", "PUMP"),
+                indicator("I4", "AHU_POW_EFF", "BLD001", "AHU"));
+        allowBuilding("BLD001");
+        when(configProvider.findAllActive()).thenReturn(indicators);
+        when(indicatorRepository.findTrends(
+                List.of("I4", "I2", "I1", "I3"),
+                MINUTE, MINUTE + 60_000L, 1))
+                .thenReturn(List.of());
+
+        assertThat(service.trends(
+                "BLD001", "I4,I2,I1,I3", MINUTE, MINUTE + 60_000L,
+                USER_ID, ADMIN).series())
+                .extracting(HvacIndicatorDtos.TrendSeries::indicatorId)
+                .containsExactly("I4", "I2", "I1", "I3");
+    }
+
+    @Test
+    void trendsRejectInvalidIndicatorSetsBeforeTdengine() {
+        allowBuilding("BLD001");
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I1", null, MINUTE + 60_000L, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I1", MINUTE, MINUTE, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I1", Long.MIN_VALUE, Long.MAX_VALUE, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I1", MINUTE,
+                MINUTE + Duration.ofDays(31).toMillis() + 1, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", null, MINUTE, MINUTE + 60_000L, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", " , ", MINUTE, MINUTE + 60_000L, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I1,I2,I3,I4,I5", MINUTE,
+                MINUTE + 60_000L, USER_ID, ADMIN));
+
+        BizIndicator inactive = indicator("I1", "WCR_COP", "BLD001", "CHILLER");
+        inactive.setStatus(0);
+        BizIndicator other = indicator("I2", "PUMP_EFF", "BLD002", "PUMP");
+        when(configProvider.findAllActive()).thenReturn(List.of(inactive, other));
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I1", MINUTE, MINUTE + 60_000L, USER_ID, ADMIN));
+        assertBadRequest(() -> service.trends(
+                "BLD001", "I2", MINUTE, MINUTE + 60_000L, USER_ID, ADMIN));
+        verifyNoInteractions(indicatorRepository);
+    }
+
+    @Test
+    void trendsFilterMismatchedTdengineIdentityAndSanitizeFailures() {
+        BizIndicator cop = indicator("I1", "WCR_COP", "BLD001", "CHILLER");
+        allowBuilding("BLD001");
+        when(configProvider.findAllActive()).thenReturn(List.of(cop));
+        when(indicatorRepository.findTrends(
+                List.of("I1"), MINUTE, MINUTE + 60_000L, 1))
+                .thenReturn(List.of(new IndicatorTrendQueryRow(
+                        "I1", "WCR_COP", "BLD001", "OTHER_GROUP", "CHILLER",
+                        MINUTE, 5.8, 5.8, 5.8, 1, 0)));
+
+        assertThat(service.trends(
+                "BLD001", "I1", MINUTE, MINUTE + 60_000L, USER_ID, ADMIN)
+                .series().getFirst().records()).isEmpty();
+
+        when(indicatorRepository.findTrends(
+                List.of("I1"), MINUTE, MINUTE + 120_000L, 1))
+                .thenThrow(new DataAccessResourceFailureException("trend sql secret"));
+        assertSanitized503(() -> service.trends(
+                "BLD001", "I1", MINUTE, MINUTE + 120_000L, USER_ID, ADMIN));
     }
 
     @Test
@@ -469,6 +607,28 @@ class HvacIndicatorQueryServiceTest {
                 0,
                 version,
                 minute + 1_000L);
+    }
+
+    private IndicatorTrendQueryRow trend(
+            BizIndicator indicator,
+            long time,
+            double average,
+            double minimum,
+            double maximum,
+            long sampleCount,
+            int dataQuality) {
+        return new IndicatorTrendQueryRow(
+                indicator.getIndicatorId(),
+                indicator.getIndicatorCode(),
+                indicator.getBuildingId(),
+                indicator.getSystemGroupId(),
+                indicator.getEquipId(),
+                time,
+                average,
+                minimum,
+                maximum,
+                sampleCount,
+                dataQuality);
     }
 
     private FormulaCalculationException failure(

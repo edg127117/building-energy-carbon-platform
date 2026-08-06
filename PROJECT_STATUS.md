@@ -2,7 +2,7 @@
 
 ## 1. 状态基准
 
-- 状态日期：2026-08-04。
+- 状态日期：2026-08-06。
 - 代码基线：以本文件所在 Git 版本及其已合并代码、测试为准，不在文档中固定易过期的提交号。
 - 本文件只描述其所在 Git 版本能够通过代码、测试、已合并提交或有效文档核验的状态。
 - Docker 容器、端口、数据库数据、前后端进程等本地运行状态不进入本文件，必须在需要时现场检查。
@@ -41,8 +41,11 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 - 最新测点快照已区分分钟数据质量与查询时新鲜度；超过容忍边界的最后记录返回 `STALE`，页面主值显示 `--`、辅助展示最后值和来源分钟，并从当前有效测点完整率中排除。
 - 四项实时指标卡已接入后端真实计算详情抽屉；成功状态展示输入、质量、公式版本和分步过程，失败卡片只展示业务摘要和缺失数量，原因码与缺失语义键集中在详情抽屉中。
 - 详情请求在无指标或无分钟时保持本地空状态，快速切换、关闭和切换建筑时会隔离迟到响应，不在浏览器重算指标或填充默认值。
+- 四项能效指标已通过建筑级批量趋势接口展示真实 TDengine 历史，服务端按查询跨度返回 1、5 或 30 分钟分辨率；原有单指标精确历史接口保持不变，用于公式版本和失败记录审计。
+- 统一历史模块支持能效指标与原始测点切换；指标模式默认查询最近 24 小时四项指标，测点模式允许从冻结 19 测点中选择 1 至 8 个，并按建筑记忆有效选择。
+- 前端按单位拆分图表、保留时间缺口和 Q0/Q1/Q2 质量语义，不计算指标、不使用假数据，也不自行降采样；查询失败时保留上次成功结果并明确提示过期状态。
 
-证据入口：[`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java)、[`web/src/api/hvac.ts`](web/src/api/hvac.ts)、[`useHvacDashboard.ts`](web/src/composables/useHvacDashboard.ts)、[`useHvacCalculationDetail.ts`](web/src/composables/useHvacCalculationDetail.ts)、[`HvacCalculationDetailDrawer.vue`](web/src/components/hvac/HvacCalculationDetailDrawer.vue)、[`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue)。
+证据入口：[`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java)、[`HvacIndicatorQueryService.java`](src/main/java/com/platform/hvac/service/HvacIndicatorQueryService.java)、[`web/src/api/hvac.ts`](web/src/api/hvac.ts)、[`useHvacDashboard.ts`](web/src/composables/useHvacDashboard.ts)、[`useHvacCalculationDetail.ts`](web/src/composables/useHvacCalculationDetail.ts)、[`useHvacHistoryTrends.ts`](web/src/composables/useHvacHistoryTrends.ts)、[`HvacCalculationDetailDrawer.vue`](web/src/components/hvac/HvacCalculationDetailDrawer.vue)、[`HvacHistoryPanel.vue`](web/src/components/hvac/HvacHistoryPanel.vue)、[`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue)。
 
 ### 3.4 工程与运行基础
 
@@ -58,7 +61,6 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 ## 4. 尚未完成或待继续
 
 - 前端尚未消费后端 `/ws/hvac` 实时消息，目前 HVAC 页面仍使用 30 秒轮询。
-- 后端已经提供历史查询，但前端尚未形成真实历史曲线和历史查询交互。
 - 用户、角色、菜单和建筑授权已有后端能力，但当前前端尚未形成对应的最小后台管理页面。
 - 真实现场设备、网络抖动、长时间运行和现场数据质量仍需独立验收，不能由单元测试或本地冒烟替代。
 
@@ -68,22 +70,21 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 - GitHub `main` 分支保护不能由仓库文件自动启用，仍需仓库所有者在页面配置必需检查并通过实际 PR 现场验证；本地 Hook 也需要在每个 clone 中单独安装。
 - MySQL、TDengine、Redis、EMQX 和现场设备都属于外部资源；某台开发机当前能否启动必须现场验证，本文件不作保证。
 - 历史任务文档已增加文件级状态警告和中央目录；其正文仍保存当时状态，判断当前范围时不能跳过当前项目入口。
-- 后端已经具备 WebSocket 和历史查询能力，但前端未完成对应消费，不能把后端存在接口描述成完整用户功能。
+- 后端已经具备 WebSocket 发布能力，但前端尚未消费 `/ws/hvac`，不能把后端存在端点描述成完整实时用户功能。
 - 仓库防回退 CI 只能证明文件、PR 证据和方法清单结构完整，不能单独证明业务注释语义正确。
 
 ## 6. 已确认技术债
 
 - 前端 30 秒轮询与后端 WebSocket 能力尚未闭环。
-- 前端历史查询和最小后台页面尚未闭环。
+- 最小后台管理页面尚未闭环。
 
 记录这些事项不代表必须在当前任务立即重构或补齐；每项应在独立范围、设计、测试和 PR 中处理。
 
 ## 7. 下一步优先级
 
-1. 接入真实历史数据展示和时间范围查询，形成可验证的前后端闭环。
-2. 接入 `/ws/hvac`，并保留轮询作为明确的重连或降级策略。
-3. 建立用户、角色、菜单和建筑授权的最小后台前端入口。
-4. 使用真实现场设备和数据完成长时间运行、异常恢复和数据质量验收。
+1. 接入 `/ws/hvac`，并保留轮询作为明确的重连或降级策略。
+2. 建立用户、角色、菜单和建筑授权的最小后台前端入口。
+3. 使用真实现场设备和数据完成长时间运行、异常恢复和数据质量验收。
 
 每个事项开始前仍需根据 `AGENTS.md` 判断是否必须先确认独立设计和实施范围。
 

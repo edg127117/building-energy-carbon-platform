@@ -12,6 +12,7 @@ import com.platform.iot.formula.model.IndicatorLatestState;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
+import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.system.service.BuildingScopeService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -22,6 +23,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -45,6 +47,7 @@ import java.util.function.Supplier;
 public class HvacIndicatorQueryService {
 
     private static final long MAX_HISTORY_SPAN = Duration.ofDays(31).toMillis();
+    private static final int MAX_TREND_INDICATORS = 4;
     private static final Comparator<BizIndicator> INDICATOR_ORDER = Comparator
             .comparing(BizIndicator::getIndicatorCode,
                     Comparator.nullsLast(String::compareTo))
@@ -168,6 +171,43 @@ public class HvacIndicatorQueryService {
     }
 
     /**
+     * 返回一个建筑内 1 至 4 个指标的图表趋势。
+     *
+     * <p>入口先校验建筑权限，再从 MySQL 活动配置验证全部指标归属；任一指标非法时
+     * 整批返回 400，不能借此探测其他建筑的指标。TDengine 只接收已验证 ID，并按
+     * 查询跨度返回 1/5/30 分钟成功值窗口；合法无数据指标仍保留空系列。</p>
+     */
+    public HvacIndicatorDtos.TrendResponse trends(
+            String buildingId,
+            String rawIndicatorIds,
+            Long from,
+            Long to,
+            Long userId,
+            Set<String> roles) {
+        checkBuildingAccess(buildingId, userId, roles);
+        long span = validateHistoryRange(from, to);
+        List<String> indicatorIds = parseTrendIndicatorIds(rawIndicatorIds);
+        Map<String, BizIndicator> indicators = validateTrendIndicators(
+                buildingId, indicatorIds);
+        int resolutionMinutes = historyResolution(span);
+        List<IndicatorTrendQueryRow> rows = queryTdengine(
+                () -> indicatorRepository.findTrends(
+                        indicatorIds, from, to, resolutionMinutes));
+        Map<String, List<IndicatorTrendQueryRow>> rowsByIndicator = rows.stream()
+                .filter(row -> trendIdentityMatches(
+                        indicators.get(row.indicatorId()), row))
+                .collect(java.util.stream.Collectors.groupingBy(
+                        IndicatorTrendQueryRow::indicatorId));
+        List<HvacIndicatorDtos.TrendSeries> series = indicatorIds.stream()
+                .map(id -> trendSeries(
+                        indicators.get(id),
+                        rowsByIndicator.getOrDefault(id, List.of())))
+                .toList();
+        return new HvacIndicatorDtos.TrendResponse(
+                buildingId, from, to, resolutionMinutes, series);
+    }
+
+    /**
      * 返回指定来源分钟的成功公式过程或失败审计。
      *
      * <p>最新分钟可以直接使用 Redis 中的输入和步骤；历史成功结果必须读取同
@@ -244,7 +284,7 @@ public class HvacIndicatorQueryService {
      * 校验指标历史查询的半开区间 {@code [from,to)}。
      * 缺参、逆序、跨度运算溢出或超过 31 天均返回 400，避免无界扫描 TDengine。
      */
-    private void validateHistoryRange(Long from, Long to) {
+    private long validateHistoryRange(Long from, Long to) {
         if (from == null || to == null) {
             throw new BusinessException(400, "from 和 to 为必填毫秒时间戳");
         }
@@ -260,6 +300,96 @@ public class HvacIndicatorQueryService {
         if (span > MAX_HISTORY_SPAN) {
             throw new BusinessException(400, "历史查询跨度不能超过 31 天");
         }
+        return span;
+    }
+
+    /** 按查询跨度选择与原始测点历史一致的服务端分辨率，调用方不能自行指定。 */
+    private int historyResolution(long span) {
+        if (span <= Duration.ofHours(24).toMillis()) {
+            return 1;
+        }
+        if (span <= Duration.ofDays(7).toMillis()) {
+            return 5;
+        }
+        return 30;
+    }
+
+    /**
+     * 清理逗号分隔的指标 ID，去空、去重并保留首次出现顺序，最多允许四项。
+     */
+    private List<String> parseTrendIndicatorIds(String rawIndicatorIds) {
+        if (rawIndicatorIds == null) {
+            throw new BusinessException(400, "indicatorIds 不能为空");
+        }
+        LinkedHashSet<String> unique = new LinkedHashSet<>();
+        for (String candidate : rawIndicatorIds.split(",", -1)) {
+            String indicatorId = candidate.trim();
+            if (!indicatorId.isEmpty()) {
+                unique.add(indicatorId);
+            }
+        }
+        if (unique.isEmpty()) {
+            throw new BusinessException(400, "indicatorIds 不能为空");
+        }
+        if (unique.size() > MAX_TREND_INDICATORS) {
+            throw new BusinessException(400, "一次最多查询 4 个指标");
+        }
+        return List.copyOf(unique);
+    }
+
+    /**
+     * 一次读取 MySQL 活动指标配置并验证全部 ID 都属于路径建筑。
+     * 统一错误文案避免向当前用户泄露跨建筑指标是否存在。
+     */
+    private Map<String, BizIndicator> validateTrendIndicators(
+            String buildingId, List<String> indicatorIds) {
+        Set<String> requested = Set.copyOf(indicatorIds);
+        Map<String, BizIndicator> indicators = new LinkedHashMap<>();
+        for (BizIndicator indicator : configProvider.findAllActive()) {
+            if (Integer.valueOf(1).equals(indicator.getStatus())
+                    && buildingId.equals(indicator.getBuildingId())
+                    && requested.contains(indicator.getIndicatorId())) {
+                indicators.putIfAbsent(indicator.getIndicatorId(), indicator);
+            }
+        }
+        if (indicators.size() != indicatorIds.size()) {
+            throw new BusinessException(
+                    400, "指标不存在、已停用或不属于目标建筑");
+        }
+        return indicators;
+    }
+
+    /**
+     * 防御性校验 TDengine 行的完整指标身份，避免陈旧子表标签跨配置混入响应。
+     */
+    private boolean trendIdentityMatches(
+            BizIndicator indicator, IndicatorTrendQueryRow row) {
+        return indicator != null
+                && Objects.equals(indicator.getIndicatorId(), row.indicatorId())
+                && Objects.equals(indicator.getIndicatorCode(), row.indicatorCode())
+                && Objects.equals(indicator.getBuildingId(), row.buildingId())
+                && Objects.equals(indicator.getSystemGroupId(), row.systemGroupId())
+                && Objects.equals(indicator.getEquipId(), row.equipId());
+    }
+
+    /** 将同一指标的 TDengine 窗口按时间排序并转换为图表 DTO。 */
+    private HvacIndicatorDtos.TrendSeries trendSeries(
+            BizIndicator indicator, List<IndicatorTrendQueryRow> rows) {
+        List<HvacIndicatorDtos.TrendRecord> records = rows.stream()
+                .sorted(Comparator.comparingLong(IndicatorTrendQueryRow::time))
+                .map(row -> new HvacIndicatorDtos.TrendRecord(
+                        row.time(),
+                        row.average(),
+                        row.minimum(),
+                        row.maximum(),
+                        row.sampleCount(),
+                        row.dataQuality()))
+                .toList();
+        return new HvacIndicatorDtos.TrendSeries(
+                indicator.getIndicatorId(),
+                indicator.getIndicatorCode(),
+                indicator.getEquipId(),
+                records);
     }
 
     /**

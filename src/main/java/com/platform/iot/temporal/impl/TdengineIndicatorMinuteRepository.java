@@ -6,6 +6,7 @@ import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
+import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -198,6 +199,80 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return template.query(sql, this::mapSuccess);
     }
 
+    /**
+     * 一次读取多个指标的图表趋势，避免页面按指标发起 N+1 查询。
+     *
+     * <p>1 分钟直接读取成功值；5/30 分钟只在 TDengine 内聚合平均值、极值、样本数和
+     * 最差质量。分辨率使用白名单，不能把调用方输入直接拼成 {@code INTERVAL}。</p>
+     */
+    @Override
+    public List<IndicatorTrendQueryRow> findTrends(
+            List<String> indicatorIds,
+            long fromInclusive,
+            long toExclusive,
+            int resolutionMinutes) {
+        if (indicatorIds.isEmpty()) {
+            return List.of();
+        }
+        String interval = switch (resolutionMinutes) {
+            case 1 -> null;
+            case 5 -> "5m";
+            case 30 -> "30m";
+            default -> throw new IllegalArgumentException(
+                    "指标趋势分辨率只允许 1、5、30 分钟");
+        };
+        String sql = interval == null
+                ? rawTrendSql(indicatorIds, fromInclusive, toExclusive)
+                : downsampledTrendSql(
+                        indicatorIds, fromInclusive, toExclusive, interval);
+        return template.query(sql, this::mapTrendRow);
+    }
+
+    /** 1 分钟趋势保留成功表原值，使图表点与精确审计分钟一致。 */
+    private String rawTrendSql(
+            List<String> indicatorIds, long fromInclusive, long toExclusive) {
+        return """
+                SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,
+                       ts AS bucket_time,
+                       val AS average_value,
+                       val AS minimum_value,
+                       val AS maximum_value,
+                       1 AS sample_count,
+                       data_quality
+                FROM %s
+                WHERE indicator_id IN (%s) AND %s
+                ORDER BY indicator_id,ts
+                """.formatted(
+                indicatorStable(), values(indicatorIds),
+                timeRange(fromInclusive, toExclusive));
+    }
+
+    /**
+     * 5/30 分钟趋势按完整指标身份分区，避免不同指标实例在同一窗口被混合计算。
+     */
+    private String downsampledTrendSql(
+            List<String> indicatorIds,
+            long fromInclusive,
+            long toExclusive,
+            String interval) {
+        return """
+                SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,
+                       _wstart AS bucket_time,
+                       AVG(val) AS average_value,
+                       MIN(val) AS minimum_value,
+                       MAX(val) AS maximum_value,
+                       COUNT(*) AS sample_count,
+                       MAX(data_quality) AS data_quality
+                FROM %s
+                WHERE indicator_id IN (%s) AND %s
+                PARTITION BY indicator_id,indicator_code,building_id,system_group_id,equip_id
+                INTERVAL(%s)
+                ORDER BY indicator_id,_wstart
+                """.formatted(
+                indicatorStable(), values(indicatorIds),
+                timeRange(fromInclusive, toExclusive), interval);
+    }
+
     /** 批量返回窗口内已有成功结果的精确键，恢复服务据此只补真正缺失的分钟。 */
     @Override
     public Set<IndicatorMinuteKey> findSuccessfulKeys(
@@ -285,6 +360,23 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                 splitMissingInputs(resultSet.getString("missing_inputs")),
                 resultSet.getString("formula_version"),
                 resultSet.getTimestamp("calculated_at").getTime());
+    }
+
+    /** 把精确分钟和降采样窗口映射为不含公式版本的图表读取模型。 */
+    private IndicatorTrendQueryRow mapTrendRow(
+            ResultSet resultSet, int rowNumber) throws SQLException {
+        return new IndicatorTrendQueryRow(
+                resultSet.getString("indicator_id"),
+                resultSet.getString("indicator_code"),
+                resultSet.getString("building_id"),
+                resultSet.getString("system_group_id"),
+                resultSet.getString("equip_id"),
+                resultSet.getTimestamp("bucket_time").getTime(),
+                resultSet.getDouble("average_value"),
+                resultSet.getDouble("minimum_value"),
+                resultSet.getDouble("maximum_value"),
+                resultSet.getLong("sample_count"),
+                resultSet.getInt("data_quality"));
     }
 
     private String successSelect() {
