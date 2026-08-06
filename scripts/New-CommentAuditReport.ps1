@@ -3,11 +3,13 @@ param(
     [string]$BaseRef = 'origin/main',
     [string]$HeadRef = 'HEAD',
     [ValidateSet('Markdown', 'Json')]
-    [string]$Format = 'Markdown'
+    [string]$Format = 'Markdown',
+    [string]$OutputPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:AuditDocumentPathPattern = '^docs/reviews/comment-audits/(?<year>\d{4})/(?<dateYear>\d{4})-(?<month>\d{2})-(?<day>\d{2})-(?<task>[a-z0-9]+(?:-[a-z0-9]+)*)\.md$'
 
 function Get-RepositoryRoot {
     $root = (& git rev-parse --show-toplevel 2>&1 | Out-String).Trim()
@@ -15,6 +17,56 @@ function Get-RepositoryRoot {
         throw 'NOT_A_GIT_WORKTREE'
     }
     return $root
+}
+
+function Resolve-AuditOutputPath {
+    param(
+        [string]$RepositoryRoot,
+        [string]$RelativePath,
+        [string]$Base
+    )
+    $normalized = $RelativePath.Replace('\', '/')
+    $match = [regex]::Match($normalized, $script:AuditDocumentPathPattern)
+    if (-not $match.Success -or $match.Groups['year'].Value -ne $match.Groups['dateYear'].Value) {
+        throw "AUDIT_DOCUMENT_PATH_INVALID: $RelativePath"
+    }
+
+    try {
+        $dateText = '{0}-{1}-{2}' -f $match.Groups['dateYear'].Value, $match.Groups['month'].Value, $match.Groups['day'].Value
+        [void][DateTime]::ParseExact($dateText, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
+        $rootFullPath = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]@('\', '/'))
+        $absolutePath = [IO.Path]::GetFullPath((Join-Path $rootFullPath $normalized))
+    }
+    catch {
+        throw "AUDIT_DOCUMENT_PATH_INVALID: $RelativePath"
+    }
+
+    $rootPrefix = $rootFullPath + [IO.Path]::DirectorySeparatorChar
+    if (-not $absolutePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "AUDIT_DOCUMENT_PATH_INVALID: $RelativePath"
+    }
+
+    $baseEntry = & git ls-tree --name-only $Base -- $normalized 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "GIT_BASE_REF_INVALID: $Base"
+    }
+    if (@($baseEntry).Count -gt 0) {
+        throw "AUDIT_DOCUMENT_ALREADY_IN_BASE: $normalized"
+    }
+
+    if (Test-Path -LiteralPath $absolutePath) {
+        $item = Get-Item -Force -LiteralPath $absolutePath
+        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw "AUDIT_DOCUMENT_PATH_INVALID: $RelativePath"
+        }
+    }
+
+    return [pscustomobject]@{
+        RelativePath = $normalized
+        AbsolutePath = $absolutePath
+        Date = $dateText
+        Task = $match.Groups['task'].Value
+    }
 }
 
 function Get-LineNumber {
@@ -227,6 +279,9 @@ function Write-MarkdownReport {
 
 $repositoryRoot = Get-RepositoryRoot
 Set-Location $repositoryRoot
+if ($OutputPath -and $Format -ne 'Markdown') {
+    throw 'OUTPUT_PATH_REQUIRES_MARKDOWN'
+}
 $reports = [System.Collections.Generic.List[object]]::new()
 foreach ($file in (Get-ChangedProductionFiles $BaseRef $HeadRef)) {
     $absolutePath = Join-Path $repositoryRoot $file.path
@@ -249,7 +304,33 @@ foreach ($file in (Get-ChangedProductionFiles $BaseRef $HeadRef)) {
     })
 }
 
-if ($Format -eq 'Json') {
+if ($OutputPath) {
+    $resolvedOutput = Resolve-AuditOutputPath $repositoryRoot $OutputPath $BaseRef
+    $baseLabel = $BaseRef -replace '^origin/', ''
+    $documentLines = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in @(
+        "# $($resolvedOutput.Task) 中文注释审计",
+        '',
+        "- 任务：$($resolvedOutput.Task)",
+        "- 审计日期：$($resolvedOutput.Date)",
+        "- 基线分支：$baseLabel",
+        '- 审计范围：本任务相对基线的全部变化生产文件',
+        ''
+    )) {
+        $documentLines.Add($line)
+    }
+    foreach ($line in @(Write-MarkdownReport @($reports.ToArray()))) {
+        $documentLines.Add([string]$line)
+    }
+
+    $parent = Split-Path -Parent $resolvedOutput.AbsolutePath
+    [void][IO.Directory]::CreateDirectory($parent)
+    $utf8WithoutBom = New-Object Text.UTF8Encoding($false)
+    $documentText = (($documentLines.ToArray() -join "`n").TrimEnd() + "`n")
+    [IO.File]::WriteAllText($resolvedOutput.AbsolutePath, $documentText, $utf8WithoutBom)
+    Write-Output "COMMENT_AUDIT_DOCUMENT_WRITTEN: $($resolvedOutput.RelativePath)"
+}
+elseif ($Format -eq 'Json') {
     ConvertTo-Json -InputObject @($reports.ToArray()) -Depth 8
 }
 else {

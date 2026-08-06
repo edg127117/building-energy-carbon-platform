@@ -248,6 +248,56 @@ function Invoke-CommentScannerTests {
     Assert-Contains $markdown.Output '| `query#2` |' 'Markdown must include private method row'
     Assert-Contains $markdown.Output '现有注释时效：待核验' 'Markdown must require freshness review'
     Complete-Case 'comment scanner emits parseable Markdown'
+
+    $outputPath = 'docs/reviews/comment-audits/2026/2026-08-06-device-contract.md'
+    $written = Invoke-PowerShellScript $scannerScript @(
+        '-BaseRef', 'main', '-HeadRef', 'HEAD', '-OutputPath', $outputPath
+    ) $root $null
+    Assert-True ($written.ExitCode -eq 0) "document output should succeed: $($written.Output)"
+    Assert-Contains $written.Output 'COMMENT_AUDIT_DOCUMENT_WRITTEN' 'document output must emit a success marker'
+    $absoluteOutputPath = Join-Path $root $outputPath
+    Assert-True (Test-Path -LiteralPath $absoluteOutputPath -PathType Leaf) 'document must be created as a file'
+    $document = Get-Content -Raw -Encoding UTF8 -LiteralPath $absoluteOutputPath
+    Assert-Contains $document '# device-contract 中文注释审计' 'document title must identify the task slug'
+    Assert-Contains $document '审计日期：2026-08-06' 'document metadata must use the filename date'
+    Assert-Contains $document '基线分支：main' 'document metadata must identify the base ref'
+    Assert-Contains $document '<!-- comment-audit:file=src/main/java/com/example/AuditService.java -->' 'document must retain stable file markers'
+    Assert-Contains $document '职责：待填写' 'document must retain human review placeholders'
+    Assert-Contains $document '后续支持导出功能' 'UTF-8 Chinese text must round-trip through the document'
+    $bytes = [IO.File]::ReadAllBytes($absoluteOutputPath)
+    $hasUtf8Bom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+    Assert-True (-not $hasUtf8Bom) 'document must use deterministic UTF-8 without BOM'
+    Complete-Case 'comment scanner writes permanent UTF-8 document'
+
+    $jsonWithOutput = Invoke-PowerShellScript $scannerScript @(
+        '-BaseRef', 'main', '-HeadRef', 'HEAD', '-Format', 'Json', '-OutputPath', 'docs/reviews/comment-audits/2026/2026-08-06-json-conflict.md'
+    ) $root $null
+    Assert-True ($jsonWithOutput.ExitCode -ne 0) 'JSON and document output must not be combined'
+    Assert-Contains $jsonWithOutput.Output 'OUTPUT_PATH_REQUIRES_MARKDOWN' 'format conflict must have a stable error'
+
+    foreach ($invalidPath in @(
+        'https://example.invalid/audit.md',
+        'C:/temp/2026-08-06-audit.md',
+        '../docs/reviews/comment-audits/2026/2026-08-06-audit.md',
+        'docs/reviews/2026/2026-08-06-audit.md',
+        'docs/reviews/comment-audits/2025/2026-08-06-audit.md',
+        'docs/reviews/comment-audits/2026/2026-08-06-Audit_Name.md'
+    )) {
+        $invalid = Invoke-PowerShellScript $scannerScript @(
+            '-BaseRef', 'main', '-HeadRef', 'HEAD', '-OutputPath', $invalidPath
+        ) $root $null
+        Assert-True ($invalid.ExitCode -ne 0) "invalid document path must fail: $invalidPath"
+        Assert-Contains $invalid.Output 'AUDIT_DOCUMENT_PATH_INVALID' "invalid path must use a stable error: $invalidPath"
+    }
+    Complete-Case 'comment scanner rejects unsafe output paths'
+
+    Commit-All $root 'add current audit document'
+    $historical = Invoke-PowerShellScript $scannerScript @(
+        '-BaseRef', 'HEAD', '-HeadRef', 'HEAD', '-OutputPath', $outputPath
+    ) $root $null
+    Assert-True ($historical.ExitCode -ne 0) 'base-existing audit document must not be overwritten'
+    Assert-Contains $historical.Output 'AUDIT_DOCUMENT_ALREADY_IN_BASE' 'historical overwrite must have a stable error'
+    Complete-Case 'comment scanner preserves historical audit documents'
 }
 
 function New-ContractFixture {
