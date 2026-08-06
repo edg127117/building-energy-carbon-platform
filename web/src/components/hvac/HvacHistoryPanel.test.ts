@@ -1,12 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ref } from 'vue'
-import type { HvacTrendGroup } from '@/domain/hvacHistoryTrends'
+import type {
+  HvacHistoryError,
+  useHvacHistoryTrends,
+} from '@/composables/useHvacHistoryTrends'
+import type {
+  HvacHistoryMode,
+  HvacHistoryPointOption,
+  HvacHistoryPreset,
+  HvacTrendGroup,
+} from '@/domain/hvacHistoryTrends'
 
-const holder = vi.hoisted(() => ({ state: null as any }))
+type HistoryState = ReturnType<typeof useHvacHistoryTrends>
+
+const holder = vi.hoisted(() => ({ state: null as HistoryState | null }))
 
 vi.mock('@/composables/useHvacHistoryTrends', () => ({
-  useHvacHistoryTrends: () => holder.state,
+  useHvacHistoryTrends: () => holder.state!,
 }))
 
 import HvacHistoryPanel from './HvacHistoryPanel.vue'
@@ -30,24 +41,24 @@ const dataGroup: HvacTrendGroup = {
   }],
 }
 
-function state() {
+function state(): HistoryState {
   return {
-    mode: ref('indicators'),
-    preset: ref('24h'),
-    customFrom: ref(null),
-    customTo: ref(null),
-    pointOptions: ref([
+    mode: ref<HvacHistoryMode>('indicators'),
+    preset: ref<HvacHistoryPreset>('24h'),
+    customFrom: ref<number | null>(null),
+    customTo: ref<number | null>(null),
+    pointOptions: ref<HvacHistoryPointOption[]>([
       { pointId: 'P1', pointCode: 'WCR1_TWin', label: '冷冻水进水温度', unit: '℃', precision: 1 },
       { pointId: 'P2', pointCode: 'WCR1_GW', label: '冷冻水流量', unit: 'm³/h', precision: 1 },
     ]),
     selectedPointIds: ref<string[]>([]),
     groups: ref<HvacTrendGroup[]>([dataGroup]),
-    responseRange: ref({ from: 0, to: 300_000 }),
-    resolutionMinutes: ref(1),
+    responseRange: ref<{ from: number; to: number } | null>({ from: 0, to: 300_000 }),
+    resolutionMinutes: ref<number | null>(1),
     loading: ref(false),
-    error: ref(null),
+    error: ref<HvacHistoryError | null>(null),
     stale: ref(false),
-    updatedAt: ref(300_000),
+    updatedAt: ref<number | null>(300_000),
     setBuildingContext: vi.fn().mockResolvedValue(undefined),
     setMode: vi.fn().mockResolvedValue(undefined),
     setPreset: vi.fn().mockResolvedValue(undefined),

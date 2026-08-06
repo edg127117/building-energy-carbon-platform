@@ -25,6 +25,11 @@ vi.mock('echarts/renderers', () => ({ CanvasRenderer: {} }))
 
 import HvacTrendChart from './HvacTrendChart.vue'
 
+type RenderedDatum = {
+  value: [number, number | null]
+  symbol: string
+}
+
 const group: HvacTrendGroup = {
   unit: '%',
   series: [{
@@ -115,13 +120,13 @@ describe('HvacTrendChart', () => {
       type: 'line',
       connectNulls: false,
     })
-    expect(option.series[0].data.map((item: any) => item.value)).toEqual([
+    expect(option.series[0].data.map((item: RenderedDatum) => item.value)).toEqual([
       [60_000, 70],
       [120_000, 71],
       [180_000, 72],
       [240_000, null],
     ])
-    expect(option.series[0].data.map((item: any) => item.symbol)).toEqual([
+    expect(option.series[0].data.map((item: RenderedDatum) => item.symbol)).toEqual([
       'none',
       'circle',
       'diamond',
