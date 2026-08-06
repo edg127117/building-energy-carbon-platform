@@ -185,7 +185,7 @@ describe('HvacTrendChart', () => {
     expect(wrapper.text()).toContain('无量纲')
   })
 
-  it('renders the series legend outside the ECharts canvas', () => {
+  it('separates the axis unit and lets each external legend button hide its series', async () => {
     const firstSeries = group.series[0]!
     const wrapper = mount(HvacTrendChart, {
       props: {
@@ -207,11 +207,28 @@ describe('HvacTrendChart', () => {
       },
     })
 
-    expect(wrapper.findAll('.trend-chart__series-item').map((item) => item.text()))
+    const legendButtons = wrapper.findAll('.trend-chart__series-item')
+    expect(legendButtons.map((item) => item.text()))
       .toEqual(['水泵效率', '冷却塔效率'])
     const swatches = wrapper.findAll('.trend-chart__series-swatch')
     expect(swatches).toHaveLength(2)
     expect(swatches[0]!.attributes('style')).not.toBe(swatches[1]!.attributes('style'))
-    expect(mocks.setOption.mock.calls[0][0].legend).toBeUndefined()
+    expect(wrapper.find('.trend-chart__axis-unit').text()).toBe('纵轴单位：%')
+    expect(mocks.setOption.mock.calls[0][0].yAxis.name).toBeUndefined()
+    expect(legendButtons.map((button) => button.attributes('aria-pressed')))
+      .toEqual(['true', 'true'])
+
+    await legendButtons[0]!.trigger('click')
+
+    expect(legendButtons[0]!.attributes('aria-pressed')).toBe('false')
+    expect(legendButtons[1]!.attributes('aria-pressed')).toBe('true')
+    expect(legendButtons[0]!.classes()).toContain('trend-chart__series-item--hidden')
+    expect(mocks.setOption.mock.calls.at(-1)![0].legend).toMatchObject({
+      show: false,
+      selected: {
+        '水泵效率': false,
+        '冷却塔效率': true,
+      },
+    })
   })
 })

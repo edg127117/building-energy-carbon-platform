@@ -1,7 +1,8 @@
 <template>
   <!--
     同一工程单位只使用一个纵轴；数值、质量和缺口均来自历史领域适配层。
-    本组件只管理 ECharts 生命周期，不发请求、不访问 localStorage，也不计算业务指标。
+    本组件管理 ECharts 生命周期、当前图的曲线显隐和独立单位提示，
+    不发请求、不访问 localStorage，也不计算业务指标。
   -->
   <section class="trend-chart" :aria-labelledby="titleId">
     <header class="trend-chart__heading">
@@ -19,18 +20,25 @@
       {{ resolutionMinutes }} 分钟分辨率 · 缺口保持断线 · 拖动底部范围条查看局部时段
     </p>
     <div class="trend-chart__series-legend" aria-label="趋势序列图例">
-      <span
+      <button
         v-for="(series, index) in group.series"
         :key="series.id"
+        type="button"
         class="trend-chart__series-item"
+        :class="{ 'trend-chart__series-item--hidden': !isSeriesVisible(series.id) }"
+        :aria-pressed="isSeriesVisible(series.id)"
+        @click="toggleSeries(series.id)"
       >
         <i
           class="trend-chart__series-swatch"
           :style="{ backgroundColor: seriesColor(index) }"
         />
         {{ series.label }}
-      </span>
+      </button>
     </div>
+    <p class="trend-chart__axis-unit">
+      纵轴单位：<b>{{ group.unit || '无量纲' }}</b>
+    </p>
     <div
       ref="chartElement"
       class="trend-chart__canvas"
@@ -54,6 +62,7 @@ import { LineChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
+  LegendComponent,
   TooltipComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -68,6 +77,7 @@ import {
 echarts.use([
   LineChart,
   GridComponent,
+  LegendComponent,
   TooltipComponent,
   DataZoomComponent,
   CanvasRenderer,
@@ -90,6 +100,7 @@ const props = defineProps<{
 }>()
 
 const chartElement = ref<HTMLElement | null>(null)
+const hiddenSeriesIds = ref<Set<string>>(new Set())
 const titleId = `hvac-trend-${getCurrentInstance()?.uid ?? 'chart'}`
 const groupTitle = computed(() =>
   props.group.unit ? `单位：${props.group.unit}` : '无量纲',
@@ -111,10 +122,16 @@ onMounted(() => {
   resizeObserver.observe(chartElement.value)
 })
 
-/** Props 变化只替换图表数据与范围，保留当前 DOM 上的 ECharts 实例。 */
+/** Props 变化时清理已不属于当前组的隐藏 ID，再复用现有 ECharts 实例替换数据与范围。 */
 watch(
   () => [props.group, props.from, props.to, props.resolutionMinutes],
-  () => updateChart(),
+  () => {
+    const currentIds = new Set(props.group.series.map((series) => series.id))
+    hiddenSeriesIds.value = new Set(
+      [...hiddenSeriesIds.value].filter((seriesId) => currentIds.has(seriesId)),
+    )
+    updateChart()
+  },
   { deep: true },
 )
 
@@ -133,7 +150,8 @@ function updateChart(): void {
 }
 
 /**
- * 构建同单位折线配置：Q0 不显示普通点，Q1/Q2 使用可辨识符号，空值永不连接。
+ * 构建同单位折线配置：隐藏图例只承载按钮选择状态，单位由 Canvas 外的独立行展示；
+ * Q0 不显示普通点，Q1/Q2 使用可辨识符号，空值永不连接。
  */
 function buildOption(): EChartsCoreOption {
   const reducedMotion = typeof window.matchMedia === 'function'
@@ -142,7 +160,14 @@ function buildOption(): EChartsCoreOption {
     animation: !reducedMotion,
     animationDuration: reducedMotion ? 0 : 260,
     color: SERIES_COLORS,
-    grid: { left: 54, right: 24, top: 34, bottom: 72, containLabel: false },
+    grid: { left: 54, right: 24, top: 18, bottom: 72, containLabel: false },
+    legend: {
+      show: false,
+      selected: Object.fromEntries(props.group.series.map((series) => [
+        series.label,
+        isSeriesVisible(series.id),
+      ])),
+    },
     tooltip: {
       trigger: 'axis',
       confine: true,
@@ -162,8 +187,6 @@ function buildOption(): EChartsCoreOption {
     },
     yAxis: {
       type: 'value',
-      name: props.group.unit || '无量纲',
-      nameTextStyle: { color: '#71889f', padding: [0, 0, 8, 0] },
       axisLabel: { color: '#71889f' },
       axisLine: { show: false },
       splitLine: { lineStyle: { color: 'rgba(126, 166, 198, 0.10)' } },
@@ -189,6 +212,20 @@ function buildOption(): EChartsCoreOption {
 /** 画布外图例与 ECharts 折线共用同一色板，保证换行后颜色含义仍稳定。 */
 function seriesColor(index: number): string {
   return SERIES_COLORS[index % SERIES_COLORS.length]!
+}
+
+/** 图例按钮状态只控制当前单位图内的 ECharts 系列，不改变后端数据或其他单位图。 */
+function isSeriesVisible(seriesId: string): boolean {
+  return !hiddenSeriesIds.value.has(seriesId)
+}
+
+/** 独立切换一条曲线并立即刷新隐藏图例选择，允许同单位图只保留任意一条序列。 */
+function toggleSeries(seriesId: string): void {
+  const next = new Set(hiddenSeriesIds.value)
+  if (next.has(seriesId)) next.delete(seriesId)
+  else next.add(seriesId)
+  hiddenSeriesIds.value = next
+  updateChart()
 }
 
 /** 把统一趋势序列映射为 ECharts 数据项，并把 Tooltip 所需的后端窗口事实就近保留。 */
@@ -359,18 +396,45 @@ function escapeHtml(value: string): string {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 18px;
-  padding: 9px 16px 0;
-  color: #9fb4c9;
-  font-size: 12px;
-  line-height: 1.4;
+  gap: 8px 10px;
+  padding: 10px 16px 0;
 }
 
 .trend-chart__series-item {
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(126, 166, 198, 0.22);
+  border-radius: 8px;
+  background: rgba(12, 32, 51, 0.72);
+  color: #b7cadb;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease-out,
+    background-color 160ms ease-out,
+    color 160ms ease-out;
+}
+
+.trend-chart__series-item:hover {
+  border-color: rgba(85, 185, 255, 0.55);
+  background: rgba(19, 48, 73, 0.78);
+}
+
+.trend-chart__series-item:focus-visible {
+  outline: 2px solid #72c4ff;
+  outline-offset: 2px;
+}
+
+.trend-chart__series-item--hidden {
+  border-color: rgba(126, 166, 198, 0.12);
+  background: rgba(8, 23, 39, 0.50);
+  color: #71889f;
 }
 
 .trend-chart__series-swatch {
@@ -380,10 +444,28 @@ function escapeHtml(value: string): string {
   border-radius: 2px;
 }
 
+.trend-chart__series-item--hidden .trend-chart__series-swatch {
+  opacity: 0.34;
+}
+
+.trend-chart__axis-unit {
+  margin: 10px 16px 0;
+  padding-top: 10px;
+  border-top: 1px solid rgba(126, 166, 198, 0.12);
+  color: #7890a7;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.trend-chart__axis-unit b {
+  color: #a9bdcf;
+  font-weight: 600;
+}
+
 .trend-chart__canvas {
   width: 100%;
   min-height: 300px;
-  margin-top: 6px;
+  margin-top: 0;
 }
 
 @media (max-width: 760px) {
