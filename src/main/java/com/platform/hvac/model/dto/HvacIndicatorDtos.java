@@ -101,6 +101,53 @@ public final class HvacIndicatorDtos {
     }
 
     /**
+     * 建筑内批量指标图表趋势，分辨率由服务端按跨度选择。
+     *
+     * @param buildingId 已完成权限校验的建筑 ID
+     * @param from 查询起点，包含
+     * @param to 查询终点，不包含
+     * @param resolutionMinutes 服务端选择的 1、5 或 30 分钟窗口
+     * @param series 按请求指标首次出现顺序返回的系列
+     */
+    public record TrendResponse(
+            String buildingId,
+            long from,
+            long to,
+            int resolutionMinutes,
+            List<TrendSeries> series) {
+
+        public TrendResponse {
+            series = List.copyOf(series);
+        }
+    }
+
+    /**
+     * 一个指标实例的图表序列；合法无数据指标保留空记录，供前端稳定展示槽位。
+     */
+    public record TrendSeries(
+            String indicatorId,
+            String indicatorCode,
+            String equipId,
+            List<TrendRecord> records) {
+
+        public TrendSeries {
+            records = List.copyOf(records);
+        }
+    }
+
+    /**
+     * 一个精确分钟或降采样窗口，不携带可能产生错误审计含义的公式版本。
+     */
+    public record TrendRecord(
+            long time,
+            double average,
+            double minimum,
+            double maximum,
+            long sampleCount,
+            int dataQuality) {
+    }
+
+    /**
      * 指定指标分钟的计算解释或失败审计。
      *
      * @param indicatorId 指标实例 ID
