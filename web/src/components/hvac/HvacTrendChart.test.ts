@@ -184,4 +184,34 @@ describe('HvacTrendChart', () => {
 
     expect(wrapper.text()).toContain('无量纲')
   })
+
+  it('renders the series legend outside the ECharts canvas', () => {
+    const firstSeries = group.series[0]!
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group: {
+          ...group,
+          series: [
+            firstSeries,
+            {
+              ...firstSeries,
+              id: 'I2',
+              code: 'TOWER_EFF',
+              label: '冷却塔效率',
+            },
+          ],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    expect(wrapper.findAll('.trend-chart__series-item').map((item) => item.text()))
+      .toEqual(['水泵效率', '冷却塔效率'])
+    const swatches = wrapper.findAll('.trend-chart__series-swatch')
+    expect(swatches).toHaveLength(2)
+    expect(swatches[0]!.attributes('style')).not.toBe(swatches[1]!.attributes('style'))
+    expect(mocks.setOption.mock.calls[0][0].legend).toBeUndefined()
+  })
 })

@@ -209,6 +209,31 @@ describe('HvacHistoryPanel', () => {
     expect(wrapper.text()).toContain('冷冻水进水温度')
   })
 
+  it('explains that four indicators are grouped into three unit charts', () => {
+    const firstSeries = dataGroup.series[0]!
+    holder.state.groups.value = [
+      {
+        unit: '',
+        series: [{ ...firstSeries, id: 'I1', code: 'WCR_COP' }],
+      },
+      {
+        unit: '%',
+        series: [
+          { ...firstSeries, id: 'I2', code: 'TOWER_EFF' },
+          { ...firstSeries, id: 'I3', code: 'PUMP_EFF' },
+        ],
+      },
+      {
+        unit: 'W/(m³·h)',
+        series: [{ ...firstSeries, id: 'I4', code: 'AHU_POW_EFF' }],
+      },
+    ]
+
+    const wrapper = mountPanel()
+
+    expect(wrapper.text()).toContain('4 项指标 · 3 个单位图表 · 同单位合并对比')
+  })
+
   it('distinguishes loading, stale, forbidden and unavailable states', async () => {
     holder.state.loading.value = true
     holder.state.groups.value = []

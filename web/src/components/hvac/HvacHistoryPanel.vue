@@ -85,6 +85,9 @@
       <span>
         <b>最近成功</b>{{ updatedSummary }}
       </span>
+      <span>
+        <b>图表分组</b>{{ groupingSummary }}
+      </span>
     </div>
 
     <a-alert
@@ -244,6 +247,16 @@ const pointSelectOptions = computed(() => {
 })
 
 const allSeries = computed(() => groups.value.flatMap((group) => group.series))
+
+/** 汇总当前真实序列与单位分组，明确四项指标会因同单位合并而显示为三张图。 */
+const groupingSummary = computed(() => {
+  if (groups.value.length === 0) return '尚无图表分组'
+  const subject = mode.value === 'indicators'
+    ? `${allSeries.value.length} 项指标`
+    : `${allSeries.value.length} 个测点`
+  const comparison = mode.value === 'indicators' ? ' · 同单位合并对比' : ''
+  return `${subject} · ${groups.value.length} 个单位图表${comparison}`
+})
 const hasAnyData = computed(() => allSeries.value.some((series) =>
   series.points.some((point) => point.average !== null),
 ))
@@ -416,7 +429,7 @@ onBeforeUnmount(dispose)
 
 .history-meta {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 1px;
   background: rgba(127, 167, 201, 0.10);
   border-bottom: 1px solid rgba(127, 167, 201, 0.10);
@@ -435,8 +448,8 @@ onBeforeUnmount(dispose)
 }
 
 .history-meta b {
-  color: #607991;
-  font-size: 9px;
+  color: #7890a7;
+  font-size: 10px;
   font-weight: 500;
 }
 

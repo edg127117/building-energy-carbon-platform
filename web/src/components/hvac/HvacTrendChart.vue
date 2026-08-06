@@ -18,6 +18,19 @@
     <p class="trend-chart__note">
       {{ resolutionMinutes }} 分钟分辨率 · 缺口保持断线 · 拖动底部范围条查看局部时段
     </p>
+    <div class="trend-chart__series-legend" aria-label="趋势序列图例">
+      <span
+        v-for="(series, index) in group.series"
+        :key="series.id"
+        class="trend-chart__series-item"
+      >
+        <i
+          class="trend-chart__series-swatch"
+          :style="{ backgroundColor: seriesColor(index) }"
+        />
+        {{ series.label }}
+      </span>
+    </div>
     <div
       ref="chartElement"
       class="trend-chart__canvas"
@@ -41,7 +54,6 @@ import { LineChart } from 'echarts/charts'
 import {
   DataZoomComponent,
   GridComponent,
-  LegendComponent,
   TooltipComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -57,10 +69,18 @@ echarts.use([
   LineChart,
   GridComponent,
   TooltipComponent,
-  LegendComponent,
   DataZoomComponent,
   CanvasRenderer,
 ])
+
+const SERIES_COLORS = [
+  '#55b9ff',
+  '#42d6a5',
+  '#ffad5c',
+  '#e9c85f',
+  '#ab8cff',
+  '#56d5d8',
+]
 
 const props = defineProps<{
   group: HvacTrendGroup
@@ -121,15 +141,8 @@ function buildOption(): EChartsCoreOption {
   return {
     animation: !reducedMotion,
     animationDuration: reducedMotion ? 0 : 260,
-    color: ['#55b9ff', '#42d6a5', '#ffad5c', '#e9c85f', '#ab8cff', '#56d5d8'],
-    grid: { left: 54, right: 24, top: 48, bottom: 72, containLabel: false },
-    legend: {
-      top: 4,
-      left: 4,
-      textStyle: { color: '#9fb4c9', fontSize: 11 },
-      itemWidth: 18,
-      itemHeight: 3,
-    },
+    color: SERIES_COLORS,
+    grid: { left: 54, right: 24, top: 34, bottom: 72, containLabel: false },
     tooltip: {
       trigger: 'axis',
       confine: true,
@@ -171,6 +184,11 @@ function buildOption(): EChartsCoreOption {
     ],
     series: props.group.series.map(buildSeries),
   }
+}
+
+/** 画布外图例与 ECharts 折线共用同一色板，保证换行后颜色含义仍稳定。 */
+function seriesColor(index: number): string {
+  return SERIES_COLORS[index % SERIES_COLORS.length]!
 }
 
 /** 把统一趋势序列映射为 ECharts 数据项，并把 Tooltip 所需的后端窗口事实就近保留。 */
@@ -335,6 +353,31 @@ function escapeHtml(value: string): string {
 
 .trend-chart__note {
   padding: 0 16px;
+}
+
+.trend-chart__series-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 9px 16px 0;
+  color: #9fb4c9;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.trend-chart__series-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.trend-chart__series-swatch {
+  width: 18px;
+  height: 3px;
+  flex: 0 0 auto;
+  border-radius: 2px;
 }
 
 .trend-chart__canvas {
