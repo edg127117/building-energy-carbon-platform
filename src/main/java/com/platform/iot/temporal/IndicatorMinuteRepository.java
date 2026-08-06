@@ -3,6 +3,7 @@ package com.platform.iot.temporal;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 
 import java.util.List;
 import java.util.Map;
@@ -46,6 +47,17 @@ public interface IndicatorMinuteRepository {
     /** 查询单个指标在半开时间区间内的成功趋势。 */
     List<IndicatorMinuteResult> findHistory(
             String indicatorId, long fromInclusive, long toExclusive);
+
+    /**
+     * 批量查询指标图表趋势；1 分钟返回精确成功值，5/30 分钟返回 TDengine 窗口统计。
+     *
+     * <p>该入口只读取成功指标表，失败公式分钟自然形成缺口；调用方负责权限和指标归属校验。</p>
+     */
+    List<IndicatorTrendQueryRow> findTrends(
+            List<String> indicatorIds,
+            long fromInclusive,
+            long toExclusive,
+            int resolutionMinutes);
 
     /** 返回时间窗口内已成功的指标分钟键，供缺口恢复一次性判断。 */
     Set<IndicatorMinuteKey> findSuccessfulKeys(
