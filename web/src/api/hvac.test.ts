@@ -10,6 +10,8 @@ vi.mock('@/utils/request', () => ({
 
 import {
   getIndicatorCalculationDetail,
+  getHvacIndicatorTrends,
+  getHvacPointHistory,
   getHvacSnapshot,
   getLatestHvacIndicators,
   listAccessibleBuildings,
@@ -107,5 +109,46 @@ describe('HVAC API client', () => {
     expect(get).toHaveBeenCalledWith(
       `/hvac/indicators/WCR%2FCOP%2001/calculations/${payload.minuteStart}`,
     )
+  })
+
+  it('queries chart-ready indicator trends in one request', async () => {
+    const payload = {
+      buildingId: 'BLD001',
+      from: 100,
+      to: 200,
+      resolutionMinutes: 1,
+      series: [],
+    }
+    get.mockResolvedValue({
+      data: { success: true, code: 200, msg: 'success', data: payload },
+    })
+
+    await expect(
+      getHvacIndicatorTrends('BLD 001', ['I/1', 'I2'], 100, 200),
+    ).resolves.toEqual(payload)
+    expect(get).toHaveBeenCalledWith(
+      '/hvac/buildings/BLD%20001/indicators/trends',
+      { params: { indicatorIds: 'I/1,I2', from: 100, to: 200 } },
+    )
+  })
+
+  it('queries up to eight raw point histories in one request', async () => {
+    const payload = {
+      buildingId: 'BLD001',
+      from: 100,
+      to: 200,
+      resolutionMinutes: 1,
+      series: [],
+    }
+    get.mockResolvedValue({
+      data: { success: true, code: 200, msg: 'success', data: payload },
+    })
+
+    await expect(
+      getHvacPointHistory('BLD001', ['P1', 'P2'], 100, 200),
+    ).resolves.toEqual(payload)
+    expect(get).toHaveBeenCalledWith('/hvac/buildings/BLD001/history', {
+      params: { pointIds: 'P1,P2', from: 100, to: 200 },
+    })
   })
 })

@@ -1,8 +1,8 @@
 /**
  * HVAC 页面使用的后端 DTO。
  *
- * 这些类型只描述现有建筑、分钟快照、最新指标和计算详情接口，不混入颜色、图标或布局，
- * 以免接口协议与大屏展示实现互相耦合。
+ * 这些类型只描述现有建筑、分钟快照、最新指标、历史趋势和计算详情接口，不混入颜色、
+ * 图标或布局，以免接口协议与大屏展示实现互相耦合。
  */
 export type PageResult<T> = {
   records: T[]
@@ -79,6 +79,57 @@ export type HvacLatestResponse = {
   buildingId: string
   generatedAt: number
   indicators: LatestIndicator[]
+}
+
+/**
+ * 指标和原始测点图表接口共用的一个服务端趋势窗口。
+ * `average/minimum/maximum/sampleCount` 均来自 TDengine，浏览器不得再次聚合或补值。
+ */
+export type TrendRecord = {
+  time: number
+  average: number
+  minimum: number
+  maximum: number
+  sampleCount: number
+  dataQuality: number
+}
+
+/** 新批量指标趋势接口中的一个指标实例；合法无数据指标保留空 `records`。 */
+export type IndicatorTrendSeries = {
+  indicatorId: string
+  indicatorCode: string
+  equipId: string | null
+  records: TrendRecord[]
+}
+
+/**
+ * `/hvac/buildings/{buildingId}/indicators/trends` 的图表专用响应。
+ * 该契约不携带公式版本，精确分钟审计继续使用原单指标历史接口。
+ */
+export type HvacIndicatorTrendResponse = {
+  buildingId: string
+  from: number
+  to: number
+  resolutionMinutes: 1 | 5 | 30 | number
+  series: IndicatorTrendSeries[]
+}
+
+/** 现有多测点历史接口中的一个原始测点序列。 */
+export type PointHistorySeries = {
+  pointId: string
+  pointCode: string
+  pointName: string
+  unit: string | null
+  records: TrendRecord[]
+}
+
+/** `/hvac/buildings/{buildingId}/history` 返回的 1 至 8 个测点历史响应。 */
+export type HvacPointHistoryResponse = {
+  buildingId: string
+  from: number
+  to: number
+  resolutionMinutes: 1 | 5 | 30 | number
+  series: PointHistorySeries[]
 }
 
 /** 计算详情中的一个分钟输入，质量等级沿用后端 Q0/Q1/Q2 语义。 */
