@@ -51,6 +51,7 @@
 | HVAC 公式计算详情前端接入 | [设计](specs/2026-08-04-hvac-calculation-detail-frontend-design.md) | [计划](plans/2026-08-04-hvac-calculation-detail-frontend.md) | 成对历史记录 | 当前详情入口、状态与展示以 API、Composable、抽屉组件和页面测试为准。 |
 | 前端 ESLint 基线与 CI 门禁 | [设计](specs/2026-08-04-frontend-eslint-baseline-design.md) | [计划](plans/2026-08-04-frontend-eslint-baseline.md) | 成对历史记录 | 当前规则和 CI 入口以 `web/.eslintrc.cjs`、`web/package.json` 与前端工作流为准。 |
 | HVAC 统一真实历史趋势 | [设计](specs/2026-08-05-hvac-unified-history-trends-design.md) | [计划](plans/2026-08-06-hvac-unified-history-trends.md) | 成对历史记录 | 当前接口、分辨率和页面行为以 Controller、Service、Repository、前端历史模块和测试为准。 |
+| AGENTS 指令分层整改 | [设计](specs/2026-08-08-agents-instruction-layering-design.md) | [计划](plans/2026-08-08-agents-instruction-layering.md) | 成对历史记录 | 根规则保留核心约束与按需路由，详细注释和验证规范以 `docs/development` 中当前文件为准。 |
 
 ## 已确认的替代关系
 
