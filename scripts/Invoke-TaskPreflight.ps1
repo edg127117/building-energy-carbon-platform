@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param()
 
 Set-StrictMode -Version Latest
@@ -69,5 +69,5 @@ if ($errors.Count -gt 0) {
 Write-Output 'RULE_ENTRY: AGENTS.md'
 Write-Output 'RULE_ENTRY: PROJECT_GUIDE.md'
 Write-Output 'RULE_ENTRY: PROJECT_STATUS.md'
-Write-Output 'REQUIRED_REVIEW: verify scope, changed files, tests, and comment evidence before commit or PR'
+Write-Output 'REQUIRED_REVIEW: verify scope, changed files, tests, and comment check before commit or PR'
 Write-Output 'TASK_PREFLIGHT_OK'

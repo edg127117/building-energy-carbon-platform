@@ -4,7 +4,7 @@
 
 处理本项目任务时按以下顺序读取信息：
 
-1. 读取 [`AGENTS.md`](AGENTS.md)，确认 Git、架构边界、代码注释和信息维护规则。
+1. 读取 [`AGENTS.md`](AGENTS.md)，确认核心规则和当前任务必须继续读取的开发规范。
 2. 读取本文件，定位业务模块、核心链路、数据源和详细文档。
 3. 读取 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)，确认当前 Git 版本已经完成、尚未完成和需要核验的事项。
 4. 只在任务需要时读取 `docs/superpowers/specs`、`docs/superpowers/plans` 和对应代码。
@@ -125,7 +125,7 @@
 | 入口 | 状态 | 用途 | 判断当前事实时的来源 |
 |---|---|---|---|
 | 当前代码与自动化测试 | 当前证据 | 判断当前实现、接口和行为 | 当前 Git 版本中的实现、配置和测试结果 |
-| [`AGENTS.md`](AGENTS.md) | 当前有效 | 固定 Git 流程、架构边界和注释规则 | 文件正文；只有规则变更时更新 |
+| [`AGENTS.md`](AGENTS.md) | 当前有效 | 核心工作规则和按任务读取的规范路由 | 文件正文；只有规则或路由变更时更新 |
 | [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | 当前有效 | 稳定架构、模块职责、数据链路和文档导航 | 代码结构与长期设计边界 |
 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | 动态更新 | 已完成、未完成、风险、技术债和下一步 | 本文件所在 Git 版本的代码、测试和已合并决策 |
 
@@ -137,6 +137,9 @@
 | [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前硬件契约 | 19 测点上行载荷、确认语义和接口边界 | 现场设备已经完成验收 |
 | [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来安全约束 | 未来控制能力必须满足的安全和审计边界 | 当前已经存在控制功能 |
 | [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | Java 21、Maven Wrapper 和 CI 验证 | 某台电脑已经正确配置环境 |
+| [`docs/development/code-comments.md`](docs/development/code-comments.md) | 当前开发规范 | IoT 生产代码注释边界与风险分级 | 通用语言注释规则和不涉及生产代码的任务 |
+| [`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md) | 当前 Codex Skill | 后端、前端、跨端、外部资源和流程变化的可执行验证矩阵 | 某次任务已经实际执行了所有命令 |
+| [`docs/development/verification.md`](docs/development/verification.md) | 当前开发说明 | 面向开发者的验证原则和结果记录要求 | 完整命令矩阵和某次任务的执行结果 |
 
 ### 7.3 历史任务记录
 
@@ -150,10 +153,13 @@
 
 仓库通过本地 Git Hook、任务预检、PR 模板和 GitHub Actions 防止开发流程与注释质量回退：
 
-- 安装、预检、注释报告生成、PR 检查和合并后清理的命令查看 [`repository-guardrails.md`](docs/development/repository-guardrails.md)；
+- 安装、预检、PR 检查、专项注释审计和合并后清理的命令查看 [`repository-guardrails.md`](docs/development/repository-guardrails.md)；
+- 生产代码 PR 在正文记录风险级别、检查范围和结论；普通任务不再强制新增永久审计报告，历史报告保持不可变；
+- 生产代码的 IoT 注释边界与风险分级查看 [`code-comments.md`](docs/development/code-comments.md)；
+- Codex 验证入口是 [`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md)，开发者原则查看 [`verification.md`](docs/development/verification.md)；
 - 后端 CI 入口是 [`.github/workflows/backend-ci.yml`](.github/workflows/backend-ci.yml)；
 - 前端 CI 入口是 [`.github/workflows/frontend-ci.yml`](.github/workflows/frontend-ci.yml)；
-- PR 范围和注释证据检查入口是 [`.github/workflows/repository-guardrails.yml`](.github/workflows/repository-guardrails.yml)。
+- PR 范围和注释检查入口是 [`.github/workflows/repository-guardrails.yml`](.github/workflows/repository-guardrails.yml)。
 
 本地与 CI 检查不能代替业务语义复核。GitHub `main` 分支保护属于仓库外部设置，必须在 GitHub 页面单独启用并现场验证。
 
