@@ -392,139 +392,67 @@ $AuditContent
 "@
 }
 
-function Invoke-RepositoryContractTests {
-    Assert-True (Test-Path $guardrailScript) 'Test-RepositoryGuardrails.ps1 must exist'
-    Assert-True (Test-Path $scannerScript) 'New-CommentAuditReport.ps1 must exist'
-    $root = New-ContractFixture
-    $auditPath = 'docs/reviews/comment-audits/2026/2026-08-06-contract.md'
-    $auditContent = New-CompletedAuditContent $root
-    Set-Utf8File $root $auditPath $auditContent
-    Commit-All $root 'add current audit document'
-    $body = New-LinkedAuditBody $auditPath
-    $scannerResult = Invoke-PowerShellScript $scannerScript @('-BaseRef', 'main', '-HeadRef', 'HEAD', '-Format', 'Json') $root $null
-    Assert-True ($scannerResult.ExitCode -eq 0) "empty-symbol scanner JSON should succeed: $($scannerResult.Output)"
-    $reports = $scannerResult.Output | ConvertFrom-Json
-    $emptyReports = @($reports | Where-Object { $_.path -eq 'web/src/types/ContractTypes.ts' })
-    Assert-True ($emptyReports.Count -eq 1) 'changed type-only production file must be listed'
-    $emptySymbolCount = @($emptyReports[0].symbols).Count
-    $emptySymbolsJson = $emptyReports[0].symbols | ConvertTo-Json -Depth 4 -Compress
-    Assert-True ($emptySymbolCount -eq 0) "type-only production file symbols must be an empty array, actual: $emptySymbolsJson"
-    $valid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
-    Assert-True ($valid.ExitCode -eq 0) "complete PR contract should pass: $($valid.Output)"
-    Assert-Contains $valid.Output 'REPOSITORY_GUARDRAILS_OK' 'success marker must be emitted'
-    Complete-Case 'linked production audit document passes'
-
-    $bodyWithTemplateInstructions = $body.Replace(
-        '## 注释审计',
-        "## 注释审计`n<!-- [模板示例](docs/reviews/comment-audits/2026/2026-08-06-example.md) -->"
+function New-RiskBody {
+    param(
+        [string]$Risk = '普通',
+        [string]$Scope = '检查变化文件及受影响方法。',
+        [string]$Result = '现有注释准确，无需修改。'
     )
-    $withTemplateInstructions = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $bodyWithTemplateInstructions }
-    Assert-True ($withTemplateInstructions.ExitCode -eq 0) "hidden template links must be ignored: $($withTemplateInstructions.Output)"
-    Complete-Case 'hidden PR template links are not treated as audit evidence'
-
-    $legacyBody = New-LegacyAuditBody $auditContent
-    $legacy = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $legacyBody }
-    Assert-True ($legacy.ExitCode -eq 0) "legacy inline audit should pass: $($legacy.Output)"
-    Complete-Case 'legacy inline production audit remains compatible'
-
-    foreach ($heading in @('变更内容', '测试', '注释审计')) {
-        $missingSectionBody = $body -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
-        $missingSection = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingSectionBody }
-        Assert-True ($missingSection.ExitCode -ne 0) "missing required section must fail: $heading"
-        Assert-Contains $missingSection.Output "PR_SECTION_MISSING: $heading" "failure must identify missing section: $heading"
-    }
-    Complete-Case 'three required PR sections are enforced'
-
-    $missingLinkBody = @'
+    return @"
 ## 变更内容
 更新设备档案查询实现。
+
 ## 测试
-定向合同测试通过。
-## 注释审计
-完整报告另行保存。
-'@
-    $missingLink = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingLinkBody }
-    Assert-True ($missingLink.ExitCode -ne 0) 'production PR without linked or inline evidence must fail'
-    Assert-Contains $missingLink.Output 'AUDIT_DOCUMENT_LINK_MISSING' 'missing evidence must use the document-link error'
-    Complete-Case 'production PR requires linked or legacy inline evidence'
+定向合同测试通过，无跳过项。
 
-    $multipleLinksBody = $body.Replace(
-        "[查看完整中文注释审计]($auditPath)",
-        "[审计一]($auditPath) 和 [审计二](docs/reviews/comment-audits/2026/2026-08-06-second.md)"
-    )
-    $multipleLinks = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $multipleLinksBody }
-    Assert-True ($multipleLinks.ExitCode -ne 0) 'multiple audit links must fail'
-    Assert-Contains $multipleLinks.Output 'AUDIT_DOCUMENT_LINK_MULTIPLE' 'multiple links must use a stable error'
-    Complete-Case 'multiple audit document links fail'
+## 注释检查
+风险级别：$Risk
+检查范围：$Scope
+结论：$Result
+"@
+}
 
-    foreach ($invalidPath in @(
-        'https://example.invalid/audit.md',
-        'C:/temp/2026-08-06-audit.md',
-        '../docs/reviews/comment-audits/2026/2026-08-06-audit.md',
-        'docs/reviews/2026/2026-08-06-audit.md',
-        'docs/reviews/comment-audits/2025/2026-08-06-audit.md',
-        'docs/reviews/comment-audits/2026/2026-13-40-audit.md',
-        'docs/reviews/comment-audits/2026/2026-08-06-Audit_Name.md'
-    )) {
-        $invalidBody = New-LinkedAuditBody $invalidPath
-        $invalid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $invalidBody }
-        Assert-True ($invalid.ExitCode -ne 0) "invalid audit link must fail: $invalidPath"
-        Assert-Contains $invalid.Output 'AUDIT_DOCUMENT_PATH_INVALID' "invalid link must use a stable error: $invalidPath"
+function Invoke-RepositoryContractTests {
+    Assert-True (Test-Path $guardrailScript) 'Test-RepositoryGuardrails.ps1 must exist'
+    Assert-True (Test-Path $scannerScript) 'New-CommentAuditReport.ps1 must remain available for optional audits'
+
+    $root = New-ContractFixture
+    $body = New-RiskBody
+    $valid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
+    Assert-True ($valid.ExitCode -eq 0) "production PR without audit document should pass: $($valid.Output)"
+    Assert-Contains $valid.Output 'REPOSITORY_GUARDRAILS_OK' 'success marker must be emitted'
+    Complete-Case 'production PR passes with risk-based comment check and no audit document'
+
+    foreach ($heading in @('变更内容', '测试', '注释检查')) {
+        $missingBody = $body -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
+        $missing = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingBody }
+        Assert-True ($missing.ExitCode -ne 0) "missing required section must fail: $heading"
+        Assert-Contains $missing.Output "PR_SECTION_MISSING: $heading" "failure must identify missing section: $heading"
     }
-    Complete-Case 'unsafe audit document links fail'
+    Complete-Case 'current three PR sections are enforced'
 
-    $notFoundBody = New-LinkedAuditBody 'docs/reviews/comment-audits/2026/2026-08-06-missing.md'
-    $notFound = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $notFoundBody }
-    Assert-True ($notFound.ExitCode -ne 0) 'missing linked document must fail'
-    Assert-Contains $notFound.Output 'AUDIT_DOCUMENT_NOT_FOUND' 'missing document must use a stable error'
+    $missingRisk = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Risk '') }
+    Assert-True ($missingRisk.ExitCode -ne 0) 'missing risk level must fail'
+    Assert-Contains $missingRisk.Output 'COMMENT_RISK_LEVEL_MISSING' 'risk failure must use a stable error'
 
-    $historicalBody = New-LinkedAuditBody 'docs/reviews/comment-audits/2026/2026-08-05-historical.md'
-    $historical = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $historicalBody }
-    Assert-True ($historical.ExitCode -ne 0) 'base-existing linked document must fail'
-    Assert-Contains $historical.Output 'AUDIT_DOCUMENT_NOT_ADDED' 'historical document must not be reusable'
-    Complete-Case 'missing and historical audit documents fail'
+    $missingScope = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Scope '') }
+    Assert-True ($missingScope.ExitCode -ne 0) 'missing scope must fail'
+    Assert-Contains $missingScope.Output 'COMMENT_SCOPE_MISSING' 'scope failure must use a stable error'
 
-    $emptyPath = 'docs/reviews/comment-audits/2026/2026-08-06-empty.md'
-    Set-Utf8File $root $emptyPath ''
-    Commit-All $root 'add empty audit document'
-    $empty = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-LinkedAuditBody $emptyPath) }
-    Assert-True ($empty.ExitCode -ne 0) 'empty linked document must fail'
-    Assert-Contains $empty.Output 'AUDIT_DOCUMENT_EMPTY' 'empty document must use a stable error'
+    $missingResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Result '') }
+    Assert-True ($missingResult.ExitCode -ne 0) 'missing result must fail'
+    Assert-Contains $missingResult.Output 'COMMENT_RESULT_MISSING' 'result failure must use a stable error'
+    Complete-Case 'risk level, scope, and result are required'
 
-    $directoryPath = 'docs/reviews/comment-audits/2026/2026-08-06-directory.md'
-    New-Item -ItemType Directory -Path (Join-Path $root $directoryPath) -Force | Out-Null
-    $unsafeType = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-LinkedAuditBody $directoryPath) }
-    Assert-True ($unsafeType.ExitCode -ne 0) 'directory target must fail'
-    Assert-Contains $unsafeType.Output 'AUDIT_DOCUMENT_UNSAFE_TYPE' 'directory target must use a stable error'
-    Complete-Case 'empty and unsafe audit document types fail'
+    $wrongRisk = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码') }
+    Assert-True ($wrongRisk.ExitCode -ne 0) 'production change cannot claim no production code'
+    Assert-Contains $wrongRisk.Output 'COMMENT_RISK_LEVEL_INVALID' 'production risk mismatch must use a stable error'
+    Complete-Case 'risk level must match production change presence'
 
-    $missingPrivateContent = ($auditContent -split "`r?`n" | Where-Object { $_ -notmatch '\| `allowed#1` \|' }) -join "`n"
-    Set-Utf8File $root $auditPath $missingPrivateContent
-    $missingPrivate = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
-    Assert-True ($missingPrivate.ExitCode -ne 0) 'missing private method must fail'
-    Assert-Contains $missingPrivate.Output 'AUDIT_SYMBOL_MISSING' 'failure must identify missing symbol'
-    Complete-Case 'missing private method evidence fails'
-
-    $weakReasonContent = [regex]::Replace($auditContent, '`关键-现有说明已核验` \| 说明当前方法在设备档案查询链路中的职责', '`简单-无需说明` | 无需注释', 1)
-    Set-Utf8File $root $auditPath $weakReasonContent
-    $weakReason = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
-    Assert-True ($weakReason.ExitCode -ne 0) 'simple method without concrete reason must fail'
-    Assert-Contains $weakReason.Output 'AUDIT_REASON_INVALID' 'failure must identify weak exclusion reason'
-    Complete-Case 'simple method requires concrete exclusion reason'
-
-    $invalidDecisionContent = [regex]::Replace($auditContent, '`关键-现有说明已核验`', '`未知判定`', 1)
-    Set-Utf8File $root $auditPath $invalidDecisionContent
-    $invalidDecision = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
-    Assert-True ($invalidDecision.ExitCode -ne 0) 'unknown audit decision must fail'
-    Assert-Contains $invalidDecision.Output 'AUDIT_DECISION_INVALID' 'decision failure must retain the existing error'
-
-    $missingMetadataContent = $auditContent.Replace('职责：读取设备档案并服务查询接口', '职责：待填写')
-    Set-Utf8File $root $auditPath $missingMetadataContent
-    $missingMetadata = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
-    Assert-True ($missingMetadata.ExitCode -ne 0) 'incomplete document metadata must fail'
-    Assert-Contains $missingMetadata.Output 'AUDIT_METADATA_INCOMPLETE' 'metadata failure must retain the existing error'
-    Set-Utf8File $root $auditPath $auditContent
-    Complete-Case 'linked document retains complete audit contract checks'
+    $legacyAudit = New-CompletedAuditContent $root
+    $legacy = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-LegacyAuditBody $legacyAudit) }
+    Assert-True ($legacy.ExitCode -eq 0) "legacy inline audit should remain compatible: $($legacy.Output)"
+    Complete-Case 'legacy inline audit remains compatible'
 
     $docRoot = New-TestRepository 'document-only'
     Set-Utf8File $docRoot 'README.md' "baseline`n"
@@ -532,17 +460,9 @@ function Invoke-RepositoryContractTests {
     Invoke-GitChecked $docRoot @('switch', '-c', 'docs/guide') | Out-Null
     Set-Utf8File $docRoot 'README.md' "baseline`nupdated`n"
     Commit-All $docRoot 'update docs'
-    $docBody = @'
-## 变更内容
-更新 README。
-## 测试
-git diff --check 通过，无跳过项。
-## 注释审计
-不涉及生产代码。
-'@
-    $docResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $docRoot @{ PR_BODY = $docBody }
+    $docResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $docRoot @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码' -Scope '仅检查 README 链接和差异。' -Result '不涉及生产代码注释。') }
     Assert-True ($docResult.ExitCode -eq 0) "document-only PR should pass: $($docResult.Output)"
-    Complete-Case 'document-only PR passes without audit table'
+    Complete-Case 'document-only PR passes without audit document'
 
     $stagedRoot = New-TestRepository 'staged'
     Set-Utf8File $stagedRoot 'README.md' "baseline`n"
@@ -559,17 +479,11 @@ git diff --check 通过，无跳过项。
     Set-Utf8File $sourceTargetRoot 'README.md' "baseline`n"
     Commit-All $sourceTargetRoot 'baseline'
     Invoke-GitChecked $sourceTargetRoot @('switch', '-c', 'docs/source-target') | Out-Null
-    Set-Utf8File $sourceTargetRoot 'src/main/java/com/example/target/SourceTarget.java' @'
-package com.example.target;
-
-/** 合法源码包中的 target 类。 */
-public class SourceTarget {
-}
-'@
+    Set-Utf8File $sourceTargetRoot 'src/main/java/com/example/target/SourceTarget.java' "package com.example.target;`n`n/** 合法源码包中的 target 类。 */`npublic class SourceTarget {}`n"
     Invoke-GitChecked $sourceTargetRoot @('add', '--', 'src/main/java/com/example/target/SourceTarget.java') | Out-Null
     $sourceTargetResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'Staged') $sourceTargetRoot $null
     Assert-True ($sourceTargetResult.ExitCode -eq 0) "source target package should pass: $($sourceTargetResult.Output)"
-    Complete-Case 'source target package is not treated as build output'
+    Complete-Case 'source target package remains allowed'
 
     $buildTargetRoot = New-TestRepository 'build-target-directory'
     Set-Utf8File $buildTargetRoot 'README.md' "baseline`n"
@@ -581,6 +495,38 @@ public class SourceTarget {
     Assert-True ($buildTargetResult.ExitCode -ne 0) 'real build target directory must fail'
     Assert-Contains $buildTargetResult.Output 'FORBIDDEN_PATH' 'build target failure must identify forbidden path'
     Complete-Case 'real build target directory remains forbidden'
+
+    $javaRoot = New-TestRepository 'java-javadoc'
+    Set-Utf8File $javaRoot 'README.md' "baseline`n"
+    Commit-All $javaRoot 'baseline'
+    Invoke-GitChecked $javaRoot @('switch', '-c', 'feature/java') | Out-Null
+    Set-Utf8File $javaRoot 'src/main/java/com/example/MissingDoc.java' "package com.example;`npublic class MissingDoc {}`n"
+    Invoke-GitChecked $javaRoot @('add', '--', 'src/main/java/com/example/MissingDoc.java') | Out-Null
+    $javaResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'Staged') $javaRoot $null
+    Assert-True ($javaResult.ExitCode -ne 0) 'new Java class without Javadoc must fail'
+    Assert-Contains $javaResult.Output 'JAVA_CLASS_JAVADOC_MISSING' 'Java failure must identify missing class Javadoc'
+    Complete-Case 'new Java class still requires class Javadoc'
+
+    $frontendRoot = New-TestRepository 'frontend-comment'
+    Set-Utf8File $frontendRoot 'README.md' "baseline`n"
+    Commit-All $frontendRoot 'baseline'
+    Invoke-GitChecked $frontendRoot @('switch', '-c', 'feature/frontend') | Out-Null
+    Set-Utf8File $frontendRoot 'web/src/api/device.ts' "export const loadDevice = async () => ({ id: 'D1' })`n"
+    Invoke-GitChecked $frontendRoot @('add', '--', 'web/src/api/device.ts') | Out-Null
+    $frontendResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'Staged') $frontendRoot $null
+    Assert-True ($frontendResult.ExitCode -ne 0) 'new frontend business file without comment must fail'
+    Assert-Contains $frontendResult.Output 'FRONTEND_BUSINESS_COMMENT_MISSING' 'frontend failure must identify missing business comment'
+    Complete-Case 'new frontend business file still requires a business comment'
+
+    $servicePath = Join-Path $root 'src/main/java/com/example/ContractService.java'
+    $serviceText = Get-Content -Raw -Encoding UTF8 -LiteralPath $servicePath
+    $serviceText = $serviceText.Replace('public String load', "// 后续再支持缓存。`n    public String load")
+    Set-Content -LiteralPath $servicePath -Value $serviceText -Encoding UTF8
+    Commit-All $root 'add low value comment'
+    $stale = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
+    Assert-True ($stale.ExitCode -ne 0) 'low-value future comment must fail'
+    Assert-Contains $stale.Output 'STALE_OR_LOW_VALUE_COMMENT' 'low-value comment failure must remain stable'
+    Complete-Case 'high-confidence low-value comments remain blocked'
 }
 
 function Invoke-CiContractTests {
@@ -590,26 +536,33 @@ function Invoke-CiContractTests {
     $agents = Join-Path $repositoryRoot 'AGENTS.md'
     $guide = Join-Path $repositoryRoot 'docs\development\repository-guardrails.md'
     $archive = Join-Path $repositoryRoot 'docs\reviews\comment-audits\README.md'
-    foreach ($path in @($template, $frontend, $guardrails, $agents, $guide, $archive)) {
-        Assert-True (Test-Path $path) "required CI contract file must exist: $path"
+    $skill = Join-Path $repositoryRoot '.agents\skills\iot-change-verification\SKILL.md'
+    foreach ($path in @($template, $frontend, $guardrails, $agents, $guide, $archive, $skill)) {
+        Assert-True (Test-Path $path) "required contract file must exist: $path"
     }
+
     $templateText = Get-Content -Raw -Encoding UTF8 -LiteralPath $template
-    foreach ($heading in '## 变更内容', '## 测试', '## 注释审计') {
+    foreach ($heading in '## 变更内容', '## 测试', '## 注释检查') {
         Assert-Contains $templateText $heading "PR template must contain $heading"
     }
-    foreach ($obsoleteHeading in '## 解决的问题', '## 不包含范围', '## 文件范围检查', '## 注释检查') {
-        Assert-NotContains $templateText $obsoleteHeading "PR template must not require $obsoleteHeading"
+    Assert-NotContains $templateText '## 注释审计' 'PR template must not require permanent audit documents'
+    foreach ($field in '风险级别：', '检查范围：', '结论：') {
+        Assert-Contains $templateText $field "PR template must contain $field"
     }
-    Assert-Contains $templateText 'New-CommentAuditReport.ps1' 'PR template must identify report command'
-    Assert-Contains $templateText '-OutputPath' 'PR template must generate a permanent document'
 
-    $archivePattern = 'docs/reviews/comment-audits/<year>/<YYYY-MM-DD>-<task>.md'
-    foreach ($contractPath in @($agents, $guide, $archive)) {
-        $contractText = Get-Content -Raw -Encoding UTF8 -LiteralPath $contractPath
-        Assert-Contains $contractText $archivePattern "repository contract must identify the permanent archive path: $contractPath"
-        Assert-Contains $contractText '-OutputPath' "repository contract must show document generation: $contractPath"
-        Assert-Contains $contractText '不能复用' "repository contract must forbid historical report reuse: $contractPath"
+    $guardrailScriptText = Get-Content -Raw -Encoding UTF8 -LiteralPath $guardrailScript
+    foreach ($removedContract in 'AUDIT_DOCUMENT_LINK_MISSING', 'AUDIT_DOCUMENT_NOT_ADDED', 'AUDIT_SYMBOL_MISSING') {
+        Assert-NotContains $guardrailScriptText $removedContract "guardrail must not retain $removedContract"
     }
+    foreach ($retainedContract in 'FORBIDDEN_PATH', 'JAVA_CLASS_JAVADOC_MISSING', 'FRONTEND_BUSINESS_COMMENT_MISSING', 'STALE_OR_LOW_VALUE_COMMENT') {
+        Assert-Contains $guardrailScriptText $retainedContract "guardrail must retain $retainedContract"
+    }
+
+    $agentsText = Get-Content -Raw -Encoding UTF8 -LiteralPath $agents
+    Assert-Contains $agentsText 'iot-change-verification' 'AGENTS must trigger the repository verification skill'
+    Assert-Contains $agentsText '普通生产代码 PR 不再强制新增永久审计文档' 'AGENTS must describe the new comment boundary'
+    $archiveText = Get-Content -Raw -Encoding UTF8 -LiteralPath $archive
+    Assert-Contains $archiveText '普通生产代码 PR 不再强制新增审计文档' 'archive must be historical and optional'
 
     $frontendText = Get-Content -Raw -Encoding UTF8 -LiteralPath $frontend
     foreach ($command in 'npm ci', 'npm run lint', 'npm run test:run', 'npm run check', 'npm run build') {
@@ -623,7 +576,7 @@ function Invoke-CiContractTests {
     Assert-Contains $guardrailText 'github.event.pull_request.base.sha' 'workflow must pass base SHA'
     Assert-Contains $guardrailText 'github.event.pull_request.head.sha' 'workflow must pass head SHA'
     Assert-Contains $guardrailText 'PR_BODY:' 'workflow must pass PR body'
-    Complete-Case 'PR template, permanent audit archive, and GitHub Actions contract'
+    Complete-Case 'risk-based PR template, repository skill, and GitHub Actions contract'
 }
 
 try {

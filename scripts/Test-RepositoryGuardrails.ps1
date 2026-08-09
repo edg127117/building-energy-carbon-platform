@@ -11,7 +11,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $errors = [System.Collections.Generic.List[string]]::new()
-$script:AuditDocumentPathPattern = '^docs/reviews/comment-audits/(?<year>\d{4})/(?<dateYear>\d{4})-(?<month>\d{2})-(?<day>\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$'
 
 function Add-GuardrailError {
     param([string]$Rule, [string]$Detail)
@@ -37,6 +36,7 @@ function Get-ChangedFiles {
     if ($LASTEXITCODE -ne 0) {
         throw "GIT_DIFF_FAILED: $($rows | Out-String)"
     }
+
     $files = [System.Collections.Generic.List[object]]::new()
     foreach ($row in $rows) {
         if ([string]::IsNullOrWhiteSpace($row)) { continue }
@@ -92,6 +92,14 @@ function Test-FrontendBusinessComment {
     return $false
 }
 
+function Test-IsProductionPath {
+    param([string]$Path)
+    if ($Path -match '^src/main/java/.+\.java$') { return $true }
+    return $Path -match '^web/src/.+\.(?:vue|ts)$' -and
+        $Path -notmatch '(^|/)(?:__tests__|tests?)/' -and
+        $Path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$'
+}
+
 function Get-PrSection {
     param([string]$Body, [string]$Heading)
     $pattern = '(?ms)^##\s+' + [regex]::Escape($Heading) + '\s*\r?\n(?<content>.*?)(?=^##\s+|\z)'
@@ -101,166 +109,48 @@ function Get-PrSection {
 }
 
 function Test-PrSections {
-    param([string]$Body)
+    param([string]$Body, [int]$ProductionFileCount)
     if ([string]::IsNullOrWhiteSpace($Body)) {
         Add-GuardrailError 'PR_BODY_MISSING' 'pull request body is empty'
         return
     }
+
     $withoutInstructions = [regex]::Replace($Body, '(?s)<!--.*?-->', '').Trim()
-    foreach ($heading in @('变更内容', '测试')) {
+    foreach ($heading in @('变更内容', '测试', '注释检查')) {
         $section = Get-PrSection $withoutInstructions $heading
         if ([string]::IsNullOrWhiteSpace($section)) {
             Add-GuardrailError 'PR_SECTION_MISSING' $heading
         }
     }
-    $auditSection = Get-PrSection $withoutInstructions '注释审计'
-    if ([string]::IsNullOrWhiteSpace($auditSection) -and $Body -match '<!--\s*comment-audit:file=') {
-        $auditSection = Get-PrSection $withoutInstructions '注释检查'
+
+    $commentSection = Get-PrSection $withoutInstructions '注释检查'
+    if ([string]::IsNullOrWhiteSpace($commentSection)) { return }
+
+    # 已经打开且仍使用旧内嵌 comment-audit 的 PR 保持兼容，不要求回写历史格式。
+    if ($Body -match '<!--\s*comment-audit:file=[^>]+-->' -and
+        $Body -match '<!--\s*comment-audit:end-file\s*-->') { return }
+
+    $riskMatch = [regex]::Match($commentSection, '(?m)^\s*风险级别\s*[：:]\s*(?<value>高|普通|低|不涉及生产代码)\s*$')
+    if (-not $riskMatch.Success) {
+        Add-GuardrailError 'COMMENT_RISK_LEVEL_MISSING' 'expected 高, 普通, 低, or 不涉及生产代码'
     }
-    if ([string]::IsNullOrWhiteSpace($auditSection)) {
-        Add-GuardrailError 'PR_SECTION_MISSING' '注释审计'
+    elseif ($ProductionFileCount -gt 0 -and $riskMatch.Groups['value'].Value -eq '不涉及生产代码') {
+        Add-GuardrailError 'COMMENT_RISK_LEVEL_INVALID' 'production code changed'
+    }
+    elseif ($ProductionFileCount -eq 0 -and $riskMatch.Groups['value'].Value -ne '不涉及生产代码') {
+        Add-GuardrailError 'COMMENT_RISK_LEVEL_INVALID' 'no production code changed'
+    }
+
+    if ($commentSection -notmatch '(?m)^[ \t]*检查范围[ \t]*[：:][ \t]*\S[^\r\n]*$') {
+        Add-GuardrailError 'COMMENT_SCOPE_MISSING' 'describe files, call chain, affected methods, or nearby changes'
+    }
+    if ($commentSection -notmatch '(?m)^[ \t]*结论[ \t]*[：:][ \t]*\S[^\r\n]*$') {
+        Add-GuardrailError 'COMMENT_RESULT_MISSING' 'describe comment changes or why no change is required'
     }
 }
 
-function Get-AuditDocumentLinkTargets {
-    param([string]$AuditSection)
-    $targets = [System.Collections.Generic.List[string]]::new()
-    if ([string]::IsNullOrWhiteSpace($AuditSection)) {
-        return $targets.ToArray()
-    }
-    foreach ($match in [regex]::Matches($AuditSection, '(?m)(?<!!)\[[^\]\r\n]*\]\((?<target>[^)\r\n]+)\)')) {
-        $targets.Add($match.Groups['target'].Value.Trim())
-    }
-    return $targets.ToArray()
-}
-
-function Resolve-AuditDocumentContent {
-    param(
-        [string]$RepositoryRoot,
-        [string]$Body,
-        [object[]]$ChangedFiles
-    )
-    # PR 模板通过 HTML 注释提供示例链接；这些隐藏说明不是用户提交的审计证据。
-    $withoutInstructions = [regex]::Replace($Body, '(?s)<!--.*?-->', '').Trim()
-    $auditSection = Get-PrSection $withoutInstructions '注释审计'
-    $targets = @(Get-AuditDocumentLinkTargets $auditSection)
-    if ($targets.Count -gt 1) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_LINK_MULTIPLE' ($targets -join ', ')
-        return $null
-    }
-    if ($targets.Count -eq 0) {
-        if ($Body -match '<!--\s*comment-audit:file=') {
-            return $Body
-        }
-        Add-GuardrailError 'AUDIT_DOCUMENT_LINK_MISSING' 'production code changes require one linked audit document'
-        return $null
-    }
-
-    $target = $targets[0].Replace('\', '/')
-    $pathMatch = [regex]::Match($target, $script:AuditDocumentPathPattern)
-    if (-not $pathMatch.Success -or $pathMatch.Groups['year'].Value -ne $pathMatch.Groups['dateYear'].Value) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $targets[0]
-        return $null
-    }
-    try {
-        $dateText = '{0}-{1}-{2}' -f $pathMatch.Groups['dateYear'].Value, $pathMatch.Groups['month'].Value, $pathMatch.Groups['day'].Value
-        [void][DateTime]::ParseExact($dateText, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture)
-    }
-    catch {
-        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $target
-        return $null
-    }
-
-    try {
-        $rootFullPath = [IO.Path]::GetFullPath($RepositoryRoot).TrimEnd([char[]]@('\', '/'))
-        $absolutePath = [IO.Path]::GetFullPath((Join-Path $rootFullPath $target))
-    }
-    catch {
-        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $target
-        return $null
-    }
-    $rootPrefix = $rootFullPath + [IO.Path]::DirectorySeparatorChar
-    if (-not $absolutePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' $target
-        return $null
-    }
-    if (-not (Test-Path -LiteralPath $absolutePath)) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_NOT_FOUND' $target
-        return $null
-    }
-
-    $item = Get-Item -Force -LiteralPath $absolutePath
-    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_UNSAFE_TYPE' $target
-        return $null
-    }
-    $changedDocument = @($ChangedFiles | Where-Object { $_.path -ceq $target -and $_.status -like 'A*' })
-    if ($changedDocument.Count -ne 1) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_NOT_ADDED' $target
-        return $null
-    }
-
-    try {
-        $strictUtf8 = New-Object Text.UTF8Encoding($false, $true)
-        $content = [IO.File]::ReadAllText($absolutePath, $strictUtf8)
-    }
-    catch {
-        Add-GuardrailError 'AUDIT_DOCUMENT_PATH_INVALID' "$target -> unreadable UTF-8"
-        return $null
-    }
-    if ([string]::IsNullOrWhiteSpace($content)) {
-        Add-GuardrailError 'AUDIT_DOCUMENT_EMPTY' $target
-        return $null
-    }
-    return $content
-}
-
-function Get-AuditBlock {
-    param([string]$Body, [string]$Path)
-    $start = "<!-- comment-audit:file=$Path -->"
-    $pattern = [regex]::Escape($start) + '(?<content>.*?)' + [regex]::Escape('<!-- comment-audit:end-file -->')
-    $match = [regex]::Match($Body, $pattern, [Text.RegularExpressions.RegexOptions]::Singleline)
-    if (-not $match.Success) { return $null }
-    return $match.Groups['content'].Value
-}
-
-function Test-AuditMetadata {
-    param([string]$Path, [string]$Block)
-    foreach ($field in @('职责', '上游', '下游', '数据源', '结果消费者')) {
-        $match = [regex]::Match($Block, '(?m)^-\s*' + [regex]::Escape($field) + '：(?<value>.+)$')
-        if (-not $match.Success -or $match.Groups['value'].Value.Trim() -in @('', '待填写', '无')) {
-            Add-GuardrailError 'AUDIT_METADATA_INCOMPLETE' "$Path -> $field"
-        }
-    }
-    $freshness = [regex]::Match($Block, '(?m)^-\s*现有注释时效：(?<value>.+)$')
-    if (-not $freshness.Success -or $freshness.Groups['value'].Value.Trim() -ne '已核验') {
-        Add-GuardrailError 'AUDIT_FRESHNESS_UNVERIFIED' $Path
-    }
-    if ($Block -notmatch '(?m)^-\s*人工补充符号：\s*\S+') {
-        Add-GuardrailError 'AUDIT_MANUAL_SYMBOLS_MISSING' $Path
-    }
-}
-
-function Get-AuditRows {
-    param([string]$Path, [string]$Block)
-    $rows = @{}
-    $pattern = '(?m)^\|\s*`(?<id>[^`]+)`\s*\|\s*`L\d+`\s*\|\s*`(?<decision>[^`]+)`\s*\|\s*(?<reason>.*?)\s*\|\s*$'
-    foreach ($match in [regex]::Matches($Block, $pattern)) {
-        $id = $match.Groups['id'].Value.Trim()
-        if ($rows.ContainsKey($id)) {
-            Add-GuardrailError 'AUDIT_SYMBOL_DUPLICATE' "$Path -> $id"
-            continue
-        }
-        $rows[$id] = [pscustomobject]@{
-            decision = $match.Groups['decision'].Value.Trim()
-            reason = $match.Groups['reason'].Value.Trim()
-        }
-    }
-    return $rows
-}
-
-function Test-CommentAuditContract {
-    param([string]$RepositoryRoot, [string]$Body, [string]$Base, [string]$Head)
+function Test-HighConfidenceCommentFindings {
+    param([string]$Base, [string]$Head)
     $scanner = Join-Path $PSScriptRoot 'New-CommentAuditReport.ps1'
     if (-not (Test-Path -LiteralPath $scanner)) {
         Add-GuardrailError 'COMMENT_SCANNER_MISSING' $scanner
@@ -269,42 +159,15 @@ function Test-CommentAuditContract {
     try {
         $json = & $scanner -BaseRef $Base -HeadRef $Head -Format Json 2>&1 | Out-String
         $parsedReports = $json | ConvertFrom-Json
-        $reports = [System.Collections.Generic.List[object]]::new()
-        foreach ($parsedReport in $parsedReports) {
-            $reports.Add($parsedReport)
-        }
     }
     catch {
         Add-GuardrailError 'COMMENT_SCANNER_FAILED' $_.Exception.Message
         return
     }
-    $allowedDecisions = @('关键-已新增说明', '关键-已更新说明', '关键-现有说明已核验', '简单-无需说明')
-    foreach ($report in $reports) {
+    foreach ($report in @($parsedReports)) {
         if ($null -eq $report) { continue }
-        $findings = @($report.commentFindings)
-        foreach ($finding in $findings) {
+        foreach ($finding in @($report.commentFindings)) {
             Add-GuardrailError 'STALE_OR_LOW_VALUE_COMMENT' "$($report.path):L$($finding.line) $($finding.rule)"
-        }
-
-        $block = Get-AuditBlock $Body $report.path
-        if ($null -eq $block) {
-            Add-GuardrailError 'AUDIT_FILE_MISSING' $report.path
-            continue
-        }
-        Test-AuditMetadata $report.path $block
-        $rows = Get-AuditRows $report.path $block
-        foreach ($symbol in @($report.symbols)) {
-            if (-not $rows.ContainsKey($symbol.id)) {
-                Add-GuardrailError 'AUDIT_SYMBOL_MISSING' "$($report.path) -> $($symbol.id)"
-                continue
-            }
-            $row = $rows[$symbol.id]
-            if ($row.decision -notin $allowedDecisions) {
-                Add-GuardrailError 'AUDIT_DECISION_INVALID' "$($report.path) -> $($symbol.id)"
-            }
-            if ([string]::IsNullOrWhiteSpace($row.reason) -or $row.reason -in @('待填写', '无需注释', '无')) {
-                Add-GuardrailError 'AUDIT_REASON_INVALID' "$($report.path) -> $($symbol.id)"
-            }
         }
     }
 }
@@ -335,18 +198,10 @@ foreach ($file in $changedFiles) {
 }
 
 if ($Mode -eq 'PullRequest') {
-    Test-PrSections $PullRequestBody
-    $productionFiles = @($changedFiles | Where-Object {
-        $_.path -match '^src/main/java/.+\.java$' -or
-        ($_.path -match '^web/src/.+\.(?:vue|ts)$' -and
-            $_.path -notmatch '(^|/)(?:__tests__|tests?)/' -and
-            $_.path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$')
-    })
+    $productionFiles = @($changedFiles | Where-Object { Test-IsProductionPath $_.path })
+    Test-PrSections $PullRequestBody $productionFiles.Count
     if ($productionFiles.Count -gt 0) {
-        $auditContent = Resolve-AuditDocumentContent $repositoryRoot $PullRequestBody $changedFiles
-        if ($null -ne $auditContent) {
-            Test-CommentAuditContract $repositoryRoot $auditContent $BaseRef $HeadRef
-        }
+        Test-HighConfidenceCommentFindings $BaseRef $HeadRef
     }
 }
 

@@ -1,0 +1,6 @@
+interface:
+  display_name: "IoT 变更验证"
+  short_description: "选择并执行 IoT 仓库变更所需验证"
+  default_prompt: "Use $iot-change-verification to select, run, and truthfully report the checks required for this repository change."
+policy:
+  allow_implicit_invocation: true
