@@ -421,7 +421,17 @@ function Invoke-RepositoryContractTests {
     $valid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $body }
     Assert-True ($valid.ExitCode -eq 0) "production PR without audit document should pass: $($valid.Output)"
     Assert-Contains $valid.Output 'REPOSITORY_GUARDRAILS_OK' 'success marker must be emitted'
-    Complete-Case 'production PR passes with risk-based comment check and no audit document'
+
+    $crlfBody = $body -replace "`r?`n", "`r`n"
+    $crlfValid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $crlfBody }
+    Assert-True ($crlfValid.ExitCode -eq 0) "CRLF production PR should pass: $($crlfValid.Output)"
+    Assert-Contains $crlfValid.Output 'REPOSITORY_GUARDRAILS_OK' 'CRLF success marker must be emitted'
+
+    $crBody = $body -replace "`r?`n", "`r"
+    $crValid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $crBody }
+    Assert-True ($crValid.ExitCode -eq 0) "CR production PR should pass: $($crValid.Output)"
+    Assert-Contains $crValid.Output 'REPOSITORY_GUARDRAILS_OK' 'CR success marker must be emitted'
+    Complete-Case 'LF, CRLF, and CR production PR bodies all pass'
 
     foreach ($heading in @('变更内容', '测试', '注释检查')) {
         $missingBody = $body -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
@@ -438,6 +448,11 @@ function Invoke-RepositoryContractTests {
     $missingScope = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Scope '') }
     Assert-True ($missingScope.ExitCode -ne 0) 'missing scope must fail'
     Assert-Contains $missingScope.Output 'COMMENT_SCOPE_MISSING' 'scope failure must use a stable error'
+
+    $missingScopeCrlfBody = (New-RiskBody -Scope '') -replace "`r?`n", "`r`n"
+    $missingScopeCrlf = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingScopeCrlfBody }
+    Assert-True ($missingScopeCrlf.ExitCode -ne 0) 'missing CRLF scope must fail'
+    Assert-Contains $missingScopeCrlf.Output 'COMMENT_SCOPE_MISSING' 'CRLF scope failure must use the stable error'
 
     $missingResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Result '') }
     Assert-True ($missingResult.ExitCode -ne 0) 'missing result must fail'

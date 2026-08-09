@@ -115,7 +115,8 @@ function Test-PrSections {
         return
     }
 
-    $withoutInstructions = [regex]::Replace($Body, '(?s)<!--.*?-->', '').Trim()
+    $normalizedBody = $Body.Replace("`r`n", "`n").Replace("`r", "`n")
+    $withoutInstructions = [regex]::Replace($normalizedBody, '(?s)<!--.*?-->', '').Trim()
     foreach ($heading in @('变更内容', '测试', '注释检查')) {
         $section = Get-PrSection $withoutInstructions $heading
         if ([string]::IsNullOrWhiteSpace($section)) {
@@ -127,8 +128,8 @@ function Test-PrSections {
     if ([string]::IsNullOrWhiteSpace($commentSection)) { return }
 
     # 已经打开且仍使用旧内嵌 comment-audit 的 PR 保持兼容，不要求回写历史格式。
-    if ($Body -match '<!--\s*comment-audit:file=[^>]+-->' -and
-        $Body -match '<!--\s*comment-audit:end-file\s*-->') { return }
+    if ($normalizedBody -match '<!--\s*comment-audit:file=[^>]+-->' -and
+        $normalizedBody -match '<!--\s*comment-audit:end-file\s*-->') { return }
 
     $riskMatch = [regex]::Match($commentSection, '(?m)^\s*风险级别\s*[：:]\s*(?<value>高|普通|低|不涉及生产代码)\s*$')
     if (-not $riskMatch.Success) {
