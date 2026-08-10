@@ -9,7 +9,6 @@ import jakarta.websocket.server.ServerEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.server.standard.SpringConfigurator;
 
 /**
  * HVAC WebSocket 的传输与有限协议入口。
@@ -18,7 +17,9 @@ import org.springframework.web.socket.server.standard.SpringConfigurator;
  * 建筑范围校验后建立。端点不访问 Mapper、TDengine 或公式服务；它只把协议动作委托给会话注册表，
  * 因而 WebSocket 始终是指标的最佳努力通知，而不是完整状态的权威数据源。</p>
  */
-@ServerEndpoint(value = "/ws/hvac", configurator = SpringConfigurator.class)
+@ServerEndpoint(
+        value = "/ws/hvac",
+        configurator = HvacRealtimeEndpointConfigurator.class)
 @Component
 public class WebSocketServer {
 

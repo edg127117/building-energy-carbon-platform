@@ -2,7 +2,7 @@ services:
   # 1. 关系型数据底座（正式权限、建筑、设备和测点档案）
   mysql:
     image: mysql:8.0
-    container_name: iot-mysql
+    container_name: ${MYSQL_CONTAINER_NAME:-iot-mysql}
     restart: always
     ports:
       - "${MYSQL_PORT:-3306}:3306"
@@ -29,12 +29,12 @@ services:
   # 2. MQTT 消息接入中枢（接收 HVAC 19 测点上行）
   emqx:
     image: emqx/emqx:5.6.0
-    container_name: iot-emqx
+    container_name: ${EMQX_CONTAINER_NAME:-iot-emqx}
     restart: always
     ports:
-      - "1883:1883"       # MQTT 硬件端点
-      - "18083:18083"     # Web 管理控制台
-      - "8083:8083"       # WebSocket 端口 (日后给前端大屏用)
+      - "${MQTT_PORT:-1883}:1883"       # MQTT 硬件端点
+      - "${EMQX_DASHBOARD_PORT:-18083}:18083" # Web 管理控制台
+      - "${MQTT_WEBSOCKET_PORT:-8083}:8083"   # MQTT WebSocket 端口
     environment:
       EMQX_DASHBOARD__DEFAULT_USERNAME: admin
       EMQX_DASHBOARD__DEFAULT_PASSWORD: ${MQTT_PASSWORD:-change-me} # 与后端环境变量保持一致
@@ -51,13 +51,13 @@ services:
   # 3. 时序数据底座（保存 HVAC 原始事件、分钟数据和指标结果）
   tdengine:
     image: tdengine/tdengine:3.2.3.0
-    container_name: iot-tdengine
+    container_name: ${TDENGINE_CONTAINER_NAME:-iot-tdengine}
     # TDengine 会把 FQDN 写入 dnode 元数据；容器重建后 hostname 变化会拒绝启动。
     hostname: iot-tdengine
     restart: always
     ports:
-      - "6030-6049:6030-6049"
-      - "6041:6041"       # REST API 端口 (Java JDBC 使用此端口通信)
+      - "${TDENGINE_NATIVE_PORT_START:-6030}-${TDENGINE_NATIVE_PORT_END:-6049}:6030-6049"
+      - "${TDENGINE_REST_PORT:-6041}:6041" # REST API 端口 (Java JDBC 使用此端口通信)
     environment:
       TZ: Asia/Shanghai
       TAOS_FQDN: iot-tdengine
@@ -75,7 +75,7 @@ services:
   # 4. 最新指标状态缓存
   redis:
     image: redis:7.2-alpine
-    container_name: iot-redis
+    container_name: ${REDIS_CONTAINER_NAME:-iot-redis}
     restart: always
     ports:
       - "${REDIS_PORT:-6379}:6379"
@@ -93,10 +93,10 @@ services:
 volumes:
   mysql-data:
     # 显式名称保证从不同目录执行 Compose 时仍使用同一个 MySQL 数据卷。
-    name: iot-platform-demo-mysql-data
+    name: ${MYSQL_VOLUME_NAME:-iot-platform-demo-mysql-data}
   redis-data:
     # 显式名称保证 Redis 缓存卷不随短期 worktree 或 Compose 项目名称变化。
-    name: iot-platform-demo-redis-data
+    name: ${REDIS_VOLUME_NAME:-iot-platform-demo-redis-data}
   tdengine-data:
     # 显式名称保证从不同目录执行 Compose 时仍使用同一个 TDengine 数据卷。
-    name: iot-platform-demo-tdengine-data
+    name: ${TDENGINE_VOLUME_NAME:-iot-platform-demo-tdengine-data}
