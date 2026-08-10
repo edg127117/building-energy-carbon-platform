@@ -59,6 +59,22 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain('closeCalculationDetail()')
   })
 
+  it('uses the unified realtime lifecycle and renders the confirmed channel states', () => {
+    expect(source).toContain('startRealtime()')
+    expect(source).toContain('stopRealtime()')
+    expect(source).not.toContain('startPolling')
+    expect(source).not.toContain('stopPolling')
+    expect(source).toContain("label: '实时连接中'")
+    expect(source).toContain("label: '实时连接正常'")
+    expect(source).toContain("label: '实时重连中，HTTP 保障'")
+    expect(source).toContain("label: 'HTTP 保障中'")
+    expect(source).toContain("label: '无该建筑访问权限'")
+    expect(source).toContain("tone: 'blue'")
+    expect(source).toContain("tone: 'green'")
+    expect(source).toContain("tone: 'yellow'")
+    expect(source).toContain("tone: 'red'")
+  })
+
   it('keeps the history chart column shrinkable on narrow screens', () => {
     expect(source).toContain(
       '.bottom-grid { grid-template-columns: minmax(0, 1fr); }',

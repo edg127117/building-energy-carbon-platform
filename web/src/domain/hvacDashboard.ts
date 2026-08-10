@@ -1,5 +1,6 @@
 import type {
   HvacLatestResponse,
+  HvacRealtimeIndicator,
   HvacSnapshotResponse,
   LatestIndicator,
   SnapshotPoint,
@@ -106,6 +107,7 @@ function indicatorStatusLabel(status: string): string {
     MISSING_INPUT: '缺少输入',
     INVALID_INPUT: '输入无效',
     ENGINE_ERROR: '计算异常',
+    CALCULATION_ERROR: '计算异常',
     NO_DATA: '暂无数据',
   }
   return labels[status] ?? status
@@ -121,6 +123,7 @@ function indicatorSummary(status: string): string {
     MISSING_INPUT: '当前分钟缺少必要输入',
     INVALID_INPUT: '当前分钟输入数据无效',
     ENGINE_ERROR: '当前分钟计算未完成',
+    CALCULATION_ERROR: '当前分钟计算未完成',
     NO_DATA: '暂无可用计算记录',
   }
   return summaries[status] ?? '当前指标暂不可用'
@@ -220,6 +223,71 @@ export function buildIndicatorViews(
       missingInputs,
     }
   })
+}
+
+/**
+ * 合并一条经过协议校验的实时指标，不把 WebSocket 当作完整建筑状态。
+ *
+ * 只有当前建筑、四项冻结编码且不早于卡片来源分钟的消息才能写入；同一分钟允许后到的
+ * 质量或失败状态修正覆盖。单位不在实时帧中，始终保留 HTTP 已确认单位，随后由 HTTP
+ * 对账补齐其余指标和 19 测点，浏览器不会生成缺失卡片或业务默认值。
+ */
+export function mergeRealtimeIndicator(
+  current: HvacLatestResponse | null,
+  incoming: HvacRealtimeIndicator,
+  currentBuildingId: string,
+): HvacLatestResponse | null {
+  if (
+    incoming.buildingId !== currentBuildingId
+    || !INDICATOR_DEFINITIONS.some(
+      (definition) => definition.indicatorCode === incoming.indicatorCode,
+    )
+    || (current !== null && current.buildingId !== currentBuildingId)
+  ) {
+    return current
+  }
+
+  const currentIndicators = current?.indicators ?? []
+  const existingIndex = currentIndicators.findIndex(
+    (indicator) => indicator.indicatorCode === incoming.indicatorCode,
+  )
+  const existing = existingIndex >= 0
+    ? currentIndicators[existingIndex]
+    : null
+  const incomingMinute = Math.trunc(incoming.minuteStart)
+  const existingMinute = existing?.minuteStart === null || existing?.minuteStart === undefined
+    ? null
+    : Math.trunc(existing.minuteStart)
+
+  if (existingMinute !== null && incomingMinute < existingMinute) {
+    return current
+  }
+
+  const mergedIndicator: LatestIndicator = {
+    indicatorId: incoming.indicatorId,
+    indicatorCode: incoming.indicatorCode,
+    equipId: incoming.equipId,
+    minuteStart: incomingMinute,
+    status: incoming.status,
+    value: incoming.value,
+    unit: existing?.unit ?? null,
+    dataQuality: incoming.dataQuality,
+    formulaVersion: incoming.formulaVersion,
+    reasonCode: incoming.reasonCode,
+    missingInputs: [...incoming.missingInputs],
+  }
+  const indicators = existingIndex >= 0
+    ? currentIndicators.map((indicator, index) =>
+      index === existingIndex ? mergedIndicator : indicator,
+    )
+    : [...currentIndicators, mergedIndicator]
+
+  return {
+    buildingId: currentBuildingId,
+    // 实时帧没有 HTTP 的 generatedAt；首次仅使用后端来源分钟承载单条增量，绝不冒充完整快照。
+    generatedAt: current?.generatedAt ?? incomingMinute,
+    indicators,
+  }
 }
 
 /** 按 19 个冻结槽位中状态为 NORMAL 且有当前值的数量计算当前有效完整率。 */

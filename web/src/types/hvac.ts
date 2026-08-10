@@ -74,6 +74,37 @@ export type LatestIndicator = {
   missingInputs: string[]
 }
 
+/** WebSocket 仅允许推送这四个已有的分钟指标，19 个测点仍通过 HTTP 快照读取。 */
+export const HVAC_REALTIME_INDICATOR_CODES = [
+  'WCR_COP',
+  'TOWER_EFF',
+  'PUMP_EFF',
+  'AHU_POW_EFF',
+] as const
+
+export type HvacRealtimeIndicatorCode =
+  (typeof HVAC_REALTIME_INDICATOR_CODES)[number]
+
+/**
+ * `/ws/hvac` 的单条指标增量。
+ *
+ * WebSocket 不携带 `unit` 或完整 19 测点快照；页面保留 HTTP 已确认的单位，并在收到
+ * 增量后发起权威对账。`missingInputs`、原因码和质量等级均由后端公式链提供，浏览器不补值。
+ */
+export type HvacRealtimeIndicator = {
+  indicatorId: string
+  indicatorCode: HvacRealtimeIndicatorCode
+  buildingId: string
+  equipId: string | null
+  minuteStart: number
+  status: LatestIndicator['status']
+  value: number | null
+  dataQuality: number | null
+  formulaVersion: string | null
+  reasonCode: string | null
+  missingInputs: string[]
+}
+
 /** 建筑全部活动指标的最新响应，页面再按四个稳定编码筛选展示。 */
 export type HvacLatestResponse = {
   buildingId: string

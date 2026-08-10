@@ -1,5 +1,6 @@
 import axios, { AxiosHeaders } from 'axios'
 import { message } from 'ant-design-vue'
+import { expireBrowserSession } from '@/auth/session'
 import type { ApiResult } from '@/types/api'
 
 /**
@@ -37,11 +38,7 @@ http.interceptors.response.use(
     if (!data || typeof data !== 'object') return resp
 
     if (data.code === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('userInfo')
-      if (!location.pathname.startsWith('/login')) {
-        location.href = '/login'
-      }
+      expireBrowserSession()
       return Promise.reject(new Error(data.msg || '未登录或登录已过期'))
     }
 
@@ -55,11 +52,7 @@ http.interceptors.response.use(
   (error) => {
     const status = error?.response?.status
     if (status === 401) {
-      localStorage.removeItem('token')
-      localStorage.removeItem('userInfo')
-      if (!location.pathname.startsWith('/login')) {
-        location.href = '/login'
-      }
+      expireBrowserSession()
       return Promise.reject(new Error('未登录或登录已过期'))
     }
     message.error(error?.message || '网络异常')

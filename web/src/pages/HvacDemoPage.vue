@@ -1,7 +1,7 @@
 <template>
   <!--
     HVAC V1 大屏展示后端真实建筑、最新分钟快照、最新指标状态、计算证据和历史趋势。
-    useHvacDashboard 负责大屏数据，历史面板与计算详情分别维护自己的请求和竞态隔离；
+    useHvacDashboard 负责 HTTP 权威数据与 WebSocket 生命周期，历史面板与计算详情分别维护自己的请求和竞态隔离；
     缺失或失败数据保持明确状态，不生成随机测点、虚假趋势或前端公式结果。
   -->
   <div class="hvac-demo">
@@ -38,7 +38,10 @@
       </div>
 
       <div class="header-status">
-        <div class="status-item"><span class="status-dot online" /> {{ linkStatusText }}</div>
+        <div class="status-item">
+          <span class="status-dot" :class="realtimeStatus.tone" />
+          {{ realtimeStatus.label }}
+        </div>
         <div class="clock">{{ clock }}</div>
       </div>
     </header>
@@ -321,7 +324,10 @@ import {
 import HvacCalculationDetailDrawer from '@/components/hvac/HvacCalculationDetailDrawer.vue'
 import HvacHistoryPanel from '@/components/hvac/HvacHistoryPanel.vue'
 import { useHvacCalculationDetail } from '@/composables/useHvacCalculationDetail'
-import { useHvacDashboard } from '@/composables/useHvacDashboard'
+import {
+  type HvacRealtimeState,
+  useHvacDashboard,
+} from '@/composables/useHvacDashboard'
 import {
   type DashboardPointView,
   FROZEN_POINT_DEFINITIONS,
@@ -350,11 +356,12 @@ const {
   indicatorError,
   snapshotUpdatedAt,
   indicatorUpdatedAt,
+  realtimeState,
   initialize,
   selectBuilding,
   refresh,
-  startPolling,
-  stopPolling,
+  startRealtime,
+  stopRealtime,
 } = useHvacDashboard()
 
 /**
@@ -422,19 +429,21 @@ const lastUpdatedText = computed(() => {
     : '--'
 })
 
-/**
- * 汇总两类 HTTP 查询的页面状态。
- * “真实分钟数据已连接”只表示至少一次查询成功，不代表 MQTT 或 WebSocket 长连接状态。
- */
-const linkStatusText = computed(() => {
-  if (initializing.value) return '正在加载授权建筑'
-  if (refreshing.value) return '正在刷新分钟数据'
-  if (snapshotError.value || indicatorError.value) return '部分数据暂不可用'
-  if (snapshotUpdatedAt.value || indicatorUpdatedAt.value) {
-    return '真实分钟数据已连接'
-  }
-  return '等待真实分钟数据'
-})
+/** HTTP 刷新时间与实时通道分别展示，避免把连通状态误解为全部测点已更新。 */
+const realtimeStatePresentation: Record<
+  HvacRealtimeState,
+  { label: string; tone: 'blue' | 'green' | 'yellow' | 'red' }
+> = {
+  connecting: { label: '实时连接中', tone: 'blue' },
+  realtime: { label: '实时连接正常', tone: 'green' },
+  reconnecting_with_http: { label: '实时重连中，HTTP 保障', tone: 'yellow' },
+  http_fallback: { label: 'HTTP 保障中', tone: 'yellow' },
+  forbidden: { label: '无该建筑访问权限', tone: 'red' },
+}
+
+const realtimeStatus = computed(() =>
+  realtimeStatePresentation[realtimeState.value],
+)
 
 const buildingOptions = computed(() =>
   buildings.value.map((building) => ({
@@ -512,19 +521,19 @@ const formulaCards = [
   { key: 'ahuPower', group: '风系统', title: '单位风量耗功值', formula: 'Wₛ = P / (3600 × ηₜ)', tone: 'yellow', icon: Fan },
 ] as const
 
-/** 页面挂载时启动时钟、加载授权建筑与首屏数据，完成后开启非重叠轮询。 */
+/** 页面挂载时先取得受保护 HTTP 首屏，再启动由 Composable 统一管理的实时生命周期。 */
 onMounted(async () => {
   updateClock()
   clockTimer = window.setInterval(updateClock, 1000)
   await initialize()
-  startPolling()
+  startRealtime()
 })
 
-/** 页面卸载时清理时钟、数据轮询和详情请求状态，避免后台刷新或迟到结果写回。 */
+/** 页面卸载时清理时钟、实时资源和详情请求状态，避免后台刷新或迟到结果写回。 */
 onBeforeUnmount(() => {
   if (clockTimer !== null) window.clearInterval(clockTimer)
   closeCalculationDetail()
-  stopPolling()
+  stopRealtime()
 })
 </script>
 
@@ -556,7 +565,10 @@ onBeforeUnmount(() => {
 .header-status { justify-self: end; display: flex; align-items: center; gap: 18px; color: #778ba3; font-size: 10px; }
 .status-item { display: flex; gap: 7px; align-items: center; }
 .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
-.status-dot.online { background: #3fe0a8; box-shadow: 0 0 9px #3fe0a8; }
+.status-dot.blue { background: #4aa8ff; box-shadow: 0 0 9px #4aa8ff; }
+.status-dot.green { background: #3fe0a8; box-shadow: 0 0 9px #3fe0a8; }
+.status-dot.yellow { background: #e6c45d; box-shadow: 0 0 9px #e6c45d; }
+.status-dot.red { background: #f06f73; box-shadow: 0 0 9px #f06f73; }
 .clock { font-variant-numeric: tabular-nums; letter-spacing: .06em; }
 
 .dashboard-shell { width: min(1640px, calc(100% - 44px)); margin: 0 auto; padding: 24px 0 30px; position: relative; z-index: 2; }
