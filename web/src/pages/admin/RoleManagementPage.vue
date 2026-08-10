@@ -24,7 +24,7 @@ import RoleMenuTree from '@/components/admin/RoleMenuTree.vue'
 import { useRoleManagement } from '@/composables/useRoleManagement'
 /** 页面不提供角色 CRUD，只编排固定角色选择、完整菜单树和全量保存。 */
 const roles = useRoleManagement()
-async function save() { try { await roles.save(); message.success('角色菜单授权已替换') } catch {} }
+async function save() { try { await roles.save(); message.success('角色菜单授权已替换') } catch { /* 错误已展示在页面，保留当前勾选便于修正。 */ } }
 onMounted(() => { void roles.load() })
 </script>
 <style scoped>

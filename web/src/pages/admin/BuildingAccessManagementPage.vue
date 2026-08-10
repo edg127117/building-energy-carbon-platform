@@ -33,9 +33,9 @@ const statusOptions=[{label:'待审核',value:'PENDING'},{label:'全部',value:'
 const columns=[{title:'申请人',dataIndex:'username',key:'username'},{title:'建筑',dataIndex:'buildingName',key:'building'},{title:'原因',dataIndex:'reason',key:'reason'},{title:'状态',key:'status',width:100},{title:'操作',key:'actions',width:90}]
 function reload(){void access.load().catch(()=>undefined)} function statusColor(status:string){return status==='APPROVED'?'green':status==='REJECTED'?'red':status==='PENDING'?'blue':'default'}
 function openReview(request:BuildingAccessRequestView){selectedRequest.value=request;reviewOpen.value=true}
-async function assign(ids:string[]){if(!selectedUser.value)return;try{await access.assignBuildings(selectedUser.value.id,ids);assignmentOpen.value=false;message.success('建筑授权已替换')}catch{}}
-async function approve(comment?:string){try{await access.approve(selectedRequest.value!.id,comment);reviewOpen.value=false;message.success('申请已批准')}catch{}}
-async function reject(comment?:string){try{await access.reject(selectedRequest.value!.id,comment);reviewOpen.value=false;message.success('申请已拒绝')}catch{}}
+async function assign(ids:string[]){if(!selectedUser.value)return;try{await access.assignBuildings(selectedUser.value.id,ids);assignmentOpen.value=false;message.success('建筑授权已替换')}catch{/* 业务错误已展示，保留当前选择。 */}}
+async function approve(comment?:string){try{await access.approve(selectedRequest.value!.id,comment);reviewOpen.value=false;message.success('申请已批准')}catch{/* 业务错误已展示，审核抽屉保持打开。 */}}
+async function reject(comment?:string){try{await access.reject(selectedRequest.value!.id,comment);reviewOpen.value=false;message.success('申请已拒绝')}catch{/* 业务错误已展示，审核抽屉保持打开。 */}}
 onMounted(()=>{void Promise.all([access.load(),access.loadOptions()]).catch(()=>undefined)})
 </script>
 <style scoped>

@@ -11,9 +11,11 @@
         <a-button @click="applyFilters">查询</a-button>
       </div>
       <a-alert v-if="users.error.value" class="admin-error" type="error" show-icon :message="users.error.value" />
-      <a-table :data-source="users.page.value.records" :columns="columns" row-key="id" :loading="users.loading.value"
+      <a-table
+        :data-source="users.page.value.records" :columns="columns" row-key="id" :loading="users.loading.value"
         :pagination="{ current: users.page.value.current, pageSize: users.page.value.size, total: users.page.value.total }"
-        @change="changePage">
+        @change="changePage"
+      >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'status'"><a-tag :color="record.delFlag ? 'default' : record.status ? 'green' : 'orange'">{{ record.delFlag ? '已删除' : record.status ? '启用' : '停用' }}</a-tag></template>
           <template v-else-if="column.key === 'roles'"><a-space wrap><a-tag v-for="role in record.roles" :key="role">{{ role }}</a-tag></a-space></template>
@@ -78,8 +80,8 @@ async function saveEditor(value: { username?: string; password?: string; nicknam
     editorOpen.value = false; message.success('用户信息已保存')
   } catch { /* 统一客户端保留后端业务消息，抽屉保持打开。 */ }
 }
-async function saveRoles(roles: FormalRoleKey[]) { try { await users.replaceUserRoles(selected.value!.id, roles); roleOpen.value = false; message.success('角色已替换') } catch {} }
-async function saveBuildings(ids: string[]) { try { await users.replaceUserBuildings(selected.value!.id, ids); buildingOpen.value = false; message.success('建筑授权已替换') } catch {} }
+async function saveRoles(roles: FormalRoleKey[]) { try { await users.replaceUserRoles(selected.value!.id, roles); roleOpen.value = false; message.success('角色已替换') } catch { /* 业务错误由 Composable 保留，抽屉保持打开。 */ } }
+async function saveBuildings(ids: string[]) { try { await users.replaceUserBuildings(selected.value!.id, ids); buildingOpen.value = false; message.success('建筑授权已替换') } catch { /* 业务错误由 Composable 保留，抽屉保持打开。 */ } }
 function confirmStatus(user: UserAdminView) { Modal.confirm({ title: user.status ? '停用该用户？' : '启用该用户？', content: '状态变更由后端校验，停用会撤销旧登录态。', onOk: () => user.status ? users.disableUser(user.id) : users.enableUser(user.id) }) }
 function confirmDelete(user: UserAdminView) { Modal.confirm({ title: '删除该用户？', content: '账号将逻辑删除并失去当前授权。', okType: 'danger', onOk: () => users.deleteUser(user.id) }) }
 function confirmRestore(user: UserAdminView) { Modal.confirm({ title: '恢复该用户？', content: '恢复后需重新检查角色和建筑授权。', onOk: () => users.restoreUser(user.id) }) }

@@ -32,7 +32,7 @@ function typeLabel(type: string) { return type === 'M' ? '目录 M' : type === '
 function openAdd() { editing.value = null; forcedParent.value = null; drawerOpen.value = true }
 function openEdit(menu: MenuNode) { editing.value = menu; forcedParent.value = null; drawerOpen.value = true }
 function openChild(menu: MenuNode) { editing.value = null; forcedParent.value = menu.id; drawerOpen.value = true }
-async function save(request: MenuCreateRequest) { try { const next = forcedParent.value ? { ...request, parentId: forcedParent.value } : request; if (editing.value) await menus.update({ ...next, id: editing.value.id }); else await menus.add(next); drawerOpen.value = false; message.success('菜单树已更新') } catch {} }
+async function save(request: MenuCreateRequest) { try { const next = forcedParent.value ? { ...request, parentId: forcedParent.value } : request; if (editing.value) await menus.update({ ...next, id: editing.value.id }); else await menus.add(next); drawerOpen.value = false; message.success('菜单树已更新') } catch { /* 后端层级校验消息由 Composable 展示，表单保持打开。 */ } }
 function confirmDelete(menu: MenuNode) { Modal.confirm({ title: `删除“${menu.menuName}”？`, content: '存在子菜单时后端会拒绝删除。', okType: 'danger', onOk: () => menus.remove(menu.id) }) }
 onMounted(() => { void menus.load().catch(() => undefined) })
 </script>
