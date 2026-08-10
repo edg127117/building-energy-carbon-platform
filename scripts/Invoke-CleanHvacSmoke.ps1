@@ -45,6 +45,7 @@ $expectedPointCodes = @(
     'DBO_RH'
 )
 $applicationProcess = $null
+$smokeAccountPassword = '123456'
 
 function Resolve-DockerCli {
     $command = Get-Command docker -ErrorAction SilentlyContinue
@@ -254,7 +255,7 @@ function Wait-ApplicationHealthy([datetime]$Deadline) {
     $healthUrl = 'http://127.0.0.1:8081/api/actuator/health'
     $loginBody = @{
         username = 'admin'
-        password = '123456'
+        password = $smokeAccountPassword
     } | ConvertTo-Json -Compress
 
     while ((Get-Date) -lt $Deadline) {
@@ -425,6 +426,29 @@ FROM iot_telemetry.st_raw_event;
     throw "TDengine 未记录全部冻结测点: $($missing -join ', ')"
 }
 
+function Invoke-HvacRealtimeSmoke {
+    $realtimeScript = Join-Path $repoRoot 'scripts\Test-HvacRealtimeSmoke.ps1'
+    $previousAdminPassword = $env:HVAC_SMOKE_ADMIN_PASSWORD
+    $previousRestrictedPassword = $env:HVAC_SMOKE_RESTRICTED_PASSWORD
+    try {
+        # 仅在本次受控清库环境中复用初始化账号口令，不写入子进程参数或日志。
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $smokeAccountPassword, 'Process')
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_RESTRICTED_PASSWORD', $smokeAccountPassword, 'Process')
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $realtimeScript
+        if ($LASTEXITCODE -ne 0) {
+            throw 'HVAC WebSocket 实时冒烟失败'
+        }
+    } finally {
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $previousAdminPassword, 'Process')
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_RESTRICTED_PASSWORD', $previousRestrictedPassword,
+            'Process')
+    }
+}
+
 if (-not $ResetData) {
     throw '必须显式传入 -ResetData 才允许重建测试数据'
 }
@@ -556,6 +580,7 @@ try {
         -Deadline ((Get-Date).AddSeconds($ApplicationTimeoutSeconds))
     Assert-DatabaseBoundaries
     Publish-And-AssertFrozenPoints
+    Invoke-HvacRealtimeSmoke
     Write-Output 'CLEAN_HVAC_SMOKE_SUCCESS'
 } catch {
     Write-Error $_
