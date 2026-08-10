@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { MenuNode } from '@/types/admin'
 import {
   IMPLEMENTED_MENU_ROUTES,
+  buildMenuTableTree,
   buildImplementedNavigation,
   isImplementedMenuPath,
+  summarizeMenuImplementation,
 } from './adminNavigation'
 
 const node = (input: Partial<MenuNode> & Pick<MenuNode, 'id' | 'menuName'>): MenuNode => ({
@@ -70,5 +72,51 @@ describe('controlled administration navigation', () => {
       node({ id: 3, menuName: '按钮', menuType: 'F', path: '/system/users' }),
     ]
     expect(buildImplementedNavigation(tree).map((item) => item.path)).toEqual(['/hvac-demo'])
+  })
+
+  it('summarizes directory descendants instead of judging the directory path as a page', () => {
+    const directory = node({
+      id: 100,
+      menuName: '中央空调调适',
+      path: '/hvac',
+      children: [
+        node({ id: 101, parentId: 100, menuName: 'HVAC 能效大屏', menuType: 'C', path: '/hvac-demo' }),
+        node({
+          id: 110,
+          parentId: 100,
+          menuName: '单机调适',
+          children: [node({ id: 111, parentId: 110, menuName: '冷机页面', menuType: 'C', path: '/single/chiller', visible: 0, status: 0 })],
+        }),
+      ],
+    })
+
+    expect(summarizeMenuImplementation(directory)).toEqual({
+      kind: 'directory',
+      implementedPageCount: 1,
+      totalPageCount: 2,
+    })
+  })
+
+  it('distinguishes registered pages, unregistered pages and button permissions', () => {
+    expect(summarizeMenuImplementation(node({ id: 1, menuName: '大屏', menuType: 'C', path: '/hvac-demo' }))).toEqual({
+      kind: 'page',
+      implemented: true,
+    })
+    expect(summarizeMenuImplementation(node({ id: 2, menuName: '旧页面', menuType: 'C', path: '/old' }))).toEqual({
+      kind: 'page',
+      implemented: false,
+    })
+    expect(summarizeMenuImplementation(node({ id: 3, menuName: '按钮', menuType: 'F', path: '/hvac-demo' }))).toEqual({
+      kind: 'permission',
+    })
+  })
+
+  it('only exposes the table child field for rows that can really expand', () => {
+    const tableTree = buildMenuTableTree([
+      node({ id: 1, menuName: '目录', children: [node({ id: 2, parentId: 1, menuName: '页面', menuType: 'C' })] }),
+    ])
+
+    expect(tableTree[0].children).toHaveLength(1)
+    expect(tableTree[0].children?.[0].children).toBeUndefined()
   })
 })

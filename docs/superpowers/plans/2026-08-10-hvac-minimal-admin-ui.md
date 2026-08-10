@@ -485,7 +485,7 @@ Own `tree`, `lastSuccessfulTree`, `loading`, `error`, `generation` and action pe
 
 - [ ] **Step 3: Implement the form and tree page**
 
-The form exposes only the accepted fields: parent, name, type, path, component, permission, icon, order, visible and status. Explain `M/C/F` using Chinese labels. Display “已接入页面” or “未接入页面”; do not expose unimplemented paths as clickable links.
+The form exposes only the accepted fields: parent, name, type, path, component, permission, icon, order, visible and status. Explain `M/C/F` using Chinese labels. For implementation status, aggregate descendant `C` pages on an `M` directory, evaluate exact registry matches only on a `C` page, and mark `F` button permissions as not applicable. Keep navigation visibility and menu enablement explicitly separate from frontend implementation; do not expose unimplemented paths as clickable links.
 
 - [ ] **Step 4: Run menu-management tests**
 

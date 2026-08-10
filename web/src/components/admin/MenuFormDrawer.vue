@@ -16,11 +16,11 @@
 import { reactive, watch } from 'vue'
 import type { MenuCreateRequest, MenuNode } from '@/types/admin'
 /** 表单只暴露后端 DTO 接受字段；时间、children 和新增主键均不可提交。 */
-const props = defineProps<{ open: boolean; menu?: MenuNode | null; parentOptions: Array<{ label: string; value: number }>; submitting?: boolean }>()
+const props = defineProps<{ open: boolean; menu?: MenuNode | null; initialParentId?: number; parentOptions: Array<{ label: string; value: number }>; submitting?: boolean }>()
 const emit = defineEmits<{ close: []; save: [request: MenuCreateRequest] }>()
 const typeOptions = [{ label: '目录（M）', value: 'M' }, { label: '页面（C）', value: 'C' }, { label: '按钮（F）', value: 'F' }]
 const form = reactive({ parentId: 0, menuName: '', menuType: 'C' as 'M' | 'C' | 'F', path: '', component: '', perms: '', icon: '', visible: true, status: true, sortOrder: 0 })
-watch(() => [props.open, props.menu] as const, () => Object.assign(form, { parentId: props.menu?.parentId ?? 0, menuName: props.menu?.menuName ?? '', menuType: props.menu?.menuType ?? 'C',
+watch(() => [props.open, props.menu, props.initialParentId] as const, () => Object.assign(form, { parentId: props.menu?.parentId ?? props.initialParentId ?? 0, menuName: props.menu?.menuName ?? '', menuType: props.menu?.menuType ?? 'C',
   path: props.menu?.path ?? '', component: props.menu?.component ?? '', perms: props.menu?.perms ?? '', icon: props.menu?.icon ?? '', visible: (props.menu?.visible ?? 1) === 1, status: (props.menu?.status ?? 1) === 1, sortOrder: props.menu?.sortOrder ?? 0 }), { immediate: true })
 function submit() { if (!form.menuName.trim()) return; emit('save', { parentId: form.parentId, menuName: form.menuName.trim(), menuType: form.menuType,
   path: form.path.trim() || null, component: form.component.trim() || null, perms: form.perms.trim() || null, icon: form.icon.trim() || null,

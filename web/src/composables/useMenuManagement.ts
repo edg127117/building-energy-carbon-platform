@@ -9,11 +9,20 @@ export function useMenuManagement() {
   const loading = ref(false)
   const error = ref<string | null>(null)
   const pending = ref(false)
+  const expandedMenuIds = ref<number[]>([])
   let generation = 0
+  let hasLoaded = false
   const currentMenu = useMenuStore()
   const load = async () => {
     const owner = ++generation; loading.value = true; error.value = null
-    try { const next = await getAdminMenuTree(); if (owner === generation) tree.value = next }
+    try {
+      const next = await getAdminMenuTree()
+      if (owner === generation) {
+        tree.value = next
+        expandedMenuIds.value = reconcileExpandedMenuIds(expandedMenuIds.value, next, hasLoaded)
+        hasLoaded = true
+      }
+    }
     catch (reason) { if (owner === generation) error.value = messageOf(reason); throw reason }
     finally { if (owner === generation) loading.value = false }
   }
@@ -27,7 +36,18 @@ export function useMenuManagement() {
   const add = (request: MenuCreateRequest) => command(() => addMenu(request))
   const update = (request: MenuUpdateRequest) => command(() => updateMenu(request))
   const remove = (id: number) => command(() => deleteMenu(id))
-  return { tree, loading, error, pending, load, add, update, remove, parentOptions: (id?: number) => menuParentOptions(tree.value, id) }
+  return { tree, loading, error, pending, expandedMenuIds, load, add, update, remove, parentOptions: (id?: number) => menuParentOptions(tree.value, id) }
+}
+
+/** 首次异步加载展开全部有效父节点；后续刷新只保留用户仍然有效的展开选择。 */
+export function reconcileExpandedMenuIds(current: number[], tree: MenuNode[], initialized: boolean) {
+  const expandable = new Set<number>()
+  const visit = (items: MenuNode[]) => items.forEach((item) => {
+    if (item.children.length > 0) expandable.add(item.id)
+    visit(item.children)
+  })
+  visit(tree)
+  return initialized ? current.filter((id) => expandable.has(id)) : [...expandable]
 }
 
 /** 父级候选排除当前节点和全部后代；后端仍会复核父级存在、自引用和循环。 */
@@ -38,7 +58,7 @@ export function menuParentOptions(tree: MenuNode[], editedId?: number) {
   if (edited) flatten([edited]).forEach((item) => excluded.add(item.id))
   const options = [{ label: '顶级菜单', value: 0 }]
   const walk = (items: MenuNode[], depth: number) => items.forEach((item) => {
-    if (!excluded.has(item.id)) options.push({ label: `${'　'.repeat(depth)}${item.menuName}`, value: item.id })
+    if (!excluded.has(item.id) && item.menuType !== 'F') options.push({ label: `${'　'.repeat(depth)}${item.menuName}`, value: item.id })
     walk(item.children, depth + 1)
   })
   walk(tree, 0)
