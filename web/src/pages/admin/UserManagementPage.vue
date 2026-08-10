@@ -18,7 +18,7 @@
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'status'"><a-tag :color="record.delFlag ? 'default' : record.status ? 'green' : 'orange'">{{ record.delFlag ? '已删除' : record.status ? '启用' : '停用' }}</a-tag></template>
-          <template v-else-if="column.key === 'roles'"><a-space wrap><a-tag v-for="role in record.roles" :key="role">{{ role }}</a-tag></a-space></template>
+          <template v-else-if="column.key === 'roles'"><a-space wrap><a-tag v-for="role in record.roles" :key="role">{{ adminRoleLabel(role) }}</a-tag></a-space></template>
           <template v-else-if="column.key === 'actions'">
             <a-space v-if="record.delFlag"><a-button type="link" @click="confirmRestore(record)">恢复</a-button></a-space>
             <a-space v-else wrap>
@@ -46,6 +46,7 @@ import UserRoleAssignmentDrawer from '@/components/admin/UserRoleAssignmentDrawe
 import UserBuildingAssignmentDrawer from '@/components/admin/UserBuildingAssignmentDrawer.vue'
 import { pageBuildings } from '@/api/systemAdmin'
 import { useUserManagement } from '@/composables/useUserManagement'
+import { adminRoleLabel } from '@/domain/adminRoles'
 import type { BuildingOption, FormalRoleKey, UserAdminView, UserStatus } from '@/types/admin'
 
 const users = useUserManagement()

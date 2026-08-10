@@ -22,7 +22,7 @@
             <div class="h-10 w-10 rounded-2xl bg-[conic-gradient(from_220deg,rgba(47,125,255,0.95),rgba(29,214,164,0.95),rgba(255,77,109,0.90),rgba(47,125,255,0.95))]" />
             <div>
               <div class="text-sm font-semibold tracking-wide">能效碳效智慧管控平台</div>
-              <div class="text-[11px] tracking-[0.22em] text-zinc-400">HIGH-CONCURRENCY · REALTIME · RBAC</div>
+              <div class="text-[11px] tracking-[0.22em] text-zinc-400">高并发 · 实时数据 · 权限管理</div>
             </div>
           </div>
           <div class="mt-7 text-3xl font-semibold leading-tight text-zinc-50">
@@ -33,7 +33,7 @@
           </div>
           <div class="mt-8 flex gap-3">
             <div class="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-zinc-300">
-              API: <span class="text-zinc-100">{{ apiBase }}</span>
+              服务地址：<span class="text-zinc-100">{{ apiBase }}</span>
             </div>
             <div class="rounded-xl border border-white/10 bg-black/20 px-4 py-3 text-xs text-zinc-300">
               范围: <span class="text-zinc-100">HVAC V1</span>
@@ -48,7 +48,7 @@
             <div class="p-6">
               <div class="mb-5">
                 <div class="text-sm font-semibold text-zinc-50">登录 / 注册</div>
-                <div class="mt-1 text-xs text-zinc-400">使用 JWT Token + RBAC 骨架，适合 Demo 快速演示。</div>
+                <div class="mt-1 text-xs text-zinc-400">使用账号权限体系，适合快速功能演示。</div>
               </div>
 
               <a-segmented v-model:value="mode" :options="modes" block class="mb-5" />
@@ -78,7 +78,7 @@
                     管理员：<span class="text-zinc-100">admin / 123456</span>
                   </div>
                   <div class="rounded-xl border border-white/10 bg-black/20 px-3 py-2">
-                    注册账号：默认 <span class="text-zinc-100">BUILDING_OWNER</span>，不自动授予建筑
+                    注册账号：默认 <span class="text-zinc-100">建筑业主</span>，不自动授予建筑
                   </div>
                 </div>
               </a-form>

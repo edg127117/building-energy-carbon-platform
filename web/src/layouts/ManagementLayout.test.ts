@@ -19,6 +19,8 @@ describe('management layout', () => {
   })
 
   it('loads controlled navigation and keeps one nested outlet', async () => {
+    const auth = useAuthStore()
+    auth.userInfo = { uid: 1, username: 'admin', roles: ['PLATFORM_ADMIN'] }
     const menu = useMenuStore()
     menu.navigation = [{ id: 200, label: '系统管理', children: [{
       id: 211, label: '用户管理', path: '/system/users', routeName: 'system-users', admin: true, children: [],
@@ -31,6 +33,8 @@ describe('management layout', () => {
     await wrapper.vm.$nextTick()
     expect(ensureLoaded).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('用户管理')
+    expect(wrapper.text()).toContain('平台管理员')
+    expect(wrapper.text()).not.toContain('PLATFORM_ADMIN')
     expect(wrapper.findAll('[data-test="outlet"]')).toHaveLength(1)
   })
 

@@ -4,7 +4,7 @@
     <aside class="admin-sidebar">
       <RouterLink class="admin-brand" to="/hvac-demo">
         <span class="admin-brand-mark"><Snowflake :size="18" /></span>
-        <span><strong>经常性调适平台</strong><small>ADMINISTRATION</small></span>
+        <span><strong>经常性调适平台</strong><small>后台管理</small></span>
       </RouterLink>
 
       <nav class="admin-navigation" aria-label="后台管理导航">
@@ -39,7 +39,7 @@
         <div><span>系统后台</span><small>仅平台管理员可访问</small></div>
         <div class="admin-account">
           <span class="admin-avatar">{{ accountInitial }}</span>
-          <span><strong>{{ auth.userInfo?.username ?? '管理员' }}</strong><small>PLATFORM_ADMIN</small></span>
+          <span><strong>{{ auth.userInfo?.username ?? '管理员' }}</strong><small>平台管理员</small></span>
           <button data-test="logout" type="button" @click="logout"><LogOut :size="16" />退出</button>
         </div>
       </header>

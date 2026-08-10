@@ -7,14 +7,12 @@
 </template>
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { ADMIN_ROLE_OPTIONS } from '@/domain/adminRoles'
 import type { FormalRoleKey, UserAdminView } from '@/types/admin'
 /** 固定四角色的全量选择器，不提供角色新增、删除或重命名入口。 */
 const props = defineProps<{ open: boolean; user?: UserAdminView | null; submitting?: boolean }>()
 defineEmits<{ close: []; save: [roles: FormalRoleKey[]] }>()
 const selected = ref<FormalRoleKey[]>([])
-const options = [
-  { label: '建筑业主', value: 'BUILDING_OWNER' }, { label: '能效管理方', value: 'ENERGY_MANAGER' },
-  { label: '接口调用方', value: 'THIRD_PARTY' }, { label: '平台管理员', value: 'PLATFORM_ADMIN' },
-] as const
+const options = ADMIN_ROLE_OPTIONS
 watch(() => [props.open, props.user] as const, () => { selected.value = [...(props.user?.roles ?? [])] }, { immediate: true })
 </script>
