@@ -329,42 +329,43 @@ CREATE TABLE IF NOT EXISTS `sys_role_menu` (
     UNIQUE KEY `uk_role_menu` (`role_id`, `menu_id`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='角色菜单关联表';
 
--- 冻结书 7.1：5 级菜单树（本期启用的部分）
--- 一级：常规调适
-INSERT INTO `sys_menu` (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `component`, `icon`, `sort_order`) VALUES
-                                                                                                                    (100, 0,    '常规调适',    'M', '/commissioning', NULL,       'dashboard', 1),
-                                                                                                                    (110, 100,  '单机调适',    'M', '/single',        NULL,       'control',   1),
-                                                                                                                    (120, 110,  '变风量空调系统','M','/single/vav',    NULL,       'apartment', 1),
+-- 已上线入口保持可见；未来菜单保留数据但隐藏，不能被前端当作可执行组件。
+INSERT INTO `sys_menu` (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `component`, `icon`, `visible`, `status`, `sort_order`) VALUES
+                                                                                                                    (100, 0,    '中央空调调适', 'M', '/hvac',          NULL,       'dashboard', 1, 1, 1),
+                                                                                                                    (101, 100,  'HVAC 能效大屏','C', '/hvac-demo',     NULL,       'dashboard', 1, 1, 1),
+                                                                                                                    (110, 100,  '单机调适',    'M', '/single',        NULL,       'control',   0, 1, 2),
+                                                                                                                    (120, 110,  '变风量空调系统','M','/single/vav',    NULL,       'apartment', 0, 1, 1),
 -- 冷水机组
-                                                                                                                    (130, 120,  '冷水机组',    'M', '/single/vav/chiller', NULL,  'cpu',       1),
-                                                                                                                    (131, 130,  '制冷量计算',  'C', '/single/vav/chiller/cooling-capacity', 'commissioning/ChillerCooling', 'function', 1),
-                                                                                                                    (132, 130,  'COP 计算',    'C', '/single/vav/chiller/cop',              'commissioning/ChillerCop',     'function', 2),
-                                                                                                                    (133, 130,  '吸收式 COP',  'C', '/single/vav/chiller/absorption-cop',   'commissioning/AbsorptionCop',   'lock',     3),
+                                                                                                                    (130, 120,  '冷水机组',    'M', '/single/vav/chiller', NULL,  'cpu',       0, 1, 1),
+                                                                                                                    (131, 130,  '制冷量计算',  'C', '/single/vav/chiller/cooling-capacity', 'commissioning/ChillerCooling', 'function', 0, 1, 1),
+                                                                                                                    (132, 130,  'COP 计算',    'C', '/single/vav/chiller/cop',              'commissioning/ChillerCop',     'function', 0, 1, 2),
+                                                                                                                    (133, 130,  '吸收式 COP',  'C', '/single/vav/chiller/absorption-cop',   'commissioning/AbsorptionCop',   'lock',     0, 1, 3),
 -- 冷却塔
-                                                                                                                    (140, 120,  '冷却塔',      'M', '/single/vav/tower',    NULL,  'radar',     2),
-                                                                                                                    (141, 140,  '冷却塔效率',  'C', '/single/vav/tower/efficiency', 'commissioning/TowerEfficiency', 'function', 1),
+                                                                                                                    (140, 120,  '冷却塔',      'M', '/single/vav/tower',    NULL,  'radar',     0, 1, 2),
+                                                                                                                    (141, 140,  '冷却塔效率',  'C', '/single/vav/tower/efficiency', 'commissioning/TowerEfficiency', 'function', 0, 1, 1),
 -- 水泵
-                                                                                                                    (150, 120,  '水泵',        'M', '/single/vav/pump',     NULL,  'sliders',   3),
-                                                                                                                    (151, 150,  '水泵效率',    'C', '/single/vav/pump/efficiency',  'commissioning/PumpEfficiency',   'function', 1),
+                                                                                                                    (150, 120,  '水泵',        'M', '/single/vav/pump',     NULL,  'sliders',   0, 1, 3),
+                                                                                                                    (151, 150,  '水泵效率',    'C', '/single/vav/pump/efficiency',  'commissioning/PumpEfficiency',   'function', 0, 1, 1),
 -- 风系统
-                                                                                                                    (160, 120,  '风系统',      'M', '/single/vav/ahu',      NULL,  'wind',      4),
-                                                                                                                    (161, 160,  '单位风量耗功值','C','/single/vav/ahu/power-efficiency', 'commissioning/AhuEfficiency', 'function', 1);
+                                                                                                                    (160, 120,  '风系统',      'M', '/single/vav/ahu',      NULL,  'wind',      0, 1, 4),
+                                                                                                                    (161, 160,  '单位风量耗功值','C','/single/vav/ahu/power-efficiency', 'commissioning/AhuEfficiency', 'function', 0, 1, 1);
 
 -- 一级：系统管理
-INSERT INTO `sys_menu` (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `component`, `icon`, `sort_order`) VALUES
-                                                                                                                    (200, 0,    '系统管理',    'M', '/system',       NULL,        'setting',  2),
-                                                                                                                    (210, 200,  '人员管理',    'M', '/system/user',  NULL,        'usergroup',1),
-                                                                                                                    (211, 210,  '用户管理',    'C', '/system/user/list',        'system/UserList',   'user',     1),
-                                                                                                                    (212, 210,  '角色管理',    'C', '/system/role/list',        'system/RoleList',   'team',     2),
-                                                                                                                    (220, 200,  '建筑管理',    'M', '/system/building', NULL,    'home',     2),
-                                                                                                                    (221, 220,  '建筑注册',    'C', '/system/building/list',     'system/BuildingList','home',   1),
-                                                                                                                    (222, 220,  '空间管理',    'C', '/system/space/list',        'system/SpaceList',  'block',   2),
-                                                                                                                    (230, 200,  '设备管理',    'M', '/system/equipment',  NULL,     'tool',     3),
-                                                                                                                    (231, 230,  '设备台账',    'C', '/system/equipment/list',       'system/DeviceList', 'database',1),
-                                                                                                                    (232, 230,  '测点管理',    'C', '/system/datapoint/list',    'system/PointList',  'node',    2),
-                                                                                                                    (240, 200,  '后台配置',    'M', '/system/config',  NULL,     'code',     4),
-                                                                                                                    (241, 240,  '菜单管理',    'C', '/system/menu/list',         'system/MenuList',   'menu',    1),
-                                                                                                                    (242, 240,  '数据建模',    'C', '/system/generator',         'system/Generator',  'code',    2);
+INSERT INTO `sys_menu` (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `component`, `icon`, `visible`, `status`, `sort_order`) VALUES
+                                                                                                                    (200, 0,    '系统管理',    'M', '/system',       NULL,        'setting',   1, 1, 2),
+                                                                                                                    (210, 200,  '人员与角色',  'M', '/system/identity', NULL,      'usergroup', 1, 1, 1),
+                                                                                                                    (211, 210,  '用户管理',    'C', '/system/users', NULL,        'user',      1, 1, 1),
+                                                                                                                    (212, 210,  '角色权限',    'C', '/system/roles', NULL,        'team',      1, 1, 2),
+                                                                                                                    (220, 200,  '建筑权限',    'M', '/system/access', NULL,       'home',      1, 1, 2),
+                                                                                                                    (221, 220,  '建筑注册',    'C', '/system/building/list', 'system/BuildingList','home',   0, 1, 1),
+                                                                                                                    (222, 220,  '空间管理',    'C', '/system/space/list', 'system/SpaceList',  'block',   0, 1, 2),
+                                                                                                                    (223, 220,  '建筑授权',    'C', '/system/building-access', NULL, 'key',     1, 1, 3),
+                                                                                                                    (230, 200,  '设备管理',    'M', '/system/equipment', NULL,     'tool',     0, 1, 3),
+                                                                                                                    (231, 230,  '设备台账',    'C', '/system/equipment/list', 'system/DeviceList', 'database',0, 1, 1),
+                                                                                                                    (232, 230,  '测点管理',    'C', '/system/datapoint/list', 'system/PointList',  'node',    0, 1, 2),
+                                                                                                                    (240, 200,  '后台配置',    'M', '/system/config', NULL,        'code',     1, 1, 4),
+                                                                                                                    (241, 240,  '菜单管理',    'C', '/system/menus', NULL,         'menu',     1, 1, 1),
+                                                                                                                    (242, 240,  '数据建模',    'C', '/system/generator', 'system/Generator',   'code',     0, 1, 2);
 
 -- MySQL 不支持 ADD COLUMN IF NOT EXISTS，使用 information_schema 保护增量升级。
 SET @ddl = IF(
@@ -476,7 +477,7 @@ WHERE r.role_key='PLATFORM_ADMIN';
 
 INSERT IGNORE INTO `sys_role_menu` (`role_id`, `menu_id`)
 SELECT r.id, m.id FROM `sys_role` r JOIN `sys_menu` m ON m.id IN
-  (100,110,120,130,131,132,140,141,150,151,160,161)
+  (100,101)
 WHERE r.role_key IN ('BUILDING_OWNER','ENERGY_MANAGER');
 
 -- ============================================================================
