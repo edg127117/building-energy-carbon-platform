@@ -941,3 +941,18 @@ This task is complete only when all of the following are true:
 - desktop browser flows and error states are inspected against the confirmed design;
 - project documents distinguish implemented, tested and unverified work accurately;
 - the feature branch is pushed and a reviewable PR is created without unrelated changes.
+
+---
+
+## Post-acceptance refinement: business-facing menu management
+
+After desktop review, the menu table is refined without changing the backend DTO or route registry:
+
+- [x] Replace developer-facing type, path and implementation columns with `菜单`, `上线情况`, `导航状态` and `操作`.
+- [x] Keep every menu name on one line with ellipsis overflow and a full-name title tooltip.
+- [x] Aggregate directory rollout as implemented pages over total descendant pages; label page entries as `已上线` or `未上线`.
+- [x] Combine visibility and enablement into plain-language navigation states.
+- [x] Keep `编辑` visible and move add-child/delete actions under `更多`.
+- [x] Rename type choices to `目录`, `页面入口` and `操作权限`, hiding the backend `M/C/F` codes.
+- [x] Move route, component, permission and icon fields into collapsed advanced settings that reset when another menu opens.
+- [x] Add focused Vue component coverage, run the complete frontend gate, and inspect the real desktop page plus browser console.

@@ -40,7 +40,7 @@ const node = (input: Partial<MenuNode> & Pick<MenuNode, 'id' | 'menuName'>): Men
 const TableStub = defineComponent({
   name: 'ATable',
   props: {
-    columns: { type: Array as PropType<Array<{ key: string }>>, required: true },
+    columns: { type: Array as PropType<Array<{ key: string; title: string }>>, required: true },
     dataSource: { type: Array as PropType<MenuTableRow[]>, required: true },
     expandedRowKeys: { type: Array as PropType<number[]>, required: true },
   },
@@ -56,6 +56,13 @@ const ButtonStub = defineComponent({
   emits: ['click'],
   setup(_, { emit, slots, attrs }) {
     return () => h('button', { ...attrs, onClick: () => emit('click') }, slots.default?.())
+  },
+})
+
+const DropdownStub = defineComponent({
+  name: 'ADropdown',
+  setup(_, { slots }) {
+    return () => h('div', { class: 'dropdown-stub' }, [slots.default?.(), slots.overlay?.()])
   },
 })
 
@@ -78,6 +85,10 @@ function mountPage() {
         AdminPageHeader: { props: ['title', 'description'], template: '<header>{{ title }} {{ description }}<slot /></header>' },
         MenuFormDrawer: MenuDrawerStub,
         'a-button': ButtonStub,
+        'a-dropdown': DropdownStub,
+        'a-menu': { template: '<div><slot /></div>' },
+        'a-menu-item': { props: ['disabled', 'danger'], template: '<button :disabled="disabled"><slot /></button>' },
+        'a-menu-divider': true,
         'a-alert': true,
         'a-table': TableStub,
         'a-tag': { template: '<span><slot /></span>' },
@@ -106,20 +117,34 @@ describe('menu management page', () => {
     ]
   })
 
-  it('shows type-aware implementation summaries and explicit menu configuration states', () => {
+  it('shows a business-facing four-column table without developer fields', () => {
     const wrapper = mountPage()
+    const table = wrapper.findComponent(TableStub)
 
-    expect(wrapper.text()).toContain('已实现子页面 1/2')
-    expect(wrapper.text()).toContain('前端已实现')
-    expect(wrapper.text()).toContain('前端未实现')
-    expect(wrapper.text()).toContain('不适用（按钮权限）')
-    expect(wrapper.text()).toContain('导航隐藏')
-    expect(wrapper.text()).toContain('菜单停用')
+    expect(table.props('columns').map((column: { title: string }) => column.title)).toEqual(['菜单', '上线情况', '导航状态', '操作'])
+    expect(wrapper.text()).toContain('已上线 1/2')
+    expect(wrapper.text()).toContain('已上线')
+    expect(wrapper.text()).toContain('未上线')
+    expect(wrapper.text()).toContain('操作权限')
+    expect(wrapper.text()).toContain('已隐藏 · 已停用')
+    expect(wrapper.text()).not.toContain('前端')
+    expect(wrapper.text()).not.toContain('/hvac-demo')
+    expect(wrapper.text()).not.toMatch(/目录 M|页面 C|按钮 F/)
+  })
+
+  it('keeps every menu name on one line and preserves the full name for hover', () => {
+    mocked.tree.value[0].children[1].menuName = '单位风量耗功值'
+
+    const wrapper = mountPage()
+    const nameCell = wrapper.find('[data-row="102"][data-column="name"] .menu-name')
+
+    expect(nameCell.text()).toBe('单位风量耗功值')
+    expect(nameCell.attributes('title')).toBe('单位风量耗功值')
   })
 
   it('passes the clicked parent into the child form instead of submitting a hidden override', async () => {
     const wrapper = mountPage()
-    const childButton = wrapper.findAll('button').find((button) => button.text() === '新增子级')
+    const childButton = wrapper.find('[data-row="100"][data-column="actions"]').findAll('button').find((button) => button.text() === '新增下级')
 
     await childButton?.trigger('click')
 
@@ -131,7 +156,7 @@ describe('menu management page', () => {
     const table = wrapper.findComponent(TableStub)
     const tableData = table.props('dataSource') as MenuTableRow[]
     const rootDelete = wrapper.find('[data-row="100"][data-column="actions"]').findAll('button').find((button) => button.text() === '删除')
-    const permissionChild = wrapper.find('[data-row="103"][data-column="actions"]').findAll('button').find((button) => button.text() === '新增子级')
+    const permissionChild = wrapper.find('[data-row="103"][data-column="actions"]').findAll('button').find((button) => button.text() === '新增下级')
 
     expect(table.props('expandedRowKeys')).toEqual([100])
     expect(tableData[0].children).toHaveLength(3)
