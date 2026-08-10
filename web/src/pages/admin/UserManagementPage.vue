@@ -83,8 +83,8 @@ async function saveEditor(value: { username?: string; password?: string; nicknam
 }
 async function saveRoles(roles: FormalRoleKey[]) { try { await users.replaceUserRoles(selected.value!.id, roles); roleOpen.value = false; message.success('角色已替换') } catch { /* 业务错误由 Composable 保留，抽屉保持打开。 */ } }
 async function saveBuildings(ids: string[]) { try { await users.replaceUserBuildings(selected.value!.id, ids); buildingOpen.value = false; message.success('建筑授权已替换') } catch { /* 业务错误由 Composable 保留，抽屉保持打开。 */ } }
-function confirmStatus(user: UserAdminView) { Modal.confirm({ title: user.status ? '停用该用户？' : '启用该用户？', content: '状态变更由后端校验，停用会撤销旧登录态。', onOk: () => user.status ? users.disableUser(user.id) : users.enableUser(user.id) }) }
-function confirmDelete(user: UserAdminView) { Modal.confirm({ title: '删除该用户？', content: '账号将逻辑删除并失去当前授权。', okType: 'danger', onOk: () => users.deleteUser(user.id) }) }
-function confirmRestore(user: UserAdminView) { Modal.confirm({ title: '恢复该用户？', content: '恢复后需重新检查角色和建筑授权。', onOk: () => users.restoreUser(user.id) }) }
+function confirmStatus(user: UserAdminView) { Modal.confirm({ title: user.status ? '停用该用户？' : '启用该用户？', content: '状态变更由后端校验，停用会撤销旧登录态。', okText: user.status ? '确认停用' : '确认启用', cancelText: '取消', onOk: () => user.status ? users.disableUser(user.id) : users.enableUser(user.id) }) }
+function confirmDelete(user: UserAdminView) { Modal.confirm({ title: '删除该用户？', content: '账号将逻辑删除并失去当前授权。', okText: '确认删除', cancelText: '取消', okType: 'danger', onOk: () => users.deleteUser(user.id) }) }
+function confirmRestore(user: UserAdminView) { Modal.confirm({ title: '恢复该用户？', content: '恢复后需重新检查角色和建筑授权。', okText: '确认恢复', cancelText: '取消', onOk: () => users.restoreUser(user.id) }) }
 onMounted(() => { void users.loadUsers().catch(() => undefined); void pageBuildings({ page: 1, size: 100 }).then((result) => { buildings.value = result.records }).catch(() => undefined) })
 </script>

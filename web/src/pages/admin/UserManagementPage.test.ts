@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { Modal } from 'ant-design-vue'
 import UserManagementPage from './UserManagementPage.vue'
 
 vi.mock('@/composables/useUserManagement', () => ({ useUserManagement: () => ({
@@ -16,7 +17,8 @@ describe('user management page', () => {
   it('shows the lifecycle surface without fabricated rows', () => {
     const wrapper = mount(UserManagementPage, { global: { stubs: {
       UserEditorDrawer: true, UserRoleAssignmentDrawer: true, UserBuildingAssignmentDrawer: true,
-      'a-table': { props: ['dataSource'], template: '<div data-test="table"><slot name="bodyCell" :column="{ key: \'roles\' }" :record="dataSource[0]" /></div>' }, 'a-button': true, 'a-input': true,
+      'a-table': { props: ['dataSource'], template: '<div data-test="table"><slot name="bodyCell" :column="{ key: \'roles\' }" :record="dataSource[0]" /><slot name="bodyCell" :column="{ key: \'actions\' }" :record="dataSource[0]" /></div>' },
+      'a-button': { template: '<button @click="$emit(\'click\')"><slot /></button>' }, 'a-input': true,
       'a-select': true, 'a-switch': true, 'a-alert': true,
       'a-tag': { template: '<span><slot /></span>' }, 'a-space': { template: '<div><slot /></div>' } } } })
     expect(wrapper.text()).toContain('用户管理')
@@ -24,5 +26,19 @@ describe('user management page', () => {
     expect(wrapper.text()).toContain('能效管理方')
     expect(wrapper.text()).not.toContain('PLATFORM_ADMIN')
     expect(wrapper.find('[data-test="table"]').exists()).toBe(true)
+  })
+
+  it('uses Chinese action labels in user confirmation dialogs', async () => {
+    const confirm = vi.spyOn(Modal, 'confirm').mockImplementation(vi.fn())
+    const wrapper = mount(UserManagementPage, { global: { stubs: {
+      UserEditorDrawer: true, UserRoleAssignmentDrawer: true, UserBuildingAssignmentDrawer: true,
+      'a-table': { props: ['dataSource'], template: '<div><slot name="bodyCell" :column="{ key: \'actions\' }" :record="dataSource[0]" /></div>' },
+      'a-button': { template: '<button @click="$emit(\'click\')"><slot /></button>' }, 'a-input': true,
+      'a-select': true, 'a-switch': true, 'a-alert': true, 'a-tag': true, 'a-space': { template: '<div><slot /></div>' },
+    } } })
+
+    await wrapper.findAll('button').find((button) => button.text() === '停用')?.trigger('click')
+
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ okText: '确认停用', cancelText: '取消' }))
   })
 })

@@ -72,7 +72,7 @@ function openAdd() { editing.value = null; initialParentId.value = 0; drawerOpen
 function openEdit(menu: MenuNode) { editing.value = menu; initialParentId.value = menu.parentId; drawerOpen.value = true }
 function openChild(menu: MenuNode) { if (menu.menuType === 'F') return; editing.value = null; initialParentId.value = menu.id; drawerOpen.value = true }
 async function save(request: MenuCreateRequest) { try { if (editing.value) await menus.update({ ...request, id: editing.value.id }); else await menus.add(request); drawerOpen.value = false; message.success('菜单树已更新') } catch { /* 后端层级校验消息由 Composable 展示，表单保持打开。 */ } }
-function confirmDelete(menu: MenuNode) { Modal.confirm({ title: `删除“${menu.menuName}”？`, content: '存在子菜单时后端会拒绝删除。', okType: 'danger', onOk: () => menus.remove(menu.id) }) }
+function confirmDelete(menu: MenuNode) { Modal.confirm({ title: `删除“${menu.menuName}”？`, content: '存在子菜单时后端会拒绝删除。', okText: '确认删除', cancelText: '取消', okType: 'danger', onOk: () => menus.remove(menu.id) }) }
 onMounted(() => { void menus.load().catch(() => undefined) })
 </script>
 <style scoped>

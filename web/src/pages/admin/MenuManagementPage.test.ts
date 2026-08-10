@@ -2,6 +2,7 @@
 import { defineComponent, h, type PropType } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { Modal } from 'ant-design-vue'
 import MenuManagementPage from './MenuManagementPage.vue'
 import type { MenuNode } from '@/types/admin'
 
@@ -163,5 +164,16 @@ describe('menu management page', () => {
     expect(tableData[0].children?.[0].children).toBeUndefined()
     expect(rootDelete?.attributes('disabled')).toBeDefined()
     expect(permissionChild?.attributes('disabled')).toBeDefined()
+  })
+
+  it('uses Chinese action labels in menu deletion confirmation', async () => {
+    const confirm = vi.spyOn(Modal, 'confirm').mockImplementation(vi.fn())
+    const wrapper = mountPage()
+    const leafDelete = wrapper.find('[data-row="102"][data-column="actions"]').findAll('button').find((button) => button.text() === '删除')
+
+    await leafDelete?.trigger('click')
+
+    expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ okText: '确认删除', cancelText: '取消' }))
+    confirm.mockRestore()
   })
 })

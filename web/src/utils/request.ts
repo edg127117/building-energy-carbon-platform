@@ -11,6 +11,42 @@ import type { ApiResult } from '@/types/api'
  */
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8081/api'
 
+const HTTP_ERROR_MESSAGES: Partial<Record<number, string>> = {
+  400: '提交内容有误，请检查后重试',
+  403: '当前账号没有权限执行此操作',
+  404: '请求的内容不存在或已被删除',
+  409: '当前状态不允许此操作，请刷新后重试',
+  429: '操作过于频繁，请稍后重试',
+  500: '系统暂时繁忙，请稍后重试',
+  502: '服务暂时不可用，请稍后重试',
+  503: '服务暂时不可用，请稍后重试',
+  504: '服务响应超时，请稍后重试',
+}
+
+type HttpFailure = {
+  code?: unknown
+  response?: {
+    status?: unknown
+    data?: unknown
+  }
+}
+
+/** 优先保留后端已脱敏业务文案；缺少文案时把 HTTP/网络异常转换为可操作的中文提示。 */
+export function requestErrorMessage(reason: unknown): string {
+  const failure = reason as HttpFailure | null | undefined
+  const responseData = failure?.response?.data
+  if (responseData && typeof responseData === 'object' && 'msg' in responseData) {
+    const businessMessage = (responseData as { msg?: unknown }).msg
+    if (typeof businessMessage === 'string' && businessMessage.trim()) return businessMessage.trim()
+  }
+
+  const status = failure?.response?.status
+  if (typeof status === 'number' && HTTP_ERROR_MESSAGES[status]) return HTTP_ERROR_MESSAGES[status]
+  if (failure?.code === 'ECONNABORTED') return '请求超时，请稍后重试'
+  if (!failure?.response) return '网络连接失败，请检查网络后重试'
+  return '请求失败，请稍后重试'
+}
+
 export const http = axios.create({
   baseURL: API_BASE,
   timeout: 15000,
@@ -55,7 +91,9 @@ http.interceptors.response.use(
       expireBrowserSession()
       return Promise.reject(new Error('未登录或登录已过期'))
     }
-    message.error(error?.message || '网络异常')
+    const userMessage = requestErrorMessage(error)
+    if (error instanceof Error) error.message = userMessage
+    message.error(userMessage)
     return Promise.reject(error)
   },
 )
