@@ -80,4 +80,11 @@ describe('HvacDemoPage real-data boundary', () => {
       '.bottom-grid { grid-template-columns: minmax(0, 1fr); }',
     )
   })
+
+  it('shows a controlled administrator entry backed by current menu state', () => {
+    expect(source).toContain('useMenuStore')
+    expect(source).toContain('managementPath')
+    expect(source).toContain('PLATFORM_ADMIN')
+    expect(source).not.toContain('menu.component')
+  })
 })
