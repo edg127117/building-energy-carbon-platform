@@ -497,6 +497,22 @@ function Invoke-HvacRealtimeSmoke {
     }
 }
 
+function Invoke-HvacAdminSmoke {
+    $adminScript = Join-Path $repoRoot 'scripts\Test-HvacAdminSmoke.ps1'
+    $previousPassword = $env:HVAC_SMOKE_ADMIN_PASSWORD
+    try {
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $smokeAccountPassword, 'Process')
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $adminScript
+        if ($LASTEXITCODE -ne 0) {
+            throw 'HVAC 后台管理真实冒烟失败'
+        }
+    } finally {
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $previousPassword, 'Process')
+    }
+}
+
 if (-not $ResetData) {
     throw '必须显式传入 -ResetData 才允许重建测试数据'
 }
@@ -671,6 +687,7 @@ try {
     Assert-DatabaseBoundaries
     Publish-And-AssertFrozenPoints
     Invoke-HvacRealtimeSmoke
+    Invoke-HvacAdminSmoke
     Write-Output 'CLEAN_HVAC_SMOKE_SUCCESS'
 } catch {
     Write-Error $_
