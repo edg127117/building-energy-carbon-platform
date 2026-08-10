@@ -30,9 +30,10 @@ public class SecurityConfig {
     /**
      * 装配无状态 HTTP 安全链。
      *
-     * <p>{@code /auth/**} 允许匿名注册和登录；WebSocket 握手路径按当前实现匿名放行；其余
-     * HTTP 请求必须先由 JWT 过滤器建立身份。认证失败交给 401 入口，已认证但角色不足交给
-     * 403 处理器，业务层抛出的建筑越权则由全局异常处理器映射为 403。</p>
+     * <p>{@code /auth/**} 允许匿名注册和登录；WebSocket 路径只为浏览器 HTTP 升级匿名放行，
+     * 业务权限由端点首帧 JWT 校验和建筑订阅校验执行；其余 HTTP 请求必须先由 JWT 过滤器建立
+     * 身份。认证失败交给 401 入口，已认证但角色不足交给 403 处理器，业务层抛出的建筑越权则
+     * 由全局异常处理器映射为 403。</p>
      */
     @Bean
     public SecurityFilterChain securityFilterChain(
@@ -56,7 +57,7 @@ public class SecurityConfig {
         http.authorizeHttpRequests(auth -> auth
                 // 1. 放行登录与注册相关接口
                 .requestMatchers("/auth/**", "/api/auth/**").permitAll()
-                // HVAC WebSocket 握手当前匿名放行，因此它不具备 HTTP 接口相同的 JWT/建筑范围保护。
+                // 仅放行 WebSocket 传输升级；首帧 SUBSCRIBE 在端点内完成 JWT 与建筑权限校验。
                 .requestMatchers("/ws/**", "/api/ws/**").permitAll()
                 // 3. 其他所有请求必须携带 Token 并通过鉴权
                 .anyRequest().authenticated()

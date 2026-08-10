@@ -9,7 +9,7 @@ import org.springframework.web.socket.server.standard.ServerEndpointExporter;
  * 在非测试环境注册 Jakarta WebSocket 端点导出器。
  *
  * <p>{@link ServerEndpointExporter} 负责发现并发布 {@code /ws/hvac}；测试 Profile
- * 不创建该 Bean，避免普通 Spring 测试依赖真实 Servlet 容器或开放网络端点。</p>
+ * 不创建该 Bean，避免普通单元测试依赖真实 Servlet 容器、开放端口或连接外部资源。</p>
  */
 @Configuration
 @Profile("!test")
