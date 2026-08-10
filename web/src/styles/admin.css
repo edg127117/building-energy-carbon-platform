@@ -54,6 +54,9 @@
 .admin-panel { min-width: 0; padding: 20px; border: 1px solid var(--admin-border); background: var(--admin-panel); border-radius: 14px; box-shadow: 0 16px 34px rgba(0, 4, 10, .22); }
 .admin-filter-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 18px; }
 .admin-error { margin-bottom: 14px; }
+.drawer-actions { margin-top: 24px; display: flex; justify-content: flex-end; gap: 10px; }
+.assignment-list { width: 100%; margin-top: 22px; display: grid; gap: 12px; }
+.assignment-select { width: 100%; margin-top: 22px; }
 .admin-shell .ant-table-wrapper .ant-table { background: transparent; color: var(--admin-text); }
 .admin-shell .ant-table-wrapper .ant-table-thead > tr > th { background: #102235; color: #b9ccdc; border-color: var(--admin-border); }
 .admin-shell .ant-table-wrapper .ant-table-tbody > tr > td { background: transparent; color: #d4e1ed; border-color: rgba(120, 169, 207, .1); }
