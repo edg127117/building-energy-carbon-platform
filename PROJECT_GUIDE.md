@@ -61,7 +61,12 @@
 → [`useHvacDashboard`](web/src/composables/useHvacDashboard.ts)
 → [`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue)。
 
-公式结果还会通过 [`IndicatorRealtimePublisher`](src/main/java/com/platform/iot/formula/IndicatorRealtimePublisher.java) 和 [`WebSocketServer`](src/main/java/com/platform/iot/websocket/WebSocketServer.java) 发布到后端 `/ws/hvac` 端点。前端是否已消费该端点，以项目状态文件为准。
+公式结果在 TDengine 持久化成功且 Redis 接受最新分钟后，还会通过
+[`IndicatorRealtimePublisher`](src/main/java/com/platform/iot/formula/IndicatorRealtimePublisher.java)、
+[`HvacRealtimeSessionRegistry`](src/main/java/com/platform/iot/websocket/HvacRealtimeSessionRegistry.java)
+和 [`WebSocketServer`](src/main/java/com/platform/iot/websocket/WebSocketServer.java)
+向 `/ws/hvac` 发布当前建筑的四项指标增量。WebSocket 是最佳努力通知，发送失败不回滚指标结果；
+19 测点完整快照和全部最新指标仍以受保护 HTTP 查询为权威来源。
 
 ### 4.2 登录、权限和建筑范围
 
@@ -82,8 +87,13 @@
 → `useHvacDashboard`
 → 查询当前用户可访问建筑
 → 请求 `/hvac/buildings/{buildingId}/snapshot` 和 `/hvac/buildings/{buildingId}/indicators/latest`
-→ 将后端 DTO 转为页面展示模型
-→ 使用非重叠的 30 秒轮询刷新。
+→ 建立 `/ws/hvac` 单连接并在首帧提交 JWT 与目标建筑
+→ 服务端复核 Redis 活动登录态和 MySQL 建筑范围，心跳时继续复核
+→ 四项指标增量立即合并，500 毫秒尾随触发一次非重叠 HTTP 权威对账。
+
+实时连接异常时，前端立即启用 30 秒 HTTP 保障，并按 1、2、5、10、30 秒有界退避重连；
+连接稳定 60 秒后重置退避，重连成功且 HTTP 对账完成后才恢复实时正常状态。
+WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 
 请求失败时保留已有数据并展示错误；无数据使用明确空值，不生成随机业务数据。
 快照由后端按统一服务端时间区分 `NORMAL`、`STALE` 和 `NO_DATA`：过期记录仍保留
@@ -97,7 +107,7 @@
 | TDengine | 原始事件、分钟数据、指标结果和公式异常 | `iot.temporal` 专用 Repository | 普通测试关闭真实 TDengine，真实链路使用专用集成验证 |
 | Redis | Token、菜单、建筑范围和最新指标缓存 | `com.platform.cache` | 允许 Fake/Mock；缓存失败是否降级由业务服务明确决定 |
 | MQTT / EMQX | `device/data/up` 的 19 测点上行载荷 | `MqttConfig`、`HvacMqttMessageHandler` | 普通测试必须关闭真实 MQTT 连接 |
-| WebSocket | HVAC 指标实时消息 | `IndicatorRealtimePublisher`、`WebSocketServer` | 后端端点存在不代表前端已经完成实时接入 |
+| WebSocket | 按建筑发布四项 HVAC 指标增量，不承载 19 测点完整状态 | `IndicatorRealtimePublisher`、`HvacRealtimeSessionRegistry`、`WebSocketServer`、`web/src/realtime` | 普通测试使用 Mock/Fake；真实路由与恢复使用隔离 Docker 和浏览器验证 |
 
 多数据源代码必须使用明确 Bean 名称和 `Qualifier`；MySQL SQL 与 TDengine SQL 不得跨数据源执行。
 
@@ -111,7 +121,7 @@
 | 后端启动脚本 | [`start-server.sh`](start-server.sh) |
 | 后端构建与测试 | [`pom.xml`](pom.xml)、[`application-test.yml`](src/test/resources/application-test.yml) |
 | 前端构建与测试 | [`web/package.json`](web/package.json) |
-| 前端 API 基址示例 | [`web/.env.example`](web/.env.example) |
+| 前端 HTTP / WebSocket 基址示例 | [`web/.env.example`](web/.env.example) |
 | HVAC MQTT 配置 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java) |
 | HVAC 查询入口 | [`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java) |
 | 前端 HVAC 页面 | [`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue) |
