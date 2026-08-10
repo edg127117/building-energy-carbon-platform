@@ -24,10 +24,16 @@ ON DUPLICATE KEY UPDATE
 UPDATE `sys_menu` SET `visible`=0, `status`=0
 WHERE `id` IN (110,120,130,131,132,133,140,141,150,151,160,161,221,222,230,231,232,242);
 
--- 仅重置本期稳定菜单集合的正式角色关系，不触碰未来菜单和用户关系。
+-- 对方开发是按建筑授权的接口账号，清理全部历史菜单误配；重复执行结果不变。
+UPDATE `sys_role` SET `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY';
 DELETE rm FROM `sys_role_menu` rm
 JOIN `sys_role` r ON r.`id`=rm.`role_id`
-WHERE r.`role_key` IN ('BUILDING_OWNER','ENERGY_MANAGER','THIRD_PARTY','PLATFORM_ADMIN')
+WHERE r.`role_key`='THIRD_PARTY';
+
+-- 其他正式角色仅重置本期稳定菜单集合，不触碰未来菜单和用户关系。
+DELETE rm FROM `sys_role_menu` rm
+JOIN `sys_role` r ON r.`id`=rm.`role_id`
+WHERE r.`role_key` IN ('BUILDING_OWNER','ENERGY_MANAGER','PLATFORM_ADMIN')
   AND rm.`menu_id` IN (100,101,200,210,211,212,220,223,240,241);
 
 INSERT IGNORE INTO `sys_role_menu` (`role_id`, `menu_id`)

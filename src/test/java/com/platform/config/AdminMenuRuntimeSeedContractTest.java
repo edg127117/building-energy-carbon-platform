@@ -28,7 +28,9 @@ class AdminMenuRuntimeSeedContractTest {
     void existingDatabaseMigrationIsIdempotentAndPreservesMenuRows() {
         assertThat(migrationSql)
                 .contains("ON DUPLICATE KEY UPDATE", "INSERT IGNORE", "visible`=0, `status`=0",
-                        "BUILDING_OWNER", "ENERGY_MANAGER", "PLATFORM_ADMIN")
+                        "BUILDING_OWNER", "ENERGY_MANAGER", "PLATFORM_ADMIN",
+                        "SET `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY'",
+                        "WHERE r.`role_key`='THIRD_PARTY'")
                 .doesNotContain("DELETE FROM `sys_menu`", "DROP TABLE", "TRUNCATE TABLE");
     }
 

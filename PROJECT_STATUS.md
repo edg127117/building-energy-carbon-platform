@@ -18,13 +18,13 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 ### 3.1 权限与业务档案
 
 - 已建立四类正式角色、JWT 登录、动态菜单和建筑范围授权后端能力。
-- 已形成仅供 `PLATFORM_ADMIN` 使用的最小后台管理界面，覆盖用户生命周期、固定四角色菜单、完整菜单树和建筑授权审批；不提供角色 CRUD 或建筑 CRUD。
+- 已形成仅供 `PLATFORM_ADMIN` 使用的最小后台管理界面，覆盖用户生命周期、固定角色权限、完整菜单树和建筑授权审批；`THIRD_PARTY` 显示固定 API 接入能力且禁止分配内部菜单，不提供角色 CRUD 或建筑 CRUD。
 - 后台导航只接受受控注册表中的四条显式路由，数据库菜单不驱动前端组件动态加载；未上线菜单保留但隐藏并停用。
 - Token 带唯一 `jti`，禁用、密码重置或角色变更撤销旧会话后，同一秒重新登录也不会复用黑名单 Token。
 - 已建立建筑、系统、设备、测点、别名、命名规则和指标档案。
 - 后端 Controller、Service 和 Mapper 已按建筑权限执行主要查询和管理流程。
 
-证据入口：[`com.platform.system`](src/main/java/com/platform/system)、[`com.platform.security`](src/main/java/com/platform/security)、[`com.platform.hvac`](src/main/java/com/platform/hvac)。
+证据入口：[`com.platform.system`](src/main/java/com/platform/system)、[`com.platform.security`](src/main/java/com/platform/security)、[`com.platform.hvac`](src/main/java/com/platform/hvac)、[`com.platform.integration`](src/main/java/com/platform/integration)。
 
 ### 3.2 HVAC 数据链路
 
@@ -79,13 +79,15 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 ## 6. 已确认技术债
 
-- 当前没有新增且属于本次最小后台管理范围的已确认技术债；角色 CRUD、建筑 CRUD、移动端专项适配和动态组件加载均为明确不做，不是遗留缺陷。
+- `THIRD_PARTY` 当前已具备按授权建筑读取建筑、设备和测点定义的 Open API，以及按建筑校验的 HVAC WebSocket 订阅；冻结书中的 COP、设备运行状态专用 REST API 和 Swagger 文档尚未实现，不能表述为完整第三方接入交付。
+- 角色 CRUD、建筑 CRUD、移动端专项适配和动态组件加载均为最小后台明确不做，不是遗留缺陷。
 
 记录这些事项不代表必须在当前任务立即重构或补齐；每项应在独立范围、设计、测试和 PR 中处理。
 
 ## 7. 下一步优先级
 
-1. 使用真实现场设备和数据完成长时间运行、异常恢复和数据质量验收。
+1. 单独设计并补齐第三方 COP、设备运行状态 REST API 与 Swagger 文档，完成第三方接入契约验收。
+2. 使用真实现场设备和数据完成长时间运行、异常恢复和数据质量验收。
 
 每个事项开始前仍需根据 `AGENTS.md` 判断是否必须先确认独立设计和实施范围。
 

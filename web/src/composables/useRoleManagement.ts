@@ -18,6 +18,12 @@ export function useRoleManagement() {
   const selectRole = async (role: RoleAdminView) => {
     const owner = ++generation
     selectedRole.value = role
+    if (role.roleKey === 'THIRD_PARTY') {
+      checkedIds.value = []
+      loading.value = false
+      error.value = null
+      return
+    }
     loading.value = true
     error.value = null
     try {
@@ -45,7 +51,7 @@ export function useRoleManagement() {
   }
 
   const save = async () => {
-    if (!selectedRole.value || saving.value) return
+    if (!selectedRole.value || selectedRole.value.roleKey === 'THIRD_PARTY' || saving.value) return
     saving.value = true
     error.value = null
     try {

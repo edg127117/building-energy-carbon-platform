@@ -33,6 +33,7 @@
 | `web/src` | 登录、显式路由、HVAC 页面、最小后台管理、API 调用和前端状态编排 | 不在浏览器伪造后端指标和历史数据，不按数据库组件字符串动态加载页面 |
 | `com.platform.system`、`com.platform.security` | 登录、JWT、四角色 RBAC、菜单和建筑授权 | 不直接处理 HVAC 时序计算 |
 | `com.platform.hvac` | 建筑、设备、测点档案和 HVAC 查询 API | 不直接消费 MQTT 报文 |
+| `com.platform.integration` | 面向 `THIRD_PARTY` 的按建筑授权只读 Open API | 不提供内部后台、写入、控制或 Token 签发 |
 | `com.platform.iot.ingest`、`com.platform.iot.quality` | MQTT 载荷接入、测点身份解析和运行时质量校验 | 不承担前端展示组装 |
 | `com.platform.iot.aggregation` | 将原始事件聚合为整分钟数据 | 不保存用户权限数据 |
 | `com.platform.iot.dataquality` | Q0/Q1/Q2 数据质量补全、恢复、重算和任务状态 | 不改变 MySQL 与 TDengine 的职责边界 |
