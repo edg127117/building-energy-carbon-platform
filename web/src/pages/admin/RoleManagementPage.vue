@@ -28,7 +28,7 @@
 
       <section v-else-if="roles.selectedRole.value" class="admin-panel">
         <div class="role-tree-heading"><div><h2>菜单授权</h2><p>勾选该角色可以进入的后台页面。</p></div><a-button type="primary" :loading="roles.saving.value" :disabled="!roles.selectedRole.value" @click="save">保存菜单授权</a-button></div>
-        <RoleMenuTree :tree="roles.tree.value" :checked-ids="roles.checkedIds.value" @update:checked-ids="roles.checkedIds.value = $event" />
+        <RoleMenuTree :key="roles.selectedRole.value.id" :tree="roles.tree.value" :checked-ids="roles.checkedIds.value" @update:checked-ids="roles.checkedIds.value = $event" />
       </section>
     </div>
   </div>

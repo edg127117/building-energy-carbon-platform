@@ -1,5 +1,5 @@
 <template>
-  <a-tree :tree-data="tree" checkable default-expand-all :checked-keys="checkedIds" :field-names="fieldNames" @check="handleCheck">
+  <a-tree :tree-data="tree" checkable :default-expanded-keys="[]" :checked-keys="checkedIds" :field-names="fieldNames" @check="handleCheck">
     <template #title="node"><span>{{ node.menuName }}</span><a-tag v-if="node.status === 0" color="orange">停用</a-tag><a-tag v-if="node.visible === 0">隐藏</a-tag></template>
   </a-tree>
 </template>
