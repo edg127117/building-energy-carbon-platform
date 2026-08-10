@@ -30,7 +30,7 @@
 
 | 位置 | 主要职责 | 不承担的职责 |
 |---|---|---|
-| `web/src` | 登录、路由、HVAC 页面、API 调用和前端状态编排 | 不在浏览器伪造后端指标和历史数据 |
+| `web/src` | 登录、显式路由、HVAC 页面、最小后台管理、API 调用和前端状态编排 | 不在浏览器伪造后端指标和历史数据，不按数据库组件字符串动态加载页面 |
 | `com.platform.system`、`com.platform.security` | 登录、JWT、四角色 RBAC、菜单和建筑授权 | 不直接处理 HVAC 时序计算 |
 | `com.platform.hvac` | 建筑、设备、测点档案和 HVAC 查询 API | 不直接消费 MQTT 报文 |
 | `com.platform.iot.ingest`、`com.platform.iot.quality` | MQTT 载荷接入、测点身份解析和运行时质量校验 | 不承担前端展示组装 |
@@ -81,6 +81,12 @@
 
 前端路由限制只负责用户体验，后端权限校验才是最终安全边界。
 
+平台管理员从 HVAC 大屏进入 `/system` 后台壳层，前端只把后端菜单树映射到受控注册表中的
+`/system/users`、`/system/roles`、`/system/menus` 和 `/system/building-access` 四条显式路由。
+用户生命周期、固定四角色菜单、完整菜单树和建筑授权审批分别调用 `com.platform.system`
+管理接口；数据库中的 `component` 字符串不参与前端组件解析，普通角色也不能通过直输 URL
+绕过后端 `PLATFORM_ADMIN` 鉴权。
+
 ### 4.3 前端真实数据刷新
 
 `HvacDemoPage.vue` 初始化
@@ -125,6 +131,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 | HVAC MQTT 配置 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java) |
 | HVAC 查询入口 | [`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java) |
 | 前端 HVAC 页面 | [`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue) |
+| 最小后台管理 | [`ManagementLayout.vue`](web/src/layouts/ManagementLayout.vue)、[`systemAdmin.ts`](web/src/api/systemAdmin.ts)、[`adminNavigation.ts`](web/src/domain/adminNavigation.ts) |
 
 本地 `server.env`、`web/.env` 等被忽略配置只服务当前机器，不是项目事实，也不得提交密码或 Token。
 
