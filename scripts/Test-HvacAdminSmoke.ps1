@@ -15,6 +15,7 @@ $temporaryMenuId = $null
 $roleId = $null
 $originalRoleMenuIds = $null
 $roleMenusChanged = $false
+$stage = 'initialize'
 $temporaryUsername = 'hvac_admin_smoke_' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
 $temporaryPassword = [Guid]::NewGuid().ToString('N') + 'Aa1!'
 $resetPassword = [Guid]::NewGuid().ToString('N') + 'Bb2!'
@@ -75,10 +76,10 @@ function Get-FlattenedMenus([object[]]$Menus) {
 
 function Test-TokenRejected([string]$Token) {
     try {
-        Invoke-JsonApi -Method Get -Path '/auth/me' -Token $Token | Out-Null
-        return $false
+        $response = Invoke-JsonApi -Method Get -Path '/auth/me' -Token $Token
+        return -not $response.success -and $response.code -eq 401
     } catch {
-        $status = $_.Exception.Response.StatusCode.value__
+        $status = [int]$_.Exception.Response.StatusCode
         return $status -eq 401 -or $status -eq 403
     }
 }
@@ -88,6 +89,7 @@ if (-not $adminPassword) {
 }
 
 try {
+    $stage = 'admin login and full menu tree'
     $adminToken = Get-RequiredToken $AdminUsername $adminPassword
 
     $adminTree = Invoke-JsonApi -Method Get -Path '/menu/admin/tree' -Token $adminToken
@@ -100,6 +102,7 @@ try {
         throw '管理员完整菜单树未返回停用菜单'
     }
 
+    $stage = 'create and verify temporary user'
     $createdUser = Invoke-JsonApi -Method Post -Path '/system/users' -Token $adminToken -Body @{
         username = $temporaryUsername
         password = $temporaryPassword
@@ -125,6 +128,7 @@ try {
         throw '非管理员菜单没有遵守 HVAC 可见、后台管理不可见边界'
     }
 
+    $stage = 'invalidate and refresh temporary session'
     Invoke-JsonApi -Method Put -Path "/system/users/$temporaryUserId/status" -Token $adminToken -Body @{ status = 0 } | Out-Null
     if (-not (Test-TokenRejected $temporaryToken)) {
         throw '旧会话仍然有效，禁用用户后会话未失效'
@@ -133,6 +137,7 @@ try {
     Invoke-JsonApi -Method Put -Path "/system/users/$temporaryUserId/password" -Token $adminToken -Body @{ password = $resetPassword } | Out-Null
     $temporaryToken = Get-RequiredToken $temporaryUsername $resetPassword
 
+    $stage = 'create hidden menu'
     $createdMenu = Invoke-JsonApi -Method Post -Path '/menu/add' -Token $adminToken -Body @{
         parentId = 200
         menuName = '后台管理冒烟隐藏项'
@@ -148,6 +153,7 @@ try {
     Assert-Success $createdMenu '创建隐藏菜单'
     $temporaryMenuId = $createdMenu.data.id
 
+    $stage = 'update hidden menu'
     $updatedMenu = Invoke-JsonApi -Method Put -Path '/menu/update' -Token $adminToken -Body @{
         id = $temporaryMenuId
         parentId = 200
@@ -163,17 +169,20 @@ try {
     }
     Assert-Success $updatedMenu '更新隐藏菜单'
 
+    $stage = 'query available building'
     $available = Invoke-JsonApi -Method Get -Path '/building-access/available' -Token $temporaryToken
     Assert-Success $available '查询可申请建筑'
     if (@($available.data | Where-Object { $_.buildingId -eq $RequestedBuildingId }).Count -ne 1) {
         throw '待申请建筑不在可申请范围'
     }
+    $stage = 'submit building access request'
     $request = Invoke-JsonApi -Method Post -Path '/building-access/requests' -Token $temporaryToken -Body @{
         buildingId = $RequestedBuildingId
         reason = '后台管理真实冒烟验证'
     }
     Assert-Success $request '提交建筑授权申请'
     $requestId = $request.data.id
+    $stage = 'approve building access request'
     Invoke-JsonApi -Method Put -Path "/system/building-access/requests/$requestId/approve" -Token $adminToken -Body @{
         comment = '后台管理真实冒烟批准'
     } | Out-Null
@@ -182,19 +191,24 @@ try {
         throw '建筑授权审批后未写入用户建筑范围'
     }
 
+    $stage = 'replace fixed role menus'
     $roles = Invoke-JsonApi -Method Get -Path '/system/roles' -Token $adminToken
     $buildingOwnerRole = @($roles.data | Where-Object { $_.roleKey -eq 'BUILDING_OWNER' }) | Select-Object -First 1
     if ($null -eq $buildingOwnerRole) {
         throw '固定角色 BUILDING_OWNER 不存在'
     }
     $roleId = $buildingOwnerRole.id
+    $stage = 'read fixed role menu assignment'
     $roleMenus = Invoke-JsonApi -Method Get -Path "/system/roles/$roleId/menus" -Token $adminToken
     $originalRoleMenuIds = @($roleMenus.data)
+    $stage = 'write fixed role menu assignment'
     Invoke-JsonApi -Method Put -Path "/system/roles/$roleId/menus" -Token $adminToken -Body @{ menuIds = @(100) } | Out-Null
     $roleMenusChanged = $true
 
+    $stage = 'refresh temporary session after role menu change'
     Invoke-JsonApi -Method Put -Path "/system/users/$temporaryUserId/password" -Token $adminToken -Body @{ password = $temporaryPassword } | Out-Null
     $temporaryToken = Get-RequiredToken $temporaryUsername $temporaryPassword
+    $stage = 'verify reduced current menu'
     $reducedMenus = Invoke-JsonApi -Method Get -Path '/menu/current' -Token $temporaryToken
     $reducedPaths = @(Get-FlattenedMenus @($reducedMenus.data) | ForEach-Object { $_.path })
     if ($reducedPaths -contains '/hvac-demo') {
@@ -203,7 +217,7 @@ try {
 
     Write-Output 'HVAC_ADMIN_SMOKE_OK'
 } catch {
-    Write-Error 'HVAC 后台管理真实冒烟失败；敏感请求数据已隐藏'
+    Write-Warning "HVAC 后台管理真实冒烟失败（阶段: $stage）；敏感请求数据已隐藏"
     throw
 } finally {
     if ($roleMenusChanged -and $roleId -and $null -ne $originalRoleMenuIds -and $adminToken) {

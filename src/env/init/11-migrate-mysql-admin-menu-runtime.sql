@@ -20,8 +20,8 @@ ON DUPLICATE KEY UPDATE
 `icon`=VALUES(`icon`), `visible`=VALUES(`visible`), `status`=VALUES(`status`),
 `sort_order`=VALUES(`sort_order`);
 
--- 保留尚未接入的配置节点，仅移除其导航可见性。
-UPDATE `sys_menu` SET `visible`=0
+-- 保留尚未接入的配置节点，但同时隐藏和停用，避免被误分配为可执行入口。
+UPDATE `sys_menu` SET `visible`=0, `status`=0
 WHERE `id` IN (110,120,130,131,132,133,140,141,150,151,160,161,221,222,230,231,232,242);
 
 -- 仅重置本期稳定菜单集合的正式角色关系，不触碰未来菜单和用户关系。

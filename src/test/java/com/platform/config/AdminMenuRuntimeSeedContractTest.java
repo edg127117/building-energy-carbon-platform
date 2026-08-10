@@ -18,14 +18,16 @@ class AdminMenuRuntimeSeedContractTest {
     void baseSeedContainsOnlyConfirmedRuntimeCatalogAsVisibleEntries() {
         assertThat(baseSql)
                 .contains("(101", "'/hvac-demo'", "(223", "'/system/building-access'",
-                        "'/system/users'", "'/system/roles'", "'/system/menus'")
+                        "'/system/users'", "'/system/roles'", "'/system/menus'",
+                        "'单机调适',    'M', '/single',        NULL,       'control',   0, 0",
+                        "'建筑注册',    'C', '/system/building/list', 'system/BuildingList','home',   0, 0")
                 .contains("'BUILDING_OWNER'", "'ENERGY_MANAGER'", "'PLATFORM_ADMIN'");
     }
 
     @Test
     void existingDatabaseMigrationIsIdempotentAndPreservesMenuRows() {
         assertThat(migrationSql)
-                .contains("ON DUPLICATE KEY UPDATE", "INSERT IGNORE", "visible`=0",
+                .contains("ON DUPLICATE KEY UPDATE", "INSERT IGNORE", "visible`=0, `status`=0",
                         "BUILDING_OWNER", "ENERGY_MANAGER", "PLATFORM_ADMIN")
                 .doesNotContain("DELETE FROM `sys_menu`", "DROP TABLE", "TRUNCATE TABLE");
     }
