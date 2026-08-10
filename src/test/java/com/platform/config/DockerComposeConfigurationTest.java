@@ -42,7 +42,7 @@ class DockerComposeConfigurationTest {
                         "TAOS_FQDN: iot-tdengine",
                         "TAOS_FIRST_EP: iot-tdengine:6030",
                         "- tdengine-data:/var/lib/taos",
-                        "name: iot-platform-demo-tdengine-data")
+                        "name: ${TDENGINE_VOLUME_NAME:-iot-platform-demo-tdengine-data}")
                 .doesNotContain("- ./taos-data:/var/lib/taos");
         assertThat(countOccurrences(compose, "tdengine-data:")).isEqualTo(2);
     }
@@ -52,9 +52,9 @@ class DockerComposeConfigurationTest {
         assertThat(compose)
                 .contains(
                         "- mysql-data:/var/lib/mysql",
-                        "name: iot-platform-demo-mysql-data",
+                        "name: ${MYSQL_VOLUME_NAME:-iot-platform-demo-mysql-data}",
                         "- redis-data:/data",
-                        "name: iot-platform-demo-redis-data")
+                        "name: ${REDIS_VOLUME_NAME:-iot-platform-demo-redis-data}")
                 .doesNotContain(
                         "- ./mysql-data:/var/lib/mysql",
                         "- ./redis-data:/data");
