@@ -24,19 +24,25 @@ class CleanHvacSmokeScriptContractTest {
                 "Remove-Item -LiteralPath",
                 "mysql-data",
                 "taos-data",
-                "redis-data");
+                "redis-data",
+                "iot-platform-demo-hvac-smoke-mysql-data",
+                "iot-platform-demo-hvac-smoke-tdengine-data",
+                "iot-platform-demo-hvac-smoke-redis-data",
+                "Remove-ValidatedDataVolume");
     }
 
     @Test
     void scriptOnlyTargetsTheFourKnownContainers() {
         assertThat(script).contains(
-                "'iot-mysql'",
-                "'iot-emqx'",
-                "'iot-tdengine'",
-                "'iot-redis'");
+                "'iot-smoke-mysql'",
+                "'iot-smoke-emqx'",
+                "'iot-smoke-tdengine'",
+                "'iot-smoke-redis'",
+                "iot-platform-demo-hvac-smoke");
         assertThat(script).doesNotContain(
                 "docker system prune",
                 "docker volume prune",
+                "volume prune",
                 "Remove-Item $repoRoot",
                 "Remove-Item -Recurse -Force $env:");
     }

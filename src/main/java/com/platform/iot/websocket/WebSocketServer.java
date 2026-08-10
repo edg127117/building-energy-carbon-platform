@@ -1,93 +1,106 @@
 package com.platform.iot.websocket;
 
-import jakarta.websocket.*;
+import jakarta.websocket.OnClose;
+import jakarta.websocket.OnError;
+import jakarta.websocket.OnMessage;
+import jakarta.websocket.OnOpen;
+import jakarta.websocket.Session;
 import jakarta.websocket.server.ServerEndpoint;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArraySet;
-
 /**
- * HVAC 指标实时广播端点。
+ * HVAC WebSocket 的传输与有限协议入口。
  *
- * <p>{@link com.platform.iot.formula.IndicatorRealtimePublisher} 将指标状态序列化后，
- * 经网关调用 {@link #broadcastMessage(String)} 向所有已连接的 {@code /ws/hvac}
- * 会话广播。端点不解析指标内容，也不影响 TDengine 或 Redis 的提交结果。</p>
- *
- * <p>该端点目前没有 JWT 握手校验、建筑订阅或按权限隔离，所有连接共享同一会话池；
- * 因而它只适合受控网络中的大屏实时通道，不能把广播范围理解为后端数据权限校验。</p>
+ * <p>HTTP 握手可以匿名完成，但业务数据权限只在首帧 {@code SUBSCRIBE} 通过 JWT、Redis 登录态和
+ * 建筑范围校验后建立。端点不访问 Mapper、TDengine 或公式服务；它只把协议动作委托给会话注册表，
+ * 因而 WebSocket 始终是指标的最佳努力通知，而不是完整状态的权威数据源。</p>
  */
-@ServerEndpoint("/ws/hvac")
+@ServerEndpoint(
+        value = "/ws/hvac",
+        configurator = HvacRealtimeEndpointConfigurator.class)
 @Component
 public class WebSocketServer {
 
     private static final Logger log = LoggerFactory.getLogger(WebSocketServer.class);
 
-    // 线程安全集合，用于存放所有当前在线的浏览器客户端 Session
-    private static final CopyOnWriteArraySet<Session> sessionPool = new CopyOnWriteArraySet<>();
-    // 记录已正常关闭/异常的 SessionId，防止 remove 后残余线程往已关闭连接写数据
-    private static final Set<String> closedSessionIds = ConcurrentHashMap.newKeySet();
+    private final HvacRealtimeProtocol protocol;
+    private final HvacRealtimeSessionRegistry registry;
 
-    /** 注册新连接；相同会话 ID 重连时先清除旧关闭标记，恢复广播资格。 */
+    public WebSocketServer(
+            HvacRealtimeProtocol protocol,
+            HvacRealtimeSessionRegistry registry) {
+        this.protocol = protocol;
+        this.registry = registry;
+    }
+
+    /** 建立空会话；认证成功前注册表不会让它接收任何建筑指标。 */
     @OnOpen
     public void onOpen(Session session) {
-        closedSessionIds.remove(session.getId()); // 重连时清除关闭标记
-        sessionPool.add(session);
-        log.info("[WebSocket] HVAC 实时客户端接入: sessionId={}, online={}",
-                session.getId(), sessionPool.size());
-    }
-
-    /** 标记并移除正常关闭的连接，防止并发广播继续写入失效 Session。 */
-    @OnClose
-    public void onClose(Session session) {
-        closedSessionIds.add(session.getId()); // 标记已关闭，防止 broadcastMessage 再往里写
-        sessionPool.remove(session);
-        log.info("[WebSocket] HVAC 实时客户端断开: sessionId={}, online={}",
-                session.getId(), sessionPool.size());
-    }
-
-    /** 记录连接异常并清理对应会话；空 Session 异常只记录日志。 */
-    @OnError
-    public void onError(Session session, Throwable error) {
-        log.error("[WebSocket] HVAC 实时连接异常", error);
-        // 异常后也做清理，避免脏 Session 留在池子里继续报错
-        if (session != null) {
-            closedSessionIds.add(session.getId());
-            sessionPool.remove(session);
-        }
+        registry.open(session);
+        log.info("[WebSocket] HVAC 实时连接已建立: sessionId={}", sessionId(session));
     }
 
     /**
-     * 向所有在线 HVAC 实时客户端广播指标消息。
+     * 分派订阅和心跳协议，并在拒绝时先发送脱敏错误帧再使用应用关闭码终止连接。
      *
-     * 关键设计：synchronized + getBasicRemote() 必须配对使用。
-     * - getBasicRemote().sendText() 是同步阻塞的，消息真正发完才返回
-     * - synchronized(session) 保证同一时刻只有一个线程拿到锁
-     * - 线程 A 拿到锁 → 阻塞发送 → 发完释放锁 → 线程 B 拿到锁
-     * 这样才是真正的串行化，彻底杜绝 TEXT_FULL_WRITING。
-     * 不能使用 getAsyncRemote()：它只是提交异步任务后立即返回、释放锁，
-     * 锁形同虚设，Tomcat 后台仍在并发写，异常照抛不误。
+     * <p>原始帧可能含 JWT，因此日志只记录会话 ID 和稳定错误码，不记录 payload、异常详情或查询串。</p>
      */
-    public static void broadcastMessage(String message) {
-        for (Session session : sessionPool) {
-            // 已标记关闭的 Session 跳过，避免往已关闭连接写数据
-            if (closedSessionIds.contains(session.getId())) continue;
-            try {
-                if (session.isOpen()) {
-                    // 同步锁 + 同步发送 = 真正串行，彻底消除并发写冲突
-                    synchronized (session) {
-                        session.getBasicRemote().sendText(message);
-                    }
-                }
-            } catch (Exception e) {
-                log.error("[WebSocket] HVAC 指标消息推送失败", e);
-                // 发送失败说明连接已坏，做清理
-                closedSessionIds.add(session.getId());
-                sessionPool.remove(session);
+    @OnMessage
+    public void onMessage(String payload, Session session) {
+        try {
+            HvacRealtimeProtocol.ClientMessage message = protocol.decodeClient(payload);
+            if (message instanceof HvacRealtimeProtocol.Subscribe subscribe) {
+                HvacRealtimeSubscription subscription =
+                        registry.subscribe(session, subscribe.token(), subscribe.buildingId());
+                registry.sendControl(session, protocol.subscribed(
+                        subscription.buildingId(), System.currentTimeMillis()));
+                return;
             }
+            if (message instanceof HvacRealtimeProtocol.Ping) {
+                registry.ping(session);
+                registry.sendControl(session, protocol.pong(System.currentTimeMillis()));
+            }
+        } catch (HvacRealtimeAccessException exception) {
+            reject(session, exception);
+        } catch (RuntimeException exception) {
+            reject(session, new HvacRealtimeAccessException(
+                    "REALTIME_INTERNAL_ERROR", 1011, "实时服务暂不可用"));
         }
+    }
+
+    /** 正常关闭只清理内存索引，不把浏览器主动离开误报为服务端应用错误。 */
+    @OnClose
+    public void onClose(Session session) {
+        registry.remove(session);
+        log.info("[WebSocket] HVAC 实时连接已关闭: sessionId={}", sessionId(session));
+    }
+
+    /**
+     * 容器报告传输异常时幂等清理会话。
+     *
+     * <p>异常可能携带底层网络或输入细节，日志不输出 Throwable，避免诊断链意外记录 Token。</p>
+     */
+    @OnError
+    public void onError(Session session, Throwable error) {
+        registry.remove(session);
+        log.warn("[WebSocket] HVAC 实时连接异常: sessionId={}, reason=TRANSPORT_ERROR",
+                sessionId(session));
+    }
+
+    private void reject(Session session, HvacRealtimeAccessException exception) {
+        log.warn("[WebSocket] HVAC 实时协议被拒绝: sessionId={}, errorCode={}, closeCode={}",
+                sessionId(session), exception.errorCode(), exception.closeCode());
+        try {
+            registry.sendControl(session,
+                    protocol.error(exception.errorCode(), exception.publicMessage()));
+        } finally {
+            registry.close(session, exception.closeCode(), exception.publicMessage());
+        }
+    }
+
+    private String sessionId(Session session) {
+        return session == null ? "<none>" : session.getId();
     }
 }

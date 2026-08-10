@@ -4,6 +4,12 @@ param(
     [string]$LegacyEnvRoot,
     [int]$MySqlPort = 13306,
     [int]$RedisPort = 16379,
+    [int]$MqttPort = 11883,
+    [int]$EmqxDashboardPort = 18084,
+    [int]$MqttWebSocketPort = 18085,
+    [int]$TdengineNativePortStart = 16030,
+    [int]$TdengineNativePortEnd = 16049,
+    [int]$TdengineRestPort = 17041,
     [int]$InfrastructureTimeoutSeconds = 240,
     [int]$ApplicationTimeoutSeconds = 180
 )
@@ -16,13 +22,23 @@ $currentEnvRoot = [IO.Path]::GetFullPath(
 $composeFile = Join-Path $currentEnvRoot 'docker-compose.yml'
 $serverEnvFile = Join-Path $repoRoot 'server.env'
 $smokeOutputDirectory = Join-Path $repoRoot 'target\smoke'
+$composeProjectName = 'iot-platform-demo-hvac-smoke'
+$mysqlContainer = 'iot-smoke-mysql'
+$emqxContainer = 'iot-smoke-emqx'
+$tdengineContainer = 'iot-smoke-tdengine'
+$redisContainer = 'iot-smoke-redis'
 $knownContainers = @(
-    'iot-mysql',
-    'iot-emqx',
-    'iot-tdengine',
-    'iot-redis'
+    $mysqlContainer,
+    $emqxContainer,
+    $tdengineContainer,
+    $redisContainer
 )
 $dataDirectoryNames = @('mysql-data', 'taos-data', 'redis-data')
+$knownDataVolumes = @(
+    'iot-platform-demo-hvac-smoke-mysql-data',
+    'iot-platform-demo-hvac-smoke-tdengine-data',
+    'iot-platform-demo-hvac-smoke-redis-data'
+)
 $expectedPointCodes = @(
     'WCR1_TWin',
     'WCR1_TWout',
@@ -45,6 +61,7 @@ $expectedPointCodes = @(
     'DBO_RH'
 )
 $applicationProcess = $null
+$smokeAccountPassword = '123456'
 
 function Resolve-DockerCli {
     $command = Get-Command docker -ErrorAction SilentlyContinue
@@ -152,7 +169,8 @@ function Get-ContainerInspection([string]$Container) {
 
 function Assert-ContainerDataMounts(
     [string]$Container,
-    [string[]]$AllowedTargets
+    [string[]]$AllowedTargets,
+    [string[]]$AllowedVolumes
 ) {
     $inspection = Get-ContainerInspection $Container
     if ($null -eq $inspection) {
@@ -160,13 +178,20 @@ function Assert-ContainerDataMounts(
     }
 
     $composeProject = $inspection.Config.Labels.'com.docker.compose.project'
-    if ($composeProject -ne 'env') {
-        throw "容器 $Container 不属于预期 Compose 项目 env"
+    if ($composeProject -ne $composeProjectName) {
+        throw "容器 $Container 不属于预期 Compose 项目 $composeProjectName"
     }
 
     foreach ($mount in $inspection.Mounts) {
         if ($mount.Destination -notin
             @('/var/lib/mysql', '/var/lib/taos', '/data')) {
+            continue
+        }
+
+        if ($mount.Type -eq 'volume') {
+            if ($mount.Name -notin $AllowedVolumes) {
+                throw "容器 $Container 的数据卷超出允许范围: $($mount.Name)"
+            }
             continue
         }
 
@@ -254,7 +279,7 @@ function Wait-ApplicationHealthy([datetime]$Deadline) {
     $healthUrl = 'http://127.0.0.1:8081/api/actuator/health'
     $loginBody = @{
         username = 'admin'
-        password = '123456'
+        password = $smokeAccountPassword
     } | ConvertTo-Json -Compress
 
     while ((Get-Date) -lt $Deadline) {
@@ -301,7 +326,7 @@ function Invoke-MySqlScalar([string]$Sql) {
         -Arguments @(
             'exec',
             '-e', "MYSQL_PWD=$password",
-            'iot-mysql',
+            $mysqlContainer,
             'mysql',
             '-uroot',
             '-Nse', $Sql
@@ -316,7 +341,7 @@ function Invoke-Taos([string]$Sql) {
     $lines = Invoke-Docker `
         -Arguments @(
             'exec',
-            'iot-tdengine',
+            $tdengineContainer,
             'taos',
             '-s', $Sql
         ) `
@@ -425,6 +450,53 @@ FROM iot_telemetry.st_raw_event;
     throw "TDengine 未记录全部冻结测点: $($missing -join ', ')"
 }
 
+function Test-DockerVolumeExists([string]$Volume) {
+    $previousErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $script:dockerCli volume inspect $Volume *> $null
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+}
+
+function Remove-ValidatedDataVolume(
+    [string]$Volume,
+    [string[]]$AllowedVolumes
+) {
+    if ($Volume -notin $AllowedVolumes) {
+        throw "拒绝删除未批准 Docker 数据卷: $Volume"
+    }
+    if (Test-DockerVolumeExists $Volume) {
+        Write-Output "删除测试数据卷: $Volume"
+        Invoke-Docker -Arguments @('volume', 'rm', $Volume)
+    }
+}
+
+function Invoke-HvacRealtimeSmoke {
+    $realtimeScript = Join-Path $repoRoot 'scripts\Test-HvacRealtimeSmoke.ps1'
+    $previousAdminPassword = $env:HVAC_SMOKE_ADMIN_PASSWORD
+    $previousRestrictedPassword = $env:HVAC_SMOKE_RESTRICTED_PASSWORD
+    try {
+        # 仅在本次受控清库环境中复用初始化账号口令，不写入子进程参数或日志。
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $smokeAccountPassword, 'Process')
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_RESTRICTED_PASSWORD', $smokeAccountPassword, 'Process')
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $realtimeScript
+        if ($LASTEXITCODE -ne 0) {
+            throw 'HVAC WebSocket 实时冒烟失败'
+        }
+    } finally {
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $previousAdminPassword, 'Process')
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_RESTRICTED_PASSWORD', $previousRestrictedPassword,
+            'Process')
+    }
+}
+
 if (-not $ResetData) {
     throw '必须显式传入 -ResetData 才允许重建测试数据'
 }
@@ -444,6 +516,40 @@ Import-ServerEnvironment $serverEnvFile
 [Environment]::SetEnvironmentVariable(
     'REDIS_PORT', $RedisPort.ToString(), 'Process')
 [Environment]::SetEnvironmentVariable(
+    'MQTT_PORT', $MqttPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'EMQX_DASHBOARD_PORT', $EmqxDashboardPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'MQTT_WEBSOCKET_PORT', $MqttWebSocketPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'TDENGINE_NATIVE_PORT_START',
+    $TdengineNativePortStart.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'TDENGINE_NATIVE_PORT_END',
+    $TdengineNativePortEnd.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'TDENGINE_REST_PORT', $TdengineRestPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'TDENGINE_PORT', $TdengineRestPort.ToString(), 'Process')
+[Environment]::SetEnvironmentVariable(
+    'MQTT_BROKER_URL', "tcp://127.0.0.1:$MqttPort", 'Process')
+[Environment]::SetEnvironmentVariable(
+    'COMPOSE_PROJECT_NAME', $composeProjectName, 'Process')
+[Environment]::SetEnvironmentVariable(
+    'MYSQL_CONTAINER_NAME', $mysqlContainer, 'Process')
+[Environment]::SetEnvironmentVariable(
+    'EMQX_CONTAINER_NAME', $emqxContainer, 'Process')
+[Environment]::SetEnvironmentVariable(
+    'TDENGINE_CONTAINER_NAME', $tdengineContainer, 'Process')
+[Environment]::SetEnvironmentVariable(
+    'REDIS_CONTAINER_NAME', $redisContainer, 'Process')
+[Environment]::SetEnvironmentVariable(
+    'MYSQL_VOLUME_NAME', $knownDataVolumes[0], 'Process')
+[Environment]::SetEnvironmentVariable(
+    'TDENGINE_VOLUME_NAME', $knownDataVolumes[1], 'Process')
+[Environment]::SetEnvironmentVariable(
+    'REDIS_VOLUME_NAME', $knownDataVolumes[2], 'Process')
+[Environment]::SetEnvironmentVariable(
     'MQTT_ENABLED', 'true', 'Process')
 
 $allowedTargets = @(
@@ -460,11 +566,14 @@ Write-Output '即将处理的容器:'
 $knownContainers | ForEach-Object { Write-Output "  $_" }
 Write-Output '获准删除的测试数据目录:'
 $allowedTargets | ForEach-Object { Write-Output "  $_" }
+Write-Output '获准删除的固定测试数据卷:'
+$knownDataVolumes | ForEach-Object { Write-Output "  $_" }
 
 foreach ($container in $knownContainers) {
     Assert-ContainerDataMounts `
         -Container $container `
-        -AllowedTargets $allowedTargets
+        -AllowedTargets $allowedTargets `
+        -AllowedVolumes $knownDataVolumes
 }
 
 $existingContainers = @($knownContainers | Where-Object {
@@ -478,6 +587,11 @@ if ($existingContainers.Count -gt 0) {
             '--volumes'
         ) + $existingContainers)
 }
+foreach ($volume in $knownDataVolumes) {
+    Remove-ValidatedDataVolume `
+        -Volume $volume `
+        -AllowedVolumes $knownDataVolumes
+}
 foreach ($target in $allowedTargets) {
     Remove-ValidatedDataDirectory `
         -Target $target `
@@ -488,8 +602,8 @@ foreach ($target in $allowedTargets) {
 # 这里等待已知测试端口恢复可用，避免把正常的清理延迟误判成外部端口冲突。
 Wait-PortAvailable -Port $MySqlPort -Resource 'MySQL'
 Wait-PortAvailable -Port $RedisPort -Resource 'Redis'
-Wait-PortAvailable -Port 1883 -Resource 'MQTT'
-Wait-PortAvailable -Port 6041 -Resource 'TDengine REST'
+Wait-PortAvailable -Port $MqttPort -Resource 'MQTT'
+Wait-PortAvailable -Port $TdengineRestPort -Resource 'TDengine REST'
 
 Invoke-Docker -Arguments @(
     'compose',
@@ -556,6 +670,7 @@ try {
         -Deadline ((Get-Date).AddSeconds($ApplicationTimeoutSeconds))
     Assert-DatabaseBoundaries
     Publish-And-AssertFrozenPoints
+    Invoke-HvacRealtimeSmoke
     Write-Output 'CLEAN_HVAC_SMOKE_SUCCESS'
 } catch {
     Write-Error $_

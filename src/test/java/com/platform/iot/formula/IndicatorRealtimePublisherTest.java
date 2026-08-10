@@ -19,7 +19,7 @@ import static org.mockito.Mockito.*;
 class IndicatorRealtimePublisherTest {
 
     @Test
-    void broadcastsHvacIndicatorEnvelopeThroughInjectedGateway() throws Exception {
+    void sendsHvacIndicatorEnvelopeToTheStateBuildingThroughInjectedGateway() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper();
         RealtimeMessageGateway gateway = mock(RealtimeMessageGateway.class);
         IndicatorRealtimePublisher publisher = new IndicatorRealtimePublisher(objectMapper, gateway);
@@ -28,7 +28,7 @@ class IndicatorRealtimePublisherTest {
         publisher.publish(state);
 
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
-        verify(gateway).broadcast(message.capture());
+        verify(gateway).sendToBuilding(eq("BLD001"), message.capture());
         JsonNode json = objectMapper.readTree(message.getValue());
         assertThat(json.path("type").asText()).isEqualTo("HVAC_INDICATOR");
         assertThat(json.path("data").path("indicatorId").asText())
@@ -52,10 +52,25 @@ class IndicatorRealtimePublisherTest {
     void deliveryFailureIsLoggedAndDoesNotEscape() {
         RealtimeMessageGateway gateway = mock(RealtimeMessageGateway.class);
         IndicatorRealtimePublisher publisher = new IndicatorRealtimePublisher(new ObjectMapper(), gateway);
-        doThrow(new IllegalStateException("socket unavailable")).when(gateway).broadcast(any());
+        doThrow(new IllegalStateException("socket unavailable"))
+                .when(gateway).sendToBuilding(eq("BLD001"), any());
 
         assertThatCode(() -> publisher.publish(state())).doesNotThrowAnyException();
-        verify(gateway).broadcast(any());
+        verify(gateway).sendToBuilding(eq("BLD001"), any());
+    }
+
+    @Test
+    void skipsStatesWithoutAnExplicitBuildingRoute() {
+        RealtimeMessageGateway gateway = mock(RealtimeMessageGateway.class);
+        IndicatorRealtimePublisher publisher = new IndicatorRealtimePublisher(new ObjectMapper(), gateway);
+        IndicatorLatestState withoutBuilding = new IndicatorLatestState(
+                "IND001", "WCR_COP", " ", "EQUIP001", 1_800_000_000_000L,
+                FormulaCalculation.Status.SUCCESS, 5.8, 0, "WCR_COP_V1", null,
+                List.of(), List.of(), List.of());
+
+        assertThatCode(() -> publisher.publish(withoutBuilding)).doesNotThrowAnyException();
+
+        verifyNoInteractions(gateway);
     }
 
     private static IndicatorLatestState state() {

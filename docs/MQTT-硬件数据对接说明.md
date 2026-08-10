@@ -135,8 +135,19 @@ Remove-Item Env:HVAC_VALUE_OVERRIDE
 - 最新指标：`GET /api/hvac/buildings/{buildingId}/indicators/latest`
 - 指标实时消息：`ws://<host>:<port>/api/ws/hvac`
 
-实时消息类型为 `HVAC_INDICATOR`。当前端点只完成 HVAC 业务边界清理；JWT
-握手、建筑订阅和广播隔离属于后续正式实时功能。
+`/ws/hvac` 只发送 `WCR_COP`、`TOWER_EFF`、`PUMP_EFF` 和 `AHU_POW_EFF`
+四项 `HVAC_INDICATOR` 增量，不发送 19 测点完整快照。指标必须先成功写入 TDengine，
+并被 Redis 最新分钟规则接受，之后才进行最佳努力 WebSocket 发布；实时发送失败不回滚结果，
+也不改变 MQTT 接收端现有 ACK、重试或重复消息处理语义。
+
+WebSocket 升级请求可以匿名建立空会话，但客户端必须在 5 秒内用 `SUBSCRIBE` 首帧提交
+JWT 和 `buildingId`。服务端复用 JWT 校验、Redis 活动登录态和 MySQL 建筑范围，只把消息
+发给已认证且仍有该建筑权限的连接；心跳继续复核登录态和建筑权限。JWT 不得放入 URL、
+日志或错误响应。
+
+HTTP 快照和最新指标接口仍是完整当前状态的权威读取入口。客户端收到实时增量后需要通过
+HTTP 对账；断线时使用 30 秒 HTTP 保障并有界重连。当前会话注册只支持单实例，不代表
+已经实现多实例 WebSocket 总线。
 
 V1 没有控制下行主题、控制 API 或设备自动回执。未来控制能力必须按
 `docs/HVAC控制能力设计备忘.md` 单独设计和验收。
