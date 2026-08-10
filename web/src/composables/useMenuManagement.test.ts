@@ -6,13 +6,13 @@ const tree = [{ id: 1, parentId: 0, menuName: '根', menuType: 'M' as const, pat
 describe('menu parent candidates', () => {
   it('excludes the edited node and descendants', () => { expect(menuParentOptions(tree, 1).map((item) => item.value)).toEqual([0]) })
 
-  it('expands all directories after the first async load', () => {
-    expect(reconcileExpandedMenuIds([], tree, false)).toEqual([1])
+  it('keeps every directory collapsed after the first async load', () => {
+    expect(reconcileExpandedMenuIds([], tree)).toEqual([])
   })
 
   it('preserves deliberate collapse and removes keys that are no longer expandable', () => {
-    expect(reconcileExpandedMenuIds([], tree, true)).toEqual([])
-    expect(reconcileExpandedMenuIds([1, 999], tree, true)).toEqual([1])
+    expect(reconcileExpandedMenuIds([], tree)).toEqual([])
+    expect(reconcileExpandedMenuIds([1, 999], tree)).toEqual([1])
   })
 
   it('does not offer button permissions as parent menus', () => {

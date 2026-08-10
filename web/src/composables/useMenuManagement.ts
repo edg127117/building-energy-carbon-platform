@@ -11,7 +11,6 @@ export function useMenuManagement() {
   const pending = ref(false)
   const expandedMenuIds = ref<number[]>([])
   let generation = 0
-  let hasLoaded = false
   const currentMenu = useMenuStore()
   const load = async () => {
     const owner = ++generation; loading.value = true; error.value = null
@@ -19,8 +18,7 @@ export function useMenuManagement() {
       const next = await getAdminMenuTree()
       if (owner === generation) {
         tree.value = next
-        expandedMenuIds.value = reconcileExpandedMenuIds(expandedMenuIds.value, next, hasLoaded)
-        hasLoaded = true
+        expandedMenuIds.value = reconcileExpandedMenuIds(expandedMenuIds.value, next)
       }
     }
     catch (reason) { if (owner === generation) error.value = messageOf(reason); throw reason }
@@ -39,15 +37,15 @@ export function useMenuManagement() {
   return { tree, loading, error, pending, expandedMenuIds, load, add, update, remove, parentOptions: (id?: number) => menuParentOptions(tree.value, id) }
 }
 
-/** 首次异步加载展开全部有效父节点；后续刷新只保留用户仍然有效的展开选择。 */
-export function reconcileExpandedMenuIds(current: number[], tree: MenuNode[], initialized: boolean) {
+/** 刷新后只保留用户手动展开且仍然有效的父节点；首次加载保持全部折叠。 */
+export function reconcileExpandedMenuIds(current: number[], tree: MenuNode[]) {
   const expandable = new Set<number>()
   const visit = (items: MenuNode[]) => items.forEach((item) => {
     if (item.children.length > 0) expandable.add(item.id)
     visit(item.children)
   })
   visit(tree)
-  return initialized ? current.filter((id) => expandable.has(id)) : [...expandable]
+  return current.filter((id) => expandable.has(id))
 }
 
 /** 父级候选排除当前节点和全部后代；后端仍会复核父级存在、自引用和循环。 */
