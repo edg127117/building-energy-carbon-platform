@@ -24,8 +24,8 @@ ON DUPLICATE KEY UPDATE
 UPDATE `sys_menu` SET `visible`=0, `status`=0
 WHERE `id` IN (110,120,130,131,132,133,140,141,150,151,160,161,221,222,230,231,232,242);
 
--- 对方开发是按建筑授权的接口账号，清理全部历史菜单误配；重复执行结果不变。
-UPDATE `sys_role` SET `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY';
+-- 接口调用方按建筑授权，清理全部历史菜单误配；重复执行结果不变。
+UPDATE `sys_role` SET `role_name`='接口调用方', `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY';
 DELETE rm FROM `sys_role_menu` rm
 JOIN `sys_role` r ON r.`id`=rm.`role_id`
 WHERE r.`role_key`='THIRD_PARTY';

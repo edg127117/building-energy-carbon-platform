@@ -52,7 +52,7 @@ INSERT IGNORE INTO `sys_role`
 (`role_key`, `role_name`, `data_scope`, `status`) VALUES
 ('BUILDING_OWNER', '建筑业主', 'BUILDING', 1),
 ('ENERGY_MANAGER', '能效管理方', 'BUILDING', 1),
-('THIRD_PARTY', '对方开发', 'BUILDING', 1),
+('THIRD_PARTY', '接口调用方', 'BUILDING', 1),
 ('PLATFORM_ADMIN', '己方管理', 'ALL', 1);
 
 INSERT IGNORE INTO `sys_user_role` (`user_id`, `role_id`)

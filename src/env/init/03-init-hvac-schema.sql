@@ -390,11 +390,11 @@ PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 INSERT IGNORE INTO `sys_role` (`role_key`, `role_name`, `data_scope`) VALUES
 ('BUILDING_OWNER', '建筑业主',   'BUILDING'),
 ('ENERGY_MANAGER', '能效管理方', 'BUILDING'),
-('THIRD_PARTY',    '对方开发',   'BUILDING'),
+('THIRD_PARTY',    '接口调用方', 'BUILDING'),
 ('PLATFORM_ADMIN', '己方管理',   'ALL');
 
--- 对方开发是按建筑授权的接口账号，不拥有内部后台菜单；重复执行可修正旧库脏数据。
-UPDATE `sys_role` SET `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY';
+-- 接口调用方按建筑授权且不拥有内部后台菜单；重复执行可修正旧库脏数据。
+UPDATE `sys_role` SET `role_name`='接口调用方', `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY';
 DELETE rm FROM `sys_role_menu` rm
 JOIN `sys_role` r ON r.`id`=rm.`role_id`
 WHERE r.`role_key`='THIRD_PARTY';

@@ -14,7 +14,7 @@ defineEmits<{ close: []; save: [roles: FormalRoleKey[]] }>()
 const selected = ref<FormalRoleKey[]>([])
 const options = [
   { label: '建筑业主', value: 'BUILDING_OWNER' }, { label: '能效管理方', value: 'ENERGY_MANAGER' },
-  { label: '对方开发', value: 'THIRD_PARTY' }, { label: '平台管理员', value: 'PLATFORM_ADMIN' },
+  { label: '接口调用方', value: 'THIRD_PARTY' }, { label: '平台管理员', value: 'PLATFORM_ADMIN' },
 ] as const
 watch(() => [props.open, props.user] as const, () => { selected.value = [...(props.user?.roles ?? [])] }, { immediate: true })
 </script>

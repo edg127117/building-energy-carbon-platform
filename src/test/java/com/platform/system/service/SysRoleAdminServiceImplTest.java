@@ -46,7 +46,7 @@ class SysRoleAdminServiceImplTest {
         assertThatThrownBy(() -> service.replaceMenus(3L, List.of(101L)))
                 .isInstanceOfSatisfying(BusinessException.class, exception -> {
                     assertThat(exception.getCode()).isEqualTo(400);
-                    assertThat(exception.getMessage()).contains("不使用内部菜单");
+                    assertThat(exception.getMessage()).contains("不使用后台页面菜单");
                 });
 
         verifyNoInteractions(menuMapper, roleMenuMapper, userRoleMapper, menuCacheService);
@@ -58,7 +58,11 @@ class SysRoleAdminServiceImplTest {
         role.setDataScope("ALL");
         when(roleMapper.selectById(3L)).thenReturn(role);
 
-        assertThat(service.detail(3L).dataScope()).isEqualTo("BUILDING");
+        assertThat(service.detail(3L))
+                .satisfies(view -> {
+                    assertThat(view.roleName()).isEqualTo("接口调用方");
+                    assertThat(view.dataScope()).isEqualTo("BUILDING");
+                });
     }
 
     private SysRole thirdPartyRole() {

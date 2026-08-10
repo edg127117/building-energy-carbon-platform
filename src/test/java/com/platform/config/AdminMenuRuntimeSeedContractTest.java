@@ -19,6 +19,7 @@ class AdminMenuRuntimeSeedContractTest {
         assertThat(baseSql)
                 .contains("(101", "'/hvac-demo'", "(223", "'/system/building-access'",
                         "'/system/users'", "'/system/roles'", "'/system/menus'",
+                        "'THIRD_PARTY',    '接口调用方'",
                         "'单机调适',    'M', '/single',        NULL,       'control',   0, 0",
                         "'建筑注册',    'C', '/system/building/list', 'system/BuildingList','home',   0, 0")
                 .contains("'BUILDING_OWNER'", "'ENERGY_MANAGER'", "'PLATFORM_ADMIN'");
@@ -29,7 +30,7 @@ class AdminMenuRuntimeSeedContractTest {
         assertThat(migrationSql)
                 .contains("ON DUPLICATE KEY UPDATE", "INSERT IGNORE", "visible`=0, `status`=0",
                         "BUILDING_OWNER", "ENERGY_MANAGER", "PLATFORM_ADMIN",
-                        "SET `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY'",
+                        "SET `role_name`='接口调用方', `data_scope`='BUILDING' WHERE `role_key`='THIRD_PARTY'",
                         "WHERE r.`role_key`='THIRD_PARTY'")
                 .doesNotContain("DELETE FROM `sys_menu`", "DROP TABLE", "TRUNCATE TABLE");
     }

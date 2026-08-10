@@ -43,7 +43,6 @@ export function useRoleManagement() {
       const [nextRoles, nextTree] = await Promise.all([listRoles(), getAdminMenuTree()])
       roles.value = nextRoles
       tree.value = nextTree
-      if (nextRoles[0]) await selectRole(nextRoles[0])
     } catch (reason) {
       error.value = messageOf(reason)
       loading.value = false
