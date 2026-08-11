@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让相对时间范围内的 HVAC 真实历史趋势在页面可见时每 30 秒自动重查，并在移动窗口刷新失败时保留上次成功曲线。
+**Goal:** 让相对时间范围内的 HVAC 真实历史趋势在页面可见时每 30 秒自动重查，页面从后台返回时立即补查一次，并在移动窗口刷新失败时保留上次成功曲线。
 
 **Architecture:** `HvacHistoryPanel.vue` 只负责浏览器可见性和定时器生命周期，继续通过 composable 的 `refresh()` 触发查询；`useHvacHistoryTrends.ts` 把稳定展示条件与每次移动的 `[from,to)` 分离，保持现有请求版本隔离和 TDengine 权威结果。WebSocket、实时卡片、后端 API 与图表纵轴逻辑不变。
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - 只修改历史趋势自动刷新、直接测试和对应项目文档，不修改后端、TDengine、WebSocket 或实时卡片刷新。
-- `1h`、`6h`、`24h`、`7d` 在页面可见时每 30 秒重查；`custom` 不自动刷新。
+- `1h`、`6h`、`24h`、`7d` 在页面可见时每 30 秒重查；页面转为不可见时停止定时器，重新可见时立即补查并从该时刻重启 30 秒周期；`custom` 不自动刷新。
 - 自动周期遇到空上下文、空测点选择或已有请求时跳过，不排队。
 - 前端不拼接实时值、不计算指标、不生成假历史，历史接口返回仍是唯一曲线事实。
 - 同一展示条件刷新失败保留旧曲线；建筑、模式、预设或选择变化继续立即清空旧条件。
@@ -148,6 +148,8 @@ it('auto refreshes a visible relative range every 30 seconds and stops on unmoun
 
 Add one skip-matrix case that advances separate 30-second periods for `custom`、`loading`、hidden page and point mode with no selected IDs, then restores a visible indicator state and expects exactly one refresh.
 
+Add a visibility lifecycle case that mounts while hidden, confirms no timed refresh, dispatches `visibilitychange` after restoring `visible`, expects one immediate refresh, then verifies that the next refresh occurs exactly 30 seconds later. Unmount the component and confirm neither the listener nor timer can trigger another refresh.
+
 - [ ] **Step 2: Run the panel tests and confirm no interval exists**
 
 Run:
@@ -160,7 +162,7 @@ Expected: new auto-refresh assertions fail because the component only supports m
 
 - [ ] **Step 3: Implement the panel-owned timer**
 
-Import `onMounted`, declare the interval and gate the current state:
+Import `onMounted`, declare the interval and gate the current state. Keep timer ownership and the visibility listener inside the panel:
 
 ```ts
 const HISTORY_AUTO_REFRESH_MS = 30_000
@@ -173,20 +175,41 @@ function canAutoRefresh(): boolean {
   return selectedPointIds.value.length > 0
 }
 
-onMounted(() => {
+function stopAutoRefreshTimer(): void {
+  if (historyRefreshTimer !== null) window.clearInterval(historyRefreshTimer)
+  historyRefreshTimer = null
+}
+
+function startAutoRefreshTimer(): void {
+  stopAutoRefreshTimer()
+  if (document.visibilityState !== 'visible') return
   historyRefreshTimer = window.setInterval(() => {
     if (canAutoRefresh()) void refresh()
   }, HISTORY_AUTO_REFRESH_MS)
+}
+
+function handleVisibilityChange(): void {
+  if (document.visibilityState !== 'visible') {
+    stopAutoRefreshTimer()
+    return
+  }
+  if (canAutoRefresh()) void refresh()
+  startAutoRefreshTimer()
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  startAutoRefreshTimer()
 })
 
 onBeforeUnmount(() => {
-  if (historyRefreshTimer !== null) window.clearInterval(historyRefreshTimer)
-  historyRefreshTimer = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  stopAutoRefreshTimer()
   dispose()
 })
 ```
 
-Replace the old direct `onBeforeUnmount(dispose)` registration. Add one concise Chinese comment explaining that fixed custom ranges and background tabs do not continuously scan TDengine.
+Replace the old direct `onBeforeUnmount(dispose)` registration. Add one concise Chinese comment explaining that fixed custom ranges and background tabs do not continuously scan TDengine, and that returning to the page performs one authoritative catch-up query before restarting the cadence.
 
 - [ ] **Step 4: Run both focused suites**
 
@@ -194,7 +217,7 @@ Replace the old direct `onBeforeUnmount(dispose)` registration. Add one concise 
 npm run test:run -- src/components/hvac/HvacHistoryPanel.test.ts src/composables/useHvacHistoryTrends.test.ts --maxWorkers=1 --minWorkers=1 --pool=threads
 ```
 
-Expected: both files pass; timer cleanup leaves no pending refresh after unmount.
+Expected: both files pass; hidden pages own no running interval, returning visible refreshes immediately, the cadence restarts from the return time, and cleanup leaves no listener or pending refresh after unmount.
 
 - [ ] **Step 5: Commit the auto-refresh behavior**
 
@@ -221,7 +244,7 @@ git commit -m "feat(web): auto refresh HVAC history trends"
 
 - [ ] **Step 1: Update current facts**
 
-In `PROJECT_GUIDE.md` section 4.3, state that history trends use a separate visibility-aware 30-second authoritative query for relative ranges and do not consume WebSocket values. In `PROJECT_STATUS.md` section 3.3, record the same implemented boundary and failure preservation. Change the README row to link this plan and mark it “成对历史记录”.
+In `PROJECT_GUIDE.md` section 4.3, state that history trends use a separate visibility-aware 30-second authoritative query for relative ranges, immediately catch up when the page returns visible, and do not consume WebSocket values. In `PROJECT_STATUS.md` section 3.3, record the same implemented boundary and failure preservation. Change the README row to link this plan and mark it “成对历史记录”.
 
 - [ ] **Step 2: Run focused and complete frontend verification**
 
@@ -237,7 +260,7 @@ Expected: all commands exit 0. Record any existing build warning separately; do 
 
 - [ ] **Step 3: Perform browser verification**
 
-Start or reuse the current local backend/frontend. With a relative preset and visible page, observe at least one 30-second interval and confirm “最近成功” advances without clicking “刷新趋势”; switch to a custom range and confirm the timestamp does not advance automatically. Confirm the chart still shows backend data, gaps, quality markers and data-driven Y-axis. Do not insert synthetic production data.
+Start or reuse the current local backend/frontend. With a relative preset and visible page, observe at least one 30-second interval and confirm “最近成功” advances without clicking “刷新趋势”; hide the page and return, then confirm one immediate catch-up query and a fresh 30-second cadence; switch to a custom range and confirm the timestamp does not advance automatically. Confirm the chart still shows backend data, gaps, quality markers and data-driven Y-axis. Do not insert synthetic production data.
 
 - [ ] **Step 4: Review comments and repository scope**
 
@@ -264,6 +287,6 @@ Prepare a PR to `main` with actual commands and results, explicit non-goals, the
 
 ## Plan Self-Review
 
-- Spec coverage: moving relative ranges, 30-second visible refresh, custom/hidden/empty/loading skips, cleanup, stale preservation, unchanged WebSocket/backend/axis boundaries, tests, docs, browser and Git delivery all map to explicit steps.
+- Spec coverage: moving relative ranges, 30-second visible refresh, hidden stop, visible catch-up and cadence restart, custom/empty/loading skips, cleanup, stale preservation, unchanged WebSocket/backend/axis boundaries, tests, docs, browser and Git delivery all map to explicit steps.
 - Placeholder scan: every step contains an exact file, command, expected result and implementation boundary.
 - Type consistency: both tasks use the existing `refresh(): Promise<void>` and refs returned by `useHvacHistoryTrends`; the new `scopeKey` remains internal to `HistoryRequest`.
