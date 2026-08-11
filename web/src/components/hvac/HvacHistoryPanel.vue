@@ -171,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import HvacTrendChart from './HvacTrendChart.vue'
 import { useHvacHistoryTrends } from '@/composables/useHvacHistoryTrends'
 import {
@@ -221,6 +221,7 @@ const presetOptions: Array<{ label: string; value: HvacHistoryPreset }> = [
   { label: '7 天', value: '7d' },
   { label: '自定义', value: 'custom' },
 ]
+const HISTORY_AUTO_REFRESH_MS = 30_000
 
 const indicatorIds = computed(() =>
   props.indicators
@@ -347,8 +348,50 @@ function formatTime(value: number): string {
   }).format(new Date(value))
 }
 
-/** 页面卸载时关闭状态层写回入口，使迟到的 TDengine 响应失效。 */
-onBeforeUnmount(dispose)
+let historyRefreshTimer: number | null = null
+
+/** 固定区间不参与周期查询；空上下文或在途请求也跳过当前周期。 */
+function canAutoRefresh(): boolean {
+  if (document.visibilityState !== 'visible') return false
+  if (!props.buildingId || preset.value === 'custom' || loading.value) return false
+  if (mode.value === 'indicators') return indicatorIds.value.length > 0
+  return selectedPointIds.value.length > 0
+}
+
+function stopAutoRefreshTimer(): void {
+  if (historyRefreshTimer !== null) window.clearInterval(historyRefreshTimer)
+  historyRefreshTimer = null
+}
+
+function startAutoRefreshTimer(): void {
+  stopAutoRefreshTimer()
+  if (document.visibilityState !== 'visible') return
+  historyRefreshTimer = window.setInterval(() => {
+    if (canAutoRefresh()) void refresh()
+  }, HISTORY_AUTO_REFRESH_MS)
+}
+
+/** 后台页签停止扫描 TDengine；返回时先补一次权威查询，再从返回时刻重启周期。 */
+function handleVisibilityChange(): void {
+  if (document.visibilityState !== 'visible') {
+    stopAutoRefreshTimer()
+    return
+  }
+  if (canAutoRefresh()) void refresh()
+  startAutoRefreshTimer()
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  startAutoRefreshTimer()
+})
+
+/** 页面卸载时移除可见性监听、停止周期查询和状态写回，使迟到的 TDengine 响应失效。 */
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  stopAutoRefreshTimer()
+  dispose()
+})
 </script>
 
 <style scoped>

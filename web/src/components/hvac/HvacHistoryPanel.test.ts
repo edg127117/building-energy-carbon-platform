@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { ref } from 'vue'
 import type {
@@ -135,6 +135,11 @@ describe('HvacHistoryPanel', () => {
     holder.state = state()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
   it('shows approved modes, default range and response summary', () => {
     const wrapper = mountPanel()
 
@@ -175,6 +180,91 @@ describe('HvacHistoryPanel', () => {
     expect(holder.state.setPreset).toHaveBeenCalledWith('7d')
     expect(holder.state.setSelectedPointIds).toHaveBeenCalledWith(['P1'])
     expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('auto refreshes a visible relative range every 30 seconds and stops on unmount', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    const wrapper = mountPanel()
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes immediately when a hidden page becomes visible and restarts its cadence', async () => {
+    vi.useFakeTimers()
+    let visibility: DocumentVisibilityState = 'hidden'
+    vi.spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => visibility)
+    const wrapper = mountPanel()
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).not.toHaveBeenCalled()
+
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(2)
+
+    visibility = 'hidden'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(2)
+
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    expect(holder.state.refresh).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(4)
+
+    wrapper.unmount()
+    visibility = 'hidden'
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(4)
+  })
+
+  it('skips automatic refresh for fixed, hidden, loading and empty point states', async () => {
+    vi.useFakeTimers()
+    let visibility: DocumentVisibilityState = 'visible'
+    vi.spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => visibility)
+    const wrapper = mountPanel()
+
+    holder.state.preset.value = 'custom'
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    holder.state.preset.value = '24h'
+    holder.state.loading.value = true
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    holder.state.loading.value = false
+    visibility = 'hidden'
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    visibility = 'visible'
+    holder.state.mode.value = 'points'
+    holder.state.selectedPointIds.value = []
+    await vi.advanceTimersByTimeAsync(30_000)
+
+    expect(holder.state.refresh).not.toHaveBeenCalled()
+
+    holder.state.mode.value = 'indicators'
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
   })
 
   it('validates incomplete custom range before calling the composable', async () => {

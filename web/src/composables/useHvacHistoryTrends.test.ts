@@ -249,18 +249,22 @@ describe('useHvacHistoryTrends', () => {
     expect(state.groups.value[0].series[0].id).toBe('I1')
   })
 
-  it('keeps matching successful data as stale when manual refresh fails', async () => {
+  it('keeps relative-window data as stale when its refreshed range advances and fails', async () => {
     const api = dependencies()
     const state = useHvacHistoryTrends(api)
     await state.setBuildingContext({
       buildingId: 'BLD001', indicatorIds: ['I1'], points: snapshotPoints(),
     })
+    api.now.mockReturnValue(NOW + 60_000)
     api.getIndicatorTrends.mockRejectedValueOnce({
       response: { status: 503, data: { msg: 'sensitive' } },
     })
 
     await state.refresh()
 
+    expect(api.getIndicatorTrends).toHaveBeenLastCalledWith(
+      'BLD001', ['I1'], NOW - 86_400_000 + 60_000, NOW + 60_000,
+    )
     expect(state.groups.value).not.toEqual([])
     expect(state.stale.value).toBe(true)
     expect(state.error.value).toEqual({
