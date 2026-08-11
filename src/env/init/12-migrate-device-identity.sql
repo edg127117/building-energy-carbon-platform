@@ -18,3 +18,7 @@ CREATE TABLE IF NOT EXISTS `biz_device_identity` (
         FOREIGN KEY (`equip_id`, `building_id`)
         REFERENCES `biz_equipment` (`equip_id`, `building_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备外部身份预注册绑定';
+
+-- 标准多字段别名由“身份类型:身份值:指标代码”组成，原 100 字符不足以覆盖表字段上限。
+ALTER TABLE `biz_point_alias`
+    MODIFY COLUMN `source_point_code` VARCHAR(255) NOT NULL;

@@ -194,7 +194,7 @@ CREATE TABLE IF NOT EXISTS `biz_point_alias` (
     `alias_id` VARCHAR(32) NOT NULL,
     `building_id` VARCHAR(32) NOT NULL,
     `source_system` VARCHAR(50) NOT NULL,
-    `source_point_code` VARCHAR(100) NOT NULL,
+    `source_point_code` VARCHAR(255) NOT NULL,
     `point_id` VARCHAR(32) NOT NULL,
     `status` TINYINT(1) NOT NULL DEFAULT 1,
     PRIMARY KEY (`alias_id`),

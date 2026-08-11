@@ -214,7 +214,7 @@ CREATE TABLE biz_point_alias (
   alias_id VARCHAR(32) PRIMARY KEY,
   building_id VARCHAR(32) NOT NULL,
   source_system VARCHAR(50) NOT NULL,
-  source_point_code VARCHAR(100) NOT NULL,
+  source_point_code VARCHAR(255) NOT NULL,
   point_id VARCHAR(32) NOT NULL,
   status TINYINT DEFAULT 1,
   UNIQUE (building_id, source_system, source_point_code)
