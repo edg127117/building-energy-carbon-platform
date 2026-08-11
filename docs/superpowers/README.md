@@ -56,7 +56,7 @@
 | Repository Guardrail 换行兼容修复 | [设计](specs/2026-08-09-guardrail-line-ending-normalization-design.md) | [计划](plans/2026-08-09-guardrail-line-ending-normalization.md) | 成对历史记录 | PR 正文进入章节解析前统一 LF、CRLF 和 CR，避免跨平台换行导致字段误报。 |
 | HVAC WebSocket 实时韧性 | [设计](specs/2026-08-10-hvac-realtime-websocket-resilience-design.md) | [计划](plans/2026-08-10-hvac-realtime-websocket-resilience.md) | 成对历史记录 | 当前实现是认证后按建筑发布四指标增量，并以 HTTP 作为完整状态权威来源；不包含 19 测点 WebSocket 快照或多实例总线。 |
 | HVAC 最小后台管理界面 | [设计](specs/2026-08-10-hvac-minimal-admin-ui-design.md) | [计划](plans/2026-08-10-hvac-minimal-admin-ui.md) | 成对历史记录 | 当前实现只供平台管理员维护用户、固定角色菜单、菜单树和建筑授权；后端鉴权是安全边界，数据库组件字符串不驱动前端动态加载。 |
-| 可配置多字段设备报文适配器 | [设计](specs/2026-08-11-configurable-multifield-telemetry-adapter-design.md) | — | 仅设计 | 已确认独立协议适配器、MySQL 配置映射、平台严格预登记和未知设备拒绝边界；设计不代表功能已经实现。 |
+| 可配置多字段设备报文适配器 | [设计](specs/2026-08-11-configurable-multifield-telemetry-adapter-design.md) | [计划](plans/2026-08-11-configurable-multifield-telemetry-adapter.md) | 成对历史记录 | 已确认云端只做接入、本地保存业务数据，以及 MySQL 配置映射、平台严格预登记和未知设备异常拒绝边界；当前完成状态仍以代码和项目状态为准。 |
 
 ## 已确认的替代关系
 
