@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.iot.ingest.HvacIngestionResult;
 import com.platform.iot.ingest.HvacMqttMessageHandler;
+import com.platform.iot.ingest.standard.StandardTelemetryMqttMessageHandler;
+import com.platform.iot.ingest.standard.StandardTelemetryResult;
+import com.platform.iot.quality.DataPointConfigSnapshotUnavailableException;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
@@ -14,36 +17,41 @@ import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.scheduling.TaskScheduler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
-import java.nio.charset.StandardCharsets;
+import java.io.IOException;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * HVAC 19 测点 MQTT 连接与协议入口。
- *
- * <p>该配置只负责连接 EMQX、订阅可信上行主题、做载荷大小与 JSON 基础校验，
- * 再把业务载荷交给 {@link HvacMqttMessageHandler}。测点身份、质量判断和 TDengine
- * 写入不放在配置层，避免重新形成协议与业务耦合。</p>
- *
- * <p>QoS 1 使用手动确认：落库成功、重复数据和业务无效毒消息都会确认；
- * TDengine 存储失败不确认，从而保留由 EMQX 重新投递的机会。</p>
- *
- * <p>整个配置受 {@code mqtt.enabled} 控制。测试环境关闭后不会创建 Client 或执行
- * 连接任务，从而避免普通自动化测试接触真实 Broker；采集业务单元测试仍可直接
- * 构造本类验证协议和 ACK 语义。</p>
- */
 @Configuration
 @ConditionalOnProperty(
         prefix = "mqtt",
         name = "enabled",
         havingValue = "true",
         matchIfMissing = true)
+/**
+ * 本地平台旧单点与标准多字段 MQTT 连接入口。
+ *
+ * <p>该配置连接云端 EMQX，并按精确 Topic 把旧单点报文交给
+ * {@link HvacMqttMessageHandler}，把标准多字段报文交给
+ * {@link StandardTelemetryMqttMessageHandler}。配置层只负责协议路由和 QoS 1 ACK，
+ * 不解析设备归属，也不直接访问 MySQL 或 TDengine。</p>
+ *
+ * <p>业务拒绝和无法通过重投修复的 JSON 毒消息会确认；本地配置快照不可用、
+ * TDengine 写入失败或未分类运行时异常不确认。初次连接失败由独立调度器持续重试，
+ * 首次连接成功后交给 Paho 自动重连并恢复订阅。</p>
+ */
 public class MqttConfig {
 
     private static final Logger log = LoggerFactory.getLogger(MqttConfig.class);
@@ -51,6 +59,8 @@ public class MqttConfig {
 
     private final ObjectMapper objectMapper;
     private final HvacMqttMessageHandler hvacMqttMessageHandler;
+    private final StandardTelemetryMqttMessageHandler standardTelemetryMqttMessageHandler;
+    private final AtomicBoolean connecting = new AtomicBoolean();
 
     @Value("${mqtt.broker-url}")
     private String brokerUrl;
@@ -67,55 +77,75 @@ public class MqttConfig {
     @Value("${mqtt.topics.upstream}")
     private String[] upstreamTopics;
 
+    @Value("${mqtt.topics.standard-upstream:device/telemetry/up}")
+    private String[] standardUpstreamTopics;
+
+    @Value("${mqtt.initial-retry-millis:5000}")
+    private long initialRetryMillis;
+
     public MqttConfig(
             ObjectMapper objectMapper,
-            HvacMqttMessageHandler hvacMqttMessageHandler) {
+            HvacMqttMessageHandler hvacMqttMessageHandler,
+            StandardTelemetryMqttMessageHandler standardTelemetryMqttMessageHandler) {
         this.objectMapper = objectMapper;
         this.hvacMqttMessageHandler = hvacMqttMessageHandler;
+        this.standardTelemetryMqttMessageHandler = standardTelemetryMqttMessageHandler;
     }
 
-    /**
-     * 创建独立 MQTT 客户端。V1 没有控制下行，因此该 Bean 只供上行连接任务使用。
-     */
+    /** 首次连接失败后的单线程重试调度器，不承载 MQTT 消息业务处理。 */
+    @Bean(name = "mqttTaskScheduler", destroyMethod = "shutdown")
+    public ThreadPoolTaskScheduler mqttTaskScheduler() {
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setPoolSize(1);
+        scheduler.setThreadNamePrefix("mqtt-connect-");
+        return scheduler;
+    }
+
+    /** 创建拥有固定 clientId 的本地订阅客户端，稳定会话由 cleanSession=false 保留。 */
     @Bean
     public IMqttClient mqttClient() throws MqttException {
         return new MqttClient(brokerUrl, clientId, new MemoryPersistence());
     }
 
-    /**
-     * 应用启动后连接 EMQX 并订阅 HVAC 上行主题。
-     *
-     * <p>连接失败只影响 MQTT 采集，不拖垮登录、查询等无关模块；Paho 自动重连后
-     * 会重新订阅相同上行主题。</p>
-     */
+    /** 应用启动后注册回调并尝试连接；连接失败不阻断平台其他模块启动。 */
     @Bean
-    public CommandLineRunner initMqttClient(IMqttClient client) {
+    public CommandLineRunner initMqttClient(
+            IMqttClient client,
+            @Qualifier("mqttTaskScheduler") TaskScheduler scheduler) {
         return args -> {
-            if (upstreamTopics == null || upstreamTopics.length == 0) {
-                log.error("MQTT 客户端初始化失败：未配置 HVAC 上行主题");
+            if (!routingConfigurationValid()) {
                 return;
             }
-
-            try {
-                MqttConnectOptions options = new MqttConnectOptions();
-                options.setUserName(username);
-                options.setPassword(password.toCharArray());
-                options.setAutomaticReconnect(true);
-                options.setCleanSession(false);
-                options.setConnectionTimeout(10);
-
-                // 手动确认把“Broker 已投递”和“时序数据已按业务语义处理”绑定起来。
-                client.setManualAcks(true);
-                client.setCallback(callback(client));
-                client.connect(options);
-                subscribeUpstream(client);
-                log.info("MQTT HVAC 客户端已连接至 {}，上行主题={}",
-                        brokerUrl, Arrays.toString(upstreamTopics));
-            } catch (MqttException e) {
-                // 首次连接失败不阻断平台启动；该分支没有后台重试，需由进程重启或外部运维恢复。
-                log.error("MQTT HVAC 客户端初始化失败", e);
-            }
+            client.setManualAcks(true);
+            client.setCallback(callback(client));
+            connectOrScheduleRetry(client, scheduler);
         };
+    }
+
+    private void connectOrScheduleRetry(IMqttClient client, TaskScheduler scheduler) {
+        if (client.isConnected() || !connecting.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            MqttConnectOptions options = new MqttConnectOptions();
+            options.setUserName(username);
+            options.setPassword(password.toCharArray());
+            options.setAutomaticReconnect(true);
+            options.setCleanSession(false);
+            options.setConnectionTimeout(10);
+            client.connect(options);
+            subscribeUpstream(client);
+            log.info("本地MQTT客户端已连接云端EMQX: broker={}, topics={}",
+                    brokerUrl, configuredTopics());
+        } catch (MqttException exception) {
+            log.warn("本地MQTT首次连接失败，将在{}毫秒后重试: {}",
+                    initialRetryMillis, exception.getMessage());
+            scheduler.schedule(
+                    () -> connectOrScheduleRetry(client, scheduler),
+                    Instant.now().plusMillis(initialRetryMillis));
+        } finally {
+            connecting.set(false);
+        }
     }
 
     private MqttCallbackExtended callback(IMqttClient client) {
@@ -127,16 +157,15 @@ public class MqttConfig {
                 }
                 try {
                     subscribeUpstream(client);
-                    log.info("MQTT 自动重连后已恢复 HVAC 上行订阅: {}",
-                            Arrays.toString(upstreamTopics));
-                } catch (MqttException e) {
-                    log.error("MQTT 自动重连后恢复 HVAC 上行订阅失败", e);
+                    log.info("MQTT自动重连后已恢复上行订阅: {}", configuredTopics());
+                } catch (MqttException exception) {
+                    log.error("MQTT自动重连后恢复上行订阅失败", exception);
                 }
             }
 
             @Override
             public void connectionLost(Throwable cause) {
-                log.warn("MQTT 连接断开，等待自动重连: {}",
+                log.warn("MQTT连接断开，等待自动重连: {}",
                         cause == null ? "unknown" : cause.getMessage());
             }
 
@@ -146,36 +175,52 @@ public class MqttConfig {
                 try {
                     byte[] payloadBytes = message.getPayload();
                     if (payloadBytes == null || payloadBytes.length == 0) {
-                        log.warn("MQTT 报文为空，已确认丢弃: topic={}", topic);
+                        log.warn("MQTT报文为空，已确认丢弃: topic={}", topic);
                         return;
                     }
                     if (payloadBytes.length > MAX_PAYLOAD_BYTES) {
-                        log.warn("MQTT 报文超过 64 KiB，已确认丢弃: topic={}, bytes={}",
+                        log.warn("MQTT报文超过64KiB，已确认丢弃: topic={}, bytes={}",
                                 topic, payloadBytes.length);
                         return;
                     }
 
-                    String payloadText =
-                            new String(payloadBytes, StandardCharsets.UTF_8);
-                    Map<String, Object> payload = objectMapper.readValue(
-                            payloadText, new TypeReference<>() {
-                            });
-                    if (!payload.containsKey("pointCode")) {
-                        // 缺少 pointCode 的载荷属于已经下线的旧电表格式，不能再进入其他链路。
-                        log.warn("拒绝旧格式 MQTT 报文：缺少 pointCode，已确认丢弃: topic={}",
-                                topic);
+                    long localReceivedTime = System.currentTimeMillis();
+                    if (containsTopic(standardUpstreamTopics, topic)) {
+                        StandardTelemetryResult result = standardTelemetryMqttMessageHandler.handle(
+                                payloadBytes, localReceivedTime);
+                        acknowledge = result.shouldAcknowledge();
+                        log.debug("标准多字段MQTT报文处理完成: outcome={}, metrics={}",
+                                result.outcome(), result.processedMetrics());
                         return;
                     }
-
-                    HvacIngestionResult result = hvacMqttMessageHandler.handle(
-                            payload, System.currentTimeMillis());
-                    acknowledge = result.shouldAcknowledge();
-                    log.debug("HVAC MQTT 报文处理完成: pointCode={}, outcome={}",
-                            payload.get("pointCode"), result.outcome());
-                } catch (Exception e) {
-                    // JSON 错误属于无法通过重投修复的毒消息，记录原因后确认，避免阻塞队列。
-                    log.warn("MQTT HVAC 报文解析失败，已确认丢弃: topic={}, reason={}",
-                            topic, e.getMessage());
+                    if (containsTopic(upstreamTopics, topic)) {
+                        Map<String, Object> payload = objectMapper.readValue(
+                                payloadBytes, new TypeReference<>() {
+                                });
+                        if (!payload.containsKey("pointCode")) {
+                            // 缺少 pointCode 的载荷属于已经下线的旧电表格式，不能进入其他链路。
+                            log.warn("拒绝旧格式MQTT报文：缺少pointCode，已确认丢弃: topic={}",
+                                    topic);
+                            return;
+                        }
+                        HvacIngestionResult result = hvacMqttMessageHandler.handle(
+                                payload, localReceivedTime);
+                        acknowledge = result.shouldAcknowledge();
+                        log.debug("旧单点MQTT报文处理完成: pointCode={}, outcome={}",
+                                payload.get("pointCode"), result.outcome());
+                        return;
+                    }
+                    log.warn("拒绝未配置路由的MQTT主题并确认丢弃: topic={}", topic);
+                } catch (IOException | IllegalArgumentException exception) {
+                    log.warn("MQTT报文JSON格式错误，已确认丢弃: topic={}, reason={}",
+                            topic, exception.getMessage());
+                } catch (DataPointConfigSnapshotUnavailableException exception) {
+                    acknowledge = false;
+                    log.warn("本地测点配置尚不可用，保留MQTT重投: topic={}", topic);
+                } catch (RuntimeException exception) {
+                    acknowledge = false;
+                    log.error("MQTT业务处理异常，保留重投: topic={}, reason={}",
+                            topic, exception.getMessage());
                 } finally {
                     if (acknowledge) {
                         acknowledge(client, topic, message);
@@ -191,20 +236,55 @@ public class MqttConfig {
     }
 
     private void subscribeUpstream(IMqttClient client) throws MqttException {
-        int[] qos = new int[upstreamTopics.length];
+        String[] topics = configuredTopics().toArray(String[]::new);
+        int[] qos = new int[topics.length];
         Arrays.fill(qos, 1);
-        client.subscribe(upstreamTopics, qos);
+        client.subscribe(topics, qos);
     }
 
-    private void acknowledge(
-            IMqttClient client,
-            String topic,
-            MqttMessage message) {
+    private boolean routingConfigurationValid() {
+        Set<String> legacy = topicSet(upstreamTopics);
+        Set<String> standard = topicSet(standardUpstreamTopics);
+        if (legacy.isEmpty() || standard.isEmpty()) {
+            log.error("MQTT客户端初始化失败：旧单点和标准多字段上行主题都必须配置");
+            return false;
+        }
+        Set<String> overlap = new LinkedHashSet<>(legacy);
+        overlap.retainAll(standard);
+        if (!overlap.isEmpty()) {
+            log.error("MQTT客户端初始化失败：旧单点与标准主题不能重叠: {}", overlap);
+            return false;
+        }
+        return true;
+    }
+
+    private Set<String> configuredTopics() {
+        Set<String> topics = new LinkedHashSet<>(topicSet(upstreamTopics));
+        topics.addAll(topicSet(standardUpstreamTopics));
+        return topics;
+    }
+
+    private Set<String> topicSet(String[] topics) {
+        Set<String> result = new LinkedHashSet<>();
+        if (topics != null) {
+            Arrays.stream(topics)
+                    .filter(topic -> topic != null && !topic.isBlank())
+                    .map(String::trim)
+                    .forEach(result::add);
+        }
+        return result;
+    }
+
+    private boolean containsTopic(String[] topics, String actualTopic) {
+        return topicSet(topics).contains(actualTopic);
+    }
+
+    private void acknowledge(IMqttClient client, String topic, MqttMessage message) {
         try {
             client.messageArrivedComplete(message.getId(), message.getQos());
-        } catch (MqttException e) {
-            log.error("MQTT 手动确认失败: topic={}, messageId={}",
-                    topic, message.getId(), e);
+        } catch (MqttException exception) {
+            log.error("MQTT手动确认失败: topic={}, messageId={}",
+                    topic, message.getId(), exception);
         }
     }
 }

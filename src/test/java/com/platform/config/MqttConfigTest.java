@@ -4,20 +4,28 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.iot.ingest.HvacIngestionResult;
 import com.platform.iot.ingest.HvacMqttMessageHandler;
 import com.platform.iot.ingest.IngestionOutcome;
+import com.platform.iot.ingest.standard.StandardTelemetryMqttMessageHandler;
+import com.platform.iot.ingest.standard.StandardTelemetryResult;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
+import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.scheduling.TaskScheduler;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -29,11 +37,13 @@ class MqttConfigTest {
     void acknowledgesAcceptedHvacMessage() throws Exception {
         IMqttClient client = mock(IMqttClient.class);
         HvacMqttMessageHandler handler = mock(HvacMqttMessageHandler.class);
+        StandardTelemetryMqttMessageHandler standardHandler =
+                mock(StandardTelemetryMqttMessageHandler.class);
         when(handler.handle(anyMap(), anyLong()))
                 .thenReturn(HvacIngestionResult.of(IngestionOutcome.ACCEPTED));
-        MqttConfig config = configuredConfig(handler);
+        ConfigFixture fixture = configuredConfig(handler, standardHandler);
 
-        config.initMqttClient(client).run();
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
         MqttCallback callback = capturedCallback(client);
         callback.messageArrived("device/data/up", mqttMessage(
                 41,
@@ -42,6 +52,7 @@ class MqttConfigTest {
                 """));
 
         verify(handler).handle(anyMap(), anyLong());
+        verifyNoInteractions(standardHandler);
         verify(client).messageArrivedComplete(41, 1);
     }
 
@@ -49,12 +60,14 @@ class MqttConfigTest {
     void leavesStorageFailureUnacknowledgedForQosRetry() throws Exception {
         IMqttClient client = mock(IMqttClient.class);
         HvacMqttMessageHandler handler = mock(HvacMqttMessageHandler.class);
+        StandardTelemetryMqttMessageHandler standardHandler =
+                mock(StandardTelemetryMqttMessageHandler.class);
         when(handler.handle(anyMap(), anyLong()))
                 .thenReturn(HvacIngestionResult.storageFailed(
                         "TDengine unavailable"));
-        MqttConfig config = configuredConfig(handler);
+        ConfigFixture fixture = configuredConfig(handler, standardHandler);
 
-        config.initMqttClient(client).run();
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
         capturedCallback(client).messageArrived(
                 "device/data/up",
                 mqttMessage(
@@ -70,9 +83,11 @@ class MqttConfigTest {
     void acknowledgesAndRejectsLegacyPayloadWithoutPointCode() throws Exception {
         IMqttClient client = mock(IMqttClient.class);
         HvacMqttMessageHandler handler = mock(HvacMqttMessageHandler.class);
-        MqttConfig config = configuredConfig(handler);
+        StandardTelemetryMqttMessageHandler standardHandler =
+                mock(StandardTelemetryMqttMessageHandler.class);
+        ConfigFixture fixture = configuredConfig(handler, standardHandler);
 
-        config.initMqttClient(client).run();
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
         capturedCallback(client).messageArrived(
                 "device/data/up",
                 mqttMessage(
@@ -85,15 +100,87 @@ class MqttConfigTest {
         verify(client).messageArrivedComplete(43, 1);
     }
 
-    private MqttConfig configuredConfig(HvacMqttMessageHandler handler) {
-        MqttConfig config = new MqttConfig(new ObjectMapper(), handler);
+    @Test
+    void routesCanonicalTopicOnlyToStandardHandler() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        HvacMqttMessageHandler legacyHandler = mock(HvacMqttMessageHandler.class);
+        StandardTelemetryMqttMessageHandler standardHandler =
+                mock(StandardTelemetryMqttMessageHandler.class);
+        when(standardHandler.handle(any(byte[].class), anyLong()))
+                .thenReturn(StandardTelemetryResult.accepted(2));
+        ConfigFixture fixture = configuredConfig(legacyHandler, standardHandler);
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        capturedCallback(client).messageArrived(
+                "device/telemetry/up", mqttMessage(44, "{}"));
+
+        verify(standardHandler).handle(any(byte[].class), anyLong());
+        verifyNoInteractions(legacyHandler);
+        verify(client).messageArrivedComplete(44, 1);
+    }
+
+    @Test
+    void standardRetryableFailureLeavesCanonicalPacketUnacknowledged() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        StandardTelemetryMqttMessageHandler standardHandler =
+                mock(StandardTelemetryMqttMessageHandler.class);
+        when(standardHandler.handle(any(byte[].class), anyLong()))
+                .thenReturn(StandardTelemetryResult.retryable(1, "tdengine unavailable"));
+        ConfigFixture fixture = configuredConfig(
+                mock(HvacMqttMessageHandler.class), standardHandler);
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        capturedCallback(client).messageArrived(
+                "device/telemetry/up", mqttMessage(45, "{}"));
+
+        verify(client, never()).messageArrivedComplete(45, 1);
+    }
+
+    @Test
+    void unknownTopicIsAcknowledgedWithoutCallingEitherHandler() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        HvacMqttMessageHandler legacyHandler = mock(HvacMqttMessageHandler.class);
+        StandardTelemetryMqttMessageHandler standardHandler =
+                mock(StandardTelemetryMqttMessageHandler.class);
+        ConfigFixture fixture = configuredConfig(legacyHandler, standardHandler);
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        capturedCallback(client).messageArrived(
+                "device/unexpected/up", mqttMessage(46, "{}"));
+
+        verifyNoInteractions(legacyHandler, standardHandler);
+        verify(client).messageArrivedComplete(46, 1);
+    }
+
+    @Test
+    void initialConnectionFailureSchedulesBackgroundRetry() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        doThrow(new MqttException(MqttException.REASON_CODE_SERVER_CONNECT_ERROR))
+                .when(client).connect(any());
+        ConfigFixture fixture = configuredConfig(
+                mock(HvacMqttMessageHandler.class),
+                mock(StandardTelemetryMqttMessageHandler.class));
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+
+        verify(fixture.scheduler()).schedule(any(Runnable.class), any(Instant.class));
+    }
+
+    private ConfigFixture configuredConfig(
+            HvacMqttMessageHandler handler,
+            StandardTelemetryMqttMessageHandler standardHandler) {
+        TaskScheduler scheduler = mock(TaskScheduler.class);
+        MqttConfig config = new MqttConfig(new ObjectMapper(), handler, standardHandler);
         ReflectionTestUtils.setField(config, "brokerUrl", "tcp://localhost:1883");
         ReflectionTestUtils.setField(config, "clientId", "test-client");
         ReflectionTestUtils.setField(config, "username", "test");
         ReflectionTestUtils.setField(config, "password", "test");
         ReflectionTestUtils.setField(
                 config, "upstreamTopics", new String[]{"device/data/up"});
-        return config;
+        ReflectionTestUtils.setField(
+                config, "standardUpstreamTopics", new String[]{"device/telemetry/up"});
+        ReflectionTestUtils.setField(config, "initialRetryMillis", 1000L);
+        return new ConfigFixture(config, scheduler);
     }
 
     private MqttCallback capturedCallback(IMqttClient client) throws Exception {
@@ -109,5 +196,8 @@ class MqttConfigTest {
         message.setQos(1);
         message.setId(id);
         return message;
+    }
+
+    private record ConfigFixture(MqttConfig config, TaskScheduler scheduler) {
     }
 }

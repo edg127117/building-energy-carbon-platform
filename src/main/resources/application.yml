@@ -53,15 +53,17 @@ mybatis-plus:
 
 # EMQX 配置
 mqtt:
-  # true：创建 MQTT Client 并订阅 HVAC 上行；false：完全不连接 Broker，供自动化测试隔离。
+  # true：本地平台主动连接云端 EMQX；false：完全不连接 Broker，供自动化测试隔离。
   enabled: ${MQTT_ENABLED:true}
   broker-url: ${MQTT_BROKER_URL:tcp://127.0.0.1:1883}
   client-id: ${MQTT_CLIENT_ID:platform-backend-01}
   username: ${MQTT_USER:admin}
   password: ${MQTT_PASSWORD:change-me}
+  initial-retry-millis: ${MQTT_INITIAL_RETRY_MILLIS:5000}
   topics:
-    # 只接收 HVAC 19 测点上报；缺少 pointCode 的旧格式报文会被确认并拒绝。
-    upstream: device/data/up
+    # 旧单点协议仅保留迁移窗口；新设备统一走标准多字段主题。
+    upstream: ${MQTT_UPSTREAM_TOPIC:device/data/up}
+    standard-upstream: ${MQTT_STANDARD_UPSTREAM_TOPIC:device/telemetry/up}
 
 # TDengine 配置 (使用 RESTful 端口 6041)
 tdengine:
@@ -133,7 +135,9 @@ formula:
 # pointCode 是该来源系统下的别名；来源命名空间只由后端可信配置确定。
 ingestion:
   source-system: ${INGESTION_SOURCE_SYSTEM:MQTT_FREEZE_V1}
+  standard-source-system: ${INGESTION_STANDARD_SOURCE_SYSTEM:MQTT_STANDARD_V1}
   point-config-refresh-ms: ${POINT_CONFIG_REFRESH_MS:60000}
+  device-identity-refresh-ms: ${DEVICE_IDENTITY_REFRESH_MS:60000}
 
 # 只清理逐条原始事件；分钟汇总和后续COP指标长期保留。
 data-retention:
