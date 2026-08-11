@@ -350,7 +350,7 @@ function formatTime(value: number): string {
 
 let historyRefreshTimer: number | null = null
 
-/** 固定区间和后台页签不持续扫描 TDengine；空上下文或在途请求也跳过当前周期。 */
+/** 固定区间不参与周期查询；空上下文或在途请求也跳过当前周期。 */
 function canAutoRefresh(): boolean {
   if (document.visibilityState !== 'visible') return false
   if (!props.buildingId || preset.value === 'custom' || loading.value) return false
@@ -358,16 +358,38 @@ function canAutoRefresh(): boolean {
   return selectedPointIds.value.length > 0
 }
 
-onMounted(() => {
+function stopAutoRefreshTimer(): void {
+  if (historyRefreshTimer !== null) window.clearInterval(historyRefreshTimer)
+  historyRefreshTimer = null
+}
+
+function startAutoRefreshTimer(): void {
+  stopAutoRefreshTimer()
+  if (document.visibilityState !== 'visible') return
   historyRefreshTimer = window.setInterval(() => {
     if (canAutoRefresh()) void refresh()
   }, HISTORY_AUTO_REFRESH_MS)
+}
+
+/** 后台页签停止扫描 TDengine；返回时先补一次权威查询，再从返回时刻重启周期。 */
+function handleVisibilityChange(): void {
+  if (document.visibilityState !== 'visible') {
+    stopAutoRefreshTimer()
+    return
+  }
+  if (canAutoRefresh()) void refresh()
+  startAutoRefreshTimer()
+}
+
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  startAutoRefreshTimer()
 })
 
-/** 页面卸载时同时停止周期查询和状态写回，使迟到的 TDengine 响应失效。 */
+/** 页面卸载时移除可见性监听、停止周期查询和状态写回，使迟到的 TDengine 响应失效。 */
 onBeforeUnmount(() => {
-  if (historyRefreshTimer !== null) window.clearInterval(historyRefreshTimer)
-  historyRefreshTimer = null
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  stopAutoRefreshTimer()
   dispose()
 })
 </script>

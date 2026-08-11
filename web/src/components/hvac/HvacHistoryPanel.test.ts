@@ -195,6 +195,47 @@ describe('HvacHistoryPanel', () => {
     expect(holder.state.refresh).toHaveBeenCalledTimes(1)
   })
 
+  it('refreshes immediately when a hidden page becomes visible and restarts its cadence', async () => {
+    vi.useFakeTimers()
+    let visibility: DocumentVisibilityState = 'hidden'
+    vi.spyOn(document, 'visibilityState', 'get')
+      .mockImplementation(() => visibility)
+    const wrapper = mountPanel()
+
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).not.toHaveBeenCalled()
+
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(2)
+
+    visibility = 'hidden'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(2)
+
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await Promise.resolve()
+    expect(holder.state.refresh).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(4)
+
+    wrapper.unmount()
+    visibility = 'hidden'
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility = 'visible'
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(holder.state.refresh).toHaveBeenCalledTimes(4)
+  })
+
   it('skips automatic refresh for fixed, hidden, loading and empty point states', async () => {
     vi.useFakeTimers()
     let visibility: DocumentVisibilityState = 'visible'
