@@ -4,7 +4,7 @@
 
 **Goal:** 让孤立 Q0 真实点可见，恢复真正的纵轴单位与稳定单值范围，并为全空历史数据提供明确且不伪造数值的空状态。
 
-**Architecture:** 保持 `HvacTrendChart.vue` 作为唯一生产代码修改点：领域适配层继续提供缺口分隔，图表组件根据直接相邻点判断 Q0 是否已有线段可见性。纵轴范围只在全组只有一个不同有效值时增加数据驱动留白；全组无有效值时使用 DOM 空状态，不生成虚假刻度。
+**Architecture:** 保持 `HvacTrendChart.vue` 作为唯一生产代码修改点：领域适配层继续提供缺口分隔，图表组件根据直接相邻点判断 Q0 是否已有线段可见性。同单位系列继续共用一张图和一个纵轴，范围取当前查询时段该组全部有限有效值；只有一个不同有效值时增加数据驱动留白，全组无有效值时使用 DOM 空状态，不生成虚假刻度。
 
 **Tech Stack:** Vue 3、TypeScript 5.3、ECharts 5.6、Vitest 2.1、Vue Test Utils、ESLint、Vite。
 
@@ -14,6 +14,7 @@
 - 不修改后端 API、DTO、TDengine 查询、Q0/Q1/Q2 业务语义或领域适配层的缺口插入契约。
 - 不连接缺口，不进行前端插值、补点、指标重算或虚假默认值填充。
 - 连续 Q0 仍以折线为主，只有前后都没有直接相邻有效值的 Q0 才显示圆点。
+- 同单位系列共用动态纵轴，范围取该组全部真实有效值；即使单位为 `%`，也不固定为 `0～100`。
 - 全空组显示“当前时段无有效数据”，不伪造 0～1 或业务默认纵轴范围。
 - 生产代码注释使用简洁中文并准确说明缺失值、相邻点和单位边界。
 - 普通自动化测试不得连接真实 MySQL、TDengine、Redis、MQTT 或现场设备。
@@ -199,6 +200,34 @@ expect(mocks.setOption.mock.calls[0][0].yAxis).toMatchObject({
   type: 'value',
 })
 expect(mocks.setOption.mock.calls[0][0].grid.containLabel).toBe(true)
+```
+
+新增同单位共享动态范围测试，确认多个有效值继续交给 ECharts 联合自动缩放而不是使用 `%` 固定范围：
+
+```ts
+it('keeps one data-driven axis for all finite values in the same unit group', () => {
+  mount(HvacTrendChart, {
+    props: {
+      group: {
+        unit: '%',
+        series: [
+          { ...group.series[0]!, id: 'tower', points: [{ ...group.series[0]!.points[0]!, average: 58.4 }] },
+          { ...group.series[0]!, id: 'pump', points: [{ ...group.series[0]!.points[0]!, average: 74.2 }] },
+        ],
+      },
+      from: 0,
+      to: 300_000,
+      resolutionMinutes: 1,
+    },
+  })
+
+  expect(mocks.setOption.mock.calls[0][0].yAxis).toMatchObject({
+    name: '%',
+    scale: true,
+  })
+  expect(mocks.setOption.mock.calls[0][0].yAxis.min).toBeUndefined()
+  expect(mocks.setOption.mock.calls[0][0].yAxis.max).toBeUndefined()
+})
 ```
 
 新增单值范围测试：
@@ -486,7 +515,8 @@ npm run dev -- --host 127.0.0.1
 
 - 孤立 COP Q0 显示圆点；
 - 连续 Q0 不产生密集圆点；
-- `%` 与 `W/(m³·h)` 图显示 y 轴单位和数值刻度；
+- 同单位 `%` 曲线保留在一张图，并按当前查询时段全部有效值生成共享动态刻度；
+- `%` 与 `W/(m³·h)` 图显示 y 轴单位和数值刻度，不出现固定 `0～100`；
 - 全空组显示“当前时段无有效数据”；
 - DataZoom、系列显隐和 Tooltip 正常；
 - 控制台没有 Vue、ECharts 或 ResizeObserver 错误。
