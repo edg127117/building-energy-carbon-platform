@@ -75,6 +75,26 @@ const group: HvacTrendGroup = {
   }],
 }
 
+function renderSymbols(
+  points: HvacTrendGroup['series'][number]['points'],
+): string[] {
+  const wrapper = mount(HvacTrendChart, {
+    props: {
+      group: {
+        ...group,
+        series: [{ ...group.series[0]!, points }],
+      },
+      from: 0,
+      to: 300_000,
+      resolutionMinutes: 1,
+    },
+  })
+  const symbols = mocks.setOption.mock.calls.at(-1)![0].series[0].data
+    .map((item: RenderedDatum) => item.symbol)
+  wrapper.unmount()
+  return symbols
+}
+
 describe('HvacTrendChart', () => {
   let resizeCallback: ResizeObserverCallback
   const observe = vi.fn()
@@ -147,6 +167,66 @@ describe('HvacTrendChart', () => {
     expect(wrapper.text()).toContain('缺口保持断线')
   })
 
+  it('shows only Q0 points that have no adjacent line segment', () => {
+    const isolated = renderSymbols([{
+      time: 60_000,
+      average: 3.2,
+      minimum: 3.2,
+      maximum: 3.2,
+      sampleCount: 1,
+      dataQuality: 0,
+    }])
+    expect(isolated).toEqual(['circle'])
+
+    const continuous = renderSymbols([
+      {
+        time: 60_000,
+        average: 3.2,
+        minimum: 3.2,
+        maximum: 3.2,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+      {
+        time: 120_000,
+        average: 3.3,
+        minimum: 3.3,
+        maximum: 3.3,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+    ])
+    expect(continuous).toEqual(['none', 'none'])
+
+    const separated = renderSymbols([
+      {
+        time: 60_000,
+        average: 3.2,
+        minimum: 3.2,
+        maximum: 3.2,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+      {
+        time: 120_000,
+        average: null,
+        minimum: null,
+        maximum: null,
+        sampleCount: 0,
+        dataQuality: null,
+      },
+      {
+        time: 180_000,
+        average: 3.4,
+        minimum: 3.4,
+        maximum: 3.4,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+    ])
+    expect(separated).toEqual(['circle', 'none', 'circle'])
+  })
+
   it('updates without reinitializing, resizes and disposes on unmount', async () => {
     const wrapper = mount(HvacTrendChart, {
       props: {
@@ -185,6 +265,102 @@ describe('HvacTrendChart', () => {
     expect(wrapper.text()).toContain('无量纲')
   })
 
+  it('uses a bounded data-driven extent for a single finite value', () => {
+    mount(HvacTrendChart, {
+      props: {
+        group: {
+          unit: '',
+          series: [{
+            ...group.series[0]!,
+            unit: '',
+            precision: 2,
+            points: [{
+              time: 60_000,
+              average: 3.2,
+              minimum: 3.2,
+              maximum: 3.2,
+              sampleCount: 1,
+              dataQuality: 0,
+            }],
+          }],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    const yAxis = mocks.setOption.mock.calls[0][0].yAxis
+    expect(yAxis.name).toBe('无量纲')
+    expect(yAxis.min).toBeCloseTo(2.88)
+    expect(yAxis.max).toBeCloseTo(3.52)
+    expect(yAxis.axisLabel.formatter(2.9339999999999997)).toBe('2.93')
+  })
+
+  it('keeps one data-driven axis for all finite values in the same unit group', () => {
+    const sourceSeries = group.series[0]!
+    const sourcePoint = sourceSeries.points[0]!
+    mount(HvacTrendChart, {
+      props: {
+        group: {
+          unit: '%',
+          series: [
+            {
+              ...sourceSeries,
+              id: 'tower',
+              points: [{ ...sourcePoint, average: 58.4 }],
+            },
+            {
+              ...sourceSeries,
+              id: 'pump',
+              points: [{ ...sourcePoint, average: 74.2 }],
+            },
+          ],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    const yAxis = mocks.setOption.mock.calls[0][0].yAxis
+    expect(yAxis).toMatchObject({ name: '%', scale: true })
+    expect(yAxis.min).toBeUndefined()
+    expect(yAxis.max).toBeUndefined()
+    expect(yAxis.axisLabel.formatter(58.400000000000006)).toBe('58.4')
+  })
+
+  it('shows an accessible empty state without inventing an axis extent', () => {
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group: {
+          ...group,
+          series: [{
+            ...group.series[0]!,
+            points: [{
+              time: 60_000,
+              average: null,
+              minimum: null,
+              maximum: null,
+              sampleCount: 0,
+              dataQuality: null,
+            }],
+          }],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    expect(wrapper.find('.trend-chart__empty').text()).toBe('当前时段无有效数据')
+    expect(wrapper.find('.trend-chart__empty').attributes('role')).toBe('status')
+    const yAxis = mocks.setOption.mock.calls[0][0].yAxis
+    expect(yAxis.name).toBe('%')
+    expect(yAxis.min).toBeUndefined()
+    expect(yAxis.max).toBeUndefined()
+  })
+
   it('separates the axis unit and lets each external legend button hide its series', async () => {
     const firstSeries = group.series[0]!
     const wrapper = mount(HvacTrendChart, {
@@ -213,8 +389,12 @@ describe('HvacTrendChart', () => {
     const swatches = wrapper.findAll('.trend-chart__series-swatch')
     expect(swatches).toHaveLength(2)
     expect(swatches[0]!.attributes('style')).not.toBe(swatches[1]!.attributes('style'))
-    expect(wrapper.find('.trend-chart__axis-unit').text()).toBe('纵轴单位：%')
-    expect(mocks.setOption.mock.calls[0][0].yAxis.name).toBeUndefined()
+    expect(wrapper.find('.trend-chart__axis-unit').exists()).toBe(false)
+    expect(mocks.setOption.mock.calls[0][0].yAxis).toMatchObject({
+      name: '%',
+      type: 'value',
+    })
+    expect(mocks.setOption.mock.calls[0][0].grid.containLabel).toBe(true)
     expect(legendButtons.map((button) => button.attributes('aria-pressed')))
       .toEqual(['true', 'true'])
 
