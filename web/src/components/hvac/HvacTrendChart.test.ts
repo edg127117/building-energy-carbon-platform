@@ -75,6 +75,26 @@ const group: HvacTrendGroup = {
   }],
 }
 
+function renderSymbols(
+  points: HvacTrendGroup['series'][number]['points'],
+): string[] {
+  const wrapper = mount(HvacTrendChart, {
+    props: {
+      group: {
+        ...group,
+        series: [{ ...group.series[0]!, points }],
+      },
+      from: 0,
+      to: 300_000,
+      resolutionMinutes: 1,
+    },
+  })
+  const symbols = mocks.setOption.mock.calls.at(-1)![0].series[0].data
+    .map((item: RenderedDatum) => item.symbol)
+  wrapper.unmount()
+  return symbols
+}
+
 describe('HvacTrendChart', () => {
   let resizeCallback: ResizeObserverCallback
   const observe = vi.fn()
@@ -145,6 +165,66 @@ describe('HvacTrendChart', () => {
     expect(tooltip).toContain('Q2 典型值')
     expect(wrapper.text()).toContain('单位：%')
     expect(wrapper.text()).toContain('缺口保持断线')
+  })
+
+  it('shows only Q0 points that have no adjacent line segment', () => {
+    const isolated = renderSymbols([{
+      time: 60_000,
+      average: 3.2,
+      minimum: 3.2,
+      maximum: 3.2,
+      sampleCount: 1,
+      dataQuality: 0,
+    }])
+    expect(isolated).toEqual(['circle'])
+
+    const continuous = renderSymbols([
+      {
+        time: 60_000,
+        average: 3.2,
+        minimum: 3.2,
+        maximum: 3.2,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+      {
+        time: 120_000,
+        average: 3.3,
+        minimum: 3.3,
+        maximum: 3.3,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+    ])
+    expect(continuous).toEqual(['none', 'none'])
+
+    const separated = renderSymbols([
+      {
+        time: 60_000,
+        average: 3.2,
+        minimum: 3.2,
+        maximum: 3.2,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+      {
+        time: 120_000,
+        average: null,
+        minimum: null,
+        maximum: null,
+        sampleCount: 0,
+        dataQuality: null,
+      },
+      {
+        time: 180_000,
+        average: 3.4,
+        minimum: 3.4,
+        maximum: 3.4,
+        sampleCount: 1,
+        dataQuality: 0,
+      },
+    ])
+    expect(separated).toEqual(['circle', 'none', 'circle'])
   })
 
   it('updates without reinitializing, resizes and disposes on unmount', async () => {

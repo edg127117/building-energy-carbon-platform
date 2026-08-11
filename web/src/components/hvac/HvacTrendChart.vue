@@ -151,7 +151,7 @@ function updateChart(): void {
 
 /**
  * 构建同单位折线配置：隐藏图例只承载按钮选择状态，单位由 Canvas 外的独立行展示；
- * Q0 不显示普通点，Q1/Q2 使用可辨识符号，空值永不连接。
+ * 连续 Q0 依靠线段显示，孤立 Q0 与 Q1/Q2 使用可辨识符号，空值永不连接。
  */
 function buildOption(): EChartsCoreOption {
   const reducedMotion = typeof window.matchMedia === 'function'
@@ -240,9 +240,9 @@ function buildSeries(series: HvacTrendSeries) {
     symbolSize: 7,
     lineStyle: { width: 1.8 },
     emphasis: { focus: 'series' },
-    data: series.points.map((point) => ({
+    data: series.points.map((point, index, points) => ({
       value: [point.time, point.average],
-      symbol: qualitySymbol(point),
+      symbol: qualitySymbol(point, index, points),
       symbolSize: point.dataQuality === 2 ? 9 : 7,
       trendPoint: point,
       trendSeries: series,
@@ -250,12 +250,24 @@ function buildSeries(series: HvacTrendSeries) {
   }
 }
 
-/** Q1 使用圆点、Q2 使用菱形；Q0 与缺口不显示普通标记，避免高密度图表过载。 */
-function qualitySymbol(point: HvacTrendPoint): string {
-  if (point.average === null) return 'none'
+/** 有限平均值才能形成折线；空分隔点和异常数字均视为不可连接。 */
+function isFiniteAverage(point: HvacTrendPoint | undefined): boolean {
+  return typeof point?.average === 'number' && Number.isFinite(point.average)
+}
+
+/** Q1/Q2 始终标记；Q0 仅在两侧都没有有效线段时显示圆点。 */
+function qualitySymbol(
+  point: HvacTrendPoint,
+  index: number,
+  points: HvacTrendPoint[],
+): string {
+  if (!isFiniteAverage(point)) return 'none'
   if (point.dataQuality === 1) return 'circle'
   if (point.dataQuality === 2) return 'diamond'
-  return 'none'
+  if (point.dataQuality !== 0) return 'none'
+  return isFiniteAverage(points[index - 1]) || isFiniteAverage(points[index + 1])
+    ? 'none'
+    : 'circle'
 }
 
 type TooltipDatum = {
