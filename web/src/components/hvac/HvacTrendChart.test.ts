@@ -294,6 +294,40 @@ describe('HvacTrendChart', () => {
     expect(yAxis.name).toBe('无量纲')
     expect(yAxis.min).toBeCloseTo(2.88)
     expect(yAxis.max).toBeCloseTo(3.52)
+    expect(yAxis.axisLabel.formatter(2.9339999999999997)).toBe('2.93')
+  })
+
+  it('keeps one data-driven axis for all finite values in the same unit group', () => {
+    const sourceSeries = group.series[0]!
+    const sourcePoint = sourceSeries.points[0]!
+    mount(HvacTrendChart, {
+      props: {
+        group: {
+          unit: '%',
+          series: [
+            {
+              ...sourceSeries,
+              id: 'tower',
+              points: [{ ...sourcePoint, average: 58.4 }],
+            },
+            {
+              ...sourceSeries,
+              id: 'pump',
+              points: [{ ...sourcePoint, average: 74.2 }],
+            },
+          ],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    const yAxis = mocks.setOption.mock.calls[0][0].yAxis
+    expect(yAxis).toMatchObject({ name: '%', scale: true })
+    expect(yAxis.min).toBeUndefined()
+    expect(yAxis.max).toBeUndefined()
+    expect(yAxis.axisLabel.formatter(58.400000000000006)).toBe('58.4')
   })
 
   it('shows an accessible empty state without inventing an axis extent', () => {

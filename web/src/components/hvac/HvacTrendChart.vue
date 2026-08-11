@@ -162,6 +162,7 @@ function buildOption(): EChartsCoreOption {
   const reducedMotion = typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const axisExtent = singleValueAxisExtent(props.group)
+  const precision = groupPrecision(props.group)
   return {
     animation: !reducedMotion,
     animationDuration: reducedMotion ? 0 : 260,
@@ -197,7 +198,10 @@ function buildOption(): EChartsCoreOption {
       nameLocation: 'end',
       nameGap: 12,
       nameTextStyle: { color: '#71889f', fontSize: 11 },
-      axisLabel: { color: '#71889f' },
+      axisLabel: {
+        color: '#71889f',
+        formatter: (value: number) => formatAxisValue(value, precision),
+      },
       axisLine: { show: false },
       splitLine: { lineStyle: { color: 'rgba(126, 166, 198, 0.10)' } },
       scale: true,
@@ -231,10 +235,20 @@ function singleValueAxisExtent(
   const minimum = Math.min(...values)
   const maximum = Math.max(...values)
   if (minimum !== maximum) return {}
-  const maximumPrecision = Math.max(0, ...group.series.map((series) => series.precision))
-  const displayStep = 10 ** -maximumPrecision
+  const displayStep = 10 ** -groupPrecision(group)
   const padding = Math.max(Math.abs(minimum) * 0.1, displayStep * 2)
   return { min: minimum - padding, max: maximum + padding }
+}
+
+/** 同单位系列共用其中最高展示精度，避免共享纵轴丢失任一系列的小数信息。 */
+function groupPrecision(group: HvacTrendGroup): number {
+  return Math.max(0, ...group.series.map((series) => series.precision))
+}
+
+/** 纵轴标签按业务展示精度消除浮点长尾，同时保留数据驱动的真实刻度值。 */
+function formatAxisValue(value: number, precision: number): string {
+  if (!Number.isFinite(value)) return ''
+  return String(Number(value.toFixed(precision)))
 }
 
 /** 画布外图例与 ECharts 折线共用同一色板，保证换行后颜色含义仍稳定。 */
