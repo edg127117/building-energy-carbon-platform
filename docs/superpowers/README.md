@@ -57,7 +57,7 @@
 | HVAC WebSocket 实时韧性 | [设计](specs/2026-08-10-hvac-realtime-websocket-resilience-design.md) | [计划](plans/2026-08-10-hvac-realtime-websocket-resilience.md) | 成对历史记录 | 当前实现是认证后按建筑发布四指标增量，并以 HTTP 作为完整状态权威来源；不包含 19 测点 WebSocket 快照或多实例总线。 |
 | HVAC 最小后台管理界面 | [设计](specs/2026-08-10-hvac-minimal-admin-ui-design.md) | [计划](plans/2026-08-10-hvac-minimal-admin-ui.md) | 成对历史记录 | 当前实现只供平台管理员维护用户、固定角色菜单、菜单树和建筑授权；后端鉴权是安全边界，数据库组件字符串不驱动前端动态加载。 |
 | 可配置多字段设备报文适配器 | [设计](specs/2026-08-11-configurable-multifield-telemetry-adapter-design.md) | [计划](plans/2026-08-11-configurable-multifield-telemetry-adapter.md) | 成对历史记录 | 当前代码已实现云端 MySQL 配置转换、本地严格预注册、双 Topic 路由和异常拒绝边界；真实云服务器、设备和长时间运行状态仍以项目状态及现场证据为准。 |
-| HVAC 历史趋势图可见性与纵轴修复 | [设计](specs/2026-08-11-hvac-trend-chart-visibility-axis-design.md) | — | 待核验 | 修复口径已确认，实施前需完成书面复核；当前行为仍以趋势图组件和测试为准。 |
+| HVAC 历史趋势图可见性与纵轴修复 | [设计](specs/2026-08-11-hvac-trend-chart-visibility-axis-design.md) | [计划](plans/2026-08-11-hvac-trend-chart-visibility-axis.md) | 成对历史记录 | 设计已完成书面复核并形成实施计划；当前实现状态仍以趋势图组件、测试和项目状态为准。 |
 
 ## 已确认的替代关系
 
