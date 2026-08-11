@@ -24,6 +24,17 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/pages/HvacDemoPage.vue'),
   },
   {
+    path: '/system',
+    component: () => import('@/layouts/ManagementLayout.vue'),
+    meta: { requiresAuth: true, admin: true },
+    children: [
+      { path: 'users', name: 'system-users', component: () => import('@/pages/admin/UserManagementPage.vue') },
+      { path: 'roles', name: 'system-roles', component: () => import('@/pages/admin/RoleManagementPage.vue') },
+      { path: 'menus', name: 'system-menus', component: () => import('@/pages/admin/MenuManagementPage.vue') },
+      { path: 'building-access', name: 'system-building-access', component: () => import('@/pages/admin/BuildingAccessManagementPage.vue') },
+    ],
+  },
+  {
     path: '/403',
     name: 'forbidden',
     component: ForbiddenPage,

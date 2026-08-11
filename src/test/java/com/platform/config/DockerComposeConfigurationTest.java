@@ -62,6 +62,11 @@ class DockerComposeConfigurationTest {
         assertThat(countOccurrences(compose, "redis-data:")).isEqualTo(2);
     }
 
+    @Test
+    void existingDatabaseMenuMigrationIsNotMountedAsAutomaticInitialization() {
+        assertThat(compose).doesNotContain("11-migrate-mysql-admin-menu-runtime.sql");
+    }
+
     private int countOccurrences(String text, String needle) {
         return (text.length() - text.replace(needle, "").length())
                 / needle.length();

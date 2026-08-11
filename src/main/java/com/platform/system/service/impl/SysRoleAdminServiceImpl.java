@@ -52,9 +52,12 @@ public class SysRoleAdminServiceImpl implements SysRoleAdminService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void replaceMenus(Long id, List<Long> menuIds) {
-        requireRole(id);
+        SysRole role = requireRole(id);
         // 去重后校验所有菜单 ID，防止角色关联到已删除或不存在的菜单。
         Set<Long> ids = menuIds == null ? Set.of() : new LinkedHashSet<>(menuIds);
+        if (FormalRole.THIRD_PARTY.name().equals(role.getRoleKey()) && !ids.isEmpty()) {
+            throw new BusinessException("接口调用方不使用后台页面菜单，请在用户管理中维护账号和建筑范围");
+        }
         if (!ids.isEmpty() && menuMapper.selectBatchIds(ids).size() != ids.size()) throw new BusinessException(404, "包含不存在的菜单");
         roleMenuMapper.delete(new LambdaQueryWrapper<SysRoleMenu>().eq(SysRoleMenu::getRoleId, id));
         for (Long menuId : ids) {
@@ -69,5 +72,10 @@ public class SysRoleAdminServiceImpl implements SysRoleAdminService {
         if (role == null || !FormalRole.isFormal(role.getRoleKey())) throw new BusinessException(404, "正式角色不存在");
         return role;
     }
-    private RoleAdminDtos.RoleView view(SysRole r) { return new RoleAdminDtos.RoleView(r.getId(), r.getRoleKey(), r.getRoleName(), r.getDataScope(), r.getStatus()); }
+    private RoleAdminDtos.RoleView view(SysRole role) {
+        boolean thirdParty = FormalRole.THIRD_PARTY.name().equals(role.getRoleKey());
+        String roleName = thirdParty ? "接口调用方" : role.getRoleName();
+        String dataScope = thirdParty ? "BUILDING" : role.getDataScope();
+        return new RoleAdminDtos.RoleView(role.getId(), role.getRoleKey(), roleName, dataScope, role.getStatus());
+    }
 }

@@ -10,6 +10,7 @@ import com.platform.framework.exception.BusinessException;
 import com.platform.system.mapper.SysMenuMapper;
 import com.platform.system.mapper.SysRoleMenuMapper;
 import com.platform.system.mapper.SysUserMapper;
+import com.platform.system.model.dto.MenuAdminDtos;
 import com.platform.system.model.entity.SysMenu;
 import com.platform.system.model.entity.SysRoleMenu;
 import com.platform.system.service.SysMenuService;
@@ -23,6 +24,8 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.HashSet;
+import java.util.Set;
 
 /**
  * 动态菜单服务实现。
@@ -46,6 +49,13 @@ public class SysMenuServiceImpl extends ServiceImpl<SysMenuMapper, SysMenu> impl
         List<SysMenu> menus = list(new LambdaQueryWrapper<SysMenu>()
                 .eq(SysMenu::getStatus, 1).orderByAsc(SysMenu::getSortOrder).orderByAsc(SysMenu::getId));
         return Result.success(buildTree(menus));
+    }
+
+    /** 完整维护树不按可见性和启停状态过滤，避免隐藏配置失去恢复入口。 */
+    @Override
+    public Result<List<SysMenu>> adminTree() {
+        return Result.success(buildTree(list(new LambdaQueryWrapper<SysMenu>()
+                .orderByAsc(SysMenu::getSortOrder).orderByAsc(SysMenu::getId))));
     }
 
     /** 按角色读取 MySQL 授权菜单，补齐父目录后构树，供平台管理员检查角色配置。 */
@@ -81,16 +91,29 @@ public class SysMenuServiceImpl extends ServiceImpl<SysMenuMapper, SysMenu> impl
     }
 
     @Override
-    public Result<SysMenu> add(SysMenu menu) {
-        if (menu.getParentId() == null) menu.setParentId(0L);
+    public Result<SysMenu> add(MenuAdminDtos.CreateRequest request) {
+        validateEnums(request.menuType(), request.visible(), request.status());
+        Long parentId = defaultParent(request.parentId());
+        requireParent(parentId);
+        SysMenu menu = new SysMenu();
+        apply(menu, parentId, request.menuName(), request.menuType(), request.path(), request.component(),
+                request.perms(), request.icon(), defaultFlag(request.visible()), defaultFlag(request.status()),
+                request.sortOrder() == null ? 0 : request.sortOrder());
         save(menu);
         evictAllUsers();
         return Result.success(menu);
     }
 
     @Override
-    public Result<SysMenu> update(SysMenu menu) {
-        if (menu.getId() == null || getById(menu.getId()) == null) throw new BusinessException(404, "菜单不存在");
+    public Result<SysMenu> update(MenuAdminDtos.UpdateRequest request) {
+        validateEnums(request.menuType(), request.visible(), request.status());
+        SysMenu menu = getById(request.id());
+        if (menu == null) throw new BusinessException(404, "菜单不存在");
+        Long parentId = defaultParent(request.parentId());
+        validateParentChain(request.id(), parentId);
+        apply(menu, parentId, request.menuName(), request.menuType(), request.path(), request.component(),
+                request.perms(), request.icon(), defaultFlag(request.visible()), defaultFlag(request.status()),
+                request.sortOrder() == null ? 0 : request.sortOrder());
         updateById(menu);
         evictAllUsers();
         return Result.success(menu);
@@ -125,6 +148,71 @@ public class SysMenuServiceImpl extends ServiceImpl<SysMenuMapper, SysMenu> impl
             }
         }
         return new ArrayList<>(selected.values());
+    }
+
+    /**
+     * 校验更新后的完整父链。除禁止自引用外，也拒绝把节点挂到自己的后代或已有异常环中，
+     * 避免构树时节点永久丢失。数据库层仍保存平面关系，不依赖前端候选项过滤保证正确性。
+     */
+    private void validateParentChain(Long menuId, Long parentId) {
+        if (menuId.equals(parentId)) {
+            throw new BusinessException(409, "菜单不能选择自身作为父级");
+        }
+        Set<Long> visited = new HashSet<>();
+        Long current = parentId;
+        while (current != null && current != 0L) {
+            if (!visited.add(current) || menuId.equals(current)) {
+                throw new BusinessException(409, "父菜单层级存在循环");
+            }
+            SysMenu parent = getById(current);
+            if (parent == null) throw new BusinessException(404, "父菜单不存在");
+            current = parent.getParentId();
+        }
+    }
+
+    private void requireParent(Long parentId) {
+        if (parentId != 0L && getById(parentId) == null) {
+            throw new BusinessException(404, "父菜单不存在");
+        }
+    }
+
+    private void validateEnums(String menuType, Integer visible, Integer status) {
+        if (menuType == null || !Set.of("M", "C", "F").contains(menuType.trim())) {
+            throw new BusinessException("菜单类型不合法");
+        }
+        if ((visible != null && visible != 0 && visible != 1)
+                || (status != null && status != 0 && status != 1)) {
+            throw new BusinessException("菜单可见性或状态不合法");
+        }
+    }
+
+    private void apply(SysMenu menu, Long parentId, String menuName, String menuType, String path,
+                       String component, String perms, String icon, Integer visible, Integer status,
+                       Integer sortOrder) {
+        menu.setParentId(parentId);
+        menu.setMenuName(menuName.trim());
+        menu.setMenuType(menuType.trim());
+        menu.setPath(normalize(path));
+        menu.setComponent(normalize(component));
+        menu.setPerms(normalize(perms));
+        menu.setIcon(normalize(icon));
+        menu.setVisible(visible);
+        menu.setStatus(status);
+        menu.setSortOrder(sortOrder);
+    }
+
+    private String normalize(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private Long defaultParent(Long parentId) {
+        return parentId == null ? 0L : parentId;
+    }
+
+    private Integer defaultFlag(Integer value) {
+        return value == null ? 1 : value;
     }
 
     private List<SysMenu> buildTree(List<SysMenu> menus) {

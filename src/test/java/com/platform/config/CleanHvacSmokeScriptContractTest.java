@@ -66,6 +66,7 @@ class CleanHvacSmokeScriptContractTest {
                 "st_formula_calc_exception",
                 "/api/auth/login",
                 "Authorization",
+                "Invoke-HvacAdminSmoke",
                 "CLEAN_HVAC_SMOKE_SUCCESS");
     }
 

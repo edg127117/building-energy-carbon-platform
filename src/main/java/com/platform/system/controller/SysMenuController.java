@@ -1,6 +1,7 @@
 package com.platform.system.controller;
 
 import com.platform.framework.common.Result;
+import com.platform.system.model.dto.MenuAdminDtos;
 import com.platform.system.model.entity.SysMenu;
 import com.platform.security.JwtUserPrincipal;
 import com.platform.system.service.SysMenuService;
@@ -33,6 +34,13 @@ public class SysMenuController {
         return menuService.buildTree();
     }
 
+    /** 查询完整维护树；隐藏和停用菜单也必须可见，才能由管理员恢复。 */
+    @GetMapping("/admin/tree")
+    @PreAuthorize("hasRole('PLATFORM_ADMIN')")
+    public Result<List<SysMenu>> adminTree() {
+        return menuService.adminTree();
+    }
+
     /** 按角色查询菜单树 */
     @GetMapping("/role/{roleKey}")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
@@ -43,15 +51,15 @@ public class SysMenuController {
     /** 新增菜单 */
     @PostMapping("/add")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
-    public Result<SysMenu> add(@Valid @RequestBody SysMenu sysMenu) {
-        return menuService.add(sysMenu);
+    public Result<SysMenu> add(@Valid @RequestBody MenuAdminDtos.CreateRequest request) {
+        return menuService.add(request);
     }
 
     /** 更新菜单 */
     @PutMapping("/update")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
-    public Result<SysMenu> update(@Valid @RequestBody SysMenu sysMenu) {
-        return menuService.update(sysMenu);
+    public Result<SysMenu> update(@Valid @RequestBody MenuAdminDtos.UpdateRequest request) {
+        return menuService.update(request);
     }
 
     /** 删除菜单 */

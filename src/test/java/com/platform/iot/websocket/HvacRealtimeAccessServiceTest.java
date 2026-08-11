@@ -64,6 +64,19 @@ class HvacRealtimeAccessServiceTest {
     }
 
     @Test
+    void authenticatesThirdPartyForAuthorizedBuildingRealtimeSubscription() {
+        stubClaims(9L, List.of("THIRD_PARTY"), futureExpiry());
+        when(tokenCacheService.validateActiveToken(9L, "jwt"))
+                .thenReturn(TokenValidationResult.ACTIVE);
+
+        HvacRealtimeSubscription result = service.authenticate("jwt", "BLD001");
+
+        assertThat(result.roles()).containsExactly("THIRD_PARTY");
+        verify(buildingScopeService).checkAccess(
+                9L, Set.of("THIRD_PARTY"), "BLD001");
+    }
+
+    @Test
     void keepsHttpJwtFallbackWhenRedisIsUnavailable() {
         stubClaims(7L, List.of("BUILDING_OWNER"), futureExpiry());
         when(tokenCacheService.validateActiveToken(7L, "jwt"))

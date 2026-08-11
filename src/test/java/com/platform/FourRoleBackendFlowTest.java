@@ -41,7 +41,8 @@ class FourRoleBackendFlowTest {
         String ownerToken = login(ownerName, "123456");
 
         JsonNode ownerMenu = json(getWithToken("/menu/current", ownerToken)).path("data");
-        assertThat(flattenMenuIds(ownerMenu)).contains(100L, 132L);
+        assertThat(flattenMenuIds(ownerMenu)).contains(100L, 101L)
+                .doesNotContain(200L, 210L, 211L, 212L, 220L, 223L, 240L, 241L);
 
         JsonNode emptyBuildings = json(getWithToken("/building/list", ownerToken))
                 .path("data").path("records");

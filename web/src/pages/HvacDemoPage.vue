@@ -38,6 +38,9 @@
       </div>
 
       <div class="header-status">
+        <RouterLink v-if="managementPath" class="management-entry" :to="managementPath">
+          <Settings :size="14" />后台管理
+        </RouterLink>
         <div class="status-item">
           <span class="status-dot" :class="realtimeStatus.tone" />
           {{ realtimeStatus.label }}
@@ -317,6 +320,7 @@ import {
   CloudSun,
   Fan,
   Gauge,
+  Settings,
   Snowflake,
   Waves,
   Wind,
@@ -333,9 +337,28 @@ import {
   FROZEN_POINT_DEFINITIONS,
   type FrozenPointCode,
 } from '@/domain/hvacDashboard'
+import { useAuthStore } from '@/store/auth'
+import { useMenuStore } from '@/store/menu'
+import type { AdminNavigationItem } from '@/domain/adminNavigation'
 
 const clock = ref('')
 let clockTimer: number | null = null
+const authStore = useAuthStore()
+const menuStore = useMenuStore()
+
+/** 管理入口同时要求平台管理员角色和后端当前菜单中的已注册管理路径。 */
+const managementPath = computed(() => {
+  if (!authStore.roles.includes('PLATFORM_ADMIN')) return null
+  const find = (items: AdminNavigationItem[]): string | null => {
+    for (const item of items) {
+      if (item.admin && item.path) return item.path
+      const nested = find(item.children)
+      if (nested) return nested
+    }
+    return null
+  }
+  return find(menuStore.navigation)
+})
 
 /**
  * 大屏数据状态由 Composable 提供：建筑来自 MySQL 授权范围，测点来自 MySQL 元数据与
@@ -525,6 +548,9 @@ const formulaCards = [
 onMounted(async () => {
   updateClock()
   clockTimer = window.setInterval(updateClock, 1000)
+  if (authStore.roles.includes('PLATFORM_ADMIN')) {
+    void menuStore.ensureLoaded().catch(() => undefined)
+  }
   await initialize()
   startRealtime()
 })
@@ -563,6 +589,8 @@ onBeforeUnmount(() => {
 .header-center { display: flex; gap: 8px; align-items: center; }
 .building-select { min-width: 220px; }
 .header-status { justify-self: end; display: flex; align-items: center; gap: 18px; color: #778ba3; font-size: 10px; }
+.management-entry { display:flex; align-items:center; gap:6px; min-height:30px; padding:0 10px; color:#9fc5e2; text-decoration:none; border:1px solid rgba(104,169,217,.22); background:rgba(33,102,154,.1); border-radius:10px; }
+.management-entry:hover { color:#e7f6ff; border-color:rgba(104,184,239,.4); }
 .status-item { display: flex; gap: 7px; align-items: center; }
 .status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; }
 .status-dot.blue { background: #4aa8ff; box-shadow: 0 0 9px #4aa8ff; }

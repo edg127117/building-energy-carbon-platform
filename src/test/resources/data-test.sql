@@ -10,17 +10,21 @@ INSERT INTO sys_role (id, role_key, role_name, status, data_scope) VALUES
 INSERT INTO sys_user_role (user_id, role_id) VALUES (1, 13);
 
 INSERT INTO sys_menu (id, parent_id, menu_name, menu_type, path, visible, status, sort_order) VALUES
-(100, 0, '常规调适', 'M', '/commissioning', 1, 1, 1),
-(110, 100, '单机调适', 'M', '/single', 1, 1, 1),
-(130, 110, '冷水机组', 'M', '/single/chiller', 1, 1, 1),
-(132, 130, 'COP计算', 'C', '/single/chiller/cop', 1, 1, 1),
+(100, 0, '中央空调调适', 'M', '/hvac', 1, 1, 1),
+(101, 100, 'HVAC 能效大屏', 'C', '/hvac-demo', 1, 1, 1),
 (200, 0, '系统管理', 'M', '/system', 1, 1, 2),
-(211, 200, '用户管理', 'C', '/system/user/list', 1, 1, 1);
+(210, 200, '人员与角色', 'M', '/system/identity', 1, 1, 1),
+(211, 210, '用户管理', 'C', '/system/users', 1, 1, 1),
+(212, 210, '角色权限', 'C', '/system/roles', 1, 1, 2),
+(220, 200, '建筑权限', 'M', '/system/access', 1, 1, 2),
+(223, 220, '建筑授权', 'C', '/system/building-access', 1, 1, 3),
+(240, 200, '后台配置', 'M', '/system/config', 1, 1, 4),
+(241, 240, '菜单管理', 'C', '/system/menus', 1, 1, 1);
 
 INSERT INTO sys_role_menu (role_id, menu_id) VALUES
-(10,100),(10,110),(10,130),(10,132),
-(11,100),(11,110),(11,130),(11,132),
-(13,100),(13,110),(13,130),(13,132),(13,200),(13,211);
+(10,100),(10,101),
+(11,100),(11,101),
+(13,100),(13,101),(13,200),(13,210),(13,211),(13,212),(13,220),(13,223),(13,240),(13,241);
 
 INSERT INTO building (building_id, building_name, building_code, del_flag) VALUES
 ('BLD001', '一号楼', 'B001', 0),

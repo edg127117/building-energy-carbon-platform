@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 登录 Token 的签发与密码学校验边界。
@@ -38,6 +39,8 @@ public class JwtService {
         Date exp = new Date(now.getTime() + expireSeconds * 1000);
 
         return Jwts.builder()
+                // jti 保证同一账号在同一秒内撤销后重登也会生成新 Token，避免命中旧 Token 黑名单。
+                .id(UUID.randomUUID().toString())
                 .subject(username)
                 .issuedAt(now)
                 .expiration(exp)

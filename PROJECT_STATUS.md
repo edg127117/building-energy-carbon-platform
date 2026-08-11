@@ -2,7 +2,7 @@
 
 ## 1. 状态基准
 
-- 状态日期：2026-08-06。
+- 状态日期：2026-08-10。
 - 代码基线：以本文件所在 Git 版本及其已合并代码、测试为准，不在文档中固定易过期的提交号。
 - 本文件只描述其所在 Git 版本能够通过代码、测试、已合并提交或有效文档核验的状态。
 - Docker 容器、端口、数据库数据、前后端进程等本地运行状态不进入本文件，必须在需要时现场检查。
@@ -18,10 +18,13 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 ### 3.1 权限与业务档案
 
 - 已建立四类正式角色、JWT 登录、动态菜单和建筑范围授权后端能力。
+- 已形成仅供 `PLATFORM_ADMIN` 使用的最小后台管理界面，覆盖用户生命周期、固定角色权限、完整菜单树和建筑授权审批；`THIRD_PARTY` 对外显示为“接口调用方”，只能管理账号、启停和建筑范围，且禁止分配内部菜单，不提供角色 CRUD 或建筑 CRUD。
+- 后台导航只接受受控注册表中的四条显式路由，数据库菜单不驱动前端组件动态加载；未上线菜单保留但隐藏并停用。
+- Token 带唯一 `jti`，禁用、密码重置或角色变更撤销旧会话后，同一秒重新登录也不会复用黑名单 Token。
 - 已建立建筑、系统、设备、测点、别名、命名规则和指标档案。
 - 后端 Controller、Service 和 Mapper 已按建筑权限执行主要查询和管理流程。
 
-证据入口：[`com.platform.system`](src/main/java/com/platform/system)、[`com.platform.security`](src/main/java/com/platform/security)、[`com.platform.hvac`](src/main/java/com/platform/hvac)。
+证据入口：[`com.platform.system`](src/main/java/com/platform/system)、[`com.platform.security`](src/main/java/com/platform/security)、[`com.platform.hvac`](src/main/java/com/platform/hvac)、[`com.platform.integration`](src/main/java/com/platform/integration)。
 
 ### 3.2 HVAC 数据链路
 
@@ -57,12 +60,12 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 - MySQL、Redis 和 TDengine 的本地稳定卷、可配置端口、MySQL UTF-8 初始化和启动脚本 Compose 路径已形成仓库配置。
 - 旧电表前后端、控制、模拟器、数据库结构和运行入口已经从当前有效项目中下线。
 - 隔离 Docker 冒烟已验证首帧认证、受限用户 `4403`、跨建筑隔离、四指标推送、HTTP 对账和重连；浏览器已验证实时更新、后端断开后的 HTTP 保障、无新登录的自动恢复，以及持续 WebSocket 故障时 HTTP 继续刷新。
+- 隔离 Docker 后台冒烟已验证管理员完整菜单、临时用户创建与禁用、旧会话失效、密码重置、隐藏菜单 CRUD、建筑申请审批、固定角色菜单替换及回滚。
 
 证据入口：[`application-test.yml`](src/test/resources/application-test.yml)、[`java21.md`](docs/development/java21.md)、[`docker-compose.yml`](src/env/docker-compose.yml)、[`server.env.example`](server.env.example)。
 
 ## 4. 尚未完成或待继续
 
-- 用户、角色、菜单和建筑授权已有后端能力，但当前前端尚未形成对应的最小后台管理页面。
 - 真实现场设备、网络抖动、长时间运行和现场数据质量仍需独立验收，不能由单元测试或本地冒烟替代。
 
 ## 5. 当前阻塞与风险
@@ -76,13 +79,14 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 ## 6. 已确认技术债
 
-- 最小后台管理页面尚未闭环。
+- `THIRD_PARTY` 当前已具备按授权建筑读取建筑、设备和测点定义的 Open API，以及按建筑校验的 HVAC WebSocket 订阅；冻结书中的 COP、设备运行状态专用 REST API 和 Swagger 文档尚未实现，不能表述为完整第三方接入交付。
+- 角色 CRUD、建筑 CRUD、移动端专项适配和动态组件加载均为最小后台明确不做，不是遗留缺陷。
 
 记录这些事项不代表必须在当前任务立即重构或补齐；每项应在独立范围、设计、测试和 PR 中处理。
 
 ## 7. 下一步优先级
 
-1. 建立用户、角色、菜单和建筑授权的最小后台前端入口。
+1. 单独设计并补齐第三方 COP、设备运行状态 REST API 与 Swagger 文档，完成第三方接入契约验收。
 2. 使用真实现场设备和数据完成长时间运行、异常恢复和数据质量验收。
 
 每个事项开始前仍需根据 `AGENTS.md` 判断是否必须先确认独立设计和实施范围。
