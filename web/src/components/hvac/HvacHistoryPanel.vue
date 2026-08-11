@@ -171,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import HvacTrendChart from './HvacTrendChart.vue'
 import { useHvacHistoryTrends } from '@/composables/useHvacHistoryTrends'
 import {
@@ -221,6 +221,7 @@ const presetOptions: Array<{ label: string; value: HvacHistoryPreset }> = [
   { label: '7 天', value: '7d' },
   { label: '自定义', value: 'custom' },
 ]
+const HISTORY_AUTO_REFRESH_MS = 30_000
 
 const indicatorIds = computed(() =>
   props.indicators
@@ -347,8 +348,28 @@ function formatTime(value: number): string {
   }).format(new Date(value))
 }
 
-/** 页面卸载时关闭状态层写回入口，使迟到的 TDengine 响应失效。 */
-onBeforeUnmount(dispose)
+let historyRefreshTimer: number | null = null
+
+/** 固定区间和后台页签不持续扫描 TDengine；空上下文或在途请求也跳过当前周期。 */
+function canAutoRefresh(): boolean {
+  if (document.visibilityState !== 'visible') return false
+  if (!props.buildingId || preset.value === 'custom' || loading.value) return false
+  if (mode.value === 'indicators') return indicatorIds.value.length > 0
+  return selectedPointIds.value.length > 0
+}
+
+onMounted(() => {
+  historyRefreshTimer = window.setInterval(() => {
+    if (canAutoRefresh()) void refresh()
+  }, HISTORY_AUTO_REFRESH_MS)
+})
+
+/** 页面卸载时同时停止周期查询和状态写回，使迟到的 TDengine 响应失效。 */
+onBeforeUnmount(() => {
+  if (historyRefreshTimer !== null) window.clearInterval(historyRefreshTimer)
+  historyRefreshTimer = null
+  dispose()
+})
 </script>
 
 <style scoped>
