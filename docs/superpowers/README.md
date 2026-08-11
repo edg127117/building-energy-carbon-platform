@@ -58,7 +58,7 @@
 | HVAC 最小后台管理界面 | [设计](specs/2026-08-10-hvac-minimal-admin-ui-design.md) | [计划](plans/2026-08-10-hvac-minimal-admin-ui.md) | 成对历史记录 | 当前实现只供平台管理员维护用户、固定角色菜单、菜单树和建筑授权；后端鉴权是安全边界，数据库组件字符串不驱动前端动态加载。 |
 | 可配置多字段设备报文适配器 | [设计](specs/2026-08-11-configurable-multifield-telemetry-adapter-design.md) | [计划](plans/2026-08-11-configurable-multifield-telemetry-adapter.md) | 成对历史记录 | 当前代码已实现云端 MySQL 配置转换、本地严格预注册、双 Topic 路由和异常拒绝边界；真实云服务器、设备和长时间运行状态仍以项目状态及现场证据为准。 |
 | HVAC 历史趋势图可见性与纵轴修复 | [设计](specs/2026-08-11-hvac-trend-chart-visibility-axis-design.md) | [计划](plans/2026-08-11-hvac-trend-chart-visibility-axis.md) | 成对历史记录 | 设计已完成书面复核并形成实施计划；当前实现状态仍以趋势图组件、测试和项目状态为准。 |
-| HVAC 历史趋势自动刷新 | [设计](specs/2026-08-11-hvac-history-auto-refresh-design.md) | 待形成实施计划 | 已确认设计 | 相对时间范围每 30 秒权威重查；自定义区间不自动刷新，当前实现状态以历史 composable、面板和测试为准。 |
+| HVAC 历史趋势自动刷新 | [设计](specs/2026-08-11-hvac-history-auto-refresh-design.md) | [计划](plans/2026-08-11-hvac-history-auto-refresh.md) | 成对历史记录 | 相对时间范围每 30 秒权威重查；自定义区间不自动刷新，当前实现状态以历史 composable、面板和测试为准。 |
 
 ## 已确认的替代关系
 
