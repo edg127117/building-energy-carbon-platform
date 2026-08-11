@@ -265,6 +265,68 @@ describe('HvacTrendChart', () => {
     expect(wrapper.text()).toContain('无量纲')
   })
 
+  it('uses a bounded data-driven extent for a single finite value', () => {
+    mount(HvacTrendChart, {
+      props: {
+        group: {
+          unit: '',
+          series: [{
+            ...group.series[0]!,
+            unit: '',
+            precision: 2,
+            points: [{
+              time: 60_000,
+              average: 3.2,
+              minimum: 3.2,
+              maximum: 3.2,
+              sampleCount: 1,
+              dataQuality: 0,
+            }],
+          }],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    const yAxis = mocks.setOption.mock.calls[0][0].yAxis
+    expect(yAxis.name).toBe('无量纲')
+    expect(yAxis.min).toBeCloseTo(2.88)
+    expect(yAxis.max).toBeCloseTo(3.52)
+  })
+
+  it('shows an accessible empty state without inventing an axis extent', () => {
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group: {
+          ...group,
+          series: [{
+            ...group.series[0]!,
+            points: [{
+              time: 60_000,
+              average: null,
+              minimum: null,
+              maximum: null,
+              sampleCount: 0,
+              dataQuality: null,
+            }],
+          }],
+        },
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    expect(wrapper.find('.trend-chart__empty').text()).toBe('当前时段无有效数据')
+    expect(wrapper.find('.trend-chart__empty').attributes('role')).toBe('status')
+    const yAxis = mocks.setOption.mock.calls[0][0].yAxis
+    expect(yAxis.name).toBe('%')
+    expect(yAxis.min).toBeUndefined()
+    expect(yAxis.max).toBeUndefined()
+  })
+
   it('separates the axis unit and lets each external legend button hide its series', async () => {
     const firstSeries = group.series[0]!
     const wrapper = mount(HvacTrendChart, {
@@ -293,8 +355,12 @@ describe('HvacTrendChart', () => {
     const swatches = wrapper.findAll('.trend-chart__series-swatch')
     expect(swatches).toHaveLength(2)
     expect(swatches[0]!.attributes('style')).not.toBe(swatches[1]!.attributes('style'))
-    expect(wrapper.find('.trend-chart__axis-unit').text()).toBe('纵轴单位：%')
-    expect(mocks.setOption.mock.calls[0][0].yAxis.name).toBeUndefined()
+    expect(wrapper.find('.trend-chart__axis-unit').exists()).toBe(false)
+    expect(mocks.setOption.mock.calls[0][0].yAxis).toMatchObject({
+      name: '%',
+      type: 'value',
+    })
+    expect(mocks.setOption.mock.calls[0][0].grid.containLabel).toBe(true)
     expect(legendButtons.map((button) => button.attributes('aria-pressed')))
       .toEqual(['true', 'true'])
 

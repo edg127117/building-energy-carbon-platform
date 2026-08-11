@@ -1,7 +1,7 @@
 <template>
   <!--
     同一工程单位只使用一个纵轴；数值、质量和缺口均来自历史领域适配层。
-    本组件管理 ECharts 生命周期、当前图的曲线显隐和独立单位提示，
+    本组件管理 ECharts 生命周期、当前图的曲线显隐、纵轴单位和空状态，
     不发请求、不访问 localStorage，也不计算业务指标。
   -->
   <section class="trend-chart" :aria-labelledby="titleId">
@@ -36,15 +36,17 @@
         {{ series.label }}
       </button>
     </div>
-    <p class="trend-chart__axis-unit">
-      纵轴单位：<b>{{ group.unit || '无量纲' }}</b>
-    </p>
-    <div
-      ref="chartElement"
-      class="trend-chart__canvas"
-      role="img"
-      :aria-label="`${groupTitle}历史趋势图，${seriesSummary}`"
-    />
+    <div class="trend-chart__plot">
+      <p v-if="!hasFiniteGroupValue" class="trend-chart__empty" role="status">
+        当前时段无有效数据
+      </p>
+      <div
+        ref="chartElement"
+        class="trend-chart__canvas"
+        role="img"
+        :aria-label="`${groupTitle}历史趋势图，${seriesSummary}`"
+      />
+    </div>
   </section>
 </template>
 
@@ -109,6 +111,9 @@ const seriesSummary = computed(() => {
   const names = props.group.series.map((series) => series.label).join('、')
   return `包含 ${props.group.series.length} 条真实曲线：${names}`
 })
+const hasFiniteGroupValue = computed(() => props.group.series.some((series) =>
+  series.points.some((point) => isFiniteAverage(point)),
+))
 
 let chart: ReturnType<typeof echarts.init> | null = null
 let resizeObserver: ResizeObserver | null = null
@@ -150,17 +155,18 @@ function updateChart(): void {
 }
 
 /**
- * 构建同单位折线配置：隐藏图例只承载按钮选择状态，单位由 Canvas 外的独立行展示；
+ * 构建同单位折线配置：隐藏图例只承载按钮选择状态，单位由纵轴展示；
  * 连续 Q0 依靠线段显示，孤立 Q0 与 Q1/Q2 使用可辨识符号，空值永不连接。
  */
 function buildOption(): EChartsCoreOption {
   const reducedMotion = typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const axisExtent = singleValueAxisExtent(props.group)
   return {
     animation: !reducedMotion,
     animationDuration: reducedMotion ? 0 : 260,
     color: SERIES_COLORS,
-    grid: { left: 54, right: 24, top: 18, bottom: 72, containLabel: false },
+    grid: { left: 24, right: 24, top: 38, bottom: 72, containLabel: true },
     legend: {
       show: false,
       selected: Object.fromEntries(props.group.series.map((series) => [
@@ -187,10 +193,15 @@ function buildOption(): EChartsCoreOption {
     },
     yAxis: {
       type: 'value',
+      name: props.group.unit || '无量纲',
+      nameLocation: 'end',
+      nameGap: 12,
+      nameTextStyle: { color: '#71889f', fontSize: 11 },
       axisLabel: { color: '#71889f' },
       axisLine: { show: false },
       splitLine: { lineStyle: { color: 'rgba(126, 166, 198, 0.10)' } },
       scale: true,
+      ...axisExtent,
     },
     dataZoom: [
       { type: 'inside', filterMode: 'none' },
@@ -207,6 +218,23 @@ function buildOption(): EChartsCoreOption {
     ],
     series: props.group.series.map(buildSeries),
   }
+}
+
+/** 单一有效值以自身和展示精度生成留白；多值继续交给 ECharts 自动缩放。 */
+function singleValueAxisExtent(
+  group: HvacTrendGroup,
+): { min?: number; max?: number } {
+  const values = group.series.flatMap((series) => series.points.flatMap((point) =>
+    isFiniteAverage(point) ? [point.average] : [],
+  ))
+  if (values.length === 0) return {}
+  const minimum = Math.min(...values)
+  const maximum = Math.max(...values)
+  if (minimum !== maximum) return {}
+  const maximumPrecision = Math.max(0, ...group.series.map((series) => series.precision))
+  const displayStep = 10 ** -maximumPrecision
+  const padding = Math.max(Math.abs(minimum) * 0.1, displayStep * 2)
+  return { min: minimum - padding, max: maximum + padding }
 }
 
 /** 画布外图例与 ECharts 折线共用同一色板，保证换行后颜色含义仍稳定。 */
@@ -251,7 +279,9 @@ function buildSeries(series: HvacTrendSeries) {
 }
 
 /** 有限平均值才能形成折线；空分隔点和异常数字均视为不可连接。 */
-function isFiniteAverage(point: HvacTrendPoint | undefined): boolean {
+function isFiniteAverage(
+  point: HvacTrendPoint | undefined,
+): point is HvacTrendPoint & { average: number } {
   return typeof point?.average === 'number' && Number.isFinite(point.average)
 }
 
@@ -460,18 +490,20 @@ function escapeHtml(value: string): string {
   opacity: 0.34;
 }
 
-.trend-chart__axis-unit {
-  margin: 10px 16px 0;
-  padding-top: 10px;
-  border-top: 1px solid rgba(126, 166, 198, 0.12);
-  color: #7890a7;
-  font-size: 11px;
-  line-height: 1.5;
+.trend-chart__plot {
+  position: relative;
 }
 
-.trend-chart__axis-unit b {
-  color: #a9bdcf;
-  font-weight: 600;
+.trend-chart__empty {
+  position: absolute;
+  z-index: 1;
+  inset: 38px 24px 72px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #9fb4c9;
+  font-size: 13px;
+  pointer-events: none;
 }
 
 .trend-chart__canvas {
