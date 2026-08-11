@@ -35,6 +35,7 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
     private final BizPointAliasMapper aliasMapper;
     private final BizEquipmentMapper equipmentMapper;
     private volatile ConfigSnapshot snapshot = ConfigSnapshot.empty();
+    private volatile boolean snapshotAvailable;
 
     /** 在定时任务启动前构建首份测点身份快照。 */
     @PostConstruct
@@ -96,6 +97,7 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
             snapshot = new ConfigSnapshot(
                     Collections.unmodifiableMap(new LinkedHashMap<>(aliasToPointId)),
                     Collections.unmodifiableMap(new LinkedHashMap<>(pointById)));
+            snapshotAvailable = true;
             log.debug("测点身份缓存刷新完成: points={}, aliases={}",
                     pointById.size(), aliasToPointId.size());
         } catch (RuntimeException exception) {
@@ -105,6 +107,7 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
 
     @Override
     public Optional<PointRuntimeConfig> find(PointAliasKey aliasKey) {
+        requireSnapshot();
         String pointId = snapshot.aliasToPointId().get(aliasKey);
         return pointId == null
                 ? Optional.empty()
@@ -113,12 +116,20 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
 
     @Override
     public Optional<PointRuntimeConfig> findByPointId(String pointId) {
+        requireSnapshot();
         return Optional.ofNullable(snapshot.pointById().get(pointId));
     }
 
     @Override
     public Collection<PointRuntimeConfig> findAll() {
+        requireSnapshot();
         return snapshot.pointById().values();
+    }
+
+    private void requireSnapshot() {
+        if (!snapshotAvailable) {
+            throw new DataPointConfigSnapshotUnavailableException("测点身份快照尚未成功加载");
+        }
     }
 
     private record ConfigSnapshot(

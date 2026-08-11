@@ -32,10 +32,15 @@ jobs:
           distribution: temurin
           java-version-file: .java-version
           cache: maven
-          cache-dependency-path: pom.xml
+          cache-dependency-path: |
+            pom.xml
+            telemetry-adapter/pom.xml
 
       - name: Show build tool versions
         run: ./mvnw -version
 
       - name: Test and package backend
         run: ./mvnw --batch-mode --no-transfer-progress verify
+
+      - name: Test and package cloud telemetry adapter
+        run: ./mvnw --batch-mode --no-transfer-progress -f telemetry-adapter/pom.xml verify

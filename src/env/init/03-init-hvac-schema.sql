@@ -139,6 +139,24 @@ CREATE TABLE IF NOT EXISTS `biz_equipment` (
         REFERENCES `biz_space` (`space_id`, `building_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备台账';
 
+CREATE TABLE IF NOT EXISTS `biz_device_identity` (
+    `identity_id` VARCHAR(32) NOT NULL COMMENT '平台内部身份绑定ID',
+    `identity_type` VARCHAR(20) NOT NULL COMMENT '外部身份类型，如MAC或SERIAL_NO',
+    `identity_value` VARCHAR(100) NOT NULL COMMENT '设备上报的外部身份值',
+    `equip_id` VARCHAR(32) NOT NULL,
+    `building_id` VARCHAR(32) NOT NULL,
+    `expected_profile_code` VARCHAR(50) NOT NULL COMMENT '允许的云端协议模板代码',
+    `status` TINYINT(1) NOT NULL DEFAULT 1,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`identity_id`),
+    UNIQUE KEY `uk_device_identity_value` (`identity_type`, `identity_value`),
+    KEY `idx_device_identity_owner` (`equip_id`, `building_id`, `status`),
+    CONSTRAINT `fk_device_identity_equipment_building`
+        FOREIGN KEY (`equip_id`, `building_id`)
+        REFERENCES `biz_equipment` (`equip_id`, `building_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='设备外部身份预注册绑定';
+
 CREATE TABLE IF NOT EXISTS `biz_data_point` (
     `point_id` VARCHAR(32) NOT NULL COMMENT '平台内部全局ID',
     `point_code` VARCHAR(100) NOT NULL COMMENT '平台标准测点编码',
@@ -176,7 +194,7 @@ CREATE TABLE IF NOT EXISTS `biz_point_alias` (
     `alias_id` VARCHAR(32) NOT NULL,
     `building_id` VARCHAR(32) NOT NULL,
     `source_system` VARCHAR(50) NOT NULL,
-    `source_point_code` VARCHAR(100) NOT NULL,
+    `source_point_code` VARCHAR(255) NOT NULL,
     `point_id` VARCHAR(32) NOT NULL,
     `status` TINYINT(1) NOT NULL DEFAULT 1,
     PRIMARY KEY (`alias_id`),

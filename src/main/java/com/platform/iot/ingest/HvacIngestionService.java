@@ -70,8 +70,22 @@ public class HvacIngestionService {
      * {@link IngestionOutcome#STORAGE_FAILED}，让 MQTT 不确认并等待 Broker 重投。</p>
      */
     public HvacIngestionResult ingest(Map<String, Object> payload, long receivedTime) {
+        return ingest(payload, receivedTime, sourceSystem);
+    }
+
+    /**
+     * 使用服务端选择的可信来源命名空间执行单点接入。
+     *
+     * <p>该重载供标准多字段批次展开复用；来源值来自应用配置和内部路由，绝不读取设备载荷，
+     * 因此设备不能伪造别名命名空间绕过建筑或测点归属。</p>
+     */
+    public HvacIngestionResult ingest(
+            Map<String, Object> payload,
+            long receivedTime,
+            String trustedSourceSystem) {
         // 来源系统由服务端配置，不允许设备载荷伪造命名空间。
-        TelemetryValidationResult validation = validator.validate(payload, receivedTime, sourceSystem);
+        TelemetryValidationResult validation = validator.validate(
+                payload, receivedTime, trustedSourceSystem);
         if (!validation.accepted()) {
             meterRegistry.counter("iot.hvac.ingestion.rejected",
                     "reason", validation.reason().name()).increment();

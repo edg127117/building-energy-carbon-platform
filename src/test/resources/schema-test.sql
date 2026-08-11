@@ -13,6 +13,7 @@ DROP TABLE IF EXISTS sys_user;
 DROP TABLE IF EXISTS biz_indicator;
 DROP TABLE IF EXISTS biz_point_alias;
 DROP TABLE IF EXISTS biz_data_point;
+DROP TABLE IF EXISTS biz_device_identity;
 DROP TABLE IF EXISTS biz_equipment;
 DROP TABLE IF EXISTS biz_point_naming_rule;
 DROP TABLE IF EXISTS biz_equipment_type;
@@ -171,6 +172,19 @@ CREATE TABLE biz_equipment (
   UNIQUE (equip_id, building_id)
 );
 
+CREATE TABLE biz_device_identity (
+  identity_id VARCHAR(32) PRIMARY KEY,
+  identity_type VARCHAR(20) NOT NULL,
+  identity_value VARCHAR(100) NOT NULL,
+  equip_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  expected_profile_code VARCHAR(50) NOT NULL,
+  status TINYINT DEFAULT 1,
+  create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (identity_type, identity_value)
+);
+
 CREATE TABLE biz_data_point (
   point_id VARCHAR(32) PRIMARY KEY,
   point_code VARCHAR(100) NOT NULL,
@@ -200,7 +214,7 @@ CREATE TABLE biz_point_alias (
   alias_id VARCHAR(32) PRIMARY KEY,
   building_id VARCHAR(32) NOT NULL,
   source_system VARCHAR(50) NOT NULL,
-  source_point_code VARCHAR(100) NOT NULL,
+  source_point_code VARCHAR(255) NOT NULL,
   point_id VARCHAR(32) NOT NULL,
   status TINYINT DEFAULT 1,
   UNIQUE (building_id, source_system, source_point_code)

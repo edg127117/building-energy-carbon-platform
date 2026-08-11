@@ -1,0 +1,30 @@
+server:
+  port: ${ADAPTER_PORT:8091}
+
+spring:
+  application:
+    name: telemetry-adapter
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${ADAPTER_MYSQL_HOST:127.0.0.1}:${ADAPTER_MYSQL_PORT:3306}/${ADAPTER_MYSQL_DATABASE:iot_adapter}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+    username: ${ADAPTER_MYSQL_USER:adapter}
+    password: ${ADAPTER_MYSQL_PASSWORD:change-me}
+
+adapter:
+  profile-refresh-ms: ${ADAPTER_PROFILE_REFRESH_MS:60000}
+  mqtt:
+    enabled: ${ADAPTER_MQTT_ENABLED:true}
+    broker-url: ${ADAPTER_MQTT_BROKER_URL:tcp://127.0.0.1:1883}
+    client-id: ${ADAPTER_MQTT_CLIENT_ID:telemetry-adapter-01}
+    username: ${ADAPTER_MQTT_USER:adapter}
+    password: ${ADAPTER_MQTT_PASSWORD:change-me}
+    raw-topic: ${ADAPTER_RAW_TOPIC:device/raw/#}
+    standard-topic: ${ADAPTER_STANDARD_TOPIC:device/telemetry/up}
+    max-payload-bytes: ${ADAPTER_MAX_PAYLOAD_BYTES:65536}
+    initial-retry-millis: ${ADAPTER_INITIAL_RETRY_MILLIS:5000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics

@@ -20,7 +20,7 @@
 - V1 保持 Spring Boot 单体后端和 Vue 前端，不拆微服务。
 - MySQL 保存用户权限、建筑、设备、测点和任务等结构化业务数据。
 - TDengine 保存 HVAC 原始事件、分钟数据和指标结果。
-- MQTT 负责 19 测点上行，Redis 负责 Token、权限范围和最新指标等缓存。
+- 云端 EMQX 与独立 `telemetry-adapter` 负责设备接入和配置驱动格式转换；本地平台主动订阅标准 MQTT 上行，Redis 负责 Token、权限范围和最新指标等缓存。
 - 旧电表 Demo 已退出当前产品范围，只保留 Git 历史，不得恢复为并行业务链。
 - V1 只提供采集、分析和展示能力；HVAC 控制必须经过独立安全设计和验收。
 
@@ -35,6 +35,7 @@
 | `com.platform.hvac` | 建筑、设备、测点档案和 HVAC 查询 API | 不直接消费 MQTT 报文 |
 | `com.platform.integration` | 面向 `THIRD_PARTY` 的按建筑授权只读 Open API | 不提供内部后台、写入、控制或 Token 签发 |
 | `com.platform.iot.ingest`、`com.platform.iot.quality` | MQTT 载荷接入、测点身份解析和运行时质量校验 | 不承担前端展示组装 |
+| `com.platform.iot.identity` | 从本地 MySQL 解析外部设备身份到设备、建筑和期望协议 | 不从报文猜测归属，不自动创建设备 |
 | `com.platform.iot.aggregation` | 将原始事件聚合为整分钟数据 | 不保存用户权限数据 |
 | `com.platform.iot.dataquality` | Q0/Q1/Q2 数据质量补全、恢复、重算和任务状态 | 不改变 MySQL 与 TDengine 的职责边界 |
 | `com.platform.iot.formula` | 组装公式输入、计算四类指标、保存并发布结果 | 不直接处理 HTTP 权限入口 |
@@ -42,15 +43,19 @@
 | `com.platform.cache` | Token、菜单、建筑范围和最新指标缓存 | 不作为时序事实的永久存储 |
 | `com.platform.generator` | 后端代码生成器 | 不承载 HVAC 业务规则 |
 | `com.platform.config` | 数据源、MQTT、Redis、WebSocket 和开关装配 | 不承载业务流程 |
+| `telemetry-adapter` | 云端独立 Spring Boot 接入程序；按云端 MySQL 模板把原始 JSON 转为标准多指标 MQTT 报文 | 不保存正式遥测、建筑、设备归属、用户和指标 |
 
 ## 4. 核心业务数据链路
 
 ### 4.1 HVAC 采集、计算和展示
 
-`device/data/up` MQTT 报文
-→ [`MqttConfig`](src/main/java/com/platform/config/MqttConfig.java)
-→ [`HvacMqttMessageHandler`](src/main/java/com/platform/iot/ingest/HvacMqttMessageHandler.java)
-→ [`HvacIngestionService`](src/main/java/com/platform/iot/ingest/HvacIngestionService.java)
+设备原始 MQTT 报文
+→ 云端 [`telemetry-adapter`](telemetry-adapter)
+→ `device/telemetry/up` 标准多指标报文
+→ 本地 [`MqttConfig`](src/main/java/com/platform/config/MqttConfig.java)
+→ [`StandardTelemetryMqttMessageHandler`](src/main/java/com/platform/iot/ingest/standard/StandardTelemetryMqttMessageHandler.java)
+→ 本地设备预注册与整包测点预检
+→ [`HvacIngestionService`](src/main/java/com/platform/iot/ingest/HvacIngestionService.java) 逐指标复用单点链
 → 测点配置与 [`TelemetryQualityValidator`](src/main/java/com/platform/iot/quality/TelemetryQualityValidator.java)
 → [`TdengineHvacRawEventRepository`](src/main/java/com/platform/iot/temporal/impl/TdengineHvacRawEventRepository.java)
 → [`HvacMinuteAggregationService`](src/main/java/com/platform/iot/aggregation/HvacMinuteAggregationService.java)
@@ -61,6 +66,12 @@
 → [`web/src/api/hvac.ts`](web/src/api/hvac.ts)
 → [`useHvacDashboard`](web/src/composables/useHvacDashboard.ts)
 → [`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue)。
+
+迁移期旧 `device/data/up` 单测点报文仍由 `MqttConfig`
+→ [`HvacMqttMessageHandler`](src/main/java/com/platform/iot/ingest/HvacMqttMessageHandler.java)
+→ [`HvacIngestionService`](src/main/java/com/platform/iot/ingest/HvacIngestionService.java)
+→ 测点配置与 [`TelemetryQualityValidator`](src/main/java/com/platform/iot/quality/TelemetryQualityValidator.java)
+进入相同的本地时序链；该路径不用于新增多字段设备。
 
 公式结果在 TDengine 持久化成功且 Redis 接受最新分钟后，还会通过
 [`IndicatorRealtimePublisher`](src/main/java/com/platform/iot/formula/IndicatorRealtimePublisher.java)、
@@ -110,10 +121,11 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 
 | 资源 | 保存或传递的内容 | 主要访问位置 | 测试边界 |
 |---|---|---|---|
-| MySQL | 用户、角色、菜单、建筑、设备、测点、典型值和任务状态 | `system`、`hvac` Mapper，数据质量 MySQL Repository | 普通测试使用 H2 或 Mock，不依赖本机 MySQL |
+| 本地 MySQL | 用户、角色、菜单、建筑、设备、外部身份绑定、测点、典型值和任务状态 | `system`、`hvac` Mapper，设备身份与数据质量 MySQL Provider | 普通测试使用 H2 或 Mock，不依赖本机 MySQL |
+| 云端适配器 MySQL | 协议模板、版本、JSON 字段路径、单位和换算规则 | `telemetry-adapter` 的 JDBC 配置快照 | 适配器普通测试使用独立 H2，不保存业务数据 |
 | TDengine | 原始事件、分钟数据、指标结果和公式异常 | `iot.temporal` 专用 Repository | 普通测试关闭真实 TDengine，真实链路使用专用集成验证 |
 | Redis | Token、菜单、建筑范围和最新指标缓存 | `com.platform.cache` | 允许 Fake/Mock；缓存失败是否降级由业务服务明确决定 |
-| MQTT / EMQX | `device/data/up` 的 19 测点上行载荷 | `MqttConfig`、`HvacMqttMessageHandler` | 普通测试必须关闭真实 MQTT 连接 |
+| MQTT / EMQX | 设备原始报文、`device/telemetry/up` 标准多指标报文和迁移期 `device/data/up` 单点报文 | 云端适配器、`MqttConfig` 与两个接入 Handler | 普通测试必须关闭真实 MQTT 连接 |
 | WebSocket | 按建筑发布四项 HVAC 指标增量，不承载 19 测点完整状态 | `IndicatorRealtimePublisher`、`HvacRealtimeSessionRegistry`、`WebSocketServer`、`web/src/realtime` | 普通测试使用 Mock/Fake；真实路由与恢复使用隔离 Docker 和浏览器验证 |
 
 多数据源代码必须使用明确 Bean 名称和 `Qualifier`；MySQL SQL 与 TDengine SQL 不得跨数据源执行。
@@ -127,9 +139,10 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 | 本地基础设施 | [`src/env/docker-compose.yml`](src/env/docker-compose.yml) |
 | 后端启动脚本 | [`start-server.sh`](start-server.sh) |
 | 后端构建与测试 | [`pom.xml`](pom.xml)、[`application-test.yml`](src/test/resources/application-test.yml) |
+| 云端适配器 | [`telemetry-adapter/README.md`](telemetry-adapter/README.md)、[`telemetry-adapter/pom.xml`](telemetry-adapter/pom.xml) |
 | 前端构建与测试 | [`web/package.json`](web/package.json) |
 | 前端 HTTP / WebSocket 基址示例 | [`web/.env.example`](web/.env.example) |
-| HVAC MQTT 配置 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java) |
+| MQTT 接入配置 | 本地 [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、云端 [`telemetry-adapter/application.yml`](telemetry-adapter/src/main/resources/application.yml) |
 | HVAC 查询入口 | [`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java) |
 | 前端 HVAC 页面 | [`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue) |
 | 最小后台管理 | [`ManagementLayout.vue`](web/src/layouts/ManagementLayout.vue)、[`systemAdmin.ts`](web/src/api/systemAdmin.ts)、[`adminNavigation.ts`](web/src/domain/adminNavigation.ts) |
@@ -152,7 +165,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 | 文档 | 状态 | 用途 | 不用于判断 |
 |---|---|---|---|
 | [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) | V1 设计基线 | 冻结范围、测点、公式和安全边界 | 当前完成进度和仍待实施事项 |
-| [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前硬件契约 | 19 测点上行载荷、确认语义和接口边界 | 现场设备已经完成验收 |
+| [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前硬件契约 | 云端适配、本地预注册、多字段与旧单点上行、确认语义 | 现场设备已经完成验收 |
 | [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来安全约束 | 未来控制能力必须满足的安全和审计边界 | 当前已经存在控制功能 |
 | [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | Java 21、Maven Wrapper 和 CI 验证 | 某台电脑已经正确配置环境 |
 | [`docs/development/code-comments.md`](docs/development/code-comments.md) | 当前开发规范 | IoT 生产代码注释边界与风险分级 | 通用语言注释规则和不涉及生产代码的任务 |

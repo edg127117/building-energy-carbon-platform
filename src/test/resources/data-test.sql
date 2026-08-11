@@ -72,6 +72,11 @@ VALUES
 ('EQUIP_PUMP_B1', 'PUMP1', '一号冷冻水泵', 'WCP', 'PUMP', 'GROUP001', 'BLD001', 'SPACE001', 0),
 ('EQUIP_AHU_B1', 'AHU1', '一号空气处理机组', 'AHU', 'AHU', 'GROUP001', 'BLD001', 'SPACE001', 0);
 
+INSERT INTO biz_device_identity
+(identity_id, identity_type, identity_value, equip_id, building_id, expected_profile_code, status)
+VALUES
+('IDENTITY_WCR_B1', 'MAC', 'TEST-MAC-WCR-B1', 'EQUIP_WCR_B1', 'BLD001', 'HVAC_DEVICE_V1', 1);
+
 -- 标准测点使用交底规范；冻结书19点编码放入别名表。
 INSERT INTO biz_data_point
 (point_id, point_code, point_name, building_id, system_group_id, equip_id,
