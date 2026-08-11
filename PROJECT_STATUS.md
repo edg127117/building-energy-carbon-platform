@@ -51,6 +51,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 - 四项能效指标已通过建筑级批量趋势接口展示真实 TDengine 历史，服务端按查询跨度返回 1、5 或 30 分钟分辨率；原有单指标精确历史接口保持不变，用于公式版本和失败记录审计。
 - 统一历史模块支持能效指标与原始测点切换；指标模式默认查询最近 24 小时四项指标，测点模式允许从冻结 19 测点中选择 1 至 8 个，并按建筑记忆有效选择。
 - 前端按单位拆分图表、保留时间缺口和 Q0/Q1/Q2 质量语义，不计算指标、不使用假数据，也不自行降采样；查询失败时保留上次成功结果并明确提示过期状态。
+- 相对历史范围在页面可见时每 30 秒通过现有历史 API 自动重查；自定义固定区间、后台页签、空选择和在途请求不自动访问 TDengine，同一展示条件的移动窗口刷新失败继续保留上一份曲线。
 
 证据入口：[`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java)、[`HvacIndicatorQueryService.java`](src/main/java/com/platform/hvac/service/HvacIndicatorQueryService.java)、[`web/src/api/hvac.ts`](web/src/api/hvac.ts)、[`useHvacDashboard.ts`](web/src/composables/useHvacDashboard.ts)、[`useHvacCalculationDetail.ts`](web/src/composables/useHvacCalculationDetail.ts)、[`useHvacHistoryTrends.ts`](web/src/composables/useHvacHistoryTrends.ts)、[`HvacCalculationDetailDrawer.vue`](web/src/components/hvac/HvacCalculationDetailDrawer.vue)、[`HvacHistoryPanel.vue`](web/src/components/hvac/HvacHistoryPanel.vue)、[`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue)。
 
