@@ -39,6 +39,7 @@ type HistoryRequest = {
   ids: string[]
   from: number
   to: number
+  scopeKey: string
 }
 
 type HttpFailure = {
@@ -79,8 +80,8 @@ function mapHistoryError(cause: unknown): HvacHistoryError {
  * 编排 HVAC 历史模式、时间条件、按建筑测点记忆和请求竞态。
  *
  * 页面只把当前建筑指标 ID 与冻结测点快照传入；本层调用两类历史 API、适配统一图表
- * 模型并持久化有效测点选择。每次条件变化递增请求版本并清除不匹配数据，同条件手动
- * 刷新失败才保留上次成功曲线并标记过期，历史请求不会加入实时 30 秒轮询。
+ * 模型并持久化有效测点选择。每次条件变化递增请求版本并清除不匹配数据；相对范围的
+ * 时间戳会随刷新移动，但同一展示条件刷新失败仍保留上次成功曲线并标记过期。
  */
 export function useHvacHistoryTrends(
   dependencies: HvacHistoryDependencies = defaultDependencies,
@@ -102,13 +103,13 @@ export function useHvacHistoryTrends(
   let buildingId: string | null = null
   let indicatorIds: string[] = []
   let requestVersion = 0
-  let activeConditionKey: string | null = null
+  let activeScopeKey: string | null = null
   let disposed = false
 
   /** 清空只属于上一个建筑或查询条件的响应，同时使在途请求失效。 */
   function invalidateCondition(): void {
     requestVersion += 1
-    activeConditionKey = null
+    activeScopeKey = null
     groups.value = []
     responseRange.value = null
     resolutionMinutes.value = null
@@ -132,31 +133,40 @@ export function useHvacHistoryTrends(
       : presetRange(preset.value, dependencies.now())
     if (range.from === null || range.to === null) return null
     if (validateHistoryRange(range.from, range.to)) return null
+    const scopeKey = JSON.stringify({
+      mode: mode.value,
+      buildingId,
+      ids,
+      preset: preset.value,
+      customFrom: preset.value === 'custom' ? range.from : null,
+      customTo: preset.value === 'custom' ? range.to : null,
+    })
     return {
       mode: mode.value,
       buildingId,
       ids: [...ids],
       from: range.from,
       to: range.to,
+      scopeKey,
     }
   }
 
   /**
    * 执行当前历史查询并以版本号隔离迟到响应。
-   * 只有同一条件的手动刷新失败会保留旧图，其他请求在发出前先清除旧响应。
+   * 只有同一展示条件的刷新失败会保留旧图；移动的相对时间戳不改变展示条件身份。
    */
-  async function runQuery(manual = false): Promise<void> {
+  async function runQuery(preserveCurrent = false): Promise<void> {
     if (disposed) return
     const request = buildCurrentRequest()
     if (!request) {
       loading.value = false
       return
     }
-    const conditionKey = JSON.stringify(request)
+    const scopeKey = request.scopeKey
     const version = ++requestVersion
     loading.value = true
     error.value = null
-    if (!manual || activeConditionKey !== conditionKey) {
+    if (!preserveCurrent || activeScopeKey !== scopeKey) {
       groups.value = []
       responseRange.value = null
       resolutionMinutes.value = null
@@ -192,13 +202,13 @@ export function useHvacHistoryTrends(
       groups.value = nextGroups
       responseRange.value = nextRange
       resolutionMinutes.value = nextResolution
-      activeConditionKey = conditionKey
+      activeScopeKey = scopeKey
       stale.value = false
       updatedAt.value = dependencies.now()
     } catch (cause) {
       if (version !== requestVersion || disposed) return
       error.value = mapHistoryError(cause)
-      stale.value = manual && activeConditionKey === conditionKey
+      stale.value = preserveCurrent && activeScopeKey === scopeKey
     } finally {
       if (version === requestVersion && !disposed) loading.value = false
     }
