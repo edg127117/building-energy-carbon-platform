@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
@@ -30,6 +31,13 @@ class MySqlDataPointConfigProviderTest {
     @BeforeEach
     void setUp() {
         provider = new MySqlDataPointConfigProvider(pointMapper, aliasMapper, equipmentMapper);
+    }
+
+    @Test
+    void rejectsLookupUntilFirstCompleteSnapshotIsLoaded() {
+        assertThatThrownBy(() -> provider.find(
+                new PointAliasKey("BLD001", "MQTT_STANDARD_V1", "MAC:ABC:POWER")))
+                .isInstanceOf(DataPointConfigSnapshotUnavailableException.class);
     }
 
     @Test

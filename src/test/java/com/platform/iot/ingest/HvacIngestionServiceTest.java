@@ -55,6 +55,18 @@ class HvacIngestionServiceTest {
     }
 
     @Test
+    void trustedSourceOverloadUsesOnlyServerSelectedNamespace() {
+        when(validator.validate(payload, EVENT_TIME, "MQTT_STANDARD_V1"))
+                .thenReturn(TelemetryValidationResult.reject(
+                        TelemetryRejectionReason.POINT_NOT_FOUND, "测点未配置"));
+
+        service.ingest(payload, EVENT_TIME, "MQTT_STANDARD_V1");
+
+        verify(validator).validate(payload, EVENT_TIME, "MQTT_STANDARD_V1");
+        verify(validator, never()).validate(payload, EVENT_TIME, "MQTT_FREEZE_V1");
+    }
+
+    @Test
     void eventReceivedAfterWindowCutoffIsStoredAsLate() {
         long minuteStart = EVENT_TIME - Math.floorMod(EVENT_TIME, 60_000L);
         long receivedTime = minuteStart + 90_001L;
