@@ -304,6 +304,22 @@ function Invoke-CommentScannerTests {
 function New-ContractFixture {
     $root = New-TestRepository 'contract'
     Set-Utf8File $root 'README.md' "baseline`n"
+    Set-Utf8File $root 'docs/superpowers/specs/fixture-design.md' @'
+# Fixture Design
+
+> **文档状态：历史任务设计记录**
+>
+> 当前状态查看[历史任务目录](../README.md)、
+> [项目状态](../../../PROJECT_STATUS.md)、当前代码与测试。
+'@
+    Set-Utf8File $root 'docs/superpowers/plans/fixture.md' @'
+# Fixture Plan
+
+> **文档状态：历史任务实施计划**
+>
+> 复选框不代表当前完成状态；当前状态查看[历史任务目录](../README.md)、
+> [项目状态](../../../PROJECT_STATUS.md)、当前代码与测试。
+'@
     Set-Utf8File $root 'docs/reviews/comment-audits/2026/2026-08-05-historical.md' "# 已合并的历史审计`n"
     Set-Utf8File $root 'src/main/java/com/example/ContractService.java' @'
 package com.example;
@@ -389,6 +405,11 @@ function New-LegacyAuditBody {
 
 ## 注释检查
 $AuditContent
+
+## 文档同步
+状态影响：无
+检查范围：核对当前代码、测试和项目状态入口。
+结论：本次不改变项目完成状态，无需更新当前状态文档。
 "@
 }
 
@@ -396,7 +417,10 @@ function New-RiskBody {
     param(
         [string]$Risk = '普通',
         [string]$Scope = '检查变化文件及受影响方法。',
-        [string]$Result = '现有注释准确，无需修改。'
+        [string]$Result = '现有注释准确，无需修改。',
+        [string]$StatusImpact = '有',
+        [string]$DocumentScope = '核对 PROJECT_STATUS.md、当前代码和测试。',
+        [string]$DocumentResult = '已同步当前项目状态。'
     )
     return @"
 ## 变更内容
@@ -409,6 +433,11 @@ function New-RiskBody {
 风险级别：$Risk
 检查范围：$Scope
 结论：$Result
+
+## 文档同步
+状态影响：$StatusImpact
+检查范围：$DocumentScope
+结论：$DocumentResult
 "@
 }
 
@@ -433,13 +462,13 @@ function Invoke-RepositoryContractTests {
     Assert-Contains $crValid.Output 'REPOSITORY_GUARDRAILS_OK' 'CR success marker must be emitted'
     Complete-Case 'LF, CRLF, and CR production PR bodies all pass'
 
-    foreach ($heading in @('变更内容', '测试', '注释检查')) {
+    foreach ($heading in @('变更内容', '测试', '注释检查', '文档同步')) {
         $missingBody = $body -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
         $missing = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingBody }
         Assert-True ($missing.ExitCode -ne 0) "missing required section must fail: $heading"
         Assert-Contains $missing.Output "PR_SECTION_MISSING: $heading" "failure must identify missing section: $heading"
     }
-    Complete-Case 'current three PR sections are enforced'
+    Complete-Case 'current four PR sections are enforced'
 
     $missingRisk = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Risk '') }
     Assert-True ($missingRisk.ExitCode -ne 0) 'missing risk level must fail'
@@ -458,6 +487,19 @@ function Invoke-RepositoryContractTests {
     Assert-True ($missingResult.ExitCode -ne 0) 'missing result must fail'
     Assert-Contains $missingResult.Output 'COMMENT_RESULT_MISSING' 'result failure must use a stable error'
     Complete-Case 'risk level, scope, and result are required'
+
+    foreach ($statusImpact in @('', '待确认')) {
+        $missingStatusImpact = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -StatusImpact $statusImpact) }
+        Assert-True ($missingStatusImpact.ExitCode -ne 0) "missing or invalid document status impact must fail: $statusImpact"
+        Assert-Contains $missingStatusImpact.Output 'DOCUMENT_STATUS_IMPACT_MISSING' 'document status impact failure must use a stable error'
+    }
+    $missingDocumentScope = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -DocumentScope '') }
+    Assert-True ($missingDocumentScope.ExitCode -ne 0) 'missing document scope must fail'
+    Assert-Contains $missingDocumentScope.Output 'DOCUMENT_SCOPE_MISSING' 'document scope failure must use a stable error'
+    $missingDocumentResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -DocumentResult '') }
+    Assert-True ($missingDocumentResult.ExitCode -ne 0) 'missing document result must fail'
+    Assert-Contains $missingDocumentResult.Output 'DOCUMENT_RESULT_MISSING' 'document result failure must use a stable error'
+    Complete-Case 'document status impact, scope, and result are required'
 
     $wrongRisk = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码') }
     Assert-True ($wrongRisk.ExitCode -ne 0) 'production change cannot claim no production code'
@@ -478,6 +520,49 @@ function Invoke-RepositoryContractTests {
     $docResult = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $docRoot @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码' -Scope '仅检查 README 链接和差异。' -Result '不涉及生产代码注释。') }
     Assert-True ($docResult.ExitCode -eq 0) "document-only PR should pass: $($docResult.Output)"
     Complete-Case 'document-only PR passes without audit document'
+
+    $historicalRoot = New-TestRepository 'historical-documents'
+    Set-Utf8File $historicalRoot 'README.md' "baseline`n"
+    Commit-All $historicalRoot 'baseline'
+    Invoke-GitChecked $historicalRoot @('switch', '-c', 'docs/history-contract') | Out-Null
+    Set-Utf8File $historicalRoot 'docs/superpowers/specs/missing-status-design.md' @'
+# Missing Status Design
+
+> 当前状态查看[历史任务目录](../README.md)、
+> [项目状态](../../../PROJECT_STATUS.md)、当前代码与测试。
+'@
+    Set-Utf8File $historicalRoot 'docs/superpowers/plans/missing-index.md' @'
+# Missing Index Plan
+
+> **文档状态：历史任务实施计划**
+>
+> 当前状态查看[项目状态](../../../PROJECT_STATUS.md)、当前代码与测试。
+'@
+    Set-Utf8File $historicalRoot 'docs/superpowers/specs/missing-current-status-design.md' @'
+# Missing Current Status Design
+
+> **文档状态：历史任务设计记录**
+>
+> 当前状态查看[历史任务目录](../README.md)和当前代码与测试。
+'@
+    Invoke-GitChecked $historicalRoot @(
+        'add', '--',
+        'docs/superpowers/specs/missing-status-design.md',
+        'docs/superpowers/plans/missing-index.md',
+        'docs/superpowers/specs/missing-current-status-design.md'
+    ) | Out-Null
+    $historicalStaged = Invoke-PowerShellScript $guardrailScript @('-Mode', 'Staged') $historicalRoot $null
+    Assert-True ($historicalStaged.ExitCode -ne 0) 'staged invalid historical documents must fail'
+    foreach ($errorCode in 'HISTORICAL_DOC_STATUS_MISSING', 'HISTORICAL_DOC_INDEX_LINK_MISSING', 'HISTORICAL_DOC_CURRENT_STATUS_LINK_MISSING') {
+        Assert-Contains $historicalStaged.Output $errorCode "staged historical failure must contain $errorCode"
+    }
+    Commit-All $historicalRoot 'add invalid historical documents'
+    $historicalPr = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $historicalRoot @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码') }
+    Assert-True ($historicalPr.ExitCode -ne 0) 'PR with invalid historical documents must fail'
+    foreach ($errorCode in 'HISTORICAL_DOC_STATUS_MISSING', 'HISTORICAL_DOC_INDEX_LINK_MISSING', 'HISTORICAL_DOC_CURRENT_STATUS_LINK_MISSING') {
+        Assert-Contains $historicalPr.Output $errorCode "PR historical failure must contain $errorCode"
+    }
+    Complete-Case 'historical document headers and current-state links are enforced in staged and PR modes'
 
     $stagedRoot = New-TestRepository 'staged'
     Set-Utf8File $stagedRoot 'README.md' "baseline`n"
@@ -557,19 +642,20 @@ function Invoke-CiContractTests {
     }
 
     $templateText = Get-Content -Raw -Encoding UTF8 -LiteralPath $template
-    foreach ($heading in '## 变更内容', '## 测试', '## 注释检查') {
+    foreach ($heading in '## 变更内容', '## 测试', '## 注释检查', '## 文档同步') {
         Assert-Contains $templateText $heading "PR template must contain $heading"
     }
     Assert-NotContains $templateText '## 注释审计' 'PR template must not require permanent audit documents'
     foreach ($field in '风险级别：', '检查范围：', '结论：') {
         Assert-Contains $templateText $field "PR template must contain $field"
     }
+    Assert-Contains $templateText '状态影响：' 'PR template must contain document status impact'
 
     $guardrailScriptText = Get-Content -Raw -Encoding UTF8 -LiteralPath $guardrailScript
     foreach ($removedContract in 'AUDIT_DOCUMENT_LINK_MISSING', 'AUDIT_DOCUMENT_NOT_ADDED', 'AUDIT_SYMBOL_MISSING') {
         Assert-NotContains $guardrailScriptText $removedContract "guardrail must not retain $removedContract"
     }
-    foreach ($retainedContract in 'FORBIDDEN_PATH', 'JAVA_CLASS_JAVADOC_MISSING', 'FRONTEND_BUSINESS_COMMENT_MISSING', 'STALE_OR_LOW_VALUE_COMMENT') {
+    foreach ($retainedContract in 'FORBIDDEN_PATH', 'JAVA_CLASS_JAVADOC_MISSING', 'FRONTEND_BUSINESS_COMMENT_MISSING', 'STALE_OR_LOW_VALUE_COMMENT', 'HISTORICAL_DOC_STATUS_MISSING', 'HISTORICAL_DOC_INDEX_LINK_MISSING', 'HISTORICAL_DOC_CURRENT_STATUS_LINK_MISSING', 'DOCUMENT_STATUS_IMPACT_MISSING', 'DOCUMENT_SCOPE_MISSING', 'DOCUMENT_RESULT_MISSING') {
         Assert-Contains $guardrailScriptText $retainedContract "guardrail must retain $retainedContract"
     }
 
