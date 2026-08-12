@@ -31,6 +31,14 @@ public class DataQualityProperties {
     @Min(1)
     private int lateRealCorrectionHours = 24;
 
+    /** 同时访问 TDengine 执行迟到 Q0 修正的最大任务数。 */
+    @Min(1)
+    private int lateRealCorrectionConcurrency = 8;
+
+    /** 迟到修正内存队列容量；队列满后依靠已落盘原始证据补偿。 */
+    @Min(1)
+    private int lateRealCorrectionQueueCapacity = 1_000;
+
     /** 已批准典型值配置快照的刷新间隔，单位毫秒。 */
     @Min(1)
     private long typicalConfigRefreshMs = 60_000L;
@@ -52,6 +60,10 @@ public class DataQualityProperties {
     /** RUNNING 批次超过该时间未更新后允许其他实例重新领取。 */
     @Min(1)
     private long recalculationStaleMs = 120_000L;
+
+    /** 同时执行人工 TDengine 重算分块的最大任务数。 */
+    @Min(1)
+    private int recalculationWorkerConcurrency = 2;
 
     /**
      * 线性插值只处理有两个质量 0 端点的短缺口，不能串联使用生成数据。

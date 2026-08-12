@@ -5,7 +5,10 @@ import com.platform.iot.dataquality.model.RecalculationJobPhase;
 import com.platform.iot.dataquality.model.entity.BizDataQualityFillTask;
 import com.platform.iot.dataquality.model.entity.BizDataQualityRecalcJob;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -19,8 +22,9 @@ import java.util.Objects;
 /**
  * 人工数据质量重算批次的低频领取和故障恢复入口。
  *
- * <p>每轮只从 MySQL 领取少量 WAITING 或超时 RUNNING 批次，领取成功后才访问
- * TDengine 并执行一个分块。条件领取是多实例并发边界，不能用 JVM 本地锁代替。</p>
+ * <p>每轮只从 MySQL 领取少量 WAITING 或超时 RUNNING 批次，扫描线程不访问
+ * TDengine；领取成功后由独立工作线程执行一个分块。条件领取是多实例并发边界，
+ * 不能用 JVM 本地锁代替。</p>
  */
 @Slf4j
 @Component
@@ -39,13 +43,16 @@ public class DataQualityRecalculationScheduler {
     private final RecalculationVoidService voidService;
     private final DataQualityRecalculationService recalculationService;
     private final DataQualityProperties properties;
+    private final TaskExecutor jobExecutor;
 
     public DataQualityRecalculationScheduler(
             RecalculationJobRepository jobRepository,
             FillTaskRepository fillTaskRepository,
             RecalculationVoidService voidService,
             DataQualityRecalculationService recalculationService,
-            DataQualityProperties properties) {
+            DataQualityProperties properties,
+            @Qualifier("recalculationJobExecutor")
+            TaskExecutor jobExecutor) {
         this.jobRepository =
                 Objects.requireNonNull(jobRepository, "jobRepository 不能为空");
         this.fillTaskRepository =
@@ -55,6 +62,7 @@ public class DataQualityRecalculationScheduler {
         this.recalculationService =
                 Objects.requireNonNull(recalculationService, "recalculationService 不能为空");
         this.properties = Objects.requireNonNull(properties, "properties 不能为空");
+        this.jobExecutor = Objects.requireNonNull(jobExecutor, "jobExecutor 不能为空");
     }
 
     /**
@@ -64,7 +72,8 @@ public class DataQualityRecalculationScheduler {
             fixedDelayString =
                     "${data-quality.recalculation-scan-delay-ms:10000}",
             initialDelayString =
-                    "${data-quality.recalculation-scan-delay-ms:10000}")
+                    "${data-quality.recalculation-scan-delay-ms:10000}",
+            scheduler = "recalculationScanTaskScheduler")
     public void run() {
         runAt(System.currentTimeMillis());
     }
@@ -108,6 +117,22 @@ public class DataQualityRecalculationScheduler {
         }
 
         try {
+            jobExecutor.execute(() -> executeClaimedJob(job, nowEpochMillis));
+        } catch (TaskRejectedException exception) {
+            // MySQL WAITING 是持久化队列；工作线程已满时不在 JVM 内积压 RUNNING。
+            releaseRejectedClaim(job, now);
+            log.warn("人工重算工作线程已满，批次退回等待: jobId={}", jobId);
+        }
+    }
+
+    /**
+     * 工作线程执行一个已领取分块；扫描线程只负责 MySQL 领取和提交，不访问 TDengine。
+     */
+    private void executeClaimedJob(
+            BizDataQualityRecalcJob job,
+            long nowEpochMillis) {
+        String jobId = job.getJobId();
+        try {
             if (job.getPhase() == RecalculationJobPhase.VOIDING) {
                 BizDataQualityFillTask oldTask = fillTaskRepository.findById(
                                 job.getSupersedesTaskId())
@@ -122,6 +147,24 @@ public class DataQualityRecalculationScheduler {
             // 原因、测点 JSON 和证据均不写 INFO；内部异常只随 jobId 进入服务端错误日志。
             log.error("人工重算批次执行失败: jobId={}", jobId, exception);
             markFailedSafely(job);
+        }
+    }
+
+    private void releaseRejectedClaim(
+            BizDataQualityRecalcJob job,
+            LocalDateTime claimedAt) {
+        try {
+            if (!jobRepository.releaseClaim(
+                    job.getJobId(), job.getCursorMinute(), claimedAt)) {
+                log.error(
+                        "人工重算批次拒绝回退未生效，等待陈旧任务恢复: jobId={}",
+                        job.getJobId());
+            }
+        } catch (RuntimeException exception) {
+            log.error(
+                    "人工重算批次拒绝回退失败，等待陈旧任务恢复: jobId={}",
+                    job.getJobId(),
+                    exception);
         }
     }
 

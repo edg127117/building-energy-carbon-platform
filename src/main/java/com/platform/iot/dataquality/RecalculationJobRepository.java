@@ -52,6 +52,12 @@ public interface RecalculationJobRepository {
             LocalDateTime staleBefore,
             LocalDateTime now);
 
+    /** 工作提交失败时，只允许本次领取者把尚未执行的批次退回 WAITING。 */
+    boolean releaseClaim(
+            String jobId,
+            LocalDateTime expectedCursor,
+            LocalDateTime claimedAt);
+
     void resumeFailed(String jobId);
 
     void freezeVoidTargets(String jobId, String targetMinutesJson);

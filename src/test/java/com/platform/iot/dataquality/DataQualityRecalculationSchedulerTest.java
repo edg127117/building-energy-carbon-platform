@@ -13,10 +13,15 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.core.task.SyncTaskExecutor;
+import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
+import org.springframework.scheduling.annotation.Scheduled;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.IntStream;
@@ -61,7 +66,8 @@ class DataQualityRecalculationSchedulerTest {
                 fillTaskRepository,
                 voidService,
                 recalculationService,
-                properties);
+                properties,
+                new SyncTaskExecutor());
     }
 
     @Test
@@ -72,8 +78,9 @@ class DataQualityRecalculationSchedulerTest {
                 .toList();
         when(jobRepository.findClaimable(any(), eq(10)))
                 .thenReturn(candidates);
-        when(jobRepository.claim(eq("JOB-2"), any(), any()))
-                .thenReturn(true);
+        when(jobRepository.claim(anyString(), any(), any()))
+                .thenAnswer(invocation ->
+                        "JOB-2".equals(invocation.getArgument(0)));
 
         scheduler.runAt(NOW);
 
@@ -183,6 +190,67 @@ class DataQualityRecalculationSchedulerTest {
     }
 
     @Test
+    void rejectedWorkerSubmissionReleasesTheExactClaimBackToWaiting() {
+        BizDataQualityRecalcJob job =
+                job("JOB-REJECTED", RecalculationJobPhase.RECALCULATING);
+        TaskExecutor rejectingExecutor = mock(TaskExecutor.class);
+        doThrow(new TaskRejectedException("queue full"))
+                .when(rejectingExecutor).execute(any(Runnable.class));
+        scheduler = new DataQualityRecalculationScheduler(
+                jobRepository,
+                fillTaskRepository,
+                voidService,
+                recalculationService,
+                properties,
+                rejectingExecutor);
+        when(jobRepository.findClaimable(any(), eq(10)))
+                .thenReturn(List.of(job));
+        when(jobRepository.claim(eq(job.getJobId()), any(), any()))
+                .thenReturn(true);
+        when(jobRepository.releaseClaim(
+                job.getJobId(), job.getCursorMinute(), local(NOW)))
+                .thenReturn(true);
+
+        scheduler.runAt(NOW);
+
+        verify(jobRepository).releaseClaim(
+                job.getJobId(), job.getCursorMinute(), local(NOW));
+        verify(recalculationService, never())
+                .processClaimedJob(anyString(), anyLong());
+    }
+
+    @Test
+    void blockedWorkerDoesNotPreventTheNextScanFromClaimingAnotherJob() {
+        BizDataQualityRecalcJob first =
+                job("JOB-BLOCKED", RecalculationJobPhase.RECALCULATING);
+        BizDataQualityRecalcJob second =
+                job("JOB-NEXT", RecalculationJobPhase.RECALCULATING);
+        List<Runnable> submittedJobs = new ArrayList<>();
+        scheduler = new DataQualityRecalculationScheduler(
+                jobRepository,
+                fillTaskRepository,
+                voidService,
+                recalculationService,
+                properties,
+                submittedJobs::add);
+        when(jobRepository.findClaimable(any(), eq(10)))
+                .thenReturn(List.of(first), List.of(second));
+        when(jobRepository.claim(anyString(), any(), any()))
+                .thenReturn(true);
+
+        scheduler.runAt(NOW);
+        scheduler.runAt(NOW + 10_000L);
+
+        assertThat(submittedJobs).hasSize(2);
+        verify(jobRepository).claim(
+                eq(first.getJobId()), any(), any());
+        verify(jobRepository).claim(
+                eq(second.getJobId()), any(), any());
+        verify(recalculationService, never())
+                .processClaimedJob(anyString(), anyLong());
+    }
+
+    @Test
     void bothFeatureFlagsAreRequiredForConditionalRegistration() {
         ApplicationContextRunner runner = new ApplicationContextRunner()
                 .withBean(RecalculationJobRepository.class,
@@ -195,6 +263,8 @@ class DataQualityRecalculationSchedulerTest {
                         () -> mock(DataQualityRecalculationService.class))
                 .withBean(DataQualityProperties.class,
                         DataQualityProperties::new)
+                .withBean("recalculationJobExecutor", TaskExecutor.class,
+                        () -> mock(TaskExecutor.class))
                 .withUserConfiguration(
                         DataQualityRecalculationScheduler.class);
 
@@ -213,6 +283,17 @@ class DataQualityRecalculationSchedulerTest {
                         "data-quality.recalculation-enabled=false")
                 .run(context -> assertThat(context).doesNotHaveBean(
                         DataQualityRecalculationScheduler.class));
+    }
+
+    @Test
+    void scheduledScanUsesItsDedicatedScheduler() throws Exception {
+        Scheduled scheduled = DataQualityRecalculationScheduler.class
+                .getMethod("run")
+                .getAnnotation(Scheduled.class);
+
+        assertThat(scheduled).isNotNull();
+        assertThat(scheduled.scheduler())
+                .isEqualTo("recalculationScanTaskScheduler");
     }
 
     private BizDataQualityRecalcJob job(

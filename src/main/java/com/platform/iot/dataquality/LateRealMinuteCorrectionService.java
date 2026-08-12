@@ -95,7 +95,7 @@ public class LateRealMinuteCorrectionService {
     /**
      * 异步执行历史分钟修正，避免 TDengine 回读和公式重算阻塞 MQTT 接入确认。
      */
-    @Async("virtualThreadExecutor")
+    @Async("lateRealCorrectionExecutor")
     @EventListener
     public void onLateRealEventStored(HvacLateRealEventStoredEvent event) {
         try {
@@ -167,17 +167,20 @@ public class LateRealMinuteCorrectionService {
         MinuteQualityLockRegistry.MinuteKey key =
                 new MinuteQualityLockRegistry.MinuteKey(
                         event.pointId(), event.minuteStart());
-        lockRegistry.withLocks(List.of(key), () -> {
-            correctLocked(event, point.orElseThrow());
-            return null;
-        });
+        Optional<Q0Correction> correction = lockRegistry.withLocks(
+                List.of(key),
+                () -> correctQ0Locked(event, point.orElseThrow()));
+        // READY 与插值可能再次申请一组分钟锁，必须在单分钟锁释放后执行，
+        // 否则不同迟到线程各持一个条带再交叉申请批量条带会循环等待。
+        correction.ifPresent(this::completeDownstream);
     }
 
     /**
      * 外层与 TDengine 质量写入仓储共用可重入锁；两个并发迟到通知中只有第一个
-     * 先执行，后一个会基于此时的完整真实证据决定幂等退出或刷新 Q0。
+     * 先执行，后一个会基于此时的完整真实证据决定幂等退出或刷新 Q0。该临界区
+     * 只允许处理当前单分钟 Q0，不能调用会申请其他分钟锁的下游服务。
      */
-    private void correctLocked(
+    private Optional<Q0Correction> correctQ0Locked(
             HvacLateRealEventStoredEvent event,
             PointRuntimeConfig point) {
         Optional<RawMinuteAggregate> current =
@@ -198,7 +201,7 @@ public class LateRealMinuteCorrectionService {
                     "reason", "evidence_missing").increment();
             log.warn("迟到通知对应的真实原始证据未查到，不修改正式分钟: pointId={}, minute={}",
                     event.pointId(), event.minuteStart());
-            return;
+            return Optional.empty();
         }
 
         long finalizedAt = nextFinalizedAt(current, event.receivedAt());
@@ -208,7 +211,7 @@ public class LateRealMinuteCorrectionService {
             meterRegistry.counter(
                     "iot.hvac.late_real.skipped",
                     "reason", "already_real").increment();
-            return;
+            return Optional.empty();
         }
         List<MinuteQualityWriteResult> results =
                 minuteRepository.saveAllWithQualityPriority(
@@ -216,34 +219,51 @@ public class LateRealMinuteCorrectionService {
         MinuteQualityWriteResult result =
                 requireSingleResult(aggregate, results);
         if (!isActualWrite(result.outcome())) {
-            return;
+            return Optional.empty();
         }
 
-        if (result.previousQuality() != null
+        String replacedTaskId = result.previousQuality() != null
                 && result.previousQuality() > 0
                 && result.previousTaskId() != null
-                && !result.previousTaskId().isBlank()) {
-            incrementReplacementBestEffort(result.previousTaskId());
+                && !result.previousTaskId().isBlank()
+                ? result.previousTaskId()
+                : null;
+        return Optional.of(new Q0Correction(
+                point, event, aggregate, finalizedAt, replacedTaskId));
+    }
+
+    /**
+     * Q0 已经持久化且单分钟锁已释放；后续允许申请其他分钟锁并由水位与幂等补偿。
+     */
+    private void completeDownstream(Q0Correction correction) {
+        if (correction.replacedTaskId() != null) {
+            incrementReplacementBestEffort(correction.replacedTaskId());
         }
 
         // Q0 已经成为 TDengine 正式事实；完整分钟回读或同步公式监听短暂失败时，
         // 在当前异步任务内独立重试，不能重新执行 Q0 写入和替换计数。
         downstreamRetry.execute(context -> {
-            publishReady(point, event, finalizedAt);
+            publishReady(
+                    correction.point(),
+                    correction.event(),
+                    correction.finalizedAt());
             return null;
         });
 
         // READY 默认同步返回，确保本分钟公式先修正，再把新 Q0 作为右端点回溯 Q1。
         try {
             interpolationFillService.fillFromRightEndpoints(
-                    List.of(aggregate), finalizedAt);
+                    List.of(correction.aggregate()),
+                    correction.finalizedAt());
         } catch (RuntimeException exception) {
             // 当前 Q0 和公式 READY 已经成功，历史插值失败单独计量，后续由
             // DataQualityRecoveryService 的迟到 Q0 扫描再次触发短缺口修复。
             meterRegistry.counter(
                     "iot.hvac.late_real.interpolation_failed").increment();
             log.error("迟到 Q0 已完成公式修正，但历史质量1回溯失败: pointId={}, minute={}",
-                    event.pointId(), event.minuteStart(), exception);
+                    correction.event().pointId(),
+                    correction.event().minuteStart(),
+                    exception);
         }
         meterRegistry.counter(
                 "iot.hvac.late_real.corrected").increment();
@@ -314,6 +334,15 @@ public class LateRealMinuteCorrectionService {
         return Math.max(
                 correctedAt,
                 Math.addExact(current.orElseThrow().finalizedAt(), 1L));
+    }
+
+    /** 锁内 Q0 成功写入后交给锁外下游的不可变事实。 */
+    private record Q0Correction(
+            PointRuntimeConfig point,
+            HvacLateRealEventStoredEvent event,
+            RawMinuteAggregate aggregate,
+            long finalizedAt,
+            String replacedTaskId) {
     }
 
     private boolean sameStoredValue(double current, double rebuilt) {

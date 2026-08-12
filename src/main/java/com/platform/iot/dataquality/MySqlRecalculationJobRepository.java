@@ -154,6 +154,19 @@ public class MySqlRecalculationJobRepository
     }
 
     @Override
+    public boolean releaseClaim(
+            String jobId,
+            LocalDateTime expectedCursor,
+            LocalDateTime claimedAt) {
+        return mapper.releaseClaimAtomic(
+                requireText(jobId, "jobId"),
+                Objects.requireNonNull(
+                        expectedCursor, "expectedCursor 不能为空"),
+                Objects.requireNonNull(
+                        claimedAt, "claimedAt 不能为空")) == 1;
+    }
+
+    @Override
     public void resumeFailed(String jobId) {
         String normalizedJobId = requireText(jobId, "jobId");
         if (mapper.resumeFailedAtomic(normalizedJobId) != 1) {
