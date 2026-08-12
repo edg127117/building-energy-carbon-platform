@@ -60,6 +60,7 @@
 | HVAC 历史趋势图可见性与纵轴修复 | [设计](specs/2026-08-11-hvac-trend-chart-visibility-axis-design.md) | [计划](plans/2026-08-11-hvac-trend-chart-visibility-axis.md) | 成对历史记录 | 设计已完成书面复核并形成实施计划；当前实现状态仍以趋势图组件、测试和项目状态为准。 |
 | HVAC 历史趋势自动刷新 | [设计](specs/2026-08-11-hvac-history-auto-refresh-design.md) | [计划](plans/2026-08-11-hvac-history-auto-refresh.md) | 成对历史记录 | 相对时间范围每 30 秒权威重查；自定义区间不自动刷新，当前实现状态以历史 composable、面板和测试为准。 |
 | HVAC 重算调度与迟到修正隔离 | [设计](specs/2026-08-12-hvac-recalculation-scheduler-isolation-design.md) | [计划](plans/2026-08-12-hvac-recalculation-scheduler-isolation.md) | 成对历史记录 | 修复人工重算 WAITING、业务调度隔离和迟到 Q0 有界并发；当前完成状态以代码、测试及项目状态为准。 |
+| 当前文档状态防回退整改 | [设计](specs/2026-08-12-document-state-guardrail-design.md) | [计划](plans/2026-08-12-document-state-guardrail.md) | 成对历史记录 | 设计冻结书不再重复动态进度；历史文件状态块和 PR 文档同步证据由 Repository Guardrails 检查。 |
 
 ## 已确认的替代关系
 

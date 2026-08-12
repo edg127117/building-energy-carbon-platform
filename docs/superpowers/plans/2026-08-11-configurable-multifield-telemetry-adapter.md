@@ -1,5 +1,11 @@
 # Configurable Multi-Field Telemetry Adapter Implementation Plan
 
+> **文档状态：历史任务实施计划**
+>
+> 本文保留任务当时的实施步骤。文中的复选框表示原计划步骤，不代表当前完成状态；
+> 执行任何命令前，请先查看[历史任务目录](../README.md)、
+> [项目状态](../../../PROJECT_STATUS.md)、当前代码与测试并重新核验。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a cloud-deployed, MySQL-configured JSON telemetry adapter and a local platform intake that resolves pre-registered device identities to building-scoped points without storing business telemetry in the cloud.
