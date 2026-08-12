@@ -34,7 +34,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 - 迁移期旧 `device/data/up` 单测点链仍保留；本地 MQTT 已实现旧 Topic 与标准 Topic 的精确路由、手动 ACK、固定会话、自动重连和首次连接失败后台重试。
 - TDengine 已形成原始事件、整分钟数据、指标结果和公式异常的数据访问能力。
 - 已实现分钟聚合、迟到数据处理、Q0/Q1/Q2 数据质量补全、恢复、任务重试和人工重算后端能力。
-- 业务定时扫描、人工重算工作和迟到 Q0 修正已使用独立有界执行资源；人工任务以 MySQL `WAITING` 作为持久化队列，工作线程满时条件回退，TDengine 连接与读取也具备有限超时，单个慢任务不会占住后续重算扫描。
+- 业务定时扫描、人工重算工作和迟到 Q0 修正已使用独立有界执行资源；人工任务以 MySQL `WAITING` 作为持久化队列，工作线程满时条件回退，TDengine 连接与读取也具备有限超时，单个慢任务不会占住后续重算扫描。迟到修正仅在当前分钟 Q0 读写期间持有外层锁，READY、公式和插值在释放锁后执行，避免与下游批量分钟锁形成循环等待。
 - 已实现 `WCR_COP`、`TOWER_EFF`、`PUMP_EFF` 和 `AHU_POW_EFF` 四类指标计算、持久化、Redis 最新值缓存，以及认证后按建筑定向的 WebSocket 最佳努力发布。
 
 证据入口：[`iot/ingest`](src/main/java/com/platform/iot/ingest)、[`iot/aggregation`](src/main/java/com/platform/iot/aggregation)、[`iot/dataquality`](src/main/java/com/platform/iot/dataquality)、[`iot/formula`](src/main/java/com/platform/iot/formula)、[`iot/temporal`](src/main/java/com/platform/iot/temporal)。

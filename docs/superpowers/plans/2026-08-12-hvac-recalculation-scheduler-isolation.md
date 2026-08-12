@@ -167,3 +167,53 @@ Expected: 无输出且退出码为 0。
 在后端、Docker 基础设施和 Gaia 1.1 模拟器均运行、且提供有效 BLD001 JWT 时执行用户提供的 PowerShell 脚本。
 
 Expected: `CENTRAL_HVAC_TOWER_EFFICIENCY_VERIFIED`。若缺少 Token 或模拟器运行环境，必须标记未执行，不得用自动化测试替代。
+
+### Task 5: 消除迟到修正与批量分钟写入的嵌套锁死锁
+
+**Files:**
+- Modify: `src/main/java/com/platform/iot/dataquality/LateRealMinuteCorrectionService.java`
+- Modify: `src/test/java/com/platform/iot/dataquality/LateRealMinuteCorrectionServiceTest.java`
+
+**Interfaces:**
+- Consumes: `MinuteQualityLockRegistry.withLocks(Collection<MinuteKey>, Supplier<T>)`。
+- Produces: 私有不可变修正结果；外层单分钟锁释放后才执行 READY、公式与插值下游。
+
+- [x] **Step 1: 写确定性并发失败测试**
+
+两个线程分别修正不同测点分钟；分钟写入处使用屏障确保两者同时持有不同外层锁，插值替身再按相同全局键集合申请批量锁。测试设置两秒完成水位并断言两个线程均退出。
+
+- [x] **Step 2: 运行测试确认旧实现失败**
+
+Run: `.\mvnw.cmd test "-Dtest=LateRealMinuteCorrectionServiceTest#concurrentCorrectionsReleaseSingleMinuteLocksBeforeBatchDownstream"`
+
+Expected: FAIL，两个线程仍存活，证明旧实现形成循环等待。
+
+- [x] **Step 3: 缩小外层锁范围**
+
+让锁内方法只返回 Q0 写入后的不可变结果；`correct` 在 `withLocks` 返回后执行替换计数、READY 短重试、插值和成功指标。空证据、同证据和未写入继续在锁内幂等退出。
+
+- [x] **Step 4: 运行定向测试**
+
+Run: `.\mvnw.cmd test "-Dtest=LateRealMinuteCorrectionServiceTest,DataQualityRecalculationSchedulerTest,DataQualityRecalculationSchedulingIntegrationTest,DataQualityRecalculationAcceptanceTest"`
+
+Expected: `BUILD SUCCESS`，新并发用例与原迟到、调度、人工重算回归全部通过。
+
+Actual: 相关 7 个测试类共 64 个测试通过，0 失败、0 错误、0 跳过。
+
+- [x] **Step 5: 运行完整后端与仓库门禁**
+
+Run: `.\mvnw.cmd test`
+
+Run: `git diff --check`
+
+Run: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RepositoryGuardrails.ps1 -Mode Staged`
+
+Expected: 全部通过；测试数量以本轮实际报告为准。
+
+Actual: 完整 Maven 测试 539 个通过，0 失败、0 错误、0 跳过；差异检查与仓库门禁通过。
+
+- [ ] **Step 6: 更新原 PR 并执行专用本地验收**
+
+推送原分支后执行 Gaia 脚本并显式传入 `-MinimumTrendPoints 10`；同时等待人工重算任务进入 `SUCCEEDED`，再执行 `jcmd <PID> Thread.print`。
+
+Expected: 10/10 趋势点匹配、任务 `SUCCEEDED`、线程转储不包含 `Found one Java-level deadlock`，脚本输出 `CENTRAL_HVAC_TOWER_EFFICIENCY_VERIFIED`。

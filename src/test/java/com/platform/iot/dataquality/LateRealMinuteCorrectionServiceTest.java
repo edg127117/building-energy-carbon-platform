@@ -36,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -452,6 +453,86 @@ class LateRealMinuteCorrectionServiceTest {
                 .fillFromRightEndpoints(anyList(), anyLong());
     }
 
+    @Test
+    void concurrentCorrectionsReleaseSingleMinuteLocksBeforeBatchDownstream()
+            throws Exception {
+        PointRuntimeConfig firstPoint = towerPoint("LOCK-A", "TWin");
+        PointRuntimeConfig secondPoint = towerPoint("LOCK-B", "TWout");
+        assertThat(stripeIndex(firstPoint.pointId()))
+                .isNotEqualTo(stripeIndex(secondPoint.pointId()));
+        List<PointRuntimeConfig> points = List.of(firstPoint, secondPoint);
+        List<MinuteQualityLockRegistry.MinuteKey> batchKeys = points.stream()
+                .map(point -> new MinuteQualityLockRegistry.MinuteKey(
+                        point.pointId(), MINUTE))
+                .toList();
+        MinuteQualityLockRegistry sharedLocks =
+                new MinuteQualityLockRegistry();
+        Map<String, RawMinuteAggregate> stored = new ConcurrentHashMap<>();
+        CountDownLatch bothQ0WritesStarted = new CountDownLatch(2);
+        when(configProvider.findByPointId(anyString()))
+                .thenAnswer(invocation -> points.stream()
+                        .filter(point -> point.pointId().equals(
+                                invocation.getArgument(0)))
+                        .findFirst());
+        when(minuteRepository.findPointMinute(anyString(), eq(MINUTE)))
+                .thenReturn(Optional.empty());
+        when(rawRepository.findWindow(MINUTE, MINUTE + 60_000L, true))
+                .thenReturn(List.of(
+                        towerEvent(firstPoint, 35.0),
+                        towerEvent(secondPoint, 30.0)));
+        when(minuteRepository.saveAllWithQualityPriority(anyList(), isNull()))
+                .thenAnswer(invocation -> {
+                    List<RawMinuteAggregate> rows = invocation.getArgument(0);
+                    RawMinuteAggregate row = rows.getFirst();
+                    stored.put(row.pointId(), row);
+                    bothQ0WritesStarted.countDown();
+                    await(bothQ0WritesStarted);
+                    return List.of(new MinuteQualityWriteResult(
+                            row.pointId(), row.minuteStart(),
+                            MinuteQualityWriteResult.Outcome.INSERTED,
+                            null, null));
+                });
+        when(minuteRepository.findByMinute(MINUTE, Set.of("B1")))
+                .thenAnswer(invocation -> List.copyOf(stored.values()));
+        doAnswer(invocation -> sharedLocks.withLocks(batchKeys, () -> null))
+                .when(interpolationFillService)
+                .fillFromRightEndpoints(anyList(), anyLong());
+        DataQualityProperties properties = new DataQualityProperties();
+        properties.setLateRealCorrectionHours(24);
+        LateRealMinuteCorrectionService concurrentService =
+                new LateRealMinuteCorrectionService(
+                        configProvider,
+                        rawRepository,
+                        minuteRepository,
+                        fillTaskRepository,
+                        interpolationFillService,
+                        eventPublisher,
+                        new HvacPointMinuteAggregator(),
+                        sharedLocks,
+                        new SimpleMeterRegistry(),
+                        properties);
+        CountDownLatch start = new CountDownLatch(1);
+        Thread first = Thread.ofVirtual().start(() -> {
+            await(start);
+            concurrentService.onLateRealEventStored(
+                    lateEvent(firstPoint.pointId()));
+        });
+        Thread second = Thread.ofVirtual().start(() -> {
+            await(start);
+            concurrentService.onLateRealEventStored(
+                    lateEvent(secondPoint.pointId()));
+        });
+
+        start.countDown();
+        first.join(TimeUnit.SECONDS.toMillis(2));
+        second.join(TimeUnit.SECONDS.toMillis(2));
+
+        assertThat(first.isAlive()).isFalse();
+        assertThat(second.isAlive()).isFalse();
+        verify(interpolationFillService, times(2))
+                .fillFromRightEndpoints(anyList(), anyLong());
+    }
+
     private RawMinuteAggregate capturedWrittenMinute() {
         @SuppressWarnings("unchecked")
         var captor = org.mockito.ArgumentCaptor
@@ -462,8 +543,12 @@ class LateRealMinuteCorrectionServiceTest {
     }
 
     private HvacLateRealEventStoredEvent lateEvent() {
+        return lateEvent("P1");
+    }
+
+    private HvacLateRealEventStoredEvent lateEvent(String pointId) {
         return new HvacLateRealEventStoredEvent(
-                "P1", "B1", MINUTE, RECEIVED_AT);
+                pointId, "B1", MINUTE, RECEIVED_AT);
     }
 
     private PointRuntimeConfig point() {
@@ -553,5 +638,11 @@ class LateRealMinuteCorrectionServiceTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(exception);
         }
+    }
+
+    private int stripeIndex(String pointId) {
+        return Math.floorMod(
+                31 * pointId.hashCode() + Long.hashCode(MINUTE),
+                256);
     }
 }
