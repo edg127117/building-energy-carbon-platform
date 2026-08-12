@@ -26,23 +26,23 @@
 - Test: `src/test/java/com/platform/config/AsyncConfigTest.java`
 
 **Interfaces:**
-- Produces: 名称为 `taskScheduler` 的 `ThreadPoolTaskScheduler`；名称为 `lateRealCorrectionExecutor` 和 `recalculationJobExecutor` 的 `AsyncTaskExecutor`。
+- Produces: 名称为 `taskScheduler` 的通用业务调度器、`recalculationScanTaskScheduler` 专用扫描调度器；名称为 `lateRealCorrectionExecutor` 和 `recalculationJobExecutor` 的 `AsyncTaskExecutor`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
-验证三个 Bean 名称、线程名前缀、有限池大小及测试关闭时不连接外部资源。
+验证四个 Bean 名称、线程名前缀、有限池大小、人工工作零内存队列及测试关闭时不连接外部资源。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `.\mvnw.cmd test "-Dtest=AsyncConfigTest"`
 
 Expected: 因 Bean 或配置尚不存在而失败。
 
-- [ ] **Step 3: 实现最小配置**
+- [x] **Step 3: 实现最小配置**
 
 在 `AsyncConfig` 中注册显式业务调度器和两个有界执行器；配置值从 `DataQualityProperties` 读取，所有执行器设置稳定线程名前缀和明确关闭策略。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `.\mvnw.cmd test "-Dtest=AsyncConfigTest"`
 
@@ -62,17 +62,17 @@ Expected: `BUILD SUCCESS`。
 - Consumes: `recalculationJobExecutor`。
 - Produces: `releaseClaim(jobId, expectedCursor, claimedAt)` 条件回退入口；扫描线程只领取和提交，工作线程执行原有阶段逻辑。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖工作异步提交、阻塞工作不阻塞下一轮扫描、队列拒绝后条件回退、并发领取失败不执行和工作异常进入 `FAILED`。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `.\mvnw.cmd test "-Dtest=DataQualityRecalculationSchedulerTest,MySqlRecalculationJobRepositoryTest"`
 
 Expected: 新异步/回退断言失败。
 
-- [ ] **Step 3: 实现条件回退与工作分离**
+- [x] **Step 3: 实现条件回退与工作分离**
 
 领取成功后通过 `recalculationJobExecutor.execute` 提交 `jobId`、游标与领取时间快照；提交拒绝时执行条件 SQL：
 
@@ -87,7 +87,7 @@ WHERE job_id = #{jobId}
 
 工作方法保留作废阶段、重算分块及失败收口语义。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `.\mvnw.cmd test "-Dtest=DataQualityRecalculationSchedulerTest,MySqlRecalculationJobRepositoryTest"`
 
@@ -107,21 +107,21 @@ Expected: `BUILD SUCCESS`。
 - Consumes: `lateRealCorrectionExecutor`。
 - Produces: 可配置的并发、队列、TDengine HTTP 连接和读取超时。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 验证 `@Async("lateRealCorrectionExecutor")`、配置最小值校验、有限执行器拒绝行为及迟到修正异常不会删除原始证据。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `.\mvnw.cmd test "-Dtest=AsyncConfigTest,LateRealMinuteCorrectionServiceTest"`
 
 Expected: 执行器名称或配置断言失败。
 
-- [ ] **Step 3: 实现有界执行器与超时**
+- [x] **Step 3: 实现有界执行器与超时**
 
-默认迟到并发为 8、队列容量为 1000；人工工作并发为 2、队列容量为 100。TDengine URL 增加 `httpConnectTimeout` 和 `httpSocketTimeout`，默认分别为 5000ms 和 30000ms，并允许环境变量覆盖。
+默认迟到并发为 8、队列容量为 1000；人工工作并发为 2，使用零容量直接交接，线程满时退回 MySQL `WAITING`。TDengine URL 增加 `httpConnectTimeout` 和 `httpSocketTimeout`，默认分别为 5000ms 和 30000ms，并允许环境变量覆盖。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 Run: `.\mvnw.cmd test "-Dtest=AsyncConfigTest,LateRealMinuteCorrectionServiceTest"`
 
@@ -131,30 +131,32 @@ Expected: `BUILD SUCCESS`。
 
 **Files:**
 - Modify: `src/test/java/com/platform/DataQualityRecalculationAcceptanceTest.java`
-- Modify: `src/test/java/com/platform/iot/dataquality/DataQualityConditionalConfigurationTest.java`
+- Modify: `src/test/java/com/platform/iot/dataquality/LateRealMinuteCorrectionServiceTest.java`
+- Add: `src/test/java/com/platform/iot/dataquality/DataQualityRecalculationSchedulingIntegrationTest.java`
+- Add: `src/test/java/com/platform/iot/dataquality/RecalculationJobClaimSqlIntegrationTest.java`
 - Modify if current status changes: `PROJECT_STATUS.md`
 
 **Interfaces:**
 - Consumes: 新调度与执行器边界。
 - Produces: 三测点迟到 Q0 到 `TOWER_EFF_V1` 的回归证据。
 
-- [ ] **Step 1: 增加回归用例**
+- [x] **Step 1: 增加回归用例**
 
 构造 POINT008/009/010 同分钟迟到原始事件，断言三条 Q0、READY 事件、公式值和容差；同时验证调度异常状态恢复。
 
-- [ ] **Step 2: 运行相关测试**
+- [x] **Step 2: 运行相关测试**
 
 Run: `.\mvnw.cmd test "-Dtest=DataQualityRecalculationAcceptanceTest,DataQualityConditionalConfigurationTest,DataQualityRecalculationSchedulerTest,MySqlRecalculationJobRepositoryTest,LateRealMinuteCorrectionServiceTest,HvacFormulaEngineTest"`
 
 Expected: `BUILD SUCCESS`。
 
-- [ ] **Step 3: 运行完整后端测试**
+- [x] **Step 3: 运行完整后端测试**
 
 Run: `.\mvnw.cmd test`
 
 Expected: `BUILD SUCCESS`。
 
-- [ ] **Step 4: 运行差异和仓库检查**
+- [x] **Step 4: 运行差异和仓库检查**
 
 Run: `git diff --check`
 

@@ -95,7 +95,7 @@ public class LateRealMinuteCorrectionService {
     /**
      * 异步执行历史分钟修正，避免 TDengine 回读和公式重算阻塞 MQTT 接入确认。
      */
-    @Async("virtualThreadExecutor")
+    @Async("lateRealCorrectionExecutor")
     @EventListener
     public void onLateRealEventStored(HvacLateRealEventStoredEvent event) {
         try {

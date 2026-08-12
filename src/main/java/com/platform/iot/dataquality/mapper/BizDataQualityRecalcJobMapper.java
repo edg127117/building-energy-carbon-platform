@@ -130,6 +130,20 @@ public interface BizDataQualityRecalcJobMapper
     @Update("""
             UPDATE biz_data_quality_recalc_job
             SET status = 'WAITING',
+                update_time = CURRENT_TIMESTAMP(3)
+            WHERE job_id = #{jobId}
+              AND status = 'RUNNING'
+              AND cursor_minute = #{expectedCursor}
+              AND update_time = #{claimedAt}
+            """)
+    int releaseClaimAtomic(
+            @Param("jobId") String jobId,
+            @Param("expectedCursor") LocalDateTime expectedCursor,
+            @Param("claimedAt") LocalDateTime claimedAt);
+
+    @Update("""
+            UPDATE biz_data_quality_recalc_job
+            SET status = 'WAITING',
                 last_error = NULL,
                 finished_at = NULL,
                 update_time = CURRENT_TIMESTAMP(3)

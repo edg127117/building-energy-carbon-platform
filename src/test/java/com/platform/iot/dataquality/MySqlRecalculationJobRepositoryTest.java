@@ -115,6 +115,21 @@ class MySqlRecalculationJobRepositoryTest {
     }
 
     @Test
+    void releaseClaimUsesStatusCursorAndClaimTimeAsOwnershipBoundary() {
+        LocalDateTime claimedAt = FROM.plusMinutes(1);
+        when(mapper.releaseClaimAtomic("JOB1", FROM, claimedAt))
+                .thenReturn(1, 0);
+
+        assertThat(repository.releaseClaim("JOB1", FROM, claimedAt))
+                .isTrue();
+        assertThat(repository.releaseClaim("JOB1", FROM, claimedAt))
+                .isFalse();
+
+        verify(mapper, org.mockito.Mockito.times(2))
+                .releaseClaimAtomic("JOB1", FROM, claimedAt);
+    }
+
+    @Test
     void finalAdvanceUsesTheSameAtomicBoundary() {
         LocalDateTime finishedAt = TO.plusSeconds(5);
         when(mapper.advanceChunkAtomic(

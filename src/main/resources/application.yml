@@ -27,6 +27,10 @@ spring:
       connection-timeout: 5000
       connection-init-sql: SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci
 
+# Spring 业务定时任务必须使用显式调度器，不能误用 MQTT 或 WebSocket 专用线程。
+scheduling:
+  business-pool-size: ${BUSINESS_SCHEDULER_POOL_SIZE:4}
+
   # Redis 缓存层配置（冻结书 D-010：仅用于缓存，不参与数据写入热路径）
   data:
     redis:
@@ -69,7 +73,7 @@ mqtt:
 tdengine:
   # true：应用启动时连接 TDengine 并自动建库、建表；测试环境会覆盖为 false。
   initialization-enabled: true
-  url: jdbc:TAOS-RS://${TDENGINE_HOST:127.0.0.1}:${TDENGINE_PORT:6041}
+  url: jdbc:TAOS-RS://${TDENGINE_HOST:127.0.0.1}:${TDENGINE_PORT:6041}?httpConnectTimeout=${TDENGINE_HTTP_CONNECT_TIMEOUT_MS:5000}&httpSocketTimeout=${TDENGINE_HTTP_SOCKET_TIMEOUT_MS:30000}
   username: ${TDENGINE_USER:root}
   password: ${TDENGINE_PASSWORD:taosdata}
   database: iot_telemetry
@@ -105,6 +109,9 @@ data-quality:
     max-gap-minutes: 5
   # 迟到真实值在24小时内可自动替换质量1/2并触发定向重算，超期需人工重算。
   late-real-correction-hours: 24
+  # 集中回放只允许有界并发访问 TDengine；队列满时保留原始证据等待低频补偿。
+  late-real-correction-concurrency: ${LATE_REAL_CORRECTION_CONCURRENCY:8}
+  late-real-correction-queue-capacity: ${LATE_REAL_CORRECTION_QUEUE_CAPACITY:1000}
   # 已批准典型值采用本地完整快照，刷新失败继续使用上一份快照。
   typical-config-refresh-ms: 60000
   # 跨 MySQL/TDengine 不做分布式事务，失败任务按此低频间隔补偿。
@@ -117,6 +124,8 @@ data-quality:
   recalculation-scan-delay-ms: 10000
   # RUNNING 批次超过该水位未更新后可被重新领取，用于服务重启和实例故障恢复。
   recalculation-stale-ms: 120000
+  # MySQL WAITING 是持久化队列；工作线程满时领取会安全回退，不进入 JVM 等待队列。
+  recalculation-worker-concurrency: ${RECALCULATION_WORKER_CONCURRENCY:2}
 
 formula:
   # false 时不创建公式引擎、指标查询 API 和补算任务；测试可据此停止公式业务链路。

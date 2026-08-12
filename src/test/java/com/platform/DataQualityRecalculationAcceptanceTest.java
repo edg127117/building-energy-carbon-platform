@@ -60,6 +60,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.core.task.SyncTaskExecutor;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -307,7 +308,8 @@ class DataQualityRecalculationAcceptanceTest {
                     new RecalculationVoidService(
                             minutes, fills, jobs, objectMapper);
             scheduler = new DataQualityRecalculationScheduler(
-                    jobs, fills, voidService, recalculation, properties);
+                    jobs, fills, voidService, recalculation, properties,
+                    new SyncTaskExecutor());
 
             BuildingService buildingService = mock(BuildingService.class);
             BizDataPointService pointService = mock(BizDataPointService.class);
@@ -807,6 +809,23 @@ class DataQualityRecalculationAcceptanceTest {
                 job.setStartedAt(now);
             }
             job.setUpdateTime(now);
+            return true;
+        }
+
+        @Override
+        public boolean releaseClaim(
+                String jobId,
+                LocalDateTime expectedCursor,
+                LocalDateTime claimedAt) {
+            BizDataQualityRecalcJob job = byId.get(jobId);
+            if (job == null
+                    || job.getStatus() != RecalculationJobStatus.RUNNING
+                    || !expectedCursor.equals(job.getCursorMinute())
+                    || !claimedAt.equals(job.getUpdateTime())) {
+                return false;
+            }
+            job.setStatus(RecalculationJobStatus.WAITING);
+            job.setUpdateTime(claimedAt.plusNanos(1_000_000L));
             return true;
         }
 

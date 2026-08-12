@@ -1,6 +1,6 @@
 # HVAC 重算调度与迟到修正隔离设计
 
-> **文档状态：已确认，待实现**
+> **文档状态：已实现并通过自动化验证，待专用本地端到端验收**
 >
 > 本设计只处理人工重算长期停留 `WAITING`、迟到 Q0 不完整及其公式下游补偿，
 > 不修改 Gaia、MQTT 测点映射、`TOWER_EFF_V1` 公式或其他指标。
@@ -35,8 +35,10 @@
 - `mqttTaskScheduler`：只负责 MQTT 首次连接重试；
 - `hvacRealtimeTaskScheduler`：只负责 WebSocket 生命周期超时。
 
-业务调度器只负责触发和轻量扫描。TDengine 人工重算分块交给独立的有界
-`recalculationJobExecutor`。不能仅把 `fixedDelay` 改成 `fixedRate`，因为这会在慢任务下产生重叠执行。
+通用业务调度器承载既有 `@Scheduled` 任务；人工重算扫描再使用独立的单线程
+`recalculationScanTaskScheduler`，只执行 MySQL 扫描、领取和工作提交。TDengine 人工重算
+分块交给独立的有界 `recalculationJobExecutor`。不能仅把 `fixedDelay` 改成 `fixedRate`，
+因为这会在慢任务下产生重叠执行。
 
 ## 3. 人工重算领取与执行
 
@@ -51,7 +53,8 @@
 → 异常后条件写入 FAILED
 ```
 
-执行器并发数和队列容量可配置。提交被拒绝时，调度器必须把刚领取的任务安全退回
+执行器并发数可配置且不设置 JVM 等待队列；MySQL `WAITING` 行就是持久化队列。
+工作线程满导致提交被拒绝时，调度器必须把刚领取的任务安全退回
 `WAITING`；不能留下无人执行的 `RUNNING`。新增回退 SQL 必须同时校验 `job_id`、
 `RUNNING` 状态、领取时的 `update_time` 和游标，避免覆盖已经开始执行或被其他实例推进的任务。
 
@@ -84,7 +87,7 @@ Hikari `connectionTimeout` 继续只限制从连接池取连接的等待时间�
 
 - 人工扫描查询异常：记录错误，等待下一轮；
 - 条件领取竞争失败：正常跳过；
-- 工作提交被拒绝：条件退回 `WAITING` 并记录错误；
+- 工作线程已满：不进入 JVM 队列，条件退回 `WAITING` 并记录错误；
 - 分块执行异常：进入 `FAILED`；
 - 迟到修正队列满：记录拒绝计数，保留原始证据等待低频补偿；
 - TDengine 超时：快速失败，不允许无限占用线程。
