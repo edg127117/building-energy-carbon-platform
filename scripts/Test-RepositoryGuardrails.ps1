@@ -100,6 +100,45 @@ function Test-IsProductionPath {
         $Path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$'
 }
 
+function Get-HistoricalDocumentPaths {
+    $rows = & git ls-files -- 'docs/superpowers/specs/*.md' 'docs/superpowers/plans/*.md' 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "GIT_LS_FILES_FAILED: $($rows | Out-String)"
+    }
+    return @($rows | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Replace('\', '/') })
+}
+
+function Test-HistoricalDocumentContracts {
+    param([string]$RepositoryRoot, [string]$CheckMode)
+
+    foreach ($path in @(Get-HistoricalDocumentPaths)) {
+        $content = Get-FileContent $RepositoryRoot $path $CheckMode
+        if ([string]::IsNullOrWhiteSpace($content)) {
+            Add-GuardrailError 'HISTORICAL_DOC_STATUS_MISSING' $path
+            continue
+        }
+
+        $normalized = $content.Replace("`r`n", "`n").Replace("`r", "`n")
+        $header = (($normalized -split "`n") | Select-Object -First 10) -join "`n"
+        $expectedStatus = if ($path -match '^docs/superpowers/specs/.+\.md$') {
+            '文档状态：历史任务设计记录'
+        }
+        else {
+            '文档状态：历史任务实施计划'
+        }
+
+        if ($header -notmatch [regex]::Escape($expectedStatus)) {
+            Add-GuardrailError 'HISTORICAL_DOC_STATUS_MISSING' $path
+        }
+        if ($header -notmatch '\]\(\.\./README\.md\)') {
+            Add-GuardrailError 'HISTORICAL_DOC_INDEX_LINK_MISSING' $path
+        }
+        if ($header -notmatch '\]\(\.\./\.\./\.\./PROJECT_STATUS\.md\)') {
+            Add-GuardrailError 'HISTORICAL_DOC_CURRENT_STATUS_LINK_MISSING' $path
+        }
+    }
+}
+
 function Get-PrSection {
     param([string]$Body, [string]$Heading)
     $pattern = '(?ms)^##\s+' + [regex]::Escape($Heading) + '\s*\r?\n(?<content>.*?)(?=^##\s+|\z)'
@@ -117,10 +156,23 @@ function Test-PrSections {
 
     $normalizedBody = $Body.Replace("`r`n", "`n").Replace("`r", "`n")
     $withoutInstructions = [regex]::Replace($normalizedBody, '(?s)<!--.*?-->', '').Trim()
-    foreach ($heading in @('变更内容', '测试', '注释检查')) {
+    foreach ($heading in @('变更内容', '测试', '注释检查', '文档同步')) {
         $section = Get-PrSection $withoutInstructions $heading
         if ([string]::IsNullOrWhiteSpace($section)) {
             Add-GuardrailError 'PR_SECTION_MISSING' $heading
+        }
+    }
+
+    $documentSection = Get-PrSection $withoutInstructions '文档同步'
+    if (-not [string]::IsNullOrWhiteSpace($documentSection)) {
+        if ($documentSection -notmatch '(?m)^\s*状态影响\s*[：:]\s*(有|无)\s*$') {
+            Add-GuardrailError 'DOCUMENT_STATUS_IMPACT_MISSING' 'expected 有 or 无'
+        }
+        if ($documentSection -notmatch '(?m)^[ \t]*检查范围[ \t]*[：:][ \t]*\S[^\r\n]*$') {
+            Add-GuardrailError 'DOCUMENT_SCOPE_MISSING' 'describe current documents and code or test evidence checked'
+        }
+        if ($documentSection -notmatch '(?m)^[ \t]*结论[ \t]*[：:][ \t]*\S[^\r\n]*$') {
+            Add-GuardrailError 'DOCUMENT_RESULT_MISSING' 'describe updated current documents or why no update is required'
         }
     }
 
@@ -176,6 +228,8 @@ function Test-HighConfidenceCommentFindings {
 $repositoryRoot = Get-RepositoryRoot
 Set-Location $repositoryRoot
 $changedFiles = @(Get-ChangedFiles $Mode $BaseRef $HeadRef)
+
+Test-HistoricalDocumentContracts $repositoryRoot $Mode
 
 foreach ($file in $changedFiles) {
     if (Test-ForbiddenPath $file.path) {

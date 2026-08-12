@@ -1,5 +1,11 @@
 # HVAC 公式计算详情前端接入实施计划
 
+> **文档状态：历史任务实施计划**
+>
+> 本文保留任务当时的实施步骤。文中的复选框表示原计划步骤，不代表当前完成状态；
+> 执行任何命令前，请先查看[历史任务目录](../README.md)、
+> [项目状态](../../../PROJECT_STATUS.md)、当前代码与测试并重新核验。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 从四项 HVAC 实时指标卡打开对应分钟的真实计算详情抽屉。

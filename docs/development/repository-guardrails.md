@@ -44,6 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight
 - `变更内容`：只写本 PR 已完成内容和明确不包含的范围；
 - `测试`：记录实际命令、结果、跳过和未验证项；
 - `注释检查`：填写风险级别、检查范围和结论。
+- `文档同步`：填写状态影响、检查范围和结论，说明是否同步 `PROJECT_STATUS.md` 等当前入口。
 
 允许的风险级别为“高”“普通”“低”“不涉及生产代码”。生产代码变化按 [`code-comments.md`](code-comments.md) 选择范围；没有生产代码变化时使用“不涉及生产代码”。
 
@@ -52,6 +53,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight
 - `Java 21 verify`：Maven `verify`；
 - `Frontend verify`：依赖安装、Vitest、类型检查和生产构建；
 - `Repository guardrails`：范围、PR 结构、注释检查字段和高置信度文本风险。
+
+Repository Guardrails 还会检查全部 `docs/superpowers/specs` 和 `plans`：设计、计划必须分别带有
+标准历史状态标识，并在文件顶部链接历史任务目录和 `PROJECT_STATUS.md`。该检查只证明入口结构
+完整；“代码已实现但文档仍写未实现”等业务语义冲突，仍必须通过 PR 的“文档同步”证据人工复核。
 
 普通生产代码 PR 不再要求创建或链接永久注释审计文档。历史 PR 中已有的内嵌审计或归档链接不作为失败条件，但新 PR 应使用当前“注释检查”结构。
 
@@ -93,5 +98,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-PostMergeClea
 - `COMMENT_RISK_LEVEL_MISSING`：填写允许的风险级别。
 - `COMMENT_SCOPE_MISSING`：说明实际检查的文件、调用链、方法或变化附近。
 - `COMMENT_RESULT_MISSING`：说明已修改内容或无需修改的理由。
+- `DOCUMENT_STATUS_IMPACT_MISSING`：在“文档同步”中填写“状态影响：有”或“状态影响：无”。
+- `DOCUMENT_SCOPE_MISSING`：列出核对的当前文档和相关代码、测试入口。
+- `DOCUMENT_RESULT_MISSING`：说明更新了哪些当前文档，或为何无需更新。
+- `HISTORICAL_DOC_STATUS_MISSING`：历史设计或计划缺少对应的标准历史状态标识。
+- `HISTORICAL_DOC_INDEX_LINK_MISSING`：历史文件顶部缺少 `docs/superpowers/README.md` 入口。
+- `HISTORICAL_DOC_CURRENT_STATUS_LINK_MISSING`：历史文件顶部缺少 `PROJECT_STATUS.md` 入口。
 - `STALE_OR_LOW_VALUE_COMMENT`：删除任务历史、过期承诺或无信息复述，改写为当前真实行为。
 - `FORBIDDEN_PATH`：移除本地配置、凭据、生成文件或运行数据，并评估是否需要轮换已暴露凭据。
