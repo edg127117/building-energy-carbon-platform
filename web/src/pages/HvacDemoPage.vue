@@ -134,6 +134,7 @@
               <span class="device-value"><b>进水</b> {{ pointText('TOWER1_TCWin') }}{{ pointUnit('TOWER1_TCWin') }} · <b>出水</b> {{ pointText('TOWER1_TCWout') }}{{ pointUnit('TOWER1_TCWout') }}</span>
               <span class="device-state" :class="{ 'is-stale': pointViews.TOWER1_TCWin.status === 'STALE', 'is-empty': pointViews.TOWER1_TCWin.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('TOWER1_TCWin') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.TOWER1_TCWin)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.TOWER1_TCWin) }}</small>
                 <small v-if="stalePointDetail(pointViews.TOWER1_TCWin)">{{ stalePointDetail(pointViews.TOWER1_TCWin) }}</small>
               </span>
             </div>
@@ -145,6 +146,7 @@
               <span class="device-value"><b>出水</b> {{ pointText('WCR1_TWout') }}{{ pointUnit('WCR1_TWout') }} · <b>功率</b> {{ pointText('WCR1_PPE') }} {{ pointUnit('WCR1_PPE') }}</span>
               <span class="device-state" :class="{ 'is-stale': pointViews.WCR1_TWout.status === 'STALE', 'is-empty': pointViews.WCR1_TWout.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('WCR1_TWout') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.WCR1_TWout)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.WCR1_TWout) }}</small>
                 <small v-if="stalePointDetail(pointViews.WCR1_TWout)">{{ stalePointDetail(pointViews.WCR1_TWout) }}</small>
               </span>
             </div>
@@ -156,6 +158,7 @@
               <span class="device-value">{{ pointText('PUMP1_Flow') }} {{ pointUnit('PUMP1_Flow') }}</span>
               <span class="device-state" :class="{ 'is-stale': pointViews.PUMP1_Flow.status === 'STALE', 'is-empty': pointViews.PUMP1_Flow.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('PUMP1_Flow') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.PUMP1_Flow)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.PUMP1_Flow) }}</small>
                 <small v-if="stalePointDetail(pointViews.PUMP1_Flow)">{{ stalePointDetail(pointViews.PUMP1_Flow) }}</small>
               </span>
             </div>
@@ -167,6 +170,7 @@
               <span class="device-value">全压 {{ pointText('AHU1_TotalPress') }} {{ pointUnit('AHU1_TotalPress') }}</span>
               <span class="device-state" :class="{ 'is-stale': pointViews.AHU1_TotalPress.status === 'STALE', 'is-empty': pointViews.AHU1_TotalPress.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('AHU1_TotalPress') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.AHU1_TotalPress)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.AHU1_TotalPress) }}</small>
                 <small v-if="stalePointDetail(pointViews.AHU1_TotalPress)">{{ stalePointDetail(pointViews.AHU1_TotalPress) }}</small>
               </span>
             </div>
@@ -288,6 +292,7 @@
               <span class="point-name"><b>{{ item.label }}</b><small>{{ item.displayCode }}</small></span>
               <span class="point-reading">
                 <span class="point-value">{{ item.displayValue }} <small>{{ item.unit }}</small></span>
+                <small v-if="pointMinuteDetail(item)" class="point-sample-minute">{{ pointMinuteDetail(item) }}</small>
                 <small v-if="item.lastDisplayValue !== null" class="point-last-value">{{ stalePointDetail(item) }}</small>
               </span>
               <span class="point-quality">{{ item.qualityLabel }} · {{ item.statusLabel }}</span>
@@ -415,7 +420,7 @@ function pointStatus(code: FrozenPointCode): string {
   return pointViews.value[code].statusLabel
 }
 
-/** 格式化后端最后分钟；只作为过期证据，不把它重新解释为当前数据。 */
+/** 格式化后端数据分钟；只展示数据采样时间，不用页面刷新时间补空值。 */
 function formatPointMinute(minute: number | null): string {
   if (minute === null) return '--'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -423,6 +428,12 @@ function formatPointMinute(minute: number | null): string {
     minute: '2-digit',
     hour12: false,
   }).format(new Date(minute))
+}
+
+/** 正常测点展示当前采样分钟；无记录和过期记录分别交由空状态与最后值证据表达。 */
+function pointMinuteDetail(point: DashboardPointView): string | null {
+  if (point.status !== 'NORMAL' || point.minute === null) return null
+  return `采样 ${formatPointMinute(point.minute)}`
 }
 
 /** 过期测点保留最后值和来源分钟，主实时值仍保持 --。 */
@@ -646,6 +657,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .device-state-label { display: flex; align-items: center; gap: 6px; }
 .device-state i { width: 5px; height: 5px; background: #3ce0a9; border-radius: 50%; box-shadow: 0 0 8px #3ce0a9; }
 .device-state small { max-width: 100%; color: #c79850; font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
+.device-state small.point-sample-minute { color: #6f879e; }
 .device-state.is-stale { color: #e3ad55; }
 .device-state.is-stale i { background: #e3ad55; box-shadow: 0 0 8px rgba(227, 173, 85, .7); }
 .device-state.is-empty { color: #687d91; }
@@ -767,6 +779,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .point-reading { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; }
 .point-value { color: #d2e1ed; font-size: 12px; font-variant-numeric: tabular-nums; }
 .point-value small { color: #566b80; font-size: 7px; }
+.point-reading .point-sample-minute { color: #6f879e; font-size: 8px; line-height: 1.35; }
 .point-last-value { max-width: 128px; color: #c79850; font-size: 9px; line-height: 1.35; text-align: right; overflow-wrap: anywhere; }
 .point-quality { color: #3db78f; font-size: 7px; text-align: right; }
 .point-row.is-stale .point-status { background: #e3ad55; box-shadow: 0 0 7px rgba(227, 173, 85, .65); }

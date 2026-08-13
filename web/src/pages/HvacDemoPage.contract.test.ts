@@ -47,6 +47,8 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain('card.statusLabel')
     expect(source).toContain('当前有效测点完整率')
     expect(source).toContain('stalePointDetail')
+    expect(source).toContain('pointMinuteDetail')
+    expect(source).toContain('采样 ${formatPointMinute(point.minute)}')
     expect(source).toContain('item.statusLabel')
     expect(source).toContain('item.lastDisplayValue')
     expect(source).not.toContain('测点数据完整率')
