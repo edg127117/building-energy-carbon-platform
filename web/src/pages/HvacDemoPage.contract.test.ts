@@ -81,6 +81,20 @@ describe('HvacDemoPage real-data boundary', () => {
     )
   })
 
+  it('keeps the topology compact and distinguishes missing point status', () => {
+    expect(source).toContain(
+      '.main-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }',
+    )
+    expect(source).toContain(
+      '.indicators { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));',
+    )
+    expect(source).toContain(
+      '.point-row.is-empty .point-quality { color: #687d91; }',
+    )
+    expect(source).toContain("'is-empty': pointViews.TOWER1_TCWin.status === 'NO_DATA'")
+    expect(source).toContain('.device-state.is-empty { color: #687d91; }')
+  })
+
   it('shows a controlled administrator entry backed by current menu state', () => {
     expect(source).toContain('useMenuStore')
     expect(source).toContain('managementPath')
