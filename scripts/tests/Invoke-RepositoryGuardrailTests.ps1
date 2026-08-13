@@ -441,6 +441,37 @@ function New-RiskBody {
 "@
 }
 
+function New-UnifiedRiskBody {
+    return @"
+## 变更内容
+更新设备档案查询实现。
+
+## 状态影响
+- [x] 新增能力
+说明：新增设备档案查询能力。
+
+## 验证结果
+- [x] 自动化测试
+专项范围：后端
+实际命令与结果：定向合同测试通过。
+未执行及原因：外部联调不适用。
+
+## 注释检查
+风险级别：普通
+检查范围：检查变化文件及受影响方法。
+结论：现有注释准确，无需修改。
+
+## 文档与 ADR
+- [x] 无需更新当前文档
+- [x] 未修改既有冻结历史文件
+说明：项目状态和稳定架构未变化。
+
+## 风险与未验证项
+风险：无。
+未验证项：无。
+"@
+}
+
 function Invoke-RepositoryContractTests {
     Assert-True (Test-Path $guardrailScript) 'Test-RepositoryGuardrails.ps1 must exist'
     Assert-True (Test-Path $scannerScript) 'New-CommentAuditReport.ps1 must remain available for optional audits'
@@ -461,6 +492,20 @@ function Invoke-RepositoryContractTests {
     Assert-True ($crValid.ExitCode -eq 0) "CR production PR should pass: $($crValid.Output)"
     Assert-Contains $crValid.Output 'REPOSITORY_GUARDRAILS_OK' 'CR success marker must be emitted'
     Complete-Case 'LF, CRLF, and CR production PR bodies all pass'
+
+    $unifiedBody = New-UnifiedRiskBody
+    $unified = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $unifiedBody }
+    Assert-True ($unified.ExitCode -eq 0) "unified PR body should pass: $($unified.Output)"
+    foreach ($heading in @('变更内容', '状态影响', '验证结果', '注释检查', '文档与 ADR', '风险与未验证项')) {
+        $missingUnifiedBody = $unifiedBody -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
+        $missingUnified = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingUnifiedBody }
+        Assert-True ($missingUnified.ExitCode -ne 0) "missing unified section must fail: $heading"
+        Assert-Contains $missingUnified.Output "PR_SECTION_MISSING: $heading" "failure must identify missing unified section: $heading"
+    }
+    $missingUnifiedField = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $unifiedBody.Replace('未验证项：无。', '未验证项：') }
+    Assert-True ($missingUnifiedField.ExitCode -ne 0) 'missing unified field must fail'
+    Assert-Contains $missingUnifiedField.Output 'PR_FIELD_MISSING: 风险与未验证项/未验证项' 'unified field failure must be explicit'
+    Complete-Case 'unified PR contract and required fields are enforced'
 
     foreach ($heading in @('变更内容', '测试', '注释检查', '文档同步')) {
         $missingBody = $body -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
@@ -642,14 +687,16 @@ function Invoke-CiContractTests {
     }
 
     $templateText = Get-Content -Raw -Encoding UTF8 -LiteralPath $template
-    foreach ($heading in '## 变更内容', '## 测试', '## 注释检查', '## 文档同步') {
+    foreach ($heading in '## 变更内容', '## 状态影响', '## 验证结果', '## 注释检查', '## 文档与 ADR', '## 风险与未验证项') {
         Assert-Contains $templateText $heading "PR template must contain $heading"
     }
     Assert-NotContains $templateText '## 注释审计' 'PR template must not require permanent audit documents'
     foreach ($field in '风险级别：', '检查范围：', '结论：') {
         Assert-Contains $templateText $field "PR template must contain $field"
     }
-    Assert-Contains $templateText '状态影响：' 'PR template must contain document status impact'
+    foreach ($field in '说明：', '专项范围：', '实际命令与结果：', '未执行及原因：', '风险：', '未验证项：') {
+        Assert-Contains $templateText $field "PR template must contain $field"
+    }
 
     $guardrailScriptText = Get-Content -Raw -Encoding UTF8 -LiteralPath $guardrailScript
     foreach ($removedContract in 'AUDIT_DOCUMENT_LINK_MISSING', 'AUDIT_DOCUMENT_NOT_ADDED', 'AUDIT_SYMBOL_MISSING') {

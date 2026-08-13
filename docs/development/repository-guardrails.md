@@ -6,7 +6,7 @@
 
 - Hook 阻止在 `main` 提交以及直接更新远程 `main`；
 - 任务预检验证规则入口、任务分支、干净工作区、基线和 Hook；
-- PR 模板记录范围、测试和风险分级注释检查；
+- PR 模板使用跨仓库统一主体，记录变更、状态、验证、注释、文档与 ADR、风险和未验证项；
 - Repository Guardrails 检查禁止路径、PR 必填结构、新增生产文件的关键说明和高置信度低价值注释；
 - 后端与前端 CI 分别验证 Java 和 Vue/TypeScript；
 - GitHub 分支保护提供最终服务器端合并边界。
@@ -39,12 +39,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight
 
 ## 4. PR 与 CI
 
-所有 PR 必须填写：
+所有新 PR 使用统一主体：
 
 - `变更内容`：只写本 PR 已完成内容和明确不包含的范围；
-- `测试`：记录实际命令、结果、跳过和未验证项；
-- `注释检查`：填写风险级别、检查范围和结论。
-- `文档同步`：填写状态影响、检查范围和结论，说明是否同步 `PROJECT_STATUS.md` 等当前入口。
+- `状态影响`：区分新增、完成、部分完成和无状态变化；
+- `验证结果`：记录验证层级、IoT 专项范围、实际命令、结果和未执行原因；
+- `注释检查`：填写风险级别、检查范围和结论；
+- `文档与 ADR`：说明是否同步当前文档、增加 ADR/正式设计，并确认冻结历史边界；
+- `风险与未验证项`：明确剩余风险和没有执行的验证，没有时填写“无”。
+
+Guardrail 继续兼容已经打开的旧格式 PR；新建 PR 不再使用旧的“测试”“文档同步”主体。
 
 允许的风险级别为“高”“普通”“低”“不涉及生产代码”。生产代码变化按 [`code-comments.md`](code-comments.md) 选择范围；没有生产代码变化时使用“不涉及生产代码”。
 
@@ -56,7 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight
 
 Repository Guardrails 还会检查全部 `docs/superpowers/specs` 和 `plans`：设计、计划必须分别带有
 标准历史状态标识，并在文件顶部链接历史任务目录和 `PROJECT_STATUS.md`。该检查只证明入口结构
-完整；“代码已实现但文档仍写未实现”等业务语义冲突，仍必须通过 PR 的“文档同步”证据人工复核。
+完整；“代码已实现但文档仍写未实现”等业务语义冲突，仍必须通过 PR 的“文档与 ADR”证据人工复核。
 
 普通生产代码 PR 不再要求创建或链接永久注释审计文档。历史 PR 中已有的内嵌审计或归档链接不作为失败条件，但新 PR 应使用当前“注释检查”结构。
 
@@ -94,7 +98,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-PostMergeClea
 
 - `GIT_HOOKS_NOT_INSTALLED`：运行安装脚本并回读 `core.hooksPath`。
 - `OUTDATED_OR_DIVERGED_BASELINE`：停止修改并安全处理基线，禁止强制覆盖。
-- `PR_SECTION_MISSING`：补齐“变更内容”“测试”或“注释检查”。
+- `PR_SECTION_MISSING`：补齐统一模板要求的主体章节。
+- `PR_SECTION_SELECTION_MISSING`：在“状态影响”“验证结果”或“文档与 ADR”中至少选择一项。
+- `PR_FIELD_MISSING`：补齐统一模板要求的说明、验证证据、风险或未验证项。
 - `COMMENT_RISK_LEVEL_MISSING`：填写允许的风险级别。
 - `COMMENT_SCOPE_MISSING`：说明实际检查的文件、调用链、方法或变化附近。
 - `COMMENT_RESULT_MISSING`：说明已修改内容或无需修改的理由。
