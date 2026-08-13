@@ -156,23 +156,60 @@ function Test-PrSections {
 
     $normalizedBody = $Body.Replace("`r`n", "`n").Replace("`r", "`n")
     $withoutInstructions = [regex]::Replace($normalizedBody, '(?s)<!--.*?-->', '').Trim()
-    foreach ($heading in @('变更内容', '测试', '注释检查', '文档同步')) {
-        $section = Get-PrSection $withoutInstructions $heading
-        if ([string]::IsNullOrWhiteSpace($section)) {
-            Add-GuardrailError 'PR_SECTION_MISSING' $heading
+    $usesUnifiedContract = $withoutInstructions -match '(?m)^##\s+(状态影响|验证结果|文档与 ADR|风险与未验证项)\s*$'
+    if ($usesUnifiedContract) {
+        $unifiedHeadings = @('变更内容', '状态影响', '验证结果', '注释检查', '文档与 ADR', '风险与未验证项')
+        foreach ($heading in $unifiedHeadings) {
+            $section = Get-PrSection $withoutInstructions $heading
+            if ([string]::IsNullOrWhiteSpace($section)) {
+                Add-GuardrailError 'PR_SECTION_MISSING' $heading
+            }
+        }
+
+        foreach ($heading in @('状态影响', '验证结果', '文档与 ADR')) {
+            $section = Get-PrSection $withoutInstructions $heading
+            if (-not [string]::IsNullOrWhiteSpace($section) -and
+                $section -notmatch '(?im)^\s*-\s*\[[xX]\]') {
+                Add-GuardrailError 'PR_SECTION_SELECTION_MISSING' $heading
+            }
+        }
+
+        $requiredFields = @{
+            '状态影响' = @('说明')
+            '验证结果' = @('专项范围', '实际命令与结果', '未执行及原因')
+            '文档与 ADR' = @('说明')
+            '风险与未验证项' = @('风险', '未验证项')
+        }
+        foreach ($heading in $requiredFields.Keys) {
+            $section = Get-PrSection $withoutInstructions $heading
+            if ([string]::IsNullOrWhiteSpace($section)) { continue }
+            foreach ($field in $requiredFields[$heading]) {
+                if ($section -notmatch ('(?m)^\s*' + [regex]::Escape($field) + '\s*[：:]\s*\S[^\r\n]*$')) {
+                    Add-GuardrailError 'PR_FIELD_MISSING' "$heading/$field"
+                }
+            }
         }
     }
+    else {
+        # 已打开的旧格式 PR 保持兼容；新 PR 由仓库模板进入统一合同。
+        foreach ($heading in @('变更内容', '测试', '注释检查', '文档同步')) {
+            $section = Get-PrSection $withoutInstructions $heading
+            if ([string]::IsNullOrWhiteSpace($section)) {
+                Add-GuardrailError 'PR_SECTION_MISSING' $heading
+            }
+        }
 
-    $documentSection = Get-PrSection $withoutInstructions '文档同步'
-    if (-not [string]::IsNullOrWhiteSpace($documentSection)) {
-        if ($documentSection -notmatch '(?m)^\s*状态影响\s*[：:]\s*(有|无)\s*$') {
-            Add-GuardrailError 'DOCUMENT_STATUS_IMPACT_MISSING' 'expected 有 or 无'
-        }
-        if ($documentSection -notmatch '(?m)^[ \t]*检查范围[ \t]*[：:][ \t]*\S[^\r\n]*$') {
-            Add-GuardrailError 'DOCUMENT_SCOPE_MISSING' 'describe current documents and code or test evidence checked'
-        }
-        if ($documentSection -notmatch '(?m)^[ \t]*结论[ \t]*[：:][ \t]*\S[^\r\n]*$') {
-            Add-GuardrailError 'DOCUMENT_RESULT_MISSING' 'describe updated current documents or why no update is required'
+        $documentSection = Get-PrSection $withoutInstructions '文档同步'
+        if (-not [string]::IsNullOrWhiteSpace($documentSection)) {
+            if ($documentSection -notmatch '(?m)^\s*状态影响\s*[：:]\s*(有|无)\s*$') {
+                Add-GuardrailError 'DOCUMENT_STATUS_IMPACT_MISSING' 'expected 有 or 无'
+            }
+            if ($documentSection -notmatch '(?m)^[ \t]*检查范围[ \t]*[：:][ \t]*\S[^\r\n]*$') {
+                Add-GuardrailError 'DOCUMENT_SCOPE_MISSING' 'describe current documents and code or test evidence checked'
+            }
+            if ($documentSection -notmatch '(?m)^[ \t]*结论[ \t]*[：:][ \t]*\S[^\r\n]*$') {
+                Add-GuardrailError 'DOCUMENT_RESULT_MISSING' 'describe updated current documents or why no update is required'
+            }
         }
     }
 
