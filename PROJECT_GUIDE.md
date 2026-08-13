@@ -165,6 +165,8 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 | [`AGENTS.md`](AGENTS.md) | 当前有效 | 核心工作规则和按任务读取的规范路由 | 文件正文；只有规则或路由变更时更新 |
 | [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | 当前有效 | 稳定架构、模块职责、数据链路和文档导航 | 代码结构与长期设计边界 |
 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | 动态更新 | 已完成、未完成、风险、技术债和下一步 | 本文件所在 Git 版本的代码、测试和已合并决策 |
+| `docs/adr` | 按需创建 | 需要长期追溯的重大技术决策 | 普通任务步骤、当前进度和临时判断 |
+| `docs/designs` | 按需创建 | 正式版本、重大架构或权威需求变化的正式设计 | 普通功能修改和执行清单 |
 
 ### 7.2 当前专题说明
 
@@ -180,9 +182,9 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 
 ### 7.3 历史任务记录
 
-- [`docs/superpowers/README.md`](docs/superpowers/README.md) 是历史任务中央目录，记录 spec/plan 配对、命名差异和已知替代关系。
-- `docs/superpowers/specs` 保存任务当时确认的设计和取舍；`docs/superpowers/plans` 保存任务当时的实施步骤和验证方案。
-- 设计与计划成对存在不属于重复：设计回答“为什么和做什么”，计划回答“如何实施和验证”。
+- [`docs/superpowers/README.md`](docs/superpowers/README.md) 是既有历史任务中央目录，记录 spec/plan 配对、命名差异和已知替代关系。
+- `docs/superpowers/specs` 与 `docs/superpowers/plans` 保持冻结，只保存迁移前任务当时的设计、步骤和验证方案，不再作为新任务默认落点。
+- 新任务不要求设计与计划成对建档；普通实施步骤留在当前 Codex 任务、Issue 或 PR，需要长期保存时分别进入 `PROJECT_STATUS.md`、`docs/adr` 或 `docs/designs`。
 - 每份历史文件顶部都有状态警告；早期正文允许包含当时存在、后来已经删除或替代的能力。
 - 需要判断当前行为时，先查代码、测试和 `PROJECT_STATUS.md`；需要理解演进原因时，再查相关历史任务文档和 Git 历史。
 
@@ -204,6 +206,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 
 - 项目定位、模块职责、数据源边界、核心链路、长期运行入口或文档入口变化时，更新本文件。
 - 项目阶段、完成项、阻塞、技术债或下一步变化时，只更新 `PROJECT_STATUS.md`。
-- 具体任务设计和实施步骤继续写入 `docs/superpowers`，不复制到本文件。
+- 普通任务不新建永久计划文档；大型跨会话模块仅在确有交接风险时，把轻量阶段说明写入 `PROJECT_STATUS.md`。
+- 重大且需要长期追溯的技术决策写入 `docs/adr`；正式版本、重大架构或权威需求变化写入 `docs/designs`，并在本文件补充导航。
 - 单次命令、错误日志、端口占用、容器状态和本地备份路径保留在当前会话，不沉淀为项目指南。
 - 发现文档与代码冲突时先核验代码和测试，再修正文档；证据不足时在 `PROJECT_STATUS.md` 标记为待核验。
