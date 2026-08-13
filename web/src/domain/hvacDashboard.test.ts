@@ -54,6 +54,7 @@ describe('HVAC dashboard mapping', () => {
     const views = buildPointViews(response)
 
     expect(Object.keys(views)).toHaveLength(19)
+    expect(views.WCR1_TWin.minute).toBe(1785420000000)
     expect(views.WCR1_Flow.internalCode).toBe('WCR1_GW')
     expect(views.WCR1_Flow.value).toBe(3)
     expect(views.TOWER1_TCWin.internalCode).toBe('WCR1_CT_TWin')
@@ -72,6 +73,7 @@ describe('HVAC dashboard mapping', () => {
     expect(views.WCR1_TWin.status).toBe('NO_DATA')
     expect(views.WCR1_TWin.statusLabel).toBe('暂无数据')
     expect(views.WCR1_TWin.lastDisplayValue).toBeNull()
+    expect(views.WCR1_TWin.minute).toBeNull()
     expect(calculatePointCoverage(views)).toBe(0)
   })
 

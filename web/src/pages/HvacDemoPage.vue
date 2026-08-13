@@ -132,8 +132,9 @@
               <span class="device-icon"><Waves :size="26" /></span>
               <span class="device-meta"><b>CT-01</b><em>冷却塔</em></span>
               <span class="device-value"><b>进水</b> {{ pointText('TOWER1_TCWin') }}{{ pointUnit('TOWER1_TCWin') }} · <b>出水</b> {{ pointText('TOWER1_TCWout') }}{{ pointUnit('TOWER1_TCWout') }}</span>
-              <span class="device-state" :class="{ 'is-stale': pointViews.TOWER1_TCWin.status === 'STALE' }">
+              <span class="device-state" :class="{ 'is-stale': pointViews.TOWER1_TCWin.status === 'STALE', 'is-empty': pointViews.TOWER1_TCWin.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('TOWER1_TCWin') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.TOWER1_TCWin)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.TOWER1_TCWin) }}</small>
                 <small v-if="stalePointDetail(pointViews.TOWER1_TCWin)">{{ stalePointDetail(pointViews.TOWER1_TCWin) }}</small>
               </span>
             </div>
@@ -143,8 +144,9 @@
               <span class="device-icon"><Snowflake :size="28" /></span>
               <span class="device-meta"><b>WCR-01</b><em>水冷冷水机组</em></span>
               <span class="device-value"><b>出水</b> {{ pointText('WCR1_TWout') }}{{ pointUnit('WCR1_TWout') }} · <b>功率</b> {{ pointText('WCR1_PPE') }} {{ pointUnit('WCR1_PPE') }}</span>
-              <span class="device-state" :class="{ 'is-stale': pointViews.WCR1_TWout.status === 'STALE' }">
+              <span class="device-state" :class="{ 'is-stale': pointViews.WCR1_TWout.status === 'STALE', 'is-empty': pointViews.WCR1_TWout.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('WCR1_TWout') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.WCR1_TWout)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.WCR1_TWout) }}</small>
                 <small v-if="stalePointDetail(pointViews.WCR1_TWout)">{{ stalePointDetail(pointViews.WCR1_TWout) }}</small>
               </span>
             </div>
@@ -154,8 +156,9 @@
               <span class="device-icon"><Gauge :size="27" /></span>
               <span class="device-meta"><b>P-01</b><em>冷冻水泵</em></span>
               <span class="device-value">{{ pointText('PUMP1_Flow') }} {{ pointUnit('PUMP1_Flow') }}</span>
-              <span class="device-state" :class="{ 'is-stale': pointViews.PUMP1_Flow.status === 'STALE' }">
+              <span class="device-state" :class="{ 'is-stale': pointViews.PUMP1_Flow.status === 'STALE', 'is-empty': pointViews.PUMP1_Flow.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('PUMP1_Flow') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.PUMP1_Flow)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.PUMP1_Flow) }}</small>
                 <small v-if="stalePointDetail(pointViews.PUMP1_Flow)">{{ stalePointDetail(pointViews.PUMP1_Flow) }}</small>
               </span>
             </div>
@@ -165,8 +168,9 @@
               <span class="device-icon fan-icon"><Fan :size="29" /></span>
               <span class="device-meta"><b>AHU-01</b><em>空气处理机组</em></span>
               <span class="device-value">全压 {{ pointText('AHU1_TotalPress') }} {{ pointUnit('AHU1_TotalPress') }}</span>
-              <span class="device-state" :class="{ 'is-stale': pointViews.AHU1_TotalPress.status === 'STALE' }">
+              <span class="device-state" :class="{ 'is-stale': pointViews.AHU1_TotalPress.status === 'STALE', 'is-empty': pointViews.AHU1_TotalPress.status === 'NO_DATA' }">
                 <span class="device-state-label"><i />{{ pointStatus('AHU1_TotalPress') }}</span>
+                <small v-if="pointMinuteDetail(pointViews.AHU1_TotalPress)" class="point-sample-minute">{{ pointMinuteDetail(pointViews.AHU1_TotalPress) }}</small>
                 <small v-if="stalePointDetail(pointViews.AHU1_TotalPress)">{{ stalePointDetail(pointViews.AHU1_TotalPress) }}</small>
               </span>
             </div>
@@ -288,6 +292,7 @@
               <span class="point-name"><b>{{ item.label }}</b><small>{{ item.displayCode }}</small></span>
               <span class="point-reading">
                 <span class="point-value">{{ item.displayValue }} <small>{{ item.unit }}</small></span>
+                <small v-if="pointMinuteDetail(item)" class="point-sample-minute">{{ pointMinuteDetail(item) }}</small>
                 <small v-if="item.lastDisplayValue !== null" class="point-last-value">{{ stalePointDetail(item) }}</small>
               </span>
               <span class="point-quality">{{ item.qualityLabel }} · {{ item.statusLabel }}</span>
@@ -415,7 +420,7 @@ function pointStatus(code: FrozenPointCode): string {
   return pointViews.value[code].statusLabel
 }
 
-/** 格式化后端最后分钟；只作为过期证据，不把它重新解释为当前数据。 */
+/** 格式化后端数据分钟；只展示数据采样时间，不用页面刷新时间补空值。 */
 function formatPointMinute(minute: number | null): string {
   if (minute === null) return '--'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -423,6 +428,12 @@ function formatPointMinute(minute: number | null): string {
     minute: '2-digit',
     hour12: false,
   }).format(new Date(minute))
+}
+
+/** 正常测点展示当前采样分钟；无记录和过期记录分别交由空状态与最后值证据表达。 */
+function pointMinuteDetail(point: DashboardPointView): string | null {
+  if (point.status !== 'NORMAL' || point.minute === null) return null
+  return `采样 ${formatPointMinute(point.minute)}`
 }
 
 /** 过期测点保留最后值和来源分钟，主实时值仍保持 --。 */
@@ -612,7 +623,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .summary-stat strong { color: #dceeff; font-size: 21px; font-weight: 560; font-variant-numeric: tabular-nums; }
 .summary-stat small { grid-column: 1 / -1; color: #3eae89; }
 
-.main-grid { display: grid; grid-template-columns: minmax(0, 1fr) 316px; gap: 14px; }
+.main-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .panel, .indicators { border: 1px solid rgba(137, 179, 215, .14); background: linear-gradient(145deg, rgba(10, 28, 48, .9), rgba(6, 19, 34, .88)); box-shadow: inset 0 1px 0 rgba(255,255,255,.025), 0 14px 40px rgba(0, 4, 11, .16); }
 .panel-heading, .aside-heading { height: 48px; padding: 0 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(137, 179, 215, .1); }
 .panel-heading > div, .aside-heading > div { display: flex; align-items: center; gap: 9px; }
@@ -646,8 +657,11 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .device-state-label { display: flex; align-items: center; gap: 6px; }
 .device-state i { width: 5px; height: 5px; background: #3ce0a9; border-radius: 50%; box-shadow: 0 0 8px #3ce0a9; }
 .device-state small { max-width: 100%; color: #c79850; font-size: 9px; line-height: 1.35; overflow-wrap: anywhere; }
+.device-state small.point-sample-minute { color: #6f879e; }
 .device-state.is-stale { color: #e3ad55; }
 .device-state.is-stale i { background: #e3ad55; box-shadow: 0 0 8px rgba(227, 173, 85, .7); }
+.device-state.is-empty { color: #687d91; }
+.device-state.is-empty i { background: #52677b; box-shadow: none; }
 .tower { left: 5%; top: 90px; width: 180px; border-color: rgba(54, 216, 168, .3); }
 .tower .device-icon { color: #45ddb0; border-color: rgba(69, 221, 176, .25); background: rgba(30, 128, 100, .12); }
 .tower .device-glow { background: rgba(43, 203, 155, .17); }
@@ -698,10 +712,11 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .label-return { top: 402px; }
 .outdoor-chip { position: absolute; left: 5.5%; bottom: 32px; display: flex; gap: 7px; align-items: center; color: #7790a8; font-size: 9px; border: 1px solid rgba(133, 168, 197, .12); background: rgba(7, 20, 34, .8); padding: 8px 10px; }
 
-.indicators { padding-bottom: 11px; }
+.indicators { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 10px; }
 .aside-heading { margin-bottom: 9px; }
+.aside-heading, .quality-card { grid-column: 1 / -1; }
 .minute-tag { color: #597089; font-size: 8px; }
-.indicator-card { position: relative; width: calc(100% - 20px); min-width: 0; min-height: 132px; margin: 0 10px 8px; padding: 13px 14px 11px; display: grid; grid-template-rows: auto auto minmax(32px, 1fr) auto; gap: 8px; border: 1px solid rgba(127, 167, 201, .14); background: rgba(7, 21, 37, .78); color: #dce8f5; text-align: left; cursor: pointer; overflow: hidden; transition: border-color .2s ease, transform .2s ease, background-color .2s ease; }
+.indicator-card { position: relative; width: 100%; min-width: 0; min-height: 132px; margin: 0; padding: 13px 14px 11px; display: grid; grid-template-rows: auto auto minmax(32px, 1fr) auto; gap: 8px; border: 1px solid rgba(127, 167, 201, .14); background: rgba(7, 21, 37, .78); color: #dce8f5; text-align: left; cursor: pointer; overflow: hidden; transition: border-color .2s ease, transform .2s ease, background-color .2s ease; }
 .indicator-card.is-failed { background: linear-gradient(145deg, color-mix(in srgb, var(--tone) 6%, #071525), rgba(7, 21, 37, .82)); }
 .indicator-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--tone) 42%, transparent); }
 .indicator-card:focus-visible { outline: 2px solid var(--tone); outline-offset: 2px; border-color: var(--tone); }
@@ -723,7 +738,7 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .indicator-card.green { --tone: #37d4a2; }
 .indicator-card.orange { --tone: #ffab55; }
 .indicator-card.yellow { --tone: #e6c45d; }
-.quality-card { margin: 12px 10px 0; padding: 12px; border: 1px solid rgba(127, 167, 201, .1); background: rgba(5, 17, 30, .6); }
+.quality-card { margin: 4px 0 0; padding: 12px; border: 1px solid rgba(127, 167, 201, .1); background: rgba(5, 17, 30, .6); }
 .quality-head { display: flex; justify-content: space-between; color: #778ca4; font-size: 9px; }
 .quality-head strong { color: #4fdaa9; font-size: 12px; }
 .quality-bar { height: 3px; margin: 8px 0 10px; background: rgba(91, 127, 154, .16); }
@@ -764,11 +779,13 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 .point-reading { min-width: 0; display: flex; flex-direction: column; align-items: flex-end; }
 .point-value { color: #d2e1ed; font-size: 12px; font-variant-numeric: tabular-nums; }
 .point-value small { color: #566b80; font-size: 7px; }
+.point-reading .point-sample-minute { color: #6f879e; font-size: 8px; line-height: 1.35; }
 .point-last-value { max-width: 128px; color: #c79850; font-size: 9px; line-height: 1.35; text-align: right; overflow-wrap: anywhere; }
 .point-quality { color: #3db78f; font-size: 7px; text-align: right; }
 .point-row.is-stale .point-status { background: #e3ad55; box-shadow: 0 0 7px rgba(227, 173, 85, .65); }
 .point-row.is-stale .point-quality { color: #d3a052; }
 .point-row.is-empty .point-status { background: #52677b; box-shadow: none; }
+.point-row.is-empty .point-quality { color: #687d91; }
 
 @keyframes flowH { from { left: -30px; } to { left: 100%; } }
 @keyframes flowV { from { top: -30px; } to { top: 100%; } }
@@ -778,11 +795,6 @@ h1 { margin: 5px 0 2px; font-size: clamp(22px, 2vw, 31px); line-height: 1.2; col
 @media (max-width: 1450px) {
   .topbar { grid-template-columns: 1fr auto; }
   .header-center { display: none; }
-  .main-grid { grid-template-columns: 1fr; }
-  .indicators { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 10px; }
-  .aside-heading, .quality-card { grid-column: 1 / -1; }
-  .indicator-card { width: 100%; margin: 0; }
-  .quality-card { margin: 4px 0 0; }
 }
 
 @media (max-width: 900px) {

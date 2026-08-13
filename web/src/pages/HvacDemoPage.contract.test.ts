@@ -47,6 +47,8 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain('card.statusLabel')
     expect(source).toContain('当前有效测点完整率')
     expect(source).toContain('stalePointDetail')
+    expect(source).toContain('pointMinuteDetail')
+    expect(source).toContain('采样 ${formatPointMinute(point.minute)}')
     expect(source).toContain('item.statusLabel')
     expect(source).toContain('item.lastDisplayValue')
     expect(source).not.toContain('测点数据完整率')
@@ -79,6 +81,20 @@ describe('HvacDemoPage real-data boundary', () => {
     expect(source).toContain(
       '.bottom-grid { grid-template-columns: minmax(0, 1fr); }',
     )
+  })
+
+  it('keeps the topology compact and distinguishes missing point status', () => {
+    expect(source).toContain(
+      '.main-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }',
+    )
+    expect(source).toContain(
+      '.indicators { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));',
+    )
+    expect(source).toContain(
+      '.point-row.is-empty .point-quality { color: #687d91; }',
+    )
+    expect(source).toContain("'is-empty': pointViews.TOWER1_TCWin.status === 'NO_DATA'")
+    expect(source).toContain('.device-state.is-empty { color: #687d91; }')
   })
 
   it('shows a controlled administrator entry backed by current menu state', () => {
