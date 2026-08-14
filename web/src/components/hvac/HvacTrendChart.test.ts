@@ -28,6 +28,10 @@ import HvacTrendChart from './HvacTrendChart.vue'
 type RenderedDatum = {
   value: [number, number | null]
   symbol: string
+  minimum: number | null
+  maximum: number | null
+  sampleCount: number
+  dataQuality: number | null
 }
 
 const group: HvacTrendGroup = {
@@ -135,6 +139,7 @@ describe('HvacTrendChart', () => {
     expect(mocks.setOption).toHaveBeenCalledTimes(1)
     const option = mocks.setOption.mock.calls[0][0]
     expect(option.series).toHaveLength(1)
+    expect(option.animation).toBe(true)
     expect(option.series[0]).toMatchObject({
       name: '水泵效率',
       type: 'line',
@@ -155,6 +160,7 @@ describe('HvacTrendChart', () => {
     const tooltip = option.tooltip.formatter([
       {
         marker: '<i />',
+        seriesId: 'I1',
         data: option.series[0].data[2],
       },
     ])
@@ -165,6 +171,47 @@ describe('HvacTrendChart', () => {
     expect(tooltip).toContain('Q2 典型值')
     expect(wrapper.text()).toContain('单位：%')
     expect(wrapper.text()).toContain('缺口保持断线')
+  })
+
+  it('keeps 24-hour data linear and disables animation for large datasets', () => {
+    const points = Array.from({ length: 1_440 }, (_, index) => ({
+      time: index * 60_000,
+      average: 70 + index / 1_000,
+      minimum: 69,
+      maximum: 71,
+      sampleCount: 60,
+      dataQuality: 0,
+    }))
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group: {
+          ...group,
+          series: [{ ...group.series[0]!, points }],
+        },
+        from: 0,
+        to: 86_400_000,
+        resolutionMinutes: 1,
+      },
+    })
+
+    const option = mocks.setOption.mock.calls[0][0]
+    const data = option.series[0].data as RenderedDatum[]
+    expect(data).toHaveLength(1_440)
+    expect(option.animation).toBe(false)
+    expect(option.animationDuration).toBe(0)
+    expect(data.every((item) => (
+      !('trendPoint' in item) && !('trendSeries' in item)
+    ))).toBe(true)
+    expect(data[0]).toEqual({
+      value: [0, 70],
+      symbol: 'none',
+      symbolSize: 7,
+      minimum: 69,
+      maximum: 71,
+      sampleCount: 60,
+      dataQuality: 0,
+    })
+    wrapper.unmount()
   })
 
   it('shows only Q0 points that have no adjacent line segment', () => {
