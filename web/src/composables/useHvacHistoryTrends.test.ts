@@ -121,6 +121,43 @@ describe('useHvacHistoryTrends', () => {
     expect(state.resolutionMinutes.value).toBe(1)
   })
 
+  it('keeps chart references stable when an automatic refresh returns identical facts', async () => {
+    const api = dependencies()
+    const state = useHvacHistoryTrends(api)
+    await state.setBuildingContext({
+      buildingId: 'BLD001',
+      indicatorIds: ['I1'],
+      points: snapshotPoints(),
+    })
+    const currentGroups = state.groups.value
+    const currentRange = state.responseRange.value
+
+    await state.refresh()
+
+    expect(api.getIndicatorTrends).toHaveBeenCalledTimes(2)
+    expect(state.groups.value).toBe(currentGroups)
+    expect(state.responseRange.value).toBe(currentRange)
+  })
+
+  it('replaces chart references when refreshed point facts change', async () => {
+    const api = dependencies()
+    const state = useHvacHistoryTrends(api)
+    await state.setBuildingContext({
+      buildingId: 'BLD001',
+      indicatorIds: ['I1'],
+      points: snapshotPoints(),
+    })
+    const currentGroups = state.groups.value
+    const changed = indicatorResponse()
+    changed.series[0]!.records[0]!.sampleCount = 2
+    api.getIndicatorTrends.mockResolvedValueOnce(changed)
+
+    await state.refresh()
+
+    expect(state.groups.value).not.toBe(currentGroups)
+    expect(state.groups.value[0]!.series[0]!.points[0]!.sampleCount).toBe(2)
+  })
+
   it('does not request point history until at least one point is selected', async () => {
     const api = dependencies()
     const state = useHvacHistoryTrends(api)

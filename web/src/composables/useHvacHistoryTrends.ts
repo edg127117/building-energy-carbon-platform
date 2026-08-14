@@ -13,6 +13,8 @@ import {
   type HvacHistoryPreset,
   type HvacHistoryPointOption,
   type HvacTrendGroup,
+  type HvacTrendPoint,
+  type HvacTrendSeries,
 } from '@/domain/hvacHistoryTrends'
 import type { SnapshotPoint } from '@/types/hvac'
 
@@ -74,6 +76,54 @@ function mapHistoryError(cause: unknown): HvacHistoryError {
     message = cause.message
   }
   return { status, message: message || '加载历史趋势失败，请稍后重试' }
+}
+
+/**
+ * 比较图表实际消费的系列与窗口点事实，避免相同的 30 秒刷新响应替换整棵响应式数据。
+ * 时间范围和分辨率在查询成功后独立比较，移动窗口仍能触发横轴更新。
+ */
+function trendGroupsEqual(
+  current: HvacTrendGroup[],
+  next: HvacTrendGroup[],
+): boolean {
+  if (current === next) return true
+  if (current.length !== next.length) return false
+  return current.every((group, groupIndex) => {
+    const nextGroup = next[groupIndex]
+    if (!nextGroup || group.unit !== nextGroup.unit
+      || group.series.length !== nextGroup.series.length) return false
+    return group.series.every((series, seriesIndex) => {
+      const nextSeries = nextGroup.series[seriesIndex]
+      if (!nextSeries) return false
+      return trendSeriesEqual(series, nextSeries)
+    })
+  })
+}
+
+function trendSeriesEqual(
+  current: HvacTrendSeries,
+  next: HvacTrendSeries,
+): boolean {
+  if (current.id !== next.id || current.code !== next.code
+    || current.label !== next.label || current.unit !== next.unit
+    || current.precision !== next.precision
+    || current.points.length !== next.points.length) return false
+  return current.points.every((point, index) => (
+    trendPointEqual(point, next.points[index])
+  ))
+}
+
+function trendPointEqual(
+  current: HvacTrendPoint,
+  next: HvacTrendPoint | undefined,
+): boolean {
+  if (!next) return false
+  return current.time === next.time
+    && current.average === next.average
+    && current.minimum === next.minimum
+    && current.maximum === next.maximum
+    && current.sampleCount === next.sampleCount
+    && current.dataQuality === next.dataQuality
 }
 
 /**
@@ -199,9 +249,14 @@ export function useHvacHistoryTrends(
         nextResolution = response.resolutionMinutes
       }
       if (version !== requestVersion || disposed) return
-      groups.value = nextGroups
-      responseRange.value = nextRange
-      resolutionMinutes.value = nextResolution
+      if (!trendGroupsEqual(groups.value, nextGroups)) groups.value = nextGroups
+      if (responseRange.value?.from !== nextRange.from
+        || responseRange.value?.to !== nextRange.to) {
+        responseRange.value = nextRange
+      }
+      if (resolutionMinutes.value !== nextResolution) {
+        resolutionMinutes.value = nextResolution
+      }
       activeScopeKey = scopeKey
       stale.value = false
       updatedAt.value = dependencies.now()

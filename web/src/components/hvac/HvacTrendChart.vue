@@ -93,6 +93,7 @@ const SERIES_COLORS = [
   '#ab8cff',
   '#56d5d8',
 ]
+const LARGE_DATASET_POINT_COUNT = 1_000
 
 const props = defineProps<{
   group: HvacTrendGroup
@@ -137,7 +138,6 @@ watch(
     )
     updateChart()
   },
-  { deep: true },
 )
 
 /** 卸载时释放观察器和 Canvas 事件，防止切换建筑或离开页面后残留监听。 */
@@ -161,11 +161,17 @@ function updateChart(): void {
 function buildOption(): EChartsCoreOption {
   const reducedMotion = typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const pointCount = props.group.series.reduce(
+    (total, series) => total + series.points.length,
+    0,
+  )
   const axisExtent = singleValueAxisExtent(props.group)
   const precision = groupPrecision(props.group)
   return {
-    animation: !reducedMotion,
-    animationDuration: reducedMotion ? 0 : 260,
+    animation: !reducedMotion && pointCount < LARGE_DATASET_POINT_COUNT,
+    animationDuration: reducedMotion || pointCount >= LARGE_DATASET_POINT_COUNT
+      ? 0
+      : 260,
     color: SERIES_COLORS,
     grid: { left: 24, right: 24, top: 38, bottom: 72, containLabel: true },
     legend: {
@@ -270,7 +276,11 @@ function toggleSeries(seriesId: string): void {
   updateChart()
 }
 
-/** 把统一趋势序列映射为 ECharts 数据项，并把 Tooltip 所需的后端窗口事实就近保留。 */
+/**
+ * 把统一趋势序列压缩为线性大小的 ECharts 数据项。
+ * 每个点只保留自身窗口事实；系列元数据由 Tooltip 按 seriesId 查找，
+ * 避免把整条曲线重复挂到每个点。
+ */
 function buildSeries(series: HvacTrendSeries) {
   return {
     id: series.id,
@@ -286,8 +296,10 @@ function buildSeries(series: HvacTrendSeries) {
       value: [point.time, point.average],
       symbol: qualitySymbol(point, index, points),
       symbolSize: point.dataQuality === 2 ? 9 : 7,
-      trendPoint: point,
-      trendSeries: series,
+      minimum: point.minimum,
+      maximum: point.maximum,
+      sampleCount: point.sampleCount,
+      dataQuality: point.dataQuality,
     })),
   }
 }
@@ -316,9 +328,13 @@ function qualitySymbol(
 
 type TooltipDatum = {
   marker?: string
+  seriesId?: string
   data?: {
-    trendPoint?: HvacTrendPoint
-    trendSeries?: HvacTrendSeries
+    value?: [number, number | null]
+    minimum?: number | null
+    maximum?: number | null
+    sampleCount?: number
+    dataQuality?: number | null
   }
 }
 
@@ -326,22 +342,24 @@ type TooltipDatum = {
 function formatTooltip(rawParams: unknown): string {
   const params = (Array.isArray(rawParams) ? rawParams : [rawParams])
     .filter(Boolean) as TooltipDatum[]
-  const firstPoint = params[0]?.data?.trendPoint
-  const header = firstPoint
-    ? `<strong>${escapeHtml(formatTime(firstPoint.time))}</strong>`
+  const firstTime = params[0]?.data?.value?.[0]
+  const header = typeof firstTime === 'number'
+    ? `<strong>${escapeHtml(formatTime(firstTime))}</strong>`
     : '<strong>历史趋势</strong>'
   const rows = params.flatMap((param) => {
-    const point = param.data?.trendPoint
-    const series = param.data?.trendSeries
-    if (!point || !series || point.average === null) return []
+    const data = param.data
+    const series = props.group.series.find((item) => item.id === param.seriesId)
+    const average = data?.value?.[1]
+    if (!data || !series || average === null || average === undefined) return []
     const unit = series.unit ? ` ${escapeHtml(series.unit)}` : ''
+    const quality = escapeHtml(historyQualityLabel(data.dataQuality ?? null))
     return [`
       <div style="margin-top:8px">
         ${param.marker ?? ''}<b>${escapeHtml(series.label)}</b><br />
-        平均值 ${formatValue(point.average, series.precision)}${unit}<br />
-        最小值 ${formatValue(point.minimum, series.precision)} ·
-        最大值 ${formatValue(point.maximum, series.precision)}<br />
-        样本数 ${point.sampleCount} · ${escapeHtml(historyQualityLabel(point.dataQuality))}
+        平均值 ${formatValue(average, series.precision)}${unit}<br />
+        最小值 ${formatValue(data.minimum ?? null, series.precision)} ·
+        最大值 ${formatValue(data.maximum ?? null, series.precision)}<br />
+        样本数 ${data.sampleCount ?? 0} · ${quality}
       </div>
     `]
   })
