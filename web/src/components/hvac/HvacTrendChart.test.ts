@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   use: vi.fn(),
   init: vi.fn(),
   setOption: vi.fn(),
+  getOption: vi.fn(),
   resize: vi.fn(),
   dispose: vi.fn(),
 }))
@@ -108,6 +109,7 @@ describe('HvacTrendChart', () => {
     vi.clearAllMocks()
     mocks.init.mockReturnValue({
       setOption: mocks.setOption,
+      getOption: mocks.getOption,
       resize: mocks.resize,
       dispose: mocks.dispose,
     })
@@ -123,6 +125,9 @@ describe('HvacTrendChart', () => {
     }
     vi.stubGlobal('ResizeObserver', ResizeObserverMock)
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })))
+    mocks.getOption.mockReturnValue({
+      dataZoom: [{ start: 0, end: 100, startValue: 0, endValue: 300_000 }],
+    })
   })
 
   it('renders quality-aware series and preserves null gaps', () => {
@@ -297,6 +302,94 @@ describe('HvacTrendChart', () => {
     wrapper.unmount()
     expect(disconnect).toHaveBeenCalledTimes(1)
     expect(mocks.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a right-anchored zoom width and follows the newest data', async () => {
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group,
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+        zoomResetKey: 'BLD001|indicators|24h||',
+      },
+    })
+    mocks.getOption.mockReturnValue({
+      dataZoom: [{
+        start: 50,
+        end: 100,
+        startValue: 150_000,
+        endValue: 300_000,
+      }],
+    })
+
+    await wrapper.setProps({ from: 60_000, to: 360_000 })
+
+    expect(mocks.setOption.mock.calls.at(-1)![0].dataZoom).toEqual([
+      expect.objectContaining({ startValue: 210_000, endValue: 360_000 }),
+      expect.objectContaining({ startValue: 210_000, endValue: 360_000 }),
+    ])
+    wrapper.unmount()
+  })
+
+  it('keeps an internal historical zoom at its absolute time', async () => {
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group,
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+        zoomResetKey: 'BLD001|indicators|24h||',
+      },
+    })
+    mocks.getOption.mockReturnValue({
+      dataZoom: [{
+        start: 20,
+        end: 60,
+        startValue: 60_000,
+        endValue: 180_000,
+      }],
+    })
+
+    await wrapper.setProps({ from: 60_000, to: 360_000 })
+
+    expect(mocks.setOption.mock.calls.at(-1)![0].dataZoom).toEqual([
+      expect.objectContaining({ startValue: 60_000, endValue: 180_000 }),
+      expect.objectContaining({ startValue: 60_000, endValue: 180_000 }),
+    ])
+    wrapper.unmount()
+  })
+
+  it('resets zoom when the query context changes', async () => {
+    const wrapper = mount(HvacTrendChart, {
+      props: {
+        group,
+        from: 0,
+        to: 300_000,
+        resolutionMinutes: 1,
+        zoomResetKey: 'BLD001|indicators|24h||',
+      },
+    })
+    mocks.getOption.mockReturnValue({
+      dataZoom: [{
+        start: 50,
+        end: 100,
+        startValue: 150_000,
+        endValue: 300_000,
+      }],
+    })
+
+    await wrapper.setProps({
+      to: 600_000,
+      zoomResetKey: 'BLD001|indicators|1h||',
+    })
+
+    const dataZoom = mocks.setOption.mock.calls.at(-1)![0].dataZoom
+    expect(dataZoom[0]).not.toHaveProperty('startValue')
+    expect(dataZoom[0]).not.toHaveProperty('endValue')
+    expect(dataZoom[1]).not.toHaveProperty('startValue')
+    expect(dataZoom[1]).not.toHaveProperty('endValue')
+    wrapper.unmount()
   })
 
   it('uses an explicit title for dimensionless groups', () => {

@@ -94,12 +94,14 @@ const SERIES_COLORS = [
   '#56d5d8',
 ]
 const LARGE_DATASET_POINT_COUNT = 1_000
+const RIGHT_EDGE_TOLERANCE_PERCENT = 0.5
 
 const props = defineProps<{
   group: HvacTrendGroup
   from: number
   to: number
   resolutionMinutes: number
+  zoomResetKey?: string
 }>()
 
 const chartElement = ref<HTMLElement | null>(null)
@@ -118,6 +120,7 @@ const hasFiniteGroupValue = computed(() => props.group.series.some((series) =>
 
 let chart: ReturnType<typeof echarts.init> | null = null
 let resizeObserver: ResizeObserver | null = null
+let lastZoomContext: ZoomContext | null = null
 
 /** 初始化一个图表实例并监听容器尺寸；页面布局变化只调用 resize，不重新创建实例。 */
 onMounted(() => {
@@ -148,17 +151,105 @@ onBeforeUnmount(() => {
   chart = null
 })
 
-/** 使用完整新配置替换图表，避免旧建筑系列、图例或时间范围残留。 */
+/**
+ * 使用完整新配置避免旧建筑系列残留，同时恢复同一查询上下文中的用户缩放。
+ * 贴住右端的窗口保持时长并跟随最新分钟；历史窗口保留绝对时间位置。
+ */
 function updateChart(): void {
   if (!chart) return
-  chart.setOption(buildOption(), true)
+  const nextContext = currentZoomContext()
+  const zoom = sameZoomContext(lastZoomContext, nextContext)
+    ? currentZoomWindow()
+    : null
+  chart.setOption(buildOption(zoom), true)
+  lastZoomContext = nextContext
+}
+
+type ZoomContext = {
+  resetKey: string
+  resolutionMinutes: number
+  seriesKey: string
+  span: number
+}
+
+type ZoomWindow = {
+  start?: number
+  end?: number
+  startValue?: number
+  endValue?: number
+}
+
+type RuntimeDataZoom = {
+  start?: unknown
+  end?: unknown
+  startValue?: unknown
+  endValue?: unknown
+}
+
+function currentZoomContext(): ZoomContext {
+  return {
+    resetKey: props.zoomResetKey ?? '',
+    resolutionMinutes: props.resolutionMinutes,
+    seriesKey: props.group.series.map((series) => series.id).join('|'),
+    span: props.to - props.from,
+  }
+}
+
+function sameZoomContext(
+  previous: ZoomContext | null,
+  next: ZoomContext,
+): boolean {
+  return previous !== null
+    && previous.resetKey === next.resetKey
+    && previous.resolutionMinutes === next.resolutionMinutes
+    && previous.seriesKey === next.seriesKey
+    && previous.span === next.span
+}
+
+/** 把 ECharts 当前缩放转换到新时间轴；失效或完整范围不额外写入 dataZoom。 */
+function currentZoomWindow(): ZoomWindow | null {
+  if (!chart) return null
+  const option = chart.getOption() as { dataZoom?: RuntimeDataZoom[] }
+  const current = option.dataZoom?.[0]
+  if (!current) return null
+  const start = finiteNumber(current.start)
+  const end = finiteNumber(current.end)
+  if (start !== null && end !== null && start <= 0 && end >= 100) return null
+
+  const startValue = finiteNumber(current.startValue)
+  const endValue = finiteNumber(current.endValue)
+  if (startValue !== null && endValue !== null && endValue > startValue) {
+    const duration = Math.min(endValue - startValue, props.to - props.from)
+    if (end !== null && end >= 100 - RIGHT_EDGE_TOLERANCE_PERCENT) {
+      return {
+        startValue: Math.max(props.from, props.to - duration),
+        endValue: props.to,
+      }
+    }
+    let nextStart = startValue
+    let nextEnd = endValue
+    if (nextStart < props.from) {
+      nextStart = props.from
+      nextEnd = Math.min(props.to, nextStart + duration)
+    } else if (nextEnd > props.to) {
+      nextEnd = props.to
+      nextStart = Math.max(props.from, nextEnd - duration)
+    }
+    return { startValue: nextStart, endValue: nextEnd }
+  }
+  if (start !== null && end !== null && end > start) return { start, end }
+  return null
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 /**
  * 构建同单位折线配置：隐藏图例只承载按钮选择状态，单位由纵轴展示；
  * 连续 Q0 依靠线段显示，孤立 Q0 与 Q1/Q2 使用可辨识符号，空值永不连接。
  */
-function buildOption(): EChartsCoreOption {
+function buildOption(zoom: ZoomWindow | null): EChartsCoreOption {
   const reducedMotion = typeof window.matchMedia === 'function'
     && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   const pointCount = props.group.series.reduce(
@@ -214,9 +305,10 @@ function buildOption(): EChartsCoreOption {
       ...axisExtent,
     },
     dataZoom: [
-      { type: 'inside', filterMode: 'none' },
+      { type: 'inside', filterMode: 'none', ...(zoom ?? {}) },
       {
         type: 'slider',
+        ...(zoom ?? {}),
         bottom: 18,
         height: 18,
         borderColor: 'rgba(126, 166, 198, 0.16)',
