@@ -152,6 +152,20 @@ describe('HvacHistoryPanel', () => {
     expect(holder.state.setBuildingContext).toHaveBeenCalledTimes(1)
   })
 
+  it('changes the chart zoom context when the query condition changes', async () => {
+    const wrapper = mountPanel()
+    expect(wrapper.get('.trend-stub').attributes('zoom-reset-key'))
+      .toBe('BLD001|indicators|24h||')
+
+    holder.state!.preset.value = 'custom'
+    holder.state!.customFrom.value = 60_000
+    holder.state!.customTo.value = 180_000
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('.trend-stub').attributes('zoom-reset-key'))
+      .toBe('BLD001|indicators|custom|60000|180000')
+  })
+
   it('shows point selection count and no-request guidance in point mode', () => {
     holder.state.mode.value = 'points'
     holder.state.groups.value = []

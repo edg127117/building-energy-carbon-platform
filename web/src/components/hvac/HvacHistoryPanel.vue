@@ -165,6 +165,7 @@
         :from="responseRange?.from ?? 0"
         :to="responseRange?.to ?? 0"
         :resolution-minutes="resolutionMinutes ?? 1"
+        :zoom-reset-key="chartZoomResetKey"
       />
     </div>
   </div>
@@ -191,6 +192,8 @@ const props = defineProps<{
 const {
   mode,
   preset,
+  customFrom,
+  customTo,
   pointOptions,
   selectedPointIds,
   groups,
@@ -236,6 +239,14 @@ const pointSignature = computed(() =>
 const contextKey = computed(() =>
   `${props.buildingId ?? ''}|${indicatorSignature.value}|${pointSignature.value}`,
 )
+/** 相对时间刷新不进入重置键；建筑、模式、预设或自定义区间变化才重置图表缩放。 */
+const chartZoomResetKey = computed(() => [
+  props.buildingId ?? '',
+  mode.value,
+  preset.value,
+  preset.value === 'custom' ? customFrom.value ?? '' : '',
+  preset.value === 'custom' ? customTo.value ?? '' : '',
+].join('|'))
 
 const pointSelectOptions = computed(() => {
   const selected = new Set(selectedPointIds.value)
