@@ -56,7 +56,8 @@
 5. 绑定、启用和正式入库之间具有明确状态，不让未确认数据污染业务时序；
 6. 同型号设备可以从产品测点模板批量生成测点和设备专属别名；
 7. 保持现有 HVAC 数据质量、公式和展示链，不在本次重算业务指标；
-8. 为后续更多 JSON 设备提供可测试、可回滚、可追踪的接入流程。
+8. 为后续更多 JSON 设备提供可测试、可回滚、可追踪的接入流程；
+9. 通过稳定 DTO、版本化 API 和契约测试支持前后端独立开发、错峰发布和内部重构。
 
 ### 3.2 第一阶段非目标
 
@@ -68,6 +69,7 @@
 - 不回放绑定前的未知设备样例；绑定后从下一条合格报文开始正式采集；
 - 不恢复已经下线的旧电表 Demo，也不建立一条平行的旧业务链；
 - 不新增能耗、碳排公式、报表、天气、控制或下行指令；
+- 不要求在本候选中一次性重构或删除所有现有实体型管理接口；
 - 不在本次处理 WebSocket 多实例、微服务拆分或无限量原始报文归档。
 
 ## 4. 既有硬约束处理
@@ -390,12 +392,12 @@
 建议接口：
 
 ```text
-GET  /api/device-onboarding/pending
-GET  /api/device-onboarding/pending/{pendingId}
-PUT  /api/device-onboarding/pending/{pendingId}/status
-POST /api/device-onboarding/pending/{pendingId}/bind
-POST /api/device-onboarding/identities/{identityId}/activate
-POST /api/device-onboarding/identities/{identityId}/deactivate
+GET  /api/v1/device-onboarding/pending
+GET  /api/v1/device-onboarding/pending/{pendingId}
+PUT  /api/v1/device-onboarding/pending/{pendingId}/status
+POST /api/v1/device-onboarding/pending/{pendingId}/bind
+POST /api/v1/device-onboarding/identities/{identityId}/activate
+POST /api/v1/device-onboarding/identities/{identityId}/deactivate
 ```
 
 所有写接口使用明确请求 DTO、后端权限和建筑归属校验；重复提交通过状态和唯一约束实现幂等冲突提示。
@@ -410,7 +412,113 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 - 展示来源别名，但不允许跨设备或跨建筑移动；
 - 停用身份只停止后续正式接入，不删除既有 TDengine 历史。
 
-## 10. 云端协议模板交付
+## 10. 前后端分层与 API 契约
+
+### 10.1 分层目标
+
+本候选必须同时满足以下两个目标：
+
+1. 前端可以独立调整页面结构、组件、交互和展示，不要求后端同步修改；
+2. 后端可以重构实体、表结构、Service 和 Mapper，只要已发布 API 契约保持兼容，就不要求前端同步修改。
+
+“前端可独立迭代”不等于前端没有业务代码。页面状态、筛选、表单体验和交互编排属于前端；
+设备归属、状态迁移、产品模板校验、测点生成、权限、事务、幂等、审计和正式入库资格属于后端权威规则。
+
+### 10.2 前端分层
+
+新页面使用固定依赖方向：
+
+```text
+Page / Component
+  → Composable / Store
+  → API Client
+  → Contract Types
+  → HTTP / WebSocket
+```
+
+约束如下：
+
+- Page 和 Component 只负责展示、输入、事件和局部 UI 状态，不直接调用 Axios、`fetch` 或拼接后端 URL；
+- Composable 负责编排加载、提交、迟到响应隔离、错误保留和页面工作流，不复制后端状态迁移规则；
+- API Client 统一处理路径、请求 DTO、响应 DTO 和数据适配，不向页面暴露 Axios 响应对象；
+- Contract Types 只表达 API 数据，不混入颜色、图标、列宽和组件实例；
+- Domain/View Model 可以把稳定 API DTO 转为页面需要的展示模型，但不得重算后端指标或推断设备归属；
+- 前端必填、按钮禁用和步骤限制只改善体验，后端必须对伪造请求执行相同或更严格的校验；
+- 未识别的后端状态或操作应进入只读安全态并提示刷新，不得默认放开写操作。
+
+### 10.3 后端分层
+
+新接口使用固定依赖方向：
+
+```text
+Controller
+  → Application / Domain Service
+  → Repository / Mapper / Adapter
+```
+
+约束如下：
+
+- Controller 只处理 HTTP 参数、请求校验、身份提取和响应装配，不直接访问 Mapper；
+- Service 负责权限、建筑范围、状态机、事务、幂等、缓存生效和审计；
+- Mapper/Repository 只处理所属数据源的持久化，不返回给前端；
+- 云端 Adapter 和本地接入 Handler 不依赖前端 DTO；
+- 数据库 Entity、MyBatis-Plus `IPage`、Mapper 查询对象不得成为新接口的请求或响应契约；
+- 新接口分别定义 `CreateRequest`、`UpdateRequest`、`ListItemView`、`DetailView` 和稳定的 `PageResponse<T>`；
+- API View 由独立 Assembler/Mapper 从领域对象生成，数据库字段增删不自动泄漏到浏览器；
+- 后端可以返回 `allowedActions` 辅助前端展示按钮，但真正的操作资格仍由 Service 在执行时重新校验。
+
+### 10.4 新模块 API 边界
+
+第一阶段新增版本化 API，不让新页面直接依赖当前返回 `Building`、`BizEquipment`、`BizDataPoint`
+等实体的旧接口：
+
+```text
+/api/v1/assets/buildings
+/api/v1/assets/spaces
+/api/v1/assets/system-groups
+/api/v1/assets/equipment
+/api/v1/assets/equipment/{equipId}/points
+/api/v1/device-products
+/api/v1/device-onboarding
+```
+
+现有 `/api/building`、`/api/equipment`、`/api/datapoint` 等接口继续服务当前使用方，不在本候选中
+一次性删除或改写。新 Service 可以复用现有领域能力，但新 Controller 必须使用独立 DTO；旧接口后续按真实使用情况
+逐步迁移，不能成为本模块开工的前置阻塞。
+
+### 10.5 契约稳定性
+
+- 相同主版本内优先只增加可选响应字段，不删除、重命名或改变已有字段语义；
+- 请求新增必填字段、枚举含义变化、单位变化或时间语义变化属于破坏性变更，必须发布新 API 主版本；
+- 列表统一使用稳定 `PageResponse<T>`，不暴露 MyBatis 分页类型；
+- 时间统一使用 Unix 毫秒，并通过字段名或枚举区分设备时间、云端接收时间和平台处理时间；
+- 单位、精度、空值、状态和错误码必须写入 OpenAPI 契约，不让前端根据中文提示判断业务分支；
+- ID 在 API 中按不透明字符串或明确数值类型处理，前端不得解析 ID 推断建筑、设备类型或层级；
+- 写操作通过状态、唯一约束和必要的幂等键抵御重复提交；状态冲突返回稳定错误码；
+- WebSocket 继续是最佳努力通知，完整状态由版本化 HTTP DTO 权威对账。
+
+### 10.6 契约生成与测试
+
+- 新版本 API 必须提供 OpenAPI 描述，并与 Controller DTO、校验和权限语义保持一致；
+- 前端 TypeScript 契约优先由 OpenAPI 生成，确需人工包装时只能在 API Client 外层增加稳定适配；
+- CI 检查生成后的 TypeScript 类型没有未提交差异，避免 Java DTO 与前端类型静默漂移；
+- 后端使用 Controller/序列化测试固定字段、枚举、空值、分页、错误码和越权响应；
+- 前端 API Client 使用真实契约样例测试成功、空数据、未知状态、权限拒绝和冲突响应；
+- 至少保留一组跨层契约测试，验证 OpenAPI 样例能被前端类型和映射代码消费；
+- 浏览器端到端测试验证用户流程，但不能替代 DTO 和权限契约测试。
+
+### 10.7 独立发布顺序
+
+前后端错峰发布遵循“先兼容、后切换、再清理”：
+
+1. 后端先发布兼容旧前端的新接口或可选字段；
+2. 前端再切换到新契约，期间旧前端仍可工作；
+3. 通过访问日志、监控和验收确认旧契约不再使用；
+4. 破坏性删除只能进入下一 API 主版本，并在约定兼容窗口后单独执行。
+
+不得要求前后端必须同一时刻上线，才能避免正常请求失败。现场是否具备独立部署和回滚能力仍需在目标环境单独验证。
+
+## 11. 云端协议模板交付
 
 第一阶段不建设可视化前端，协议配置采用以下受控流程：
 
@@ -425,9 +533,9 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 当前仓库尚未实现通用配置包导入命令。第一阶段可以继续使用受控 SQL；只有当产品模板维护频率形成真实运维负担时，
 再单独实现无界面的校验/导入 CLI 或受保护管理 API。
 
-## 11. 安全、可靠性与审计
+## 12. 安全、可靠性与审计
 
-### 11.1 权限和归属
+### 12.1 权限和归属
 
 - 首阶段只有 `PLATFORM_ADMIN` 可以创建建筑、产品、绑定设备和启停身份；
 - 页面权限只是体验层，Controller 与 Service 必须重复执行角色和建筑边界校验；
@@ -435,7 +543,7 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 - 绑定事务校验空间、系统、设备、测点和建筑的一致性；
 - 协议冲突视为安全事件，不自动迁移。
 
-### 11.2 敏感信息与载荷
+### 12.2 敏感信息与载荷
 
 - 外部身份可能属于设备敏感标识，只在业务库和授权页面中展示；
 - Micrometer 标签不使用完整身份值，避免高基数和信息泄漏；
@@ -443,7 +551,7 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 - 列表接口对身份值提供按需脱敏展示，详情由有权限用户查看；
 - 清理任务必须有批次上限、超时和可观测指标。
 
-### 11.3 时间、重复和丢包
+### 12.3 时间、重复和丢包
 
 - `DEVICE_REPORTED` 与 `SERVER_RECEIVED` 必须在样例和正式数据中可区分；
 - 没有设备 `timestamp` 时只能说明云端收到时间；
@@ -451,7 +559,7 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 - 生产可靠性优先要求设备端缓存补传、QoS 1、设备时间和序号；
 - 待绑定样例不参与正式幂等和数据质量统计。
 
-### 11.4 审计
+### 12.4 审计
 
 至少记录：
 
@@ -463,7 +571,7 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 
 审计记录不保存密码、Token 或完整原始载荷。
 
-## 12. 迁移与兼容
+## 13. 迁移与兼容
 
 1. 现有 HVAC 设备身份、设备、测点和别名原样保留，不自动迁移为待绑定设备；
 2. 现有标准多指标入口和 TDengine 写入契约保持不变；
@@ -474,7 +582,7 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 7. 数据库迁移必须先检查外部身份、产品编码、模板指标和别名唯一冲突；
 8. 回滚代码时保留新增表和数据，停用发现入口，不删除业务档案和历史。
 
-## 13. 实施分段
+## 14. 实施分段
 
 为保持一个任务、分支和 PR 只处理一个明确问题，建议按以下可独立验收的工作包推进：
 
@@ -489,20 +597,25 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 - 产品模板管理 API；
 - 待绑定查询、忽略、绑定、启停；
 - 设备、测点和别名批量实例化；
-- 权限、建筑一致性、缓存生效和审计。
+- 权限、建筑一致性、缓存生效和审计；
+- `/api/v1` 独立请求/响应 DTO、稳定分页、OpenAPI 和后端契约测试；
+- 不直接暴露数据库 Entity、MyBatis-Plus `IPage` 或 Mapper 查询对象。
 
 ### 工作包 C：建筑、空间、系统、设备和测点页面
 
 - 受控后台路由与菜单；
 - 建筑/空间/系统页面；
 - 设备/测点页面；
-- 空态、错误态、权限态和并发提交处理。
+- Page、Composable、API Client 和 Contract Types 分层；
+- 空态、错误态、未知状态、权限态和并发提交处理；
+- API Client 与 OpenAPI/契约样例测试。
 
 ### 工作包 D：产品与接入向导页面
 
 - 产品型号/测点模板页面；
 - 待绑定列表、详情和接入向导；
-- 启用确认与配置生效反馈。
+- 启用确认与配置生效反馈；
+- 验证仅调整布局和交互时不需要修改后端契约。
 
 ### 工作包 E：真实设备与端到端验收
 
@@ -514,9 +627,9 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 
 数据质量任务、典型值管理、WebSocket 安全增强和浏览器全流程回归继续作为独立任务，不混入上述 PR。
 
-## 14. 验证与验收标准
+## 15. 验证与验收标准
 
-### 14.1 自动化验证
+### 15.1 自动化验证
 
 - 同一未知身份并发上报只产生一条待绑定记录，计数和最后时间正确；
 - 样例超限被确定性截断，不保存未允许字段；
@@ -529,9 +642,12 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 - 启用后下一条合格报文进入原有正式链；
 - 停用后新报文被拒绝，既有历史仍可查询；
 - 普通测试不连接真实 MySQL、TDengine、Redis、Broker 或现场设备；
-- 前端覆盖加载、空态、错误、权限拒绝、重复提交和迟到响应。
+- 新 Controller 不接收或返回数据库 Entity、MyBatis-Plus `IPage` 或 Mapper 查询对象；
+- OpenAPI、后端 DTO 和生成的前端 TypeScript 契约保持一致；
+- 前端覆盖加载、空态、错误、未知状态、权限拒绝、重复提交和迟到响应；
+- 旧前端在新后端发布后仍能使用原有接口，新前端切换后再进入旧契约清理阶段。
 
-### 14.2 第一阶段业务验收
+### 15.2 第一阶段业务验收
 
 1. 不预创建设备时，已配置产品协议的真实设备能出现在待绑定列表；
 2. 管理员能查看身份、协议、最近样例和时间来源；
@@ -542,9 +658,13 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 7. 新 JSON 结构在当前能力范围内只新增云端配置模板，不修改适配器代码；
 8. 未知设备、协议冲突和单位错误均不能污染正式数据；
 9. 页面操作、后端权限和建筑范围无法通过直输 URL 或伪造请求绕过；
-10. 实现结果、自动化测试、隔离集成、云端部署和现场验收分别给出证据。
+10. 页面布局、组件和交互调整在 API 契约不变时不需要修改后端；
+11. 后端 Entity、表结构和内部 Service 重构在 API 契约不变时不需要修改前端；
+12. 前后端能够按“兼容后端 → 新前端 → 旧契约清理”顺序错峰发布；
+13. 契约不一致能够在 CI 阶段被发现，而不是只依赖人工联调；
+14. 实现结果、自动化测试、隔离集成、云端部署和现场验收分别给出证据。
 
-## 15. 待确认事项
+## 16. 待确认事项
 
 以下内容不阻塞先开展工作包 A，但必须在相关工作包开始前确认：
 
@@ -557,7 +677,7 @@ POST /api/device-onboarding/identities/{identityId}/deactivate
 7. 现场并发指标具体指设备数、MQTT 连接数、消息速率还是管理端用户数；
 8. 第一阶段是否需要绑定前有限回放；本设计默认不回放。
 
-## 16. 完成边界
+## 17. 完成边界
 
 本设计文档完成只代表候选方案和实施边界已经形成，不代表页面、数据库、接口、云端配置导入、
 真实设备接入或现场验收已经完成。实施任务必须在新的干净工作树中，从最新 `main` 创建独立任务分支，
