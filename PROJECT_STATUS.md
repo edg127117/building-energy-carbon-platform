@@ -2,7 +2,7 @@
 
 ## 1. 状态基准
 
-- 状态日期：2026-08-12。
+- 状态日期：2026-08-17。
 - 代码基线：以本文件所在 Git 版本及其已合并代码、测试为准，不在文档中固定易过期的提交号。
 - 本文件只描述其所在 Git 版本能够通过代码、测试、已合并提交或有效文档核验的状态。
 - Docker 容器、端口、数据库数据、前后端进程等本地运行状态不进入本文件，必须在需要时现场检查。
@@ -16,7 +16,9 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 ### 2.1 版本身份
 
 - 当前权威基线：`main` 中最近已合并并具有代码、测试或有效文档证据的状态；它不自动等同于已部署、现场已验收或全部规划完成。
-- 活动候选版本：当前没有独立的新正式版本候选。普通功能分支和 PR 只是当前 V1 的增量，不因此创建 V2 或增加平行版本目录。
+- 活动候选设计：已形成[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)，计划在不重写现有云端 JSON 适配器和正式时序链的前提下，补充产品型号、待绑定设备、接入向导以及建筑/设备/测点管理页面。
+- 候选身份：当前 Git 版本已完成工作包 A 的领域表、未知设备有界发现、清理和自动化测试；绑定事务、管理 API、前端、真实 MySQL 迁移与现场验收仍未完成，也未批准为新的正式版本。当前权威基线仍是既有已合并 V1 能力。
+- 约束处理：候选保留“云端只转换、本地管归属、未知设备不写正式时序”的边界，仅把“首次上报前必须全部预注册”替换为“可先发现，正式入库前必须绑定并启用”。
 
 ## 3. 当前版本已完成
 
@@ -35,7 +37,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 - 已新增可独立部署到云服务器的 `telemetry-adapter`：按云端 MySQL 协议模板解析 JSON 多字段报文，以 QoS 1 发布一包标准多指标消息；云端规则首次不可用或标准发布失败时保留原始消息重投。
 - 本地平台已主动订阅 `device/telemetry/up`，按预注册 `外部身份 → 设备 → 建筑 → 期望协议` 解析可信归属，并在任何正式写入前整包校验指标别名、设备/建筑归属、状态、单位、数值范围和重复代码。
-- 标准多字段报文复用现有单测点 TDengine 幂等入库链；任一点存储失败时整包不 ACK，重投后已成功点按重复事件处理。未知设备只记录告警和低基数指标，不自动创建设备、不猜建筑、不进入正式存储。
+- 标准多字段报文复用现有单测点 TDengine 幂等入库链；任一点存储失败时整包不 ACK，重投后已成功点按重复事件处理。真正未知设备会写入本地 MySQL 有界待绑定样例并记录低基数指标，但不自动创建设备、不猜建筑、不进入正式存储；已登记但停用的身份不会被误建为待绑定。
 - 迁移期旧 `device/data/up` 单测点链仍保留；本地 MQTT 已实现旧 Topic 与标准 Topic 的精确路由、手动 ACK、固定会话、自动重连和首次连接失败后台重试。
 - TDengine 已形成原始事件、整分钟数据、指标结果和公式异常的数据访问能力。
 - 已实现分钟聚合、迟到数据处理、Q0/Q1/Q2 数据质量补全、恢复、任务重试和人工重算后端能力。
@@ -75,11 +77,23 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 证据入口：[`application-test.yml`](src/test/resources/application-test.yml)、[`java21.md`](docs/development/java21.md)、[`docker-compose.yml`](src/env/docker-compose.yml)、[`server.env.example`](server.env.example)。
 
+### 3.5 可配置设备接入工作包 A
+
+- 已新增产品型号、产品测点模板和待绑定设备的 MySQL 迁移、领域实体、Mapper 与 H2 等价测试表。
+- 同一未知身份通过数据库唯一键原子 upsert：并发计数不丢失，首次/末次时间有序，乱序上报不覆盖较新的协议和样例，`IGNORED`、`BOUND` 不会被自动恢复。
+- 待绑定样例只保存指标代码、数值、单位与事件/接收时间语义；字段数、字符串和 UTF-8 JSON 总大小均有配置上限，不保存原始厂商字段路径或未知字段。
+- 待绑定 MySQL 写入使用有限重试，耗尽后仍确认未知消息并记录失败指标；未知设备不会调用 `HvacIngestionService` 或写 TDengine。
+- 清理任务只删除过期 `DISCOVERED`、`IGNORED`，并同时受批量、批次数和执行超时限制；普通自动化测试关闭后台调度且不连接真实 MySQL、TDengine、Redis 或 Broker。
+
+证据入口：[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding)、[`StandardTelemetryIngestionService.java`](src/main/java/com/platform/iot/ingest/standard/StandardTelemetryIngestionService.java)、[`13-migrate-device-onboarding-discovery.sql`](src/env/init/13-migrate-device-onboarding-discovery.sql)。
+
 ## 4. 尚未完成或待继续
 
 - 真实现场设备、网络抖动、长时间运行和现场数据质量仍需独立验收，不能由单元测试或本地冒烟替代。
 - 云端 EMQX 账号、Topic ACL、TLS、云端 MySQL 和适配器进程仍需在目标云服务器部署并验证；仓库代码不会自动创建这些外部安全配置。
-- 设备身份和标准多字段测点别名当前通过受控 SQL/运维流程配置，尚无“待绑定设备”、身份绑定和协议模板管理页面。
+- 设备身份和标准多字段测点别名当前仍通过受控 SQL/运维流程配置；虽然工作包 A 已能记录待绑定设备，但尚无查询、忽略、绑定、启停和产品模板管理 API 或页面。
+- 接入向导以及建筑/空间/系统/设备/测点业务管理页面仍是活动候选设计，当前代码尚未实现。
+- 工作包 A 的新增迁移只通过 H2/MySQL 模式验证，尚未在真实 MySQL 业务库执行；执行前必须备份并核对现有身份、产品编码和外键冲突。
 - 当前示例电表字段的实际单位、累计/周期语义、发送周期、时间戳和序号仍需硬件方确认；未确认前不能把示例单位当作正式数据契约。
 
 ## 5. 当前阻塞与风险
@@ -101,9 +115,9 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 ## 7. 下一步优先级
 
-1. 在目标云服务器部署 EMQX、适配器和适配器元数据 MySQL，按真实设备字段确认单位与协议模板。
-2. 在本地预注册真实设备、建筑归属和全部测点别名，先完成单包端到端核对，再执行 24 小时运行、断线恢复和数据质量验收。
-3. 后续独立实现设备身份/协议模板管理页和待绑定设备异常工作流；绑定前仍不得写正式时序数据。
+1. 完成工作包 A 的真实 MySQL 隔离迁移验证后，按[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)另建工作包 B，实现产品模板管理、待绑定查询、绑定事务、启停、权限和审计；绑定前仍不得写正式时序数据。
+2. 在目标云服务器部署 EMQX、适配器和适配器元数据 MySQL，按真实设备字段确认单位与协议模板。
+3. 通过新的待绑定与接入流程完成真实设备单包核对，再执行 24 小时运行、断线恢复和数据质量验收。
 4. 单独设计并补齐第三方 COP、设备运行状态 REST API 与 Swagger 文档。
 
 每个事项开始前仍需根据 `AGENTS.md` 判断是否必须先确认独立设计和实施范围。
@@ -116,6 +130,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | 当前有效、持续更新 | 不再固定提交号或记录本机瞬时状态；业务完成项仍需随当前 Git 版本更新。 |
 | [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) | V1 设计基线 | 第 11 章只保留稳定能力边界和当前状态入口，不再复制动态完成表；第 12 章和附录 C 已明确为历史排期与未来讨论。 |
 | [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前静态契约已核验 | 已对照云端适配、本地预注册、双 Topic 路由、ACK 和重投实现；真实云服务器、硬件与网络仍需现场验收。 |
+| [`docs/designs/2026-08-17-configurable-device-onboarding-design.md`](docs/designs/2026-08-17-configurable-device-onboarding-design.md) | 活动候选设计、工作包 A 已实现 | 已明确既有约束的保留与替代、云端适配边界、本地发现与绑定、页面范围和分段验收；B 至 E 尚未实现，候选也未批准为正式基线。 |
 | [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来约束、当前未实现 | 当前代码只有 HVAC 上行采集和指标发布，没有控制入口、下行主题、状态机或协议 Adapter。 |
 | [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | 已对照 `pom.xml`、Maven Wrapper、检查脚本和 CI，删除个人机器路径及管理员级 PATH 修改。 |
 
@@ -127,6 +142,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 - 稳定项目地图和完整链路：[`PROJECT_GUIDE.md`](PROJECT_GUIDE.md)。
 - V1 业务和技术设计基线：[`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md)。
 - MQTT 硬件契约：[`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md)。
+- 活动候选设备接入设计：[`docs/designs/2026-08-17-configurable-device-onboarding-design.md`](docs/designs/2026-08-17-configurable-device-onboarding-design.md)。
 - 任务设计和实施历史：[`docs/superpowers/README.md`](docs/superpowers/README.md)。
 - 当前行为：其所在 Git 版本的代码、自动化测试和已合并提交。
 

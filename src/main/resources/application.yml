@@ -148,6 +148,21 @@ ingestion:
   point-config-refresh-ms: ${POINT_CONFIG_REFRESH_MS:60000}
   device-identity-refresh-ms: ${DEVICE_IDENTITY_REFRESH_MS:60000}
 
+# 未绑定设备只保存本地 MySQL 中的规范化有限样例，不进入 TDengine 和数据质量链。
+device-onboarding:
+  discovery:
+    max-metric-count: ${PENDING_DEVICE_MAX_METRIC_COUNT:64}
+    max-string-length: ${PENDING_DEVICE_MAX_STRING_LENGTH:128}
+    max-sample-bytes: ${PENDING_DEVICE_MAX_SAMPLE_BYTES:8192}
+    max-attempts: ${PENDING_DEVICE_MAX_ATTEMPTS:3}
+    retry-delay-ms: ${PENDING_DEVICE_RETRY_DELAY_MS:50}
+    cleanup-enabled: ${PENDING_DEVICE_CLEANUP_ENABLED:true}
+    retention-days: ${PENDING_DEVICE_RETENTION_DAYS:30}
+    cleanup-batch-size: ${PENDING_DEVICE_CLEANUP_BATCH_SIZE:200}
+    cleanup-max-batches: ${PENDING_DEVICE_CLEANUP_MAX_BATCHES:5}
+    cleanup-timeout-ms: ${PENDING_DEVICE_CLEANUP_TIMEOUT_MS:5000}
+    cleanup-cron: ${PENDING_DEVICE_CLEANUP_CRON:0 45 3 * * ?}
+
 # 只清理逐条原始事件；分钟汇总和后续COP指标长期保留。
 data-retention:
   raw-event-days: 90

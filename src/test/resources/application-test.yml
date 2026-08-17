@@ -27,6 +27,11 @@ tdengine:
 mqtt:
   enabled: false
 
+# 普通测试按需直接调用待绑定清理服务，不启动后台清理调度。
+device-onboarding:
+  discovery:
+    cleanup-enabled: false
+
 # 自动化测试直接调用聚合方法；关闭后台恢复，避免测试上下文访问真实TDengine。
 aggregation:
   recovery-enabled: false

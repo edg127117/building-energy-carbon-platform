@@ -36,6 +36,7 @@
 | `com.platform.integration` | 面向 `THIRD_PARTY` 的按建筑授权只读 Open API | 不提供内部后台、写入、控制或 Token 签发 |
 | `com.platform.iot.ingest`、`com.platform.iot.quality` | MQTT 载荷接入、测点身份解析和运行时质量校验 | 不承担前端展示组装 |
 | `com.platform.iot.identity` | 从本地 MySQL 解析外部设备身份到设备、建筑和期望协议 | 不从报文猜测归属，不自动创建设备 |
+| `com.platform.iot.onboarding` | 保存产品型号、产品测点模板和真正未知身份的有界待绑定样例 | 不执行绑定、启用，不查询或写入 TDengine 正式链 |
 | `com.platform.iot.aggregation` | 将原始事件聚合为整分钟数据 | 不保存用户权限数据 |
 | `com.platform.iot.dataquality` | Q0/Q1/Q2 数据质量补全、恢复、重算和任务状态 | 不改变 MySQL 与 TDengine 的职责边界 |
 | `com.platform.iot.formula` | 组装公式输入、计算四类指标、保存并发布结果 | 不直接处理 HTTP 权限入口 |
@@ -79,6 +80,11 @@
 和 [`WebSocketServer`](src/main/java/com/platform/iot/websocket/WebSocketServer.java)
 向 `/ws/hvac` 发布当前建筑的四项指标增量。WebSocket 是最佳努力通知，发送失败不回滚指标结果；
 19 测点完整快照和全部最新指标仍以受保护 HTTP 查询为权威来源。
+
+标准入口身份未命中时，先区分“已登记但停用”和“业务库真正未知”。停用身份直接拒绝；
+真正未知身份只把规范化、大小受限的最近指标样例写入本地 MySQL `biz_pending_device`，
+写入短暂失败经过有限重试后仍确认 MQTT 消息，并继续拒绝正式 TDengine、聚合、质量和公式链。
+同一身份的并发发现由数据库唯一键原子累计，过期 `DISCOVERED`、`IGNORED` 记录由独立有界任务清理。
 
 ### 4.2 登录、权限和建筑范围
 
@@ -127,7 +133,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 
 | 资源 | 保存或传递的内容 | 主要访问位置 | 测试边界 |
 |---|---|---|---|
-| 本地 MySQL | 用户、角色、菜单、建筑、设备、外部身份绑定、测点、典型值和任务状态 | `system`、`hvac` Mapper，设备身份与数据质量 MySQL Provider | 普通测试使用 H2 或 Mock，不依赖本机 MySQL |
+| 本地 MySQL | 用户、角色、菜单、建筑、设备、产品模板、待绑定设备、外部身份绑定、测点、典型值和任务状态 | `system`、`hvac`、`iot.onboarding` Mapper，设备身份与数据质量 MySQL Provider | 普通测试使用 H2 或 Mock，不依赖本机 MySQL |
 | 云端适配器 MySQL | 协议模板、版本、JSON 字段路径、单位和换算规则 | `telemetry-adapter` 的 JDBC 配置快照 | 适配器普通测试使用独立 H2，不保存业务数据 |
 | TDengine | 原始事件、分钟数据、指标结果和公式异常 | `iot.temporal` 专用 Repository | 普通测试关闭真实 TDengine，真实链路使用专用集成验证 |
 | Redis | Token、菜单、建筑范围和最新指标缓存 | `com.platform.cache` | 允许 Fake/Mock；缓存失败是否降级由业务服务明确决定 |
@@ -174,6 +180,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 |---|---|---|---|
 | [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) | V1 设计基线 | 冻结范围、测点、公式和安全边界 | 当前完成进度和仍待实施事项 |
 | [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前硬件契约 | 云端适配、本地预注册、多字段与旧单点上行、确认语义 | 现场设备已经完成验收 |
+| [`docs/designs/2026-08-17-configurable-device-onboarding-design.md`](docs/designs/2026-08-17-configurable-device-onboarding-design.md) | 活动候选设计 | 可配置设备接入、待绑定设备、产品模板和建筑/设备/测点管理的候选边界 | 当前已经实现这些候选能力或已经批准为正式基线 |
 | [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来安全约束 | 未来控制能力必须满足的安全和审计边界 | 当前已经存在控制功能 |
 | [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | Java 21、Maven Wrapper 和 CI 验证 | 某台电脑已经正确配置环境 |
 | [`docs/development/code-comments.md`](docs/development/code-comments.md) | 当前开发规范 | IoT 生产代码注释边界与风险分级 | 通用语言注释规则和不涉及生产代码的任务 |
