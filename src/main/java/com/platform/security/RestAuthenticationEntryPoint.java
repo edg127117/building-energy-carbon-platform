@@ -36,10 +36,20 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         body.put("code", 401);
         body.put("msg", "未登录或登录已过期");
         body.put("success", false);
+        if (isOnboardingPath(request)) {
+            body.put("errorCode", "ONBOARDING_UNAUTHORIZED");
+        }
 
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding("UTF-8");
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(objectMapper.writeValueAsString(body));
+    }
+
+    /** 新版本接入 API 使用机器码，旧接口继续保持既有三字段响应。 */
+    private static boolean isOnboardingPath(HttpServletRequest request) {
+        String path = request.getRequestURI();
+        return path.startsWith(request.getContextPath() + "/v1/device-products")
+                || path.startsWith(request.getContextPath() + "/v1/device-onboarding");
     }
 }

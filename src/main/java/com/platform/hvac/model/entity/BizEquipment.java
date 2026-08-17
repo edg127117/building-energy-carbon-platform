@@ -50,6 +50,9 @@ public class BizEquipment implements Serializable {
     /** 外键→biz_space */
     private String spaceId;
 
+    /** 可空的产品接入模板版本；既有设备不要求补录。 */
+    private String productId;
+
     /** 生产厂家 */
     private String manufacturer;
 

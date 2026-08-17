@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS biz_pending_device;
+DROP TABLE IF EXISTS biz_onboarding_audit_log;
 DROP TABLE IF EXISTS biz_product_point_template;
 DROP TABLE IF EXISTS biz_device_product;
 DROP TABLE IF EXISTS sys_building_access_request;
@@ -164,6 +165,7 @@ CREATE TABLE biz_equipment (
   system_group_id VARCHAR(32),
   building_id VARCHAR(32) NOT NULL,
   space_id VARCHAR(32),
+  product_id VARCHAR(32),
   manufacturer VARCHAR(100),
   rated_capacity DECIMAL(12,4),
   rated_power DECIMAL(12,4),
@@ -174,6 +176,8 @@ CREATE TABLE biz_equipment (
   UNIQUE (building_id, equip_code),
   UNIQUE (equip_id, building_id)
 );
+
+CREATE INDEX idx_equipment_product ON biz_equipment (product_id);
 
 CREATE TABLE biz_device_identity (
   identity_id VARCHAR(32) PRIMARY KEY,
@@ -263,6 +267,21 @@ CREATE INDEX idx_pending_device_expiry
   ON biz_pending_device (status, last_seen_time, pending_id);
 CREATE INDEX idx_pending_device_bound_identity
   ON biz_pending_device (bound_identity_id);
+
+CREATE TABLE biz_onboarding_audit_log (
+  audit_id VARCHAR(32) PRIMARY KEY,
+  operator_id BIGINT NOT NULL,
+  action_type VARCHAR(50) NOT NULL,
+  object_type VARCHAR(50) NOT NULL,
+  object_id VARCHAR(32) NOT NULL,
+  before_summary VARCHAR(1000),
+  after_summary VARCHAR(1000),
+  result VARCHAR(20) NOT NULL,
+  operation_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE INDEX idx_onboarding_audit_object
+  ON biz_onboarding_audit_log (object_type, object_id, operation_time);
 
 CREATE TABLE biz_data_point (
   point_id VARCHAR(32) PRIMARY KEY,

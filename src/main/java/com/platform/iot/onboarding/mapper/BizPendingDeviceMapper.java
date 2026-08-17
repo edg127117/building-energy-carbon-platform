@@ -7,6 +7,7 @@ import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
+import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDateTime;
 import java.util.Collection;
@@ -21,6 +22,22 @@ import java.util.List;
  * 正式身份。</p>
  */
 public interface BizPendingDeviceMapper extends BaseMapper<BizPendingDevice> {
+
+    /** 锁定接入状态机记录，确保忽略、恢复和绑定不会并发覆盖。 */
+    @Select("SELECT * FROM biz_pending_device WHERE pending_id = #{pendingId} FOR UPDATE")
+    BizPendingDevice selectByIdForUpdate(@Param("pendingId") String pendingId);
+
+    /** 只允许从调用方声明的旧状态迁移，冲突时返回 0 供 Service 转为稳定 409。 */
+    @Update("""
+            UPDATE biz_pending_device
+            SET status = #{nextStatus}, bound_identity_id = #{identityId}, update_time = CURRENT_TIMESTAMP(3)
+            WHERE pending_id = #{pendingId} AND status = #{expectedStatus}
+            """)
+    int updateStatus(
+            @Param("pendingId") String pendingId,
+            @Param("expectedStatus") String expectedStatus,
+            @Param("nextStatus") String nextStatus,
+            @Param("identityId") String identityId);
 
     /**
      * 按身份组合唯一键记录一次未知设备发现。

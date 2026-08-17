@@ -51,10 +51,12 @@ class DatabaseInitializationTest {
                 jdbcTemplate, "BIZ_DATA_QUALITY_FILL_TASK"))
                 .contains("RECALC_JOB_ID");
         assertThat(tableNames(jdbcTemplate))
+                .contains("BIZ_DEVICE_PRODUCT", "BIZ_PENDING_DEVICE", "BIZ_ONBOARDING_AUDIT_LOG")
                 .doesNotContain(
                         "IOT_DEVICE",
                         "IOT_DEVICE_STATUS_LOG",
                         "CONTROL_COMMANDS");
+        assertThat(columns(jdbcTemplate, "BIZ_EQUIPMENT")).contains("PRODUCT_ID");
         assertThat(jdbcTemplate.queryForList(
                 "SELECT role_key FROM sys_role ORDER BY role_key",
                 String.class))
