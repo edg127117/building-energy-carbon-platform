@@ -174,6 +174,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 |---|---|---|---|
 | [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) | V1 设计基线 | 冻结范围、测点、公式和安全边界 | 当前完成进度和仍待实施事项 |
 | [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前硬件契约 | 云端适配、本地预注册、多字段与旧单点上行、确认语义 | 现场设备已经完成验收 |
+| [`docs/designs/2026-08-17-configurable-device-onboarding-design.md`](docs/designs/2026-08-17-configurable-device-onboarding-design.md) | 活动候选设计 | 可配置设备接入、待绑定设备、产品模板和建筑/设备/测点管理的候选边界 | 当前已经实现这些候选能力或已经批准为正式基线 |
 | [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来安全约束 | 未来控制能力必须满足的安全和审计边界 | 当前已经存在控制功能 |
 | [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | Java 21、Maven Wrapper 和 CI 验证 | 某台电脑已经正确配置环境 |
 | [`docs/development/code-comments.md`](docs/development/code-comments.md) | 当前开发规范 | IoT 生产代码注释边界与风险分级 | 通用语言注释规则和不涉及生产代码的任务 |
