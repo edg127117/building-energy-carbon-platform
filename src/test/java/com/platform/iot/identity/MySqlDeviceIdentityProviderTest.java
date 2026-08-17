@@ -61,6 +61,8 @@ class MySqlDeviceIdentityProviderTest {
         provider.refreshAll();
 
         assertThat(provider.find(new DeviceIdentityKey("MAC", "123456789012345"))).isEmpty();
+        assertThat(provider.isKnown(
+                new DeviceIdentityKey("MAC", "123456789012345"))).isTrue();
     }
 
     @Test

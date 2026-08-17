@@ -12,9 +12,11 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -29,7 +31,7 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
 
     private final BizDeviceIdentityMapper identityMapper;
     private final BizEquipmentMapper equipmentMapper;
-    private volatile Map<DeviceIdentityKey, DeviceIdentityBinding> snapshot = Map.of();
+    private volatile IdentitySnapshot snapshot = IdentitySnapshot.empty();
     private volatile boolean snapshotAvailable;
 
     @PostConstruct
@@ -48,7 +50,11 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
 
             List<BizDeviceIdentity> identities = identityMapper.selectList(new LambdaQueryWrapper<>());
             Map<DeviceIdentityKey, DeviceIdentityBinding> next = new LinkedHashMap<>();
+            Set<DeviceIdentityKey> known = new LinkedHashSet<>();
             for (BizDeviceIdentity identity : identities) {
+                DeviceIdentityKey key = new DeviceIdentityKey(
+                        identity.getIdentityType(), identity.getIdentityValue());
+                known.add(key);
                 if (!Integer.valueOf(1).equals(identity.getStatus())) {
                     continue;
                 }
@@ -57,8 +63,6 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
                     throw new IllegalStateException(
                             "设备身份归属与设备台账不一致: identityId=" + identity.getIdentityId());
                 }
-                DeviceIdentityKey key = new DeviceIdentityKey(
-                        identity.getIdentityType(), identity.getIdentityValue());
                 DeviceIdentityBinding binding = new DeviceIdentityBinding(
                         identity.getIdentityId(),
                         key,
@@ -70,7 +74,7 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
                     throw new IllegalStateException("存在重复启用设备身份: type=" + key.type());
                 }
             }
-            snapshot = Map.copyOf(next);
+            snapshot = new IdentitySnapshot(Map.copyOf(next), Set.copyOf(known));
             snapshotAvailable = true;
             log.debug("设备身份快照刷新完成: identities={}", next.size());
         } catch (RuntimeException exception) {
@@ -80,9 +84,29 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
 
     @Override
     public Optional<DeviceIdentityBinding> find(DeviceIdentityKey key) {
+        requireSnapshot();
+        return Optional.ofNullable(snapshot.activeBindings().get(key));
+    }
+
+    @Override
+    public boolean isKnown(DeviceIdentityKey key) {
+        requireSnapshot();
+        return snapshot.knownIdentities().contains(key);
+    }
+
+    private void requireSnapshot() {
         if (!snapshotAvailable) {
             throw new DeviceIdentitySnapshotUnavailableException("设备身份快照尚未成功加载");
         }
-        return Optional.ofNullable(snapshot.get(key));
+    }
+
+    /** 同一个不可变对象同时发布全部已知身份与其中可进入正式链的启用绑定。 */
+    private record IdentitySnapshot(
+            Map<DeviceIdentityKey, DeviceIdentityBinding> activeBindings,
+            Set<DeviceIdentityKey> knownIdentities) {
+
+        private static IdentitySnapshot empty() {
+            return new IdentitySnapshot(Map.of(), Set.of());
+        }
     }
 }

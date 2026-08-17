@@ -63,21 +63,6 @@ public class StandardTelemetryIngestionService {
             return StandardTelemetryResult.rejected(malformed);
         }
 
-        DeviceIdentityBinding binding;
-        try {
-            binding = identityProvider.find(message.deviceIdentity()).orElse(null);
-        } catch (DeviceIdentitySnapshotUnavailableException exception) {
-            return StandardTelemetryResult.retryable(0, exception.getMessage());
-        }
-        if (binding == null) {
-            unknownDeviceHandler.recordRejected(message.deviceIdentity(), message.profileCode());
-            return StandardTelemetryResult.rejected("设备未完成本地预注册");
-        }
-        if (!binding.expectedProfileCode().equals(message.profileCode())) {
-            return StandardTelemetryResult.rejected("设备上报协议与预注册协议不一致");
-        }
-
-        List<PreparedMetric> prepared = new ArrayList<>(message.metrics().size());
         Set<String> metricCodes = new HashSet<>();
         for (StandardMetric metric : message.metrics()) {
             String metricError = validateMetric(metric, metricCodes);
@@ -85,6 +70,25 @@ public class StandardTelemetryIngestionService {
                 return StandardTelemetryResult.rejected(metricError);
             }
         }
+
+        DeviceIdentityBinding binding;
+        try {
+            binding = identityProvider.find(message.deviceIdentity()).orElse(null);
+        } catch (DeviceIdentitySnapshotUnavailableException exception) {
+            return StandardTelemetryResult.retryable(0, exception.getMessage());
+        }
+        if (binding == null) {
+            if (identityProvider.isKnown(message.deviceIdentity())) {
+                return StandardTelemetryResult.rejected("设备身份已登记但未启用");
+            }
+            unknownDeviceHandler.recordDiscovered(message, localReceivedTime);
+            return StandardTelemetryResult.rejected("设备尚未完成本地绑定");
+        }
+        if (!binding.expectedProfileCode().equals(message.profileCode())) {
+            return StandardTelemetryResult.rejected("设备上报协议与预注册协议不一致");
+        }
+
+        List<PreparedMetric> prepared = new ArrayList<>(message.metrics().size());
         try {
             for (StandardMetric metric : message.metrics()) {
                 String sourcePointCode = "%s:%s:%s".formatted(

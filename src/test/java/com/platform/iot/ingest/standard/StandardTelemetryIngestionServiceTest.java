@@ -94,17 +94,31 @@ class StandardTelemetryIngestionServiceTest {
     }
 
     @Test
-    void unknownDeviceIsRecordedAndRejectedBeforePointLookup() {
+    void unknownDeviceIsDiscoveredAndRejectedBeforePointLookup() {
         when(identityProvider.find(identityKey())).thenReturn(Optional.empty());
 
-        StandardTelemetryResult result = service.ingest(
-                message(List.of(metric("CURRENT_ENERGY", "12.34", "kWh"))),
-                LOCAL_RECEIVED_TIME);
+        StandardTelemetryMessage message = message(
+                List.of(metric("CURRENT_ENERGY", "12.34", "kWh")));
+        StandardTelemetryResult result = service.ingest(message, LOCAL_RECEIVED_TIME);
 
         assertThat(result.outcome()).isEqualTo(StandardTelemetryOutcome.REJECTED);
         assertThat(result.shouldAcknowledge()).isTrue();
-        verify(unknownDeviceHandler).recordRejected(identityKey(), "ENERGY_METER_V1");
+        verify(unknownDeviceHandler).recordDiscovered(message, LOCAL_RECEIVED_TIME);
         verifyNoInteractions(pointProvider, hvacIngestionService);
+    }
+
+    @Test
+    void registeredButDisabledIdentityIsRejectedWithoutPendingDiscovery() {
+        when(identityProvider.find(identityKey())).thenReturn(Optional.empty());
+        when(identityProvider.isKnown(identityKey())).thenReturn(true);
+        StandardTelemetryMessage message = message(
+                List.of(metric("CURRENT_ENERGY", "12.34", "kWh")));
+
+        StandardTelemetryResult result = service.ingest(message, LOCAL_RECEIVED_TIME);
+
+        assertThat(result.outcome()).isEqualTo(StandardTelemetryOutcome.REJECTED);
+        assertThat(result.shouldAcknowledge()).isTrue();
+        verifyNoInteractions(unknownDeviceHandler, pointProvider, hvacIngestionService);
     }
 
     @Test

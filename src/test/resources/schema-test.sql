@@ -1,3 +1,6 @@
+DROP TABLE IF EXISTS biz_pending_device;
+DROP TABLE IF EXISTS biz_product_point_template;
+DROP TABLE IF EXISTS biz_device_product;
 DROP TABLE IF EXISTS sys_building_access_request;
 DROP TABLE IF EXISTS biz_data_quality_recalc_job;
 DROP TABLE IF EXISTS biz_data_quality_fill_task;
@@ -184,6 +187,82 @@ CREATE TABLE biz_device_identity (
   update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (identity_type, identity_value)
 );
+
+CREATE TABLE biz_device_product (
+  product_id VARCHAR(32) PRIMARY KEY,
+  product_code VARCHAR(50) NOT NULL UNIQUE,
+  product_name VARCHAR(100) NOT NULL,
+  manufacturer VARCHAR(100),
+  model VARCHAR(100),
+  equipment_type_code VARCHAR(20) NOT NULL,
+  expected_profile_code VARCHAR(50) NOT NULL,
+  identity_type VARCHAR(20) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT chk_device_product_status
+    CHECK (status IN ('DRAFT', 'ENABLED', 'DISABLED')),
+  CONSTRAINT fk_device_product_equipment_type
+    FOREIGN KEY (equipment_type_code) REFERENCES biz_equipment_type (type_code)
+);
+
+CREATE INDEX idx_device_product_type_status
+  ON biz_device_product (equipment_type_code, status);
+
+CREATE TABLE biz_product_point_template (
+  template_point_id VARCHAR(32) PRIMARY KEY,
+  product_id VARCHAR(32) NOT NULL,
+  metric_code VARCHAR(100) NOT NULL,
+  point_name_template VARCHAR(100) NOT NULL,
+  suffix_code VARCHAR(20),
+  unit VARCHAR(20) NOT NULL,
+  min_value DECIMAL(12,4),
+  max_value DECIMAL(12,4),
+  for_calc TINYINT NOT NULL DEFAULT 0,
+  required_flag TINYINT NOT NULL DEFAULT 0,
+  sort_order INT NOT NULL DEFAULT 0,
+  status TINYINT NOT NULL DEFAULT 1,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_product_point_template_metric UNIQUE (product_id, metric_code),
+  CONSTRAINT fk_product_point_template_product
+    FOREIGN KEY (product_id) REFERENCES biz_device_product (product_id)
+);
+
+CREATE INDEX idx_product_point_template_status
+  ON biz_product_point_template (product_id, status, sort_order);
+
+-- H2 使用 TEXT 模拟 MySQL 中已被服务层限界的规范化指标样例，不保存原始 MQTT 载荷。
+CREATE TABLE biz_pending_device (
+  pending_id VARCHAR(32) PRIMARY KEY,
+  identity_type VARCHAR(20) NOT NULL,
+  identity_value VARCHAR(100) NOT NULL,
+  profile_code VARCHAR(50) NOT NULL,
+  last_profile_version INT NOT NULL,
+  first_seen_time TIMESTAMP(3) NOT NULL,
+  last_seen_time TIMESTAMP(3) NOT NULL,
+  report_count BIGINT NOT NULL DEFAULT 1,
+  latest_event_time TIMESTAMP(3) NOT NULL,
+  latest_time_source VARCHAR(20) NOT NULL,
+  latest_metrics_json TEXT NOT NULL,
+  sample_truncated TINYINT NOT NULL DEFAULT 0,
+  status VARCHAR(20) NOT NULL DEFAULT 'DISCOVERED',
+  bound_identity_id VARCHAR(32),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_pending_device_identity UNIQUE (identity_type, identity_value),
+  CONSTRAINT chk_pending_device_status
+    CHECK (status IN ('DISCOVERED', 'BOUND', 'IGNORED')),
+  CONSTRAINT chk_pending_device_time_source
+    CHECK (latest_time_source IN ('DEVICE_REPORTED', 'SERVER_RECEIVED')),
+  CONSTRAINT fk_pending_device_bound_identity
+    FOREIGN KEY (bound_identity_id) REFERENCES biz_device_identity (identity_id)
+);
+
+CREATE INDEX idx_pending_device_expiry
+  ON biz_pending_device (status, last_seen_time, pending_id);
+CREATE INDEX idx_pending_device_bound_identity
+  ON biz_pending_device (bound_identity_id);
 
 CREATE TABLE biz_data_point (
   point_id VARCHAR(32) PRIMARY KEY,
