@@ -19,12 +19,16 @@ INSERT INTO sys_menu (id, parent_id, menu_name, menu_type, path, visible, status
 (220, 200, '建筑权限', 'M', '/system/access', 1, 1, 2),
 (223, 220, '建筑授权', 'C', '/system/building-access', 1, 1, 3),
 (240, 200, '后台配置', 'M', '/system/config', 1, 1, 4),
-(241, 240, '菜单管理', 'C', '/system/menus', 1, 1, 1);
+(241, 240, '菜单管理', 'C', '/system/menus', 1, 1, 1),
+(250, 200, '资产管理', 'M', '/system/assets', 1, 1, 3),
+(251, 250, '建筑与空间', 'C', '/system/buildings', 1, 1, 1),
+(252, 250, '设备与测点', 'C', '/system/devices', 1, 1, 2);
 
 INSERT INTO sys_role_menu (role_id, menu_id) VALUES
 (10,100),(10,101),
 (11,100),(11,101),
-(13,100),(13,101),(13,200),(13,210),(13,211),(13,212),(13,220),(13,223),(13,240),(13,241);
+(13,100),(13,101),(13,200),(13,210),(13,211),(13,212),(13,220),(13,223),(13,240),(13,241),
+(13,250),(13,251),(13,252);
 
 INSERT INTO building (building_id, building_name, building_code, del_flag) VALUES
 ('BLD001', '一号楼', 'B001', 0),
