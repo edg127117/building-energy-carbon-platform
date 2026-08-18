@@ -36,7 +36,7 @@
 | `com.platform.integration` | 面向 `THIRD_PARTY` 的按建筑授权只读 Open API | 不提供内部后台、写入、控制或 Token 签发 |
 | `com.platform.iot.ingest`、`com.platform.iot.quality` | MQTT 载荷接入、测点身份解析和运行时质量校验 | 不承担前端展示组装 |
 | `com.platform.iot.identity` | 从本地 MySQL 解析外部设备身份到设备、建筑和期望协议 | 不从报文猜测归属，不自动创建设备 |
-| `com.platform.iot.onboarding` | 保存产品型号、产品测点模板和真正未知身份的有界待绑定样例 | 不执行绑定、启用，不查询或写入 TDengine 正式链 |
+| `com.platform.iot.onboarding` | 管理产品模板、未知身份有界样例、绑定事务、身份启停、缓存生效与脱敏审计 | 不编辑云端协议模板，不查询或写入 TDengine 正式链 |
 | `com.platform.iot.aggregation` | 将原始事件聚合为整分钟数据 | 不保存用户权限数据 |
 | `com.platform.iot.dataquality` | Q0/Q1/Q2 数据质量补全、恢复、重算和任务状态 | 不改变 MySQL 与 TDengine 的职责边界 |
 | `com.platform.iot.formula` | 组装公式输入、计算四类指标、保存并发布结果 | 不直接处理 HTTP 权限入口 |
@@ -85,6 +85,9 @@
 真正未知身份只把规范化、大小受限的最近指标样例写入本地 MySQL `biz_pending_device`，
 写入短暂失败经过有限重试后仍确认 MQTT 消息，并继续拒绝正式 TDengine、聚合、质量和公式链。
 同一身份的并发发现由数据库唯一键原子累计，过期 `DISCOVERED`、`IGNORED` 记录由独立有界任务清理。
+平台管理员通过 `/api/v1/device-products` 和 `/api/v1/device-onboarding` 管理产品草稿、待绑定状态、
+设备/测点/别名绑定和身份启停；绑定在一个 MySQL 事务内锁定待绑定记录，提交后刷新并核验身份、测点快照。
+绑定完成前身份保持停用，缓存未确认可见时启用接口不会返回成功，既有正式时序和历史数据不被改写。
 
 ### 4.2 登录、权限和建筑范围
 
@@ -133,7 +136,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 
 | 资源 | 保存或传递的内容 | 主要访问位置 | 测试边界 |
 |---|---|---|---|
-| 本地 MySQL | 用户、角色、菜单、建筑、设备、产品模板、待绑定设备、外部身份绑定、测点、典型值和任务状态 | `system`、`hvac`、`iot.onboarding` Mapper，设备身份与数据质量 MySQL Provider | 普通测试使用 H2 或 Mock，不依赖本机 MySQL |
+| 本地 MySQL | 用户、角色、菜单、建筑、设备、产品模板、待绑定设备、外部身份绑定、测点、接入审计、典型值和任务状态 | `system`、`hvac`、`iot.onboarding` Mapper，设备身份与数据质量 MySQL Provider | 普通测试使用 H2 或 Mock，不依赖本机 MySQL |
 | 云端适配器 MySQL | 协议模板、版本、JSON 字段路径、单位和换算规则 | `telemetry-adapter` 的 JDBC 配置快照 | 适配器普通测试使用独立 H2，不保存业务数据 |
 | TDengine | 原始事件、分钟数据、指标结果和公式异常 | `iot.temporal` 专用 Repository | 普通测试关闭真实 TDengine，真实链路使用专用集成验证 |
 | Redis | Token、菜单、建筑范围和最新指标缓存 | `com.platform.cache` | 允许 Fake/Mock；缓存失败是否降级由业务服务明确决定 |
@@ -156,6 +159,7 @@ WebSocket 基地址由 `VITE_WS_BASE` 配置，JWT 不进入 URL。
 | 前端 HTTP / WebSocket 基址示例 | [`web/.env.example`](web/.env.example) |
 | MQTT 接入配置 | 本地 [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、云端 [`telemetry-adapter/application.yml`](telemetry-adapter/src/main/resources/application.yml) |
 | HVAC 查询入口 | [`HvacQueryController.java`](src/main/java/com/platform/hvac/controller/HvacQueryController.java)、[`HvacIndicatorController.java`](src/main/java/com/platform/hvac/controller/HvacIndicatorController.java) |
+| 设备产品与接入 API | [`DeviceProductController.java`](src/main/java/com/platform/iot/onboarding/api/DeviceProductController.java)、[`DeviceOnboardingController.java`](src/main/java/com/platform/iot/onboarding/api/DeviceOnboardingController.java) |
 | 前端 HVAC 页面 | [`HvacDemoPage.vue`](web/src/pages/HvacDemoPage.vue) |
 | 最小后台管理 | [`ManagementLayout.vue`](web/src/layouts/ManagementLayout.vue)、[`systemAdmin.ts`](web/src/api/systemAdmin.ts)、[`adminNavigation.ts`](web/src/domain/adminNavigation.ts) |
 

@@ -1,5 +1,6 @@
 package com.platform.framework.exception;
 
+import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -38,12 +39,13 @@ public class GlobalExceptionHandler {
             MethodArgumentTypeMismatchException.class
     })
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, Object> handleValidationException(Exception e) {
+    public Map<String, Object> handleValidationException(Exception e, HttpServletRequest request) {
         log.warn("前端非法输入拦截: {}", e.getMessage());
         Map<String, Object> response = new HashMap<>();
         response.put("code", 400);
         response.put("msg", "您输入的格式不正确，请检查后重试");
         response.put("success", false);
+        addOnboardingErrorCode(response, request, "ONBOARDING_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -57,6 +59,9 @@ public class GlobalExceptionHandler {
         response.put("code", e.getCode());
         response.put("msg", e.getMessage());
         response.put("success", false);
+        if (e.getErrorCode() != null) {
+            response.put("errorCode", e.getErrorCode());
+        }
         HttpStatus status = switch (e.getCode()) {
             case 401 -> HttpStatus.UNAUTHORIZED;
             case 403 -> HttpStatus.FORBIDDEN;
@@ -74,23 +79,37 @@ public class GlobalExceptionHandler {
     /** 处理进入 MVC 后抛出的认证异常；安全过滤链之前的失败由认证入口返回同结构 401。 */
     @ExceptionHandler(AuthenticationException.class)
     @ResponseStatus(HttpStatus.UNAUTHORIZED)
-    public Map<String, Object> handleAuthenticationException(AuthenticationException e) {
+    public Map<String, Object> handleAuthenticationException(
+            AuthenticationException e, HttpServletRequest request) {
         Map<String, Object> response = new HashMap<>();
         response.put("code", 401);
         response.put("msg", "未登录或登录已过期");
         response.put("success", false);
+        addOnboardingErrorCode(response, request, "ONBOARDING_UNAUTHORIZED");
         return response;
     }
 
     /** 处理方法调用期间的角色拒绝；安全过滤链中的拒绝由 AccessDeniedHandler 返回同结构 403。 */
     @ExceptionHandler(AccessDeniedException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
-    public Map<String, Object> handleAccessDeniedException(AccessDeniedException e) {
+    public Map<String, Object> handleAccessDeniedException(
+            AccessDeniedException e, HttpServletRequest request) {
         Map<String, Object> response = new HashMap<>();
         response.put("code", 403);
         response.put("msg", "无权限访问");
         response.put("success", false);
+        addOnboardingErrorCode(response, request, "ONBOARDING_FORBIDDEN");
         return response;
+    }
+
+    /** 仅为已版本化接入 API 增加机器码，保持旧接口响应契约不变。 */
+    private static void addOnboardingErrorCode(
+            Map<String, Object> response, HttpServletRequest request, String errorCode) {
+        String path = request.getRequestURI();
+        if (path.startsWith(request.getContextPath() + "/v1/device-products")
+                || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
+            response.put("errorCode", errorCode);
+        }
     }
 
     /**

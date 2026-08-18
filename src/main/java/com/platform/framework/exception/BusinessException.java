@@ -15,6 +15,9 @@ public class BusinessException extends RuntimeException {
     /** 与 HTTP 语义对应的业务码，例如 401、403、404、409 或 503。 */
     private Integer code;
 
+    /** 可选的稳定机器错误码；新版本接口不能依赖中文提示判断业务分支。 */
+    private String errorCode;
+
     /** 创建默认 400 的请求/业务规则错误。 */
     public BusinessException(String message) {
         super(message);
@@ -25,5 +28,12 @@ public class BusinessException extends RuntimeException {
     public BusinessException(Integer code, String message) {
         super(message);
         this.code = code;
+    }
+
+    /** 创建同时携带 HTTP 语义和稳定机器错误码的业务错误。 */
+    public BusinessException(Integer code, String errorCode, String message) {
+        super(message);
+        this.code = code;
+        this.errorCode = errorCode;
     }
 }
