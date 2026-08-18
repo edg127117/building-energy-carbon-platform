@@ -35,9 +35,7 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         body.put("code", 403);
         body.put("msg", "无权限访问");
         body.put("success", false);
-        if (isOnboardingPath(request)) {
-            body.put("errorCode", "ONBOARDING_FORBIDDEN");
-        }
+        addVersionedErrorCode(request, body);
 
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setCharacterEncoding("UTF-8");
@@ -45,10 +43,14 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         response.getWriter().write(objectMapper.writeValueAsString(body));
     }
 
-    /** 新版本接入 API 使用机器码，旧接口继续保持既有三字段响应。 */
-    private static boolean isOnboardingPath(HttpServletRequest request) {
+    /** 新版本管理 API 使用各自机器码，旧接口继续保持既有三字段响应。 */
+    private static void addVersionedErrorCode(HttpServletRequest request, Map<String, Object> body) {
         String path = request.getRequestURI();
-        return path.startsWith(request.getContextPath() + "/v1/device-products")
-                || path.startsWith(request.getContextPath() + "/v1/device-onboarding");
+        if (path.startsWith(request.getContextPath() + "/v1/device-products")
+                || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
+            body.put("errorCode", "ONBOARDING_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
+            body.put("errorCode", "ASSET_FORBIDDEN");
+        }
     }
 }

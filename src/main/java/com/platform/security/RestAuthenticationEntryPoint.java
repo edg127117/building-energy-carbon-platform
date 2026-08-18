@@ -36,9 +36,7 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         body.put("code", 401);
         body.put("msg", "未登录或登录已过期");
         body.put("success", false);
-        if (isOnboardingPath(request)) {
-            body.put("errorCode", "ONBOARDING_UNAUTHORIZED");
-        }
+        addVersionedErrorCode(request, body);
 
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding("UTF-8");
@@ -46,10 +44,14 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         response.getWriter().write(objectMapper.writeValueAsString(body));
     }
 
-    /** 新版本接入 API 使用机器码，旧接口继续保持既有三字段响应。 */
-    private static boolean isOnboardingPath(HttpServletRequest request) {
+    /** 新版本管理 API 使用各自机器码，旧接口继续保持既有三字段响应。 */
+    private static void addVersionedErrorCode(HttpServletRequest request, Map<String, Object> body) {
         String path = request.getRequestURI();
-        return path.startsWith(request.getContextPath() + "/v1/device-products")
-                || path.startsWith(request.getContextPath() + "/v1/device-onboarding");
+        if (path.startsWith(request.getContextPath() + "/v1/device-products")
+                || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
+            body.put("errorCode", "ONBOARDING_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
+            body.put("errorCode", "ASSET_UNAUTHORIZED");
+        }
     }
 }

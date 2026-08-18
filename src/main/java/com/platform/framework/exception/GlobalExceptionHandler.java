@@ -45,7 +45,8 @@ public class GlobalExceptionHandler {
         response.put("code", 400);
         response.put("msg", "您输入的格式不正确，请检查后重试");
         response.put("success", false);
-        addOnboardingErrorCode(response, request, "ONBOARDING_VALIDATION_FAILED");
+        addVersionedErrorCode(response, request,
+                "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -85,7 +86,8 @@ public class GlobalExceptionHandler {
         response.put("code", 401);
         response.put("msg", "未登录或登录已过期");
         response.put("success", false);
-        addOnboardingErrorCode(response, request, "ONBOARDING_UNAUTHORIZED");
+        addVersionedErrorCode(response, request,
+                "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED");
         return response;
     }
 
@@ -98,17 +100,21 @@ public class GlobalExceptionHandler {
         response.put("code", 403);
         response.put("msg", "无权限访问");
         response.put("success", false);
-        addOnboardingErrorCode(response, request, "ONBOARDING_FORBIDDEN");
+        addVersionedErrorCode(response, request,
+                "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN");
         return response;
     }
 
-    /** 仅为已版本化接入 API 增加机器码，保持旧接口响应契约不变。 */
-    private static void addOnboardingErrorCode(
-            Map<String, Object> response, HttpServletRequest request, String errorCode) {
+    /** 仅为已版本化管理 API 增加各自机器码，保持旧接口响应契约不变。 */
+    private static void addVersionedErrorCode(
+            Map<String, Object> response, HttpServletRequest request,
+            String onboardingErrorCode, String assetErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
-            response.put("errorCode", errorCode);
+            response.put("errorCode", onboardingErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
+            response.put("errorCode", assetErrorCode);
         }
     }
 

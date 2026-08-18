@@ -54,7 +54,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Building2, Gauge, KeyRound, LogOut, Menu, Snowflake, UserRoundCog } from 'lucide-vue-next'
+import { Building2, Cpu, Gauge, KeyRound, LogOut, Menu, Network, Snowflake, UserRoundCog } from 'lucide-vue-next'
 import { useAuthStore } from '@/store/auth'
 import { useMenuStore } from '@/store/menu'
 import type { AdminNavigationItem } from '@/domain/adminNavigation'
@@ -76,6 +76,8 @@ function iconFor(path?: string) {
   if (path === '/system/users') return UserRoundCog
   if (path === '/system/roles') return KeyRound
   if (path === '/system/building-access') return Building2
+  if (path === '/system/buildings') return Network
+  if (path === '/system/devices') return Cpu
   return Menu
 }
 

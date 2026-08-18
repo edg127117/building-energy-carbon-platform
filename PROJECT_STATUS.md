@@ -98,12 +98,22 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 证据入口：[`DeviceProductService.java`](src/main/java/com/platform/iot/onboarding/DeviceProductService.java)、[`DeviceOnboardingService.java`](src/main/java/com/platform/iot/onboarding/DeviceOnboardingService.java)、[`iot/onboarding/api`](src/main/java/com/platform/iot/onboarding/api)、[`14-migrate-device-onboarding-binding.sql`](src/env/init/14-migrate-device-onboarding-binding.sql)。
 
+### 3.7 可配置设备接入工作包 C
+
+- 已提供 `/system/buildings` 建筑、空间树和系统分组页面，以及 `/system/devices` 设备、身份、协议、测点完整度和测点维护页面；两条入口都来自受控路由注册表和 MySQL 菜单，只向 `PLATFORM_ADMIN` 开放。
+- 已提供 `/v1/assets` 建筑、空间、系统分组、设备和设备测点版本化接口；Controller 与 Service 双层校验管理员角色，响应使用独立 DTO、稳定分页、Unix 毫秒时间和机器错误码，不暴露 Entity 或 MyBatis 分页对象。
+- 建筑删除会检查空间、系统、设备、测点和用户授权引用；空间、系统、设备和测点删除分别检查子空间、设备、身份、测点或别名引用，冲突返回稳定 409。空间更新额外阻断任意深度父子循环。
+- 前端按 Page、Composable、API Client 和 Contract Types 分层，覆盖骨架加载、空数据、请求失败、权限拒绝、未知状态、迟到响应和同对象重复提交；页面不复制后端状态机，不生成假数据。
+- OpenAPI、后端 DTO、前端契约样例、路由和菜单由自动化测试约束；旧 `/building`、`/equipment`、`/datapoint` 等实体型接口保持兼容，尚未进入清理阶段。
+
+证据入口：[`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`assetManagement.ts`](web/src/api/assetManagement.ts)、[`useAssetManagement.ts`](web/src/composables/useAssetManagement.ts)、[`15-migrate-mysql-asset-management-menu.sql`](src/env/init/15-migrate-mysql-asset-management-menu.sql)。
+
 ## 4. 尚未完成或待继续
 
 - 真实现场设备、网络抖动、长时间运行和现场数据质量仍需独立验收，不能由单元测试或本地冒烟替代。
 - 云端 EMQX 账号、Topic ACL、TLS、云端 MySQL 和适配器进程仍需在目标云服务器部署并验证；仓库代码不会自动创建这些外部安全配置。
-- 工作包 B 已提供产品和接入管理后端，但接入向导以及建筑/空间/系统/设备/测点业务管理页面仍未实现。
-- 工作包 A、B 的新增结构只通过 H2 的 MySQL 模式等价 schema 自动化验证，增量迁移尚未在真实 MySQL 业务库执行；执行前必须备份并核对现有身份、产品编码、模板指标、别名和外键冲突。
+- 工作包 D 的产品型号、测点模板、待绑定列表、详情和接入向导页面仍未实现；工作包 B 的后端接口不能代替这些页面交付。
+- 工作包 A、B 的新增结构和工作包 C 的菜单迁移只通过 H2 等价 schema 或 SQL 契约自动化验证，增量迁移尚未在真实 MySQL 业务库执行；执行前必须备份并核对现有身份、产品编码、模板指标、别名、菜单 ID 和外键冲突。
 - 当前示例电表字段的实际单位、累计/周期语义、发送周期、时间戳和序号仍需硬件方确认；未确认前不能把示例单位当作正式数据契约。
 
 ## 5. 当前阻塞与风险
@@ -119,13 +129,13 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 ## 6. 已确认技术债
 
 - `THIRD_PARTY` 当前已具备按授权建筑读取建筑、设备和测点定义的 Open API，以及按建筑校验的 HVAC WebSocket 订阅；冻结书中的 COP、设备运行状态专用 REST API 和 Swagger 文档尚未实现，不能表述为完整第三方接入交付。
-- 角色 CRUD、建筑 CRUD、移动端专项适配和动态组件加载均为最小后台明确不做，不是遗留缺陷。
+- 角色 CRUD、移动端专项适配和动态组件加载仍为最小后台明确不做，不是遗留缺陷；建筑与资产管理已按工作包 C 的受控范围实现。
 
 记录这些事项不代表必须在当前任务立即重构或补齐；每项应在独立范围、设计、测试和 PR 中处理。
 
 ## 7. 下一步优先级
 
-1. 完成工作包 A、B 的真实 MySQL 隔离迁移验证后，按[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)另建工作包 C，实现建筑、空间、系统、设备和测点管理页面；前端不得复制后端状态机或直接依赖数据库实体。
+1. 完成工作包 A、B、C 的真实 MySQL 隔离迁移与菜单验证后，按[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)另建工作包 D，实现产品型号、测点模板、待绑定列表和接入向导页面。
 2. 在目标云服务器部署 EMQX、适配器和适配器元数据 MySQL，按真实设备字段确认单位与协议模板。
 3. 通过新的待绑定与接入流程完成真实设备单包核对，再执行 24 小时运行、断线恢复和数据质量验收。
 4. 单独设计并补齐第三方 COP、设备运行状态 REST API 与 Swagger 文档。

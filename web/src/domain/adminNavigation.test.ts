@@ -31,6 +31,8 @@ describe('controlled administration navigation', () => {
       '/system/roles',
       '/system/menus',
       '/system/building-access',
+      '/system/buildings',
+      '/system/devices',
     ])
     expect(isImplementedMenuPath('/system/users')).toBe(true)
     expect(isImplementedMenuPath('/system/users/1')).toBe(false)

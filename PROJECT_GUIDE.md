@@ -103,10 +103,17 @@
 前端路由限制只负责用户体验，后端权限校验才是最终安全边界。
 
 平台管理员从 HVAC 大屏进入 `/system` 后台壳层，前端只把后端菜单树映射到受控注册表中的
-`/system/users`、`/system/roles`、`/system/menus` 和 `/system/building-access` 四条显式路由。
+`/system/users`、`/system/roles`、`/system/menus`、`/system/building-access`、
+`/system/buildings` 和 `/system/devices` 六条显式路由。
 用户生命周期、固定四角色菜单、完整菜单树和建筑授权审批分别调用 `com.platform.system`
 管理接口；数据库中的 `component` 字符串不参与前端组件解析，普通角色也不能通过直输 URL
 绕过后端 `PLATFORM_ADMIN` 鉴权。
+
+建筑、空间、系统分组、设备和测点页面只调用 `/v1/assets/**` 版本化接口；浏览器契约集中在
+`web/src/types/assets.ts`，API Client 与页面状态编排分别位于 `web/src/api/assetManagement.ts`
+和 `web/src/composables/useAssetManagement.ts`。后端 `com.platform.hvac.asset` 把既有 HVAC 档案
+Service 结果装配为独立 DTO，删除前检查业务引用，并再次校验 `PLATFORM_ADMIN`；旧实体型接口
+仍供既有调用方使用，不是新页面契约。
 
 ### 4.3 前端真实数据刷新
 
