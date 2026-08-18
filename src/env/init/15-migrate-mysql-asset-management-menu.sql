@@ -1,6 +1,28 @@
 -- 工作包 C 资产管理菜单；手工用于已有 MySQL 卷，重复执行结果不变。
 USE `iot_platform`;
 
+-- 在写入前同时校验固定 ID 和固定路径，禁止覆盖不属于本模块的既有菜单。
+DROP PROCEDURE IF EXISTS `validate_asset_management_menu`;
+DELIMITER //
+CREATE PROCEDURE `validate_asset_management_menu`()
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM `sys_menu`
+        WHERE (`id`=250 AND NOT (`path` <=> '/system/assets'))
+           OR (`id`=251 AND NOT (`path` <=> '/system/buildings'))
+           OR (`id`=252 AND NOT (`path` <=> '/system/devices'))
+           OR (`path`='/system/assets' AND `id`<>250)
+           OR (`path`='/system/buildings' AND `id`<>251)
+           OR (`path`='/system/devices' AND `id`<>252)
+    ) THEN
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='ASSET_MANAGEMENT_MENU_ID_OR_PATH_CONFLICT';
+    END IF;
+END//
+DELIMITER ;
+
+CALL `validate_asset_management_menu`();
+DROP PROCEDURE `validate_asset_management_menu`;
+
 INSERT INTO `sys_menu`
 (`id`, `parent_id`, `menu_name`, `menu_type`, `path`, `component`, `icon`, `visible`, `status`, `sort_order`)
 VALUES
