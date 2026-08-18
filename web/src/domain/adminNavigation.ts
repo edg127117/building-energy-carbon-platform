@@ -11,6 +11,8 @@ export const IMPLEMENTED_MENU_ROUTES = {
   },
   '/system/buildings': { routeName: 'system-buildings', admin: true },
   '/system/devices': { routeName: 'system-devices', admin: true },
+  '/system/device-products': { routeName: 'system-device-products', admin: true },
+  '/system/device-onboarding': { routeName: 'system-device-onboarding', admin: true },
 } as const
 
 export type ImplementedMenuPath = keyof typeof IMPLEMENTED_MENU_ROUTES

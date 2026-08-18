@@ -104,7 +104,8 @@
 
 平台管理员从 HVAC 大屏进入 `/system` 后台壳层，前端只把后端菜单树映射到受控注册表中的
 `/system/users`、`/system/roles`、`/system/menus`、`/system/building-access`、
-`/system/buildings` 和 `/system/devices` 六条显式路由。
+`/system/buildings`、`/system/devices`、`/system/device-products` 和
+`/system/device-onboarding` 八条显式路由。
 用户生命周期、固定四角色菜单、完整菜单树和建筑授权审批分别调用 `com.platform.system`
 管理接口；数据库中的 `component` 字符串不参与前端组件解析，普通角色也不能通过直输 URL
 绕过后端 `PLATFORM_ADMIN` 鉴权。
@@ -114,6 +115,12 @@
 和 `web/src/composables/useAssetManagement.ts`。后端 `com.platform.hvac.asset` 把既有 HVAC 档案
 Service 结果装配为独立 DTO，删除前检查业务引用，并再次校验 `PLATFORM_ADMIN`；旧实体型接口
 仍供既有调用方使用，不是新页面契约。
+
+产品与接入页面只调用 `/v1/device-products` 和 `/v1/device-onboarding`；浏览器契约集中在
+`web/src/types/deviceOnboarding.ts`，API Client 与异步状态编排分别位于
+`web/src/api/deviceOnboarding.ts` 和 `web/src/composables/useDeviceOnboardingManagement.ts`。
+接入向导复用资产查询选择建筑、空间、系统、设备和测点，绑定成功后仍要求管理员单独确认
+身份启用；前端不会自行推断命名规则、资产归属或配置已经生效。
 
 ### 4.3 前端真实数据刷新
 
