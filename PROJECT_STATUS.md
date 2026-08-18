@@ -66,7 +66,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 ### 3.4 工程与运行基础
 
 - 普通后端测试已与真实 MySQL、TDengine、MQTT 和 Redis 隔离。
-- 云端适配器拥有独立 Maven 构建、H2/Mock 自动化测试、环境变量示例和 MySQL schema；后端 CI 同时验证本地平台与云端适配器。
+- 云端适配器拥有独立 Maven 构建、H2/Mock 自动化测试、环境变量示例和 MySQL schema，并通过 HTTP 暴露 Actuator 健康检查与指标端点；后端 CI 同时验证本地平台与云端适配器。
 - 后端开发和 CI 已统一到 Java 21。
 - 前端已建立 Vue 3 + TypeScript ESLint 实用基线，`npm run lint` 会扫描当前 `.ts`/`.vue` 源码，并已进入 GitHub 前端 CI 合并检查。
 - 仓库已提供本地 Git Hook 安装、任务预检、合并后安全清理、PR 模板、前端 CI 和 PR 注释防回退检查。
