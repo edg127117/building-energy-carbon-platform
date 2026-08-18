@@ -17,7 +17,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 - 当前权威基线：`main` 中最近已合并并具有代码、测试或有效文档证据的状态；它不自动等同于已部署、现场已验收或全部规划完成。
 - 活动候选设计：已形成[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)，计划在不重写现有云端 JSON 适配器和正式时序链的前提下，补充产品型号、待绑定设备、接入向导以及建筑/设备/测点管理页面。
-- 候选身份：当前 Git 版本已完成工作包 A 的领域发现后端和工作包 B 的绑定事务与版本化管理 API；前端、真实 MySQL 迁移执行和现场验收仍未完成，也未批准为新的正式版本。当前权威基线仍是既有已合并 V1 能力。
+- 候选身份：当前 Git 版本已完成工作包 A 的领域发现后端、工作包 B 的绑定事务与版本化管理 API，以及工作包 C 的资产管理页面；新增结构和菜单迁移已通过隔离 MySQL 8.0 验证，但目标业务库执行、工作包 D 和现场验收仍未完成，也未批准为新的正式版本。当前权威基线仍是既有已合并 V1 能力。
 - 约束处理：候选保留“云端只转换、本地管归属、未知设备不写正式时序”的边界，仅把“首次上报前必须全部预注册”替换为“可先发现，正式入库前必须绑定并启用”。
 
 ## 3. 当前版本已完成
@@ -108,12 +108,19 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 证据入口：[`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`assetManagement.ts`](web/src/api/assetManagement.ts)、[`useAssetManagement.ts`](web/src/composables/useAssetManagement.ts)、[`15-migrate-mysql-asset-management-menu.sql`](src/env/init/15-migrate-mysql-asset-management-menu.sql)。
 
+### 3.8 工作包 A、B、C 的隔离 MySQL 迁移验证
+
+- `01`、`03`、`13`、`14`、`15` SQL 已在空白 MySQL 8.0 容器按真实顺序执行；A、B、C 三份增量迁移均通过重复执行验证。
+- 绑定迁移会逐项核对设备产品列、索引和外键：中断后可补齐缺失结构，同名结构不符合预期时明确失败，不继续写入。
+- 资产菜单迁移会在写入前同时核对固定菜单 ID 与路径；冲突时拒绝覆盖既有菜单，正常执行后只向 `PLATFORM_ADMIN` 分配资产入口。
+- 真实 MySQL 已验证新增状态检查、外键、UTF-8 菜单、既有设备保留和临时迁移过程清理；该证据不等于已在目标业务库执行。
+
 ## 4. 尚未完成或待继续
 
 - 真实现场设备、网络抖动、长时间运行和现场数据质量仍需独立验收，不能由单元测试或本地冒烟替代。
 - 云端 EMQX 账号、Topic ACL、TLS、云端 MySQL 和适配器进程仍需在目标云服务器部署并验证；仓库代码不会自动创建这些外部安全配置。
 - 工作包 D 的产品型号、测点模板、待绑定列表、详情和接入向导页面仍未实现；工作包 B 的后端接口不能代替这些页面交付。
-- 工作包 A、B 的新增结构和工作包 C 的菜单迁移只通过 H2 等价 schema 或 SQL 契约自动化验证，增量迁移尚未在真实 MySQL 业务库执行；执行前必须备份并核对现有身份、产品编码、模板指标、别名、菜单 ID 和外键冲突。
+- 工作包 A、B 的新增结构和工作包 C 的菜单迁移已通过隔离 MySQL 8.0 验证，但尚未在目标业务库执行；正式执行前仍必须备份并核对现有身份、产品编码、模板指标、别名、菜单 ID、菜单路径和外键冲突。
 - 当前示例电表字段的实际单位、累计/周期语义、发送周期、时间戳和序号仍需硬件方确认；未确认前不能把示例单位当作正式数据契约。
 
 ## 5. 当前阻塞与风险
@@ -135,7 +142,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 
 ## 7. 下一步优先级
 
-1. 完成工作包 A、B、C 的真实 MySQL 隔离迁移与菜单验证后，按[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)另建工作包 D，实现产品型号、测点模板、待绑定列表和接入向导页面。
+1. 按[可配置设备接入与业务绑定设计](docs/designs/2026-08-17-configurable-device-onboarding-design.md)另建工作包 D，实现产品型号、测点模板、待绑定列表和接入向导页面。
 2. 在目标云服务器部署 EMQX、适配器和适配器元数据 MySQL，按真实设备字段确认单位与协议模板。
 3. 通过新的待绑定与接入流程完成真实设备单包核对，再执行 24 小时运行、断线恢复和数据质量验收。
 4. 单独设计并补齐第三方 COP、设备运行状态 REST API 与 Swagger 文档。
@@ -150,7 +157,7 @@ V1 继续保持 Spring Boot 单体后端和 Vue 前端，不进行微服务拆�
 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) | 当前有效、持续更新 | 不再固定提交号或记录本机瞬时状态；业务完成项仍需随当前 Git 版本更新。 |
 | [`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) | V1 设计基线 | 第 11 章只保留稳定能力边界和当前状态入口，不再复制动态完成表；第 12 章和附录 C 已明确为历史排期与未来讨论。 |
 | [`docs/MQTT-硬件数据对接说明.md`](docs/MQTT-硬件数据对接说明.md) | 当前静态契约已核验 | 已对照云端适配、本地预注册、双 Topic 路由、ACK 和重投实现；真实云服务器、硬件与网络仍需现场验收。 |
-| [`docs/designs/2026-08-17-configurable-device-onboarding-design.md`](docs/designs/2026-08-17-configurable-device-onboarding-design.md) | 活动候选设计、工作包 A/B 已实现 | 已明确既有约束的保留与替代、云端适配边界、本地发现与绑定、页面范围和分段验收；C 至 E 尚未实现，候选也未批准为正式基线。 |
+| [`docs/designs/2026-08-17-configurable-device-onboarding-design.md`](docs/designs/2026-08-17-configurable-device-onboarding-design.md) | 活动候选设计、工作包 A/B/C 已实现 | 已明确既有约束的保留与替代、云端适配边界、本地发现与绑定、页面范围和分段验收；D、E 尚未实现，候选也未批准为正式基线。 |
 | [`docs/HVAC控制能力设计备忘.md`](docs/HVAC控制能力设计备忘.md) | 未来约束、当前未实现 | 当前代码只有 HVAC 上行采集和指标发布，没有控制入口、下行主题、状态机或协议 Adapter。 |
 | [`docs/development/java21.md`](docs/development/java21.md) | 当前开发指南 | 已对照 `pom.xml`、Maven Wrapper、检查脚本和 CI，删除个人机器路径及管理员级 PATH 修改。 |
 

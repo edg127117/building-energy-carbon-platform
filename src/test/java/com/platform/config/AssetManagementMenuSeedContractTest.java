@@ -17,6 +17,8 @@ class AssetManagementMenuSeedContractTest {
         assertThat(migration)
                 .contains("'/system/buildings'", "'/system/devices'",
                         "ON DUPLICATE KEY UPDATE", "INSERT IGNORE",
+                        "ASSET_MANAGEMENT_MENU_ID_OR_PATH_CONFLICT",
+                        "(`path`='/system/buildings' AND `id`<>251)",
                         "r.`role_key`='PLATFORM_ADMIN'", "r.`role_key`<>'PLATFORM_ADMIN'")
                 .doesNotContain("DROP TABLE", "TRUNCATE TABLE", "DELETE FROM `sys_menu`");
     }
