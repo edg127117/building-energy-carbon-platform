@@ -16,13 +16,14 @@ describe('HVAC-only frontend boundaries', () => {
     expect(routes.some((route) => route.path === '/hvac-demo')).toBe(true)
   })
 
-  it('registers six explicit administrator deep links without backend component loading', () => {
+  it('registers eight explicit administrator deep links without backend component loading', () => {
     const system = routes.find((route) => route.path === '/system')
     expect(system?.meta?.admin).toBe(true)
     expect(system?.children?.map((route) => [route.path, route.name])).toEqual([
       ['users', 'system-users'], ['roles', 'system-roles'], ['menus', 'system-menus'],
       ['building-access', 'system-building-access'],
       ['buildings', 'system-buildings'], ['devices', 'system-devices'],
+      ['device-products', 'system-device-products'], ['device-onboarding', 'system-device-onboarding'],
     ])
     expect(routes.some((route) => route.path === '/system/generator')).toBe(false)
   })

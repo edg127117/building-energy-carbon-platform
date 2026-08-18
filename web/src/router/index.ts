@@ -34,6 +34,8 @@ export const routes: RouteRecordRaw[] = [
       { path: 'building-access', name: 'system-building-access', component: () => import('@/pages/admin/BuildingAccessManagementPage.vue') },
       { path: 'buildings', name: 'system-buildings', component: () => import('@/pages/admin/BuildingManagementPage.vue') },
       { path: 'devices', name: 'system-devices', component: () => import('@/pages/admin/DeviceManagementPage.vue') },
+      { path: 'device-products', name: 'system-device-products', component: () => import('@/pages/admin/DeviceProductManagementPage.vue') },
+      { path: 'device-onboarding', name: 'system-device-onboarding', component: () => import('@/pages/admin/DeviceOnboardingPage.vue') },
     ],
   },
   {

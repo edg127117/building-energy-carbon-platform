@@ -1,5 +1,5 @@
 <template>
-  <!-- 管理壳只消费受控菜单和认证状态，四个业务页面通过唯一 RouterView 独立加载。 -->
+  <!-- 管理壳只消费受控菜单和认证状态，业务页面通过唯一 RouterView 独立加载。 -->
   <div class="admin-shell">
     <aside class="admin-sidebar">
       <RouterLink class="admin-brand" to="/hvac-demo">
@@ -54,7 +54,7 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Building2, Cpu, Gauge, KeyRound, LogOut, Menu, Network, Snowflake, UserRoundCog } from 'lucide-vue-next'
+import { Building2, Cpu, Gauge, KeyRound, ListPlus, LogOut, Menu, Network, PackageSearch, Snowflake, UserRoundCog } from 'lucide-vue-next'
 import { useAuthStore } from '@/store/auth'
 import { useMenuStore } from '@/store/menu'
 import type { AdminNavigationItem } from '@/domain/adminNavigation'
@@ -78,6 +78,8 @@ function iconFor(path?: string) {
   if (path === '/system/building-access') return Building2
   if (path === '/system/buildings') return Network
   if (path === '/system/devices') return Cpu
+  if (path === '/system/device-products') return PackageSearch
+  if (path === '/system/device-onboarding') return ListPlus
   return Menu
 }
 

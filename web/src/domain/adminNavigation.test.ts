@@ -33,6 +33,8 @@ describe('controlled administration navigation', () => {
       '/system/building-access',
       '/system/buildings',
       '/system/devices',
+      '/system/device-products',
+      '/system/device-onboarding',
     ])
     expect(isImplementedMenuPath('/system/users')).toBe(true)
     expect(isImplementedMenuPath('/system/users/1')).toBe(false)
