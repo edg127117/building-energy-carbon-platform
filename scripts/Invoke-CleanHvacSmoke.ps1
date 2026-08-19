@@ -2,6 +2,7 @@
 param(
     [switch]$ResetData,
     [string]$LegacyEnvRoot,
+    [int]$BackendPort = 8081,
     [int]$MySqlPort = 13306,
     [int]$RedisPort = 16379,
     [int]$MqttPort = 11883,
@@ -62,6 +63,7 @@ $expectedPointCodes = @(
 )
 $applicationProcess = $null
 $smokeAccountPassword = '123456'
+$apiBase = "http://127.0.0.1:$BackendPort/api"
 
 function Resolve-DockerCli {
     $command = Get-Command docker -ErrorAction SilentlyContinue
@@ -275,8 +277,8 @@ function Wait-ContainerHealthy(
 }
 
 function Wait-ApplicationHealthy([datetime]$Deadline) {
-    $loginUrl = 'http://127.0.0.1:8081/api/auth/login'
-    $healthUrl = 'http://127.0.0.1:8081/api/actuator/health'
+    $loginUrl = "$apiBase/auth/login"
+    $healthUrl = "$apiBase/actuator/health"
     $loginBody = @{
         username = 'admin'
         password = $smokeAccountPassword
@@ -347,6 +349,42 @@ function Invoke-Taos([string]$Sql) {
         ) `
         -Capture
     return ($lines | Out-String)
+}
+
+function Invoke-OnboardingMigrations {
+    $migrationNames = @(
+        '13-migrate-device-onboarding-discovery.sql',
+        '14-migrate-device-onboarding-binding.sql',
+        '15-migrate-mysql-asset-management-menu.sql',
+        '16-migrate-mysql-device-onboarding-menu.sql'
+    )
+    $password = if ($env:MYSQL_PASSWORD) {
+        $env:MYSQL_PASSWORD
+    } else {
+        'change-me'
+    }
+
+    foreach ($migrationName in $migrationNames) {
+        $migration = Join-Path $currentEnvRoot "init\$migrationName"
+        if (-not (Test-Path -LiteralPath $migration)) {
+            throw "找不到设备接入迁移: $migration"
+        }
+        $containerPath = "/tmp/$migrationName"
+        try {
+            Invoke-Docker -Arguments @(
+                'cp', $migration, "$mysqlContainer`:$containerPath"
+            )
+            Invoke-Docker -Arguments @(
+                'exec', '-e', "MYSQL_PWD=$password", $mysqlContainer,
+                'mysql', '-uroot', '-e', "SOURCE $containerPath"
+            )
+        } finally {
+            Invoke-Docker -Arguments @(
+                'exec', $mysqlContainer, 'rm', '-f', $containerPath
+            )
+        }
+    }
+    Write-Output '设备接入与资产管理迁移已应用到隔离 MySQL'
 }
 
 function Wait-TdengineSchema([datetime]$Deadline) {
@@ -484,7 +522,10 @@ function Invoke-HvacRealtimeSmoke {
             'HVAC_SMOKE_ADMIN_PASSWORD', $smokeAccountPassword, 'Process')
         [Environment]::SetEnvironmentVariable(
             'HVAC_SMOKE_RESTRICTED_PASSWORD', $smokeAccountPassword, 'Process')
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $realtimeScript
+        & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $realtimeScript `
+            -ApiBase $apiBase `
+            -WebSocketUrl "ws://127.0.0.1:$BackendPort/api/ws/hvac"
         if ($LASTEXITCODE -ne 0) {
             throw 'HVAC WebSocket 实时冒烟失败'
         }
@@ -503,9 +544,31 @@ function Invoke-HvacAdminSmoke {
     try {
         [Environment]::SetEnvironmentVariable(
             'HVAC_SMOKE_ADMIN_PASSWORD', $smokeAccountPassword, 'Process')
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $adminScript
+        & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $adminScript `
+            -ApiBase $apiBase
         if ($LASTEXITCODE -ne 0) {
             throw 'HVAC 后台管理真实冒烟失败'
+        }
+    } finally {
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $previousPassword, 'Process')
+    }
+}
+
+function Invoke-DeviceOnboardingSmoke {
+    $onboardingScript = Join-Path `
+        $repoRoot `
+        'scripts\Test-DeviceOnboardingSmoke.ps1'
+    $previousPassword = $env:HVAC_SMOKE_ADMIN_PASSWORD
+    try {
+        [Environment]::SetEnvironmentVariable(
+            'HVAC_SMOKE_ADMIN_PASSWORD', $smokeAccountPassword, 'Process')
+        & powershell -NoProfile -ExecutionPolicy Bypass `
+            -File $onboardingScript `
+            -ApiBase $apiBase
+        if ($LASTEXITCODE -ne 0) {
+            throw '合成设备接入端到端冒烟失败'
         }
     } finally {
         [Environment]::SetEnvironmentVariable(
@@ -519,8 +582,8 @@ if (-not $ResetData) {
 if (-not (Test-Path -LiteralPath $composeFile)) {
     throw "找不到 Docker Compose 文件: $composeFile"
 }
-if (Test-PortListening 8081) {
-    throw '端口 8081 已被未知进程占用，拒绝自动结束该进程'
+if (Test-PortListening $BackendPort) {
+    throw "后端端口 $BackendPort 已被未知进程占用，拒绝自动结束该进程"
 }
 
 $dockerCli = Resolve-DockerCli
@@ -567,6 +630,8 @@ Import-ServerEnvironment $serverEnvFile
     'REDIS_VOLUME_NAME', $knownDataVolumes[2], 'Process')
 [Environment]::SetEnvironmentVariable(
     'MQTT_ENABLED', 'true', 'Process')
+[Environment]::SetEnvironmentVariable(
+    'SERVER_PORT', $BackendPort.ToString(), 'Process')
 
 $allowedTargets = @(
     Resolve-AllowedDataTargets $currentEnvRoot
@@ -642,6 +707,8 @@ foreach ($container in $knownContainers) {
         -Deadline $infrastructureDeadline
 }
 
+Invoke-OnboardingMigrations
+
 New-Item `
     -ItemType Directory `
     -Path $smokeOutputDirectory `
@@ -688,6 +755,7 @@ try {
     Publish-And-AssertFrozenPoints
     Invoke-HvacRealtimeSmoke
     Invoke-HvacAdminSmoke
+    Invoke-DeviceOnboardingSmoke
     Write-Output 'CLEAN_HVAC_SMOKE_SUCCESS'
 } catch {
     Write-Error $_
