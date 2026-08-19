@@ -52,6 +52,7 @@ class CleanHvacSmokeScriptContractTest {
         assertThat(script).contains(
                 "MySqlPort",
                 "RedisPort",
+                "BackendPort",
                 "Wait-PortAvailable",
                 "Wait-TdengineSchema",
                 "No such object",
@@ -64,7 +65,7 @@ class CleanHvacSmokeScriptContractTest {
                 "st_raw_minute",
                 "st_indicator_minute",
                 "st_formula_calc_exception",
-                "/api/auth/login",
+                "$apiBase/auth/login",
                 "Authorization",
                 "Invoke-HvacAdminSmoke",
                 "CLEAN_HVAC_SMOKE_SUCCESS");
