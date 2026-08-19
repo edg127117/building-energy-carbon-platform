@@ -77,6 +77,9 @@ function Invoke-GitChecked {
 
 function Invoke-PowerShellScript {
     param([string]$ScriptPath, [string[]]$Arguments, [string]$WorkingDirectory, [hashtable]$Environment)
+    if ($Environment -and $Environment.ContainsKey('PR_BODY') -and -not $Environment.ContainsKey('PR_TITLE')) {
+        $Environment['PR_TITLE'] = 'feat(hvac): 新增测试契约'
+    }
     $oldValues = @{}
     if ($Environment) {
         foreach ($key in $Environment.Keys) {
@@ -496,6 +499,23 @@ function Invoke-RepositoryContractTests {
     $unifiedBody = New-UnifiedRiskBody
     $unified = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $unifiedBody }
     Assert-True ($unified.ExitCode -eq 0) "unified PR body should pass: $($unified.Output)"
+
+    $missingTitle = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_TITLE = ''; PR_BODY = $unifiedBody }
+    Assert-True ($missingTitle.ExitCode -ne 0) 'missing PR title must fail'
+    Assert-Contains $missingTitle.Output 'PR_TITLE_MISSING' 'missing title failure must use a stable error'
+
+    foreach ($invalidTitle in @(
+        @{ Title = 'feat：新增历史趋势查询'; Error = 'PR_TITLE_FORMAT_INVALID' },
+        @{ Title = 'feat: 新增历史趋势查询'; Error = 'PR_TITLE_FORMAT_INVALID' },
+        @{ Title = 'feature(hvac): 新增历史趋势查询'; Error = 'PR_TITLE_FORMAT_INVALID' },
+        @{ Title = 'feat(hvac): add historical trend query'; Error = 'PR_TITLE_LANGUAGE_INVALID' }
+    )) {
+        $invalid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_TITLE = $invalidTitle.Title; PR_BODY = $unifiedBody }
+        Assert-True ($invalid.ExitCode -ne 0) "invalid PR title must fail: $($invalidTitle.Title)"
+        Assert-Contains $invalid.Output $invalidTitle.Error "invalid title must use $($invalidTitle.Error): $($invalidTitle.Title)"
+    }
+    Complete-Case 'PR title type, scope, ASCII colon, and Chinese description are enforced'
+
     foreach ($heading in @('变更内容', '状态影响', '验证结果', '注释检查', '文档与 ADR', '风险与未验证项')) {
         $missingUnifiedBody = $unifiedBody -replace ('(?ms)^## ' + [regex]::Escape($heading) + '.*?(?=^## |\z)'), ''
         $missingUnified = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = $missingUnifiedBody }
@@ -690,6 +710,7 @@ function Invoke-CiContractTests {
     foreach ($heading in '## 变更内容', '## 状态影响', '## 验证结果', '## 注释检查', '## 文档与 ADR', '## 风险与未验证项') {
         Assert-Contains $templateText $heading "PR template must contain $heading"
     }
+    Assert-Contains $templateText 'type(scope): 中文动宾短语' 'PR template must explain the title format'
     Assert-NotContains $templateText '## 注释审计' 'PR template must not require permanent audit documents'
     foreach ($field in '风险级别：', '检查范围：', '结论：') {
         Assert-Contains $templateText $field "PR template must contain $field"
@@ -705,9 +726,13 @@ function Invoke-CiContractTests {
     foreach ($retainedContract in 'FORBIDDEN_PATH', 'JAVA_CLASS_JAVADOC_MISSING', 'FRONTEND_BUSINESS_COMMENT_MISSING', 'STALE_OR_LOW_VALUE_COMMENT', 'HISTORICAL_DOC_STATUS_MISSING', 'HISTORICAL_DOC_INDEX_LINK_MISSING', 'HISTORICAL_DOC_CURRENT_STATUS_LINK_MISSING', 'DOCUMENT_STATUS_IMPACT_MISSING', 'DOCUMENT_SCOPE_MISSING', 'DOCUMENT_RESULT_MISSING') {
         Assert-Contains $guardrailScriptText $retainedContract "guardrail must retain $retainedContract"
     }
+    foreach ($titleContract in 'PR_TITLE_MISSING', 'PR_TITLE_FORMAT_INVALID', 'PR_TITLE_LANGUAGE_INVALID') {
+        Assert-Contains $guardrailScriptText $titleContract "guardrail must enforce $titleContract"
+    }
 
     $agentsText = Get-Content -Raw -Encoding UTF8 -LiteralPath $agents
     Assert-Contains $agentsText 'iot-change-verification' 'AGENTS must trigger the repository verification skill'
+    Assert-Contains $agentsText 'type(scope): 中文动宾短语' 'AGENTS must define the PR title format'
     Assert-Contains $agentsText '普通生产代码 PR 不再强制新增永久审计文档' 'AGENTS must describe the new comment boundary'
     $archiveText = Get-Content -Raw -Encoding UTF8 -LiteralPath $archive
     Assert-Contains $archiveText '普通生产代码 PR 不再强制新增审计文档' 'archive must be historical and optional'
@@ -723,6 +748,7 @@ function Invoke-CiContractTests {
     Assert-Contains $guardrailText 'name: Repository guardrails' 'guardrail job name must be stable'
     Assert-Contains $guardrailText 'github.event.pull_request.base.sha' 'workflow must pass base SHA'
     Assert-Contains $guardrailText 'github.event.pull_request.head.sha' 'workflow must pass head SHA'
+    Assert-Contains $guardrailText 'PR_TITLE:' 'workflow must pass PR title'
     Assert-Contains $guardrailText 'PR_BODY:' 'workflow must pass PR body'
     Complete-Case 'risk-based PR template, repository skill, and GitHub Actions contract'
 }

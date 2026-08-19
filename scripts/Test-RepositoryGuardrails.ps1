@@ -5,6 +5,7 @@ param(
     [string]$Mode,
     [string]$BaseRef = 'origin/main',
     [string]$HeadRef = 'HEAD',
+    [string]$PullRequestTitle = $env:PR_TITLE,
     [string]$PullRequestBody = $env:PR_BODY
 )
 
@@ -145,6 +146,26 @@ function Get-PrSection {
     $match = [regex]::Match($Body, $pattern)
     if (-not $match.Success) { return $null }
     return $match.Groups['content'].Value.Trim()
+}
+
+function Test-PrTitle {
+    param([string]$Title)
+    if ([string]::IsNullOrWhiteSpace($Title)) {
+        Add-GuardrailError 'PR_TITLE_MISSING' 'pull request title is empty'
+        return
+    }
+
+    $titleMatch = [regex]::Match(
+        $Title.Trim(),
+        '^(?<type>feat|fix|docs|chore|refactor|test|build|ci|perf)\((?<scope>[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?)\): (?<description>\S(?:.*\S)?)$'
+    )
+    if (-not $titleMatch.Success) {
+        Add-GuardrailError 'PR_TITLE_FORMAT_INVALID' 'expected type(scope): 中文动宾短语 with an ASCII colon'
+        return
+    }
+    if ($titleMatch.Groups['description'].Value -notmatch '[\u4E00-\u9FFF]') {
+        Add-GuardrailError 'PR_TITLE_LANGUAGE_INVALID' 'description must contain Chinese text'
+    }
 }
 
 function Test-PrSections {
@@ -291,6 +312,7 @@ foreach ($file in $changedFiles) {
 
 if ($Mode -eq 'PullRequest') {
     $productionFiles = @($changedFiles | Where-Object { Test-IsProductionPath $_.path })
+    Test-PrTitle $PullRequestTitle
     Test-PrSections $PullRequestBody $productionFiles.Count
     if ($productionFiles.Count -gt 0) {
         Test-HighConfidenceCommentFindings $BaseRef $HeadRef
