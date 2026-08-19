@@ -12,7 +12,7 @@
 
 云端 MySQL 只保存协议模板和字段映射，不保存建筑、设备归属、用户、正式遥测、历史或指标。
 本地平台根据预注册关系确定 `MAC → 设备 → 建筑 → 期望协议`，再写入本地 TDengine。
-当前代码与自动化测试已完成；云服务器部署、真实 EMQX、真实设备和 24 小时运行尚需现场验证。
+当前部署和现场验收完成状态以仓库根目录的 [`PROJECT_STATUS.md`](../PROJECT_STATUS.md) 为准。
 
 ## 2. 启动前准备
 
@@ -29,7 +29,9 @@
 .\mvnw.cmd -f telemetry-adapter/pom.xml -DskipTests package
 ```
 
-运行时必须使用 Java 21。适配器默认端口为 `8091`，健康检查为 `/actuator/health`。
+运行时必须使用 Java 21。适配器默认仅监听 `127.0.0.1:8091`，健康检查为
+`/actuator/health`。如需远程监控，应通过受限防火墙或受保护的反向代理访问，不能直接把
+Actuator 端口暴露到公网；确需修改监听地址时使用 `ADAPTER_BIND_ADDRESS`。
 在服务器已注入上述环境变量后运行：
 
 ```powershell
