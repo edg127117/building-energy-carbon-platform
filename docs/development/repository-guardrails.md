@@ -6,6 +6,7 @@
 
 - Hook 阻止在 `main` 提交以及直接更新远程 `main`；
 - 任务预检验证规则入口、任务分支、干净工作区、基线和 Hook；
+- PR 标题使用统一的类型、范围和中文描述，并由 Repository Guardrails 自动检查可判定格式；
 - PR 模板使用跨仓库统一主体，记录变更、状态、验证、注释、文档与 ADR、风险和未验证项；
 - Repository Guardrails 检查禁止路径、PR 必填结构、新增生产文件的关键说明和高置信度低价值注释；
 - 后端与前端 CI 分别验证 Java 和 Vue/TypeScript；
@@ -38,6 +39,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight
 成功标记为 `TASK_PREFLIGHT_OK`。脚本验证规则入口、任务分支、工作区、`origin/main` 祖先关系和 Hook，但不会获取远程状态，也不能证明执行者已经理解规则。
 
 ## 4. PR 与 CI
+
+所有新 PR 标题统一使用 `type(scope): 中文动宾短语`：
+
+- 使用半角冒号并在冒号后保留一个空格；
+- `type` 允许 `feat`、`fix`、`docs`、`chore`、`refactor`、`test`、`build`、`ci`、`perf`；
+- `scope` 必填，使用小写英文、数字或 `-`、`_`、`.`、`/`，且首尾必须为字母或数字；
+- 描述必须包含中文，允许同时使用 `API`、`MySQL`、`HVAC` 等必要术语；
+- 类型、范围和描述必须与实际改动一致，动宾语义和业务准确性由人工复核。
+
+例如：`feat(hvac): 新增历史趋势查询`、`fix(device-onboarding): 修复适配器健康检查`、`chore(workflow): 统一 PR 标题校验`。
 
 所有新 PR 使用统一主体：
 
@@ -99,6 +110,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-PostMergeClea
 - `GIT_HOOKS_NOT_INSTALLED`：运行安装脚本并回读 `core.hooksPath`。
 - `OUTDATED_OR_DIVERGED_BASELINE`：停止修改并安全处理基线，禁止强制覆盖。
 - `PR_SECTION_MISSING`：补齐统一模板要求的主体章节。
+- `PR_TITLE_MISSING`：填写 PR 标题。
+- `PR_TITLE_FORMAT_INVALID`：按 `type(scope): 中文动宾短语` 修正类型、scope、半角冒号和空格。
+- `PR_TITLE_LANGUAGE_INVALID`：在描述中使用准确的中文动宾短语，必要技术术语可保留英文。
 - `PR_SECTION_SELECTION_MISSING`：在“状态影响”“验证结果”或“文档与 ADR”中至少选择一项。
 - `PR_FIELD_MISSING`：补齐统一模板要求的说明、验证证据、风险或未验证项。
 - `COMMENT_RISK_LEVEL_MISSING`：填写允许的风险级别。
