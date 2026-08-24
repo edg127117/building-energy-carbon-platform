@@ -6,6 +6,8 @@ import com.platform.hvac.mapper.BizPointAliasMapper;
 import com.platform.hvac.model.entity.BizDataPoint;
 import com.platform.hvac.model.entity.BizEquipment;
 import com.platform.hvac.model.entity.BizPointAlias;
+import com.platform.iot.collection.mapper.BizDataSourceMapper;
+import com.platform.iot.collection.model.entity.BizDataSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,12 +27,14 @@ class MySqlDataPointConfigProviderTest {
     @Mock private BizDataPointMapper pointMapper;
     @Mock private BizPointAliasMapper aliasMapper;
     @Mock private BizEquipmentMapper equipmentMapper;
+    @Mock private BizDataSourceMapper sourceMapper;
 
     private MySqlDataPointConfigProvider provider;
 
     @BeforeEach
     void setUp() {
-        provider = new MySqlDataPointConfigProvider(pointMapper, aliasMapper, equipmentMapper);
+        provider = new MySqlDataPointConfigProvider(
+                pointMapper, aliasMapper, equipmentMapper, sourceMapper);
     }
 
     @Test
@@ -43,6 +47,7 @@ class MySqlDataPointConfigProviderTest {
     @Test
     void refreshBuildsBuildingScopedAliasAndPointSnapshots() {
         when(equipmentMapper.selectList(any())).thenReturn(List.of(equipment()));
+        when(sourceMapper.selectList(any())).thenReturn(List.of(source()));
         when(pointMapper.selectList(any())).thenReturn(List.of(point()));
         when(aliasMapper.selectList(any())).thenReturn(List.of(alias()));
 
@@ -66,6 +71,7 @@ class MySqlDataPointConfigProviderTest {
     @Test
     void failedFullRefreshKeepsLastKnownGoodSnapshot() {
         when(equipmentMapper.selectList(any())).thenReturn(List.of(equipment()));
+        when(sourceMapper.selectList(any())).thenReturn(List.of(source()));
         when(pointMapper.selectList(any()))
                 .thenReturn(List.of(point()))
                 .thenThrow(new IllegalStateException("mysql unavailable"));
@@ -106,11 +112,19 @@ class MySqlDataPointConfigProviderTest {
     private BizPointAlias alias() {
         BizPointAlias alias = new BizPointAlias();
         alias.setAliasId("ALIAS001");
+        alias.setSourceId("SOURCE001");
         alias.setBuildingId("BLD001");
         alias.setSourceSystem("MQTT_FREEZE_V1");
         alias.setSourcePointCode("WCR1_Flow");
         alias.setPointId("POINT001");
         alias.setStatus(1);
         return alias;
+    }
+
+    private BizDataSource source() {
+        BizDataSource source = new BizDataSource();
+        source.setSourceId("SOURCE001");
+        source.setStatus("ENABLED");
+        return source;
     }
 }

@@ -85,6 +85,10 @@ class DeviceOnboardingServiceIntegrationTest {
                 "SELECT COUNT(*) FROM biz_point_alias WHERE source_point_code = ?",
                 Long.class, "MAC:BTEST-DEVICE-001:temperature")).isEqualTo(1L);
         assertThat(jdbcTemplate.queryForObject(
+                "SELECT source_id FROM biz_point_alias WHERE source_point_code = ?",
+                String.class, "MAC:BTEST-DEVICE-001:temperature"))
+                .isEqualTo("SOURCE_MQTT_FREEZE_V1");
+        assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM biz_onboarding_audit_log WHERE action_type = 'PENDING_BIND'",
                 Long.class)).isEqualTo(1L);
 
@@ -153,6 +157,10 @@ class DeviceOnboardingServiceIntegrationTest {
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT COUNT(*) FROM biz_point_alias WHERE source_point_code = ? AND point_id = 'POINT001'",
                 Long.class, "MAC:BTEST-DEVICE-004:temperature")).isEqualTo(1L);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT source_id FROM biz_point_alias WHERE source_point_code = ?",
+                String.class, "MAC:BTEST-DEVICE-004:temperature"))
+                .isEqualTo("SOURCE_MQTT_FREEZE_V1");
     }
 
     @Test

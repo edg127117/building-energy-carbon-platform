@@ -1,3 +1,7 @@
+DROP TABLE IF EXISTS biz_collection_config_audit_log;
+DROP TABLE IF EXISTS biz_collection_review_request;
+DROP TABLE IF EXISTS biz_collection_policy_version;
+DROP TABLE IF EXISTS biz_collection_policy;
 DROP TABLE IF EXISTS biz_pending_device;
 DROP TABLE IF EXISTS biz_onboarding_audit_log;
 DROP TABLE IF EXISTS biz_product_point_template;
@@ -16,6 +20,7 @@ DROP TABLE IF EXISTS sys_role;
 DROP TABLE IF EXISTS sys_user;
 DROP TABLE IF EXISTS biz_indicator;
 DROP TABLE IF EXISTS biz_point_alias;
+DROP TABLE IF EXISTS biz_data_source;
 DROP TABLE IF EXISTS biz_data_point;
 DROP TABLE IF EXISTS biz_device_identity;
 DROP TABLE IF EXISTS biz_equipment;
@@ -308,15 +313,209 @@ CREATE TABLE biz_data_point (
   UNIQUE (point_id, building_id)
 );
 
+-- H2 镜像保留治理表的关系、状态与保留期约束；运行状态仍只在单体内存中保存。
+CREATE TABLE biz_data_source (
+  source_id VARCHAR(32) PRIMARY KEY,
+  source_code VARCHAR(50) NOT NULL,
+  source_name VARCHAR(100) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  source_category VARCHAR(32) NOT NULL,
+  transport_type VARCHAR(20) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  description VARCHAR(500),
+  config_revision INT NOT NULL DEFAULT 0,
+  runtime_revision BIGINT NOT NULL DEFAULT 0,
+  create_by BIGINT,
+  update_by BIGINT,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_data_source_code UNIQUE (source_code),
+  CONSTRAINT uk_data_source_id_building UNIQUE (source_id, building_id),
+  CONSTRAINT chk_data_source_category CHECK (source_category = 'DEVICE_ACCESS'),
+  CONSTRAINT chk_data_source_transport CHECK (transport_type IN ('MQTT', 'HTTP')),
+  CONSTRAINT chk_data_source_status CHECK (status IN ('DRAFT', 'ENABLED', 'DISABLED')),
+  CONSTRAINT chk_data_source_config_revision CHECK (config_revision >= 0),
+  CONSTRAINT chk_data_source_runtime_revision CHECK (runtime_revision >= 0),
+  CONSTRAINT fk_data_source_building
+    FOREIGN KEY (building_id) REFERENCES building (building_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_data_source_building_status
+  ON biz_data_source (building_id, status);
+
 CREATE TABLE biz_point_alias (
   alias_id VARCHAR(32) PRIMARY KEY,
   building_id VARCHAR(32) NOT NULL,
+  source_id VARCHAR(32),
   source_system VARCHAR(50) NOT NULL,
   source_point_code VARCHAR(255) NOT NULL,
   point_id VARCHAR(32) NOT NULL,
-  status TINYINT DEFAULT 1,
-  UNIQUE (building_id, source_system, source_point_code)
+  status TINYINT NOT NULL DEFAULT 1,
+  revision INT NOT NULL DEFAULT 0,
+  create_by BIGINT,
+  update_by BIGINT,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_alias_source UNIQUE (building_id, source_system, source_point_code),
+  CONSTRAINT uk_alias_id_building UNIQUE (alias_id, building_id),
+  CONSTRAINT chk_collection_alias_status CHECK (status IN (0, 1, 2)),
+  CONSTRAINT fk_alias_point_building
+    FOREIGN KEY (point_id, building_id)
+    REFERENCES biz_data_point (point_id, building_id) ON DELETE RESTRICT,
+  CONSTRAINT fk_alias_source_building
+    FOREIGN KEY (source_id, building_id)
+    REFERENCES biz_data_source (source_id, building_id) ON DELETE RESTRICT
 );
+
+CREATE INDEX idx_alias_source_building
+  ON biz_point_alias (source_id, building_id);
+
+CREATE TABLE biz_collection_policy (
+  policy_id VARCHAR(32) PRIMARY KEY,
+  source_id VARCHAR(32) NOT NULL,
+  alias_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  active_version_id VARCHAR(32),
+  draft_version_id VARCHAR(32),
+  create_by BIGINT,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_collection_policy_alias UNIQUE (alias_id),
+  CONSTRAINT fk_collection_policy_source_building
+    FOREIGN KEY (source_id, building_id)
+    REFERENCES biz_data_source (source_id, building_id) ON DELETE RESTRICT,
+  CONSTRAINT fk_collection_policy_alias_building
+    FOREIGN KEY (alias_id, building_id)
+    REFERENCES biz_point_alias (alias_id, building_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_collection_policy_source_building
+  ON biz_collection_policy (source_id, building_id);
+CREATE INDEX idx_collection_policy_active_version
+  ON biz_collection_policy (active_version_id);
+CREATE INDEX idx_collection_policy_draft_version
+  ON biz_collection_policy (draft_version_id);
+
+CREATE TABLE biz_collection_policy_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  policy_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  enabled_flag TINYINT NOT NULL,
+  expected_interval_seconds INT NOT NULL,
+  allowed_delay_seconds INT NOT NULL,
+  time_semantics VARCHAR(32) NOT NULL,
+  raw_retention_mode VARCHAR(20) NOT NULL,
+  raw_retention_days INT,
+  minute_retention_mode VARCHAR(20) NOT NULL,
+  minute_retention_days INT,
+  source_code_snapshot VARCHAR(50) NOT NULL,
+  source_point_code_snapshot VARCHAR(255) NOT NULL,
+  point_id_snapshot VARCHAR(32) NOT NULL,
+  point_code_snapshot VARCHAR(100) NOT NULL,
+  data_type_snapshot VARCHAR(20),
+  unit_snapshot VARCHAR(20),
+  change_type VARCHAR(20) NOT NULL,
+  change_source VARCHAR(32) NOT NULL,
+  change_reason VARCHAR(500) NOT NULL,
+  copied_from_version_id VARCHAR(32),
+  revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT,
+  published_by BIGINT,
+  published_at TIMESTAMP(3),
+  effective_from TIMESTAMP(3),
+  effective_to TIMESTAMP(3),
+  retired_at TIMESTAMP(3),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_collection_policy_version_no UNIQUE (policy_id, version_no),
+  CONSTRAINT chk_collection_policy_version_no CHECK (version_no > 0),
+  CONSTRAINT chk_collection_policy_version_status CHECK (status IN ('DRAFT', 'ACTIVE', 'RETIRED')),
+  CONSTRAINT chk_collection_policy_enabled_flag CHECK (enabled_flag IN (0, 1)),
+  CONSTRAINT chk_collection_policy_interval CHECK (expected_interval_seconds > 0),
+  CONSTRAINT chk_collection_policy_allowed_delay CHECK (allowed_delay_seconds >= 0),
+  CONSTRAINT chk_collection_policy_time_semantics CHECK (time_semantics = 'DEVICE_EVENT_TIME'),
+  CONSTRAINT chk_collection_policy_raw_retention CHECK (
+    (raw_retention_mode = 'FIXED_DAYS' AND raw_retention_days > 0)
+    OR (raw_retention_mode = 'LONG_TERM' AND raw_retention_days IS NULL)
+  ),
+  CONSTRAINT chk_collection_policy_minute_retention CHECK (
+    (minute_retention_mode = 'FIXED_DAYS' AND minute_retention_days > 0)
+    OR (minute_retention_mode = 'LONG_TERM' AND minute_retention_days IS NULL)
+  ),
+  CONSTRAINT chk_collection_policy_change_type
+    CHECK (change_type IN ('CREATE', 'UPDATE', 'DISABLE', 'ROLLBACK', 'INITIAL_MIGRATION')),
+  CONSTRAINT chk_collection_policy_change_source
+    CHECK (change_source IN ('MANUAL', 'INITIAL_MIGRATION')),
+  CONSTRAINT chk_collection_policy_change_reason CHECK (CHAR_LENGTH(TRIM(change_reason)) > 0),
+  CONSTRAINT chk_collection_policy_revision CHECK (revision >= 0),
+  CONSTRAINT fk_collection_policy_version_policy
+    FOREIGN KEY (policy_id) REFERENCES biz_collection_policy (policy_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_collection_policy_version_status
+  ON biz_collection_policy_version (policy_id, status, version_no);
+CREATE INDEX idx_collection_policy_version_copied_from
+  ON biz_collection_policy_version (copied_from_version_id);
+
+CREATE TABLE biz_collection_review_request (
+  request_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  target_type VARCHAR(32) NOT NULL,
+  target_id VARCHAR(32) NOT NULL,
+  target_config_revision INT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  submitted_by BIGINT NOT NULL,
+  submitted_at TIMESTAMP(3) NOT NULL,
+  reviewer_id BIGINT,
+  review_comment VARCHAR(500),
+  reviewed_at TIMESTAMP(3),
+  withdrawn_at TIMESTAMP(3),
+  pending_marker TINYINT GENERATED ALWAYS AS
+    (CASE WHEN status = 'PENDING' THEN 1 ELSE NULL END),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_collection_review_pending_target
+    UNIQUE (target_type, target_id, pending_marker),
+  CONSTRAINT chk_collection_review_target_type
+    CHECK (target_type IN ('SOURCE_ACTIVATION', 'ALIAS_ACTIVATION', 'POLICY_VERSION')),
+  CONSTRAINT chk_collection_review_status
+    CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN')),
+  CONSTRAINT chk_collection_review_revision CHECK (target_config_revision >= 0),
+  CONSTRAINT fk_collection_review_building
+    FOREIGN KEY (building_id) REFERENCES building (building_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_collection_review_building_status
+  ON biz_collection_review_request (building_id, status, submitted_at);
+CREATE INDEX idx_collection_review_submitter
+  ON biz_collection_review_request (submitted_by, status, submitted_at);
+
+CREATE TABLE biz_collection_config_audit_log (
+  audit_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  actor_type VARCHAR(20) NOT NULL,
+  operator_id BIGINT,
+  action_type VARCHAR(50) NOT NULL,
+  object_type VARCHAR(50) NOT NULL,
+  object_id VARCHAR(32) NOT NULL,
+  version_id VARCHAR(32),
+  before_summary VARCHAR(1000),
+  after_summary VARCHAR(1000),
+  result VARCHAR(20) NOT NULL,
+  operation_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT chk_collection_audit_actor_type CHECK (actor_type IN ('USER', 'SYSTEM_MIGRATION')),
+  CONSTRAINT chk_collection_audit_result CHECK (result = 'SUCCESS')
+);
+
+CREATE INDEX idx_collection_audit_building_time
+  ON biz_collection_config_audit_log (building_id, operation_time);
+CREATE INDEX idx_collection_audit_object
+  ON biz_collection_config_audit_log (object_type, object_id, operation_time);
+CREATE INDEX idx_collection_audit_version
+  ON biz_collection_config_audit_log (version_id, operation_time);
+CREATE INDEX idx_collection_audit_operator
+  ON biz_collection_config_audit_log (operator_id, operation_time);
 
 CREATE TABLE biz_indicator (
   indicator_id VARCHAR(32) PRIMARY KEY,

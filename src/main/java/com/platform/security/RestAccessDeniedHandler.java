@@ -13,13 +13,13 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+@Component
 /**
  * Spring Security 对“身份有效但权限不足”的请求返回 403 的处理器。
  *
  * <p>主要承接路由或方法角色校验拒绝，与未登录的 401 分开。建筑范围越权由业务服务抛出
  * 403 {@code BusinessException}，虽然经过不同入口，二者对前端保持一致的错误字段。</p>
  */
-@Component
 public class RestAccessDeniedHandler implements AccessDeniedHandler {
 
     private final ObjectMapper objectMapper;
@@ -51,6 +51,9 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
             body.put("errorCode", "ONBOARDING_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
             body.put("errorCode", "ASSET_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/data-sources")
+                || path.startsWith(request.getContextPath() + "/v1/collection-")) {
+            body.put("errorCode", "COLLECTION_CONFIG_FORBIDDEN");
         }
     }
 }

@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+@Component
 /**
  * Spring Security 对未建立有效身份的受保护请求返回 401 的入口。
  *
@@ -20,7 +21,6 @@ import java.util.Map;
  * 最终进入这里。响应保持 {@code code/msg/success} JSON，前端据此清理登录态并跳转登录页；
  * 公开 {@code /auth/**} 请求不会因附带失效 Token 而在过滤器中被提前拦截。</p>
  */
-@Component
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     private final ObjectMapper objectMapper;
@@ -52,6 +52,9 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
             body.put("errorCode", "ONBOARDING_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
             body.put("errorCode", "ASSET_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/data-sources")
+                || path.startsWith(request.getContextPath() + "/v1/collection-")) {
+            body.put("errorCode", "COLLECTION_CONFIG_UNAUTHORIZED");
         }
     }
 }

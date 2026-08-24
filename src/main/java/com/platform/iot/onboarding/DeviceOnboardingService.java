@@ -26,6 +26,8 @@ import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.hvac.service.EquipmentCodeAllocator;
 import com.platform.hvac.service.PointCodeNamingValidator;
 import com.platform.iot.identity.DeviceIdentityKey;
+import com.platform.iot.collection.mapper.BizDataSourceMapper;
+import com.platform.iot.collection.model.entity.BizDataSource;
 import com.platform.iot.identity.MySqlDeviceIdentityProvider;
 import com.platform.iot.onboarding.api.DeviceOnboardingContracts;
 import com.platform.iot.onboarding.mapper.BizDeviceProductMapper;
@@ -77,6 +79,7 @@ public class DeviceOnboardingService {
     private final BizDeviceIdentityMapper identityMapper;
     private final BizDataPointMapper pointMapper;
     private final BizPointAliasMapper aliasMapper;
+    private final BizDataSourceMapper dataSourceMapper;
     private final BizPointNamingRuleMapper namingRuleMapper;
     private final EquipmentCodeAllocator equipmentCodeAllocator;
     private final PointCodeNamingValidator namingValidator;
@@ -390,6 +393,7 @@ public class DeviceOnboardingService {
             BizEquipment equipment,
             List<BizProductPointTemplate> templates,
             List<DeviceOnboardingContracts.PointBindingRequest> requests) {
+        BizDataSource dataSource = requireOnboardingDataSource(equipment.getBuildingId());
         Map<String, BizProductPointTemplate> templateByMetric = new LinkedHashMap<>();
         templates.forEach(template -> templateByMetric.put(template.getMetricCode(), template));
         Map<String, DeviceOnboardingContracts.PointBindingRequest> requestByMetric = new LinkedHashMap<>();
@@ -420,6 +424,7 @@ public class DeviceOnboardingService {
             if (alias == null) {
                 alias = new BizPointAlias();
                 alias.setBuildingId(equipment.getBuildingId());
+                alias.setSourceId(dataSource.getSourceId());
                 alias.setSourceSystem(standardSourceSystem);
                 alias.setSourcePointCode(sourcePointCode);
                 alias.setPointId(point.getPointId());
@@ -438,6 +443,24 @@ public class DeviceOnboardingService {
                     point.getPointId(), template.getMetricCode(), aliasCreated));
         }
         return new PointBindingResult(List.copyOf(pointIds), List.copyOf(aliases));
+    }
+
+    private BizDataSource requireOnboardingDataSource(String buildingId) {
+        List<BizDataSource> candidates = dataSourceMapper.selectList(new LambdaQueryWrapper<BizDataSource>()
+                .eq(BizDataSource::getBuildingId, buildingId)
+                .eq(BizDataSource::getTransportType, "MQTT")
+                .eq(BizDataSource::getStatus, "ENABLED"));
+        List<BizDataSource> exact = candidates.stream()
+                .filter(source -> standardSourceSystem.equals(source.getSourceCode()))
+                .toList();
+        if (exact.size() == 1) {
+            return exact.getFirst();
+        }
+        // 旧接入 API 没有 sourceId；仅在建筑内唯一启用 MQTT 来源时允许确定性兼容绑定。
+        if (exact.isEmpty() && candidates.size() == 1) {
+            return candidates.getFirst();
+        }
+        throw error(409, STATE_CONFLICT, "设备接入无法唯一确定已启用 MQTT 数据源");
     }
 
     private BizDataPoint resolvePoint(
