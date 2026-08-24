@@ -7,6 +7,9 @@ import com.platform.hvac.mapper.BizPointAliasMapper;
 import com.platform.hvac.model.entity.BizDataPoint;
 import com.platform.hvac.model.entity.BizEquipment;
 import com.platform.hvac.model.entity.BizPointAlias;
+import com.platform.iot.collection.mapper.BizDataSourceMapper;
+import com.platform.iot.collection.model.CollectionModels.SourceStatus;
+import com.platform.iot.collection.model.entity.BizDataSource;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,20 +23,21 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+@Slf4j
+@Component
+@RequiredArgsConstructor
 /**
  * MySQL 工业测点身份缓存。
  *
  * <p>一次构建“来源别名→pointId”和“pointId→标准配置”两张不可变Map，
  * 再原子替换快照。MQTT热路径只查内存，刷新失败继续使用最后一份完整配置。</p>
  */
-@Slf4j
-@Component
-@RequiredArgsConstructor
 public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
 
     private final BizDataPointMapper pointMapper;
     private final BizPointAliasMapper aliasMapper;
     private final BizEquipmentMapper equipmentMapper;
+    private final BizDataSourceMapper sourceMapper;
     private volatile ConfigSnapshot snapshot = ConfigSnapshot.empty();
     private volatile boolean snapshotAvailable;
 
@@ -53,6 +57,23 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
     @Scheduled(fixedDelayString = "${ingestion.point-config-refresh-ms:60000}")
     public void refreshAll() {
         try {
+            refreshAllOrThrow();
+        } catch (RuntimeException exception) {
+            log.warn("测点身份缓存刷新失败，继续使用上一完整版本: {}", exception.getMessage());
+        }
+    }
+
+    /**
+     * 为治理发布流程提供可感知失败的完整刷新。
+     * 数据库事务已经提交后才调用；失败由运行状态记录，不撤销正式配置。
+     */
+    public void refreshAllOrThrow() {
+            List<BizDataSource> sources = sourceMapper.selectList(new LambdaQueryWrapper<>());
+            Map<String, BizDataSource> enabledSourceById = new LinkedHashMap<>();
+            sources.stream()
+                    .filter(source -> SourceStatus.ENABLED.name().equals(source.getStatus()))
+                    .forEach(source -> enabledSourceById.put(source.getSourceId(), source));
+
             List<BizEquipment> equipment = equipmentMapper.selectList(new LambdaQueryWrapper<>());
             Map<String, BizEquipment> equipmentById = new LinkedHashMap<>();
             equipment.forEach(item -> equipmentById.put(item.getEquipId(), item));
@@ -86,6 +107,7 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
             Map<PointAliasKey, String> aliasToPointId = new LinkedHashMap<>();
             for (BizPointAlias alias : aliases) {
                 if (!Integer.valueOf(1).equals(alias.getStatus())
+                        || !enabledSourceById.containsKey(alias.getSourceId())
                         || !pointById.containsKey(alias.getPointId())) {
                     continue;
                 }
@@ -100,9 +122,6 @@ public class MySqlDataPointConfigProvider implements DataPointConfigProvider {
             snapshotAvailable = true;
             log.debug("测点身份缓存刷新完成: points={}, aliases={}",
                     pointById.size(), aliasToPointId.size());
-        } catch (RuntimeException exception) {
-            log.warn("测点身份缓存刷新失败，继续使用上一完整版本: {}", exception.getMessage());
-        }
     }
 
     @Override

@@ -108,29 +108,103 @@ VALUES
 ('POINT019', 'RHO', '室外相对湿度', 'BLD001', NULL, NULL, 'RULE_RHO_ENV', 'RHO', 'ENV', 'RH', 'ANALOG', '%', 1, 'ONLINE', 0),
 ('POINT020', 'WCR1_TWin', '二号楼机组进水温度', 'BLD002', 'GROUP002', 'EQUIP_WCR_B2', 'RULE_WCR_MAIN', 'WCR', 'MAIN', 'TWin', 'ANALOG', '℃', 0, 'ONLINE', 0);
 
-INSERT INTO biz_point_alias
-(alias_id, building_id, source_system, source_point_code, point_id, status)
+-- 19 个继承别名已通过系统迁移纳入正式来源；二号楼保留独立测试来源，避免跨建筑串源。
+INSERT INTO biz_data_source
+(source_id, source_code, source_name, building_id, source_category, transport_type,
+ status, description, config_revision, runtime_revision, create_by, update_by)
 VALUES
-('ALIAS001', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_TWin', 'POINT001', 1),
-('ALIAS002', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_TWout', 'POINT002', 1),
-('ALIAS003', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_Flow', 'POINT003', 1),
-('ALIAS004', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_PPE', 'POINT004', 1),
-('ALIAS005', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_Voltage', 'POINT005', 1),
-('ALIAS006', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_Current', 'POINT006', 1),
-('ALIAS007', 'BLD001', 'MQTT_FREEZE_V1', 'WCR1_PF', 'POINT007', 1),
-('ALIAS008', 'BLD001', 'MQTT_FREEZE_V1', 'TOWER1_TCWin', 'POINT008', 1),
-('ALIAS009', 'BLD001', 'MQTT_FREEZE_V1', 'TOWER1_TCWout', 'POINT009', 1),
-('ALIAS010', 'BLD001', 'MQTT_FREEZE_V1', 'TOWER1_TWB', 'POINT010', 1),
-('ALIAS011', 'BLD001', 'MQTT_FREEZE_V1', 'PUMP1_Flow', 'POINT011', 1),
-('ALIAS012', 'BLD001', 'MQTT_FREEZE_V1', 'PUMP1_Pout', 'POINT012', 1),
-('ALIAS013', 'BLD001', 'MQTT_FREEZE_V1', 'PUMP1_Pin', 'POINT013', 1),
-('ALIAS014', 'BLD001', 'MQTT_FREEZE_V1', 'PUMP1_Z', 'POINT014', 1),
-('ALIAS015', 'BLD001', 'MQTT_FREEZE_V1', 'PUMP1_Power', 'POINT015', 1),
-('ALIAS016', 'BLD001', 'MQTT_FREEZE_V1', 'AHU1_TotalPress', 'POINT016', 1),
-('ALIAS017', 'BLD001', 'MQTT_FREEZE_V1', 'AHU1_EtaT', 'POINT017', 1),
-('ALIAS018', 'BLD001', 'MQTT_FREEZE_V1', 'DBO_TDB', 'POINT018', 1),
-('ALIAS019', 'BLD001', 'MQTT_FREEZE_V1', 'DBO_RH', 'POINT019', 1),
-('ALIAS020', 'BLD002', 'MQTT_FREEZE_V1', 'WCR1_TWin', 'POINT020', 1);
+('SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', '冻结版 MQTT HVAC 来源', 'BLD001',
+ 'DEVICE_ACCESS', 'MQTT', 'ENABLED', '系统迁移纳管现有 HVAC 19 测点来源', 1, 1, NULL, NULL),
+('SOURCE_TEST_BLD002', 'MQTT_BLD002_TEST', '二号楼测试 MQTT 来源', 'BLD002',
+ 'DEVICE_ACCESS', 'MQTT', 'ENABLED', 'H2 隔离测试来源', 1, 1, NULL, NULL);
+
+INSERT INTO biz_point_alias
+(alias_id, building_id, source_id, source_system, source_point_code, point_id, status, revision)
+VALUES
+('ALIAS001', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_TWin', 'POINT001', 1, 1),
+('ALIAS002', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_TWout', 'POINT002', 1, 1),
+('ALIAS003', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_Flow', 'POINT003', 1, 1),
+('ALIAS004', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_PPE', 'POINT004', 1, 1),
+('ALIAS005', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_Voltage', 'POINT005', 1, 1),
+('ALIAS006', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_Current', 'POINT006', 1, 1),
+('ALIAS007', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'WCR1_PF', 'POINT007', 1, 1),
+('ALIAS008', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'TOWER1_TCWin', 'POINT008', 1, 1),
+('ALIAS009', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'TOWER1_TCWout', 'POINT009', 1, 1),
+('ALIAS010', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'TOWER1_TWB', 'POINT010', 1, 1),
+('ALIAS011', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'PUMP1_Flow', 'POINT011', 1, 1),
+('ALIAS012', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'PUMP1_Pout', 'POINT012', 1, 1),
+('ALIAS013', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'PUMP1_Pin', 'POINT013', 1, 1),
+('ALIAS014', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'PUMP1_Z', 'POINT014', 1, 1),
+('ALIAS015', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'PUMP1_Power', 'POINT015', 1, 1),
+('ALIAS016', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'AHU1_TotalPress', 'POINT016', 1, 1),
+('ALIAS017', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'AHU1_EtaT', 'POINT017', 1, 1),
+('ALIAS018', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'DBO_TDB', 'POINT018', 1, 1),
+('ALIAS019', 'BLD001', 'SOURCE_MQTT_FREEZE_V1', 'MQTT_FREEZE_V1', 'DBO_RH', 'POINT019', 1, 1),
+('ALIAS020', 'BLD002', 'SOURCE_TEST_BLD002', 'MQTT_FREEZE_V1', 'WCR1_TWin', 'POINT020', 1, 1);
+
+INSERT INTO biz_collection_policy
+(policy_id, source_id, alias_id, building_id, active_version_id, draft_version_id, create_by)
+SELECT CONCAT('POLICY', RIGHT(alias_id, 3)), source_id, alias_id, building_id,
+       CONCAT('POLICY_VERSION', RIGHT(alias_id, 3)), NULL, NULL
+FROM biz_point_alias
+WHERE building_id = 'BLD001' AND source_id = 'SOURCE_MQTT_FREEZE_V1';
+
+INSERT INTO biz_collection_policy_version
+(version_id, policy_id, version_no, status, enabled_flag,
+ expected_interval_seconds, allowed_delay_seconds, time_semantics,
+ raw_retention_mode, raw_retention_days, minute_retention_mode, minute_retention_days,
+ source_code_snapshot, source_point_code_snapshot, point_id_snapshot, point_code_snapshot,
+ data_type_snapshot, unit_snapshot, change_type, change_source, change_reason, revision,
+ created_by, published_by, published_at, effective_from, effective_to, retired_at)
+SELECT CONCAT('POLICY_VERSION', RIGHT(a.alias_id, 3)),
+       CONCAT('POLICY', RIGHT(a.alias_id, 3)),
+       1, 'ACTIVE', 1, 60, 30, 'DEVICE_EVENT_TIME',
+       'FIXED_DAYS', 90, 'LONG_TERM', NULL,
+       'MQTT_FREEZE_V1', a.source_point_code, p.point_id, p.point_code,
+       p.data_type, p.unit, 'INITIAL_MIGRATION', 'INITIAL_MIGRATION',
+       '系统迁移：纳管现有 MQTT_FREEZE_V1 测点', 1,
+       NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL
+FROM biz_point_alias a
+JOIN biz_data_point p ON p.point_id = a.point_id AND p.building_id = a.building_id
+WHERE a.building_id = 'BLD001' AND a.source_id = 'SOURCE_MQTT_FREEZE_V1';
+
+INSERT INTO biz_collection_policy
+(policy_id, source_id, alias_id, building_id, active_version_id, draft_version_id, create_by)
+VALUES
+('POLICY020', 'SOURCE_TEST_BLD002', 'ALIAS020', 'BLD002', 'POLICY_VERSION020', NULL, NULL);
+
+INSERT INTO biz_collection_policy_version
+(version_id, policy_id, version_no, status, enabled_flag,
+ expected_interval_seconds, allowed_delay_seconds, time_semantics,
+ raw_retention_mode, raw_retention_days, minute_retention_mode, minute_retention_days,
+ source_code_snapshot, source_point_code_snapshot, point_id_snapshot, point_code_snapshot,
+ data_type_snapshot, unit_snapshot, change_type, change_source, change_reason, revision,
+ created_by, published_by, published_at, effective_from, effective_to, retired_at)
+VALUES
+('POLICY_VERSION020', 'POLICY020', 1, 'ACTIVE', 1, 15, 300, 'DEVICE_EVENT_TIME',
+ 'FIXED_DAYS', 14, 'FIXED_DAYS', 365,
+ 'MQTT_BLD002_TEST', 'WCR1_TWin', 'POINT020', 'WCR1_TWin', 'ANALOG', '℃',
+ 'CREATE', 'MANUAL', 'H2 验证可配置的非默认采集策略', 1,
+ NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL);
+
+INSERT INTO biz_collection_config_audit_log
+(audit_id, building_id, actor_type, operator_id, action_type, object_type,
+ object_id, version_id, before_summary, after_summary, result)
+VALUES
+('AUDIT_MIGRATION_SOURCE', 'BLD001', 'SYSTEM_MIGRATION', NULL, 'INITIAL_MIGRATION',
+ 'DATA_SOURCE', 'SOURCE_MQTT_FREEZE_V1', NULL, 'legacyAliases=19',
+ 'status=ENABLED; policies=19; runtimeRevision=1', 'SUCCESS');
+
+INSERT INTO biz_collection_config_audit_log
+(audit_id, building_id, actor_type, operator_id, action_type, object_type,
+ object_id, version_id, before_summary, after_summary, result)
+SELECT CONCAT('AUDIT_', CONCAT('POLICY', RIGHT(alias_id, 3))),
+       building_id, 'SYSTEM_MIGRATION', NULL, 'INITIAL_MIGRATION', 'COLLECTION_POLICY',
+       CONCAT('POLICY', RIGHT(alias_id, 3)), CONCAT('POLICY_VERSION', RIGHT(alias_id, 3)),
+       'legacyAlias=ENABLED',
+       'activeVersion=1; intervalSeconds=60; allowedDelaySeconds=30', 'SUCCESS'
+FROM biz_point_alias
+WHERE building_id = 'BLD001' AND source_id = 'SOURCE_MQTT_FREEZE_V1';
 
 INSERT INTO biz_indicator
 (indicator_id, building_id, indicator_code, scope_type, scope_id,

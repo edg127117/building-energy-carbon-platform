@@ -148,6 +148,10 @@ ingestion:
   point-config-refresh-ms: ${POINT_CONFIG_REFRESH_MS:60000}
   device-identity-refresh-ms: ${DEVICE_IDENTITY_REFRESH_MS:60000}
 
+# 治理配置提交后立即刷新；该周期只用于失败兜底，不代表设备采样周期。
+collection:
+  runtime-refresh-ms: ${COLLECTION_RUNTIME_REFRESH_MS:60000}
+
 # 未绑定设备只保存本地 MySQL 中的规范化有限样例，不进入 TDengine 和数据质量链。
 device-onboarding:
   discovery:

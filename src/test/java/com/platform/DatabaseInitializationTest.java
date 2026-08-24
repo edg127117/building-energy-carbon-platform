@@ -51,12 +51,21 @@ class DatabaseInitializationTest {
                 jdbcTemplate, "BIZ_DATA_QUALITY_FILL_TASK"))
                 .contains("RECALC_JOB_ID");
         assertThat(tableNames(jdbcTemplate))
-                .contains("BIZ_DEVICE_PRODUCT", "BIZ_PENDING_DEVICE", "BIZ_ONBOARDING_AUDIT_LOG")
+                .contains("BIZ_DEVICE_PRODUCT", "BIZ_PENDING_DEVICE", "BIZ_ONBOARDING_AUDIT_LOG",
+                        "BIZ_DATA_SOURCE", "BIZ_COLLECTION_POLICY",
+                        "BIZ_COLLECTION_POLICY_VERSION", "BIZ_COLLECTION_REVIEW_REQUEST",
+                        "BIZ_COLLECTION_CONFIG_AUDIT_LOG")
                 .doesNotContain(
                         "IOT_DEVICE",
                         "IOT_DEVICE_STATUS_LOG",
                         "CONTROL_COMMANDS");
         assertThat(columns(jdbcTemplate, "BIZ_EQUIPMENT")).contains("PRODUCT_ID");
+        assertThat(columns(jdbcTemplate, "BIZ_POINT_ALIAS"))
+                .contains("SOURCE_ID", "REVISION", "CREATE_BY", "UPDATE_BY");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM biz_collection_policy_version "
+                        + "WHERE status='ACTIVE' AND change_source='INITIAL_MIGRATION'",
+                Integer.class)).isEqualTo(19);
         assertThat(jdbcTemplate.queryForList(
                 "SELECT role_key FROM sys_role ORDER BY role_key",
                 String.class))

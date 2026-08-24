@@ -18,13 +18,13 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 import java.util.HashMap;
 import java.util.Map;
 
+@RestControllerAdvice
 /**
  * 将 Controller 和 Spring MVC 异常转换为稳定、脱敏的 JSON 响应。
  *
  * <p>已知的认证、权限、参数、业务和路径不存在异常分别返回对应 HTTP 状态；
  * 只有无法分类的异常才进入 500 兜底，避免把普通 404 误报为系统故障。</p>
  */
-@RestControllerAdvice
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
@@ -46,7 +46,8 @@ public class GlobalExceptionHandler {
         response.put("msg", "您输入的格式不正确，请检查后重试");
         response.put("success", false);
         addVersionedErrorCode(response, request,
-                "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED");
+                "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED",
+                "COLLECTION_CONFIG_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -87,7 +88,8 @@ public class GlobalExceptionHandler {
         response.put("msg", "未登录或登录已过期");
         response.put("success", false);
         addVersionedErrorCode(response, request,
-                "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED");
+                "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED",
+                "COLLECTION_CONFIG_UNAUTHORIZED");
         return response;
     }
 
@@ -101,20 +103,24 @@ public class GlobalExceptionHandler {
         response.put("msg", "无权限访问");
         response.put("success", false);
         addVersionedErrorCode(response, request,
-                "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN");
+                "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN",
+                "COLLECTION_CONFIG_FORBIDDEN");
         return response;
     }
 
     /** 仅为已版本化管理 API 增加各自机器码，保持旧接口响应契约不变。 */
     private static void addVersionedErrorCode(
             Map<String, Object> response, HttpServletRequest request,
-            String onboardingErrorCode, String assetErrorCode) {
+            String onboardingErrorCode, String assetErrorCode, String collectionErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
             response.put("errorCode", onboardingErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
             response.put("errorCode", assetErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/data-sources")
+                || path.startsWith(request.getContextPath() + "/v1/collection-")) {
+            response.put("errorCode", collectionErrorCode);
         }
     }
 
