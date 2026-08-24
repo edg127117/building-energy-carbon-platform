@@ -10,6 +10,7 @@ import com.platform.iot.formula.IndicatorConfigProvider;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
+import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
@@ -25,6 +26,7 @@ import org.springframework.dao.DataAccessResourceFailureException;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -33,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -90,7 +93,8 @@ class HvacIndicatorQueryServiceTest {
         assertThat(response.indicators())
                 .extracting(HvacIndicatorDtos.LatestIndicator::status)
                 .containsExactly("INVALID_INPUT", "SUCCESS");
-        verifyNoInteractions(indicatorRepository, minuteRepository);
+        verify(indicatorRepository).findLatestStates(anyList());
+        verifyNoInteractions(minuteRepository);
     }
 
     @Test
@@ -155,6 +159,32 @@ class HvacIndicatorQueryServiceTest {
             assertThat(item.value()).isEqualTo(4.2);
             assertThat(item.indicatorId()).isEqualTo("I1");
         });
+    }
+
+    @Test
+    void latestProjectionPreventsOlderSuccessCacheFromHidingNewerPolicyFailure() {
+        allowBuilding("BLD001");
+        BizIndicator indicator = indicator("I1", "WCR_COP", "BLD001", "CHILLER");
+        IndicatorMinuteState projection = new IndicatorMinuteState(
+                "I1", "WCR_COP", "BLD001", "GROUP001", "CHILLER",
+                MINUTE + 60_000L, "QUALITY_NOT_ALLOWED", null, "ATTEMPT001",
+                MINUTE + 61_000L, 9);
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(cache.get("I1")).thenReturn(Optional.of(
+                latest(indicator, MINUTE, FormulaCalculation.Status.SUCCESS, 4.2)));
+        when(indicatorRepository.findLatestStates(List.of("I1")))
+                .thenReturn(Map.of("I1", projection));
+        when(indicatorRepository.findLatestSuccesses(List.of("I1")))
+                .thenReturn(List.of(success(indicator, MINUTE, 4.2, "WCR_COP_V1")));
+        when(indicatorRepository.findLatestExceptions(List.of("I1")))
+                .thenReturn(List.of());
+
+        HvacIndicatorDtos.LatestIndicator response = service.latest(
+                "BLD001", USER_ID, ADMIN).indicators().getFirst();
+
+        assertThat(response.minuteStart()).isEqualTo(MINUTE + 60_000L);
+        assertThat(response.status()).isEqualTo("QUALITY_NOT_ALLOWED");
+        assertThat(response.value()).isNull();
     }
 
     @Test
@@ -340,7 +370,8 @@ class HvacIndicatorQueryServiceTest {
         assertThat(response.status()).isEqualTo("SUCCESS");
         assertThat(response.inputs()).containsExactly(input);
         assertThat(response.steps()).containsExactly(step);
-        verifyNoInteractions(indicatorRepository, minuteRepository, formulaEngine);
+        verify(indicatorRepository).findStates(anySet());
+        verifyNoInteractions(minuteRepository, formulaEngine);
     }
 
     @Test

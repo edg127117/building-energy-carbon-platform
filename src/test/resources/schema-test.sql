@@ -703,3 +703,224 @@ CREATE INDEX idx_recalc_building_range
   (building_id, status, from_minute, to_minute);
 CREATE INDEX idx_recalc_supersedes
   ON biz_data_quality_recalc_job (supersedes_task_id, create_time);
+
+-- Q0/Q1/Q2 使用策略治理的 H2 隔离镜像。真实 MySQL 增量迁移保留在 18 号脚本；
+-- 此处仅提供管理状态、审核证据和恢复任务的结构，普通测试不会连接 TDengine。
+-- schema-test.sql 会在同一 JVM 的多个 Spring 上下文中重复初始化。先按依赖反向
+-- 清理治理表，避免残留的治理外键干扰继承业务表的既有清理顺序。
+-- 因此 H2 不持有指向既有 building、biz_data_point 的外键；应用服务会校验范围，
+-- 正式 MySQL 迁移仍以 RESTRICT 外键强制该完整性边界。
+DROP TABLE IF EXISTS biz_quality_usage_recovery_task;
+DROP TABLE IF EXISTS biz_quality_usage_policy_level;
+DROP TABLE IF EXISTS biz_quality_usage_review_request;
+DROP TABLE IF EXISTS biz_quality_usage_policy_version;
+DROP TABLE IF EXISTS biz_quality_usage_policy;
+DROP TABLE IF EXISTS biz_quality_usage_change_set;
+DROP TABLE IF EXISTS biz_quality_usage_audit_log;
+DROP TABLE IF EXISTS biz_quality_usage_scenario;
+DROP TABLE IF EXISTS biz_quality_usage_config_revision;
+
+CREATE TABLE biz_quality_usage_scenario (
+  scenario_id VARCHAR(32) PRIMARY KEY,
+  scenario_code VARCHAR(64) NOT NULL,
+  scenario_name VARCHAR(100) NOT NULL,
+  adapter_type VARCHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  introduced_version VARCHAR(32) NOT NULL,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  enabled_at TIMESTAMP(3),
+  disabled_at TIMESTAMP(3),
+  status_reason VARCHAR(500),
+  CONSTRAINT uk_quality_usage_scenario_code UNIQUE (scenario_code),
+  CONSTRAINT chk_quality_usage_scenario_status CHECK (status IN ('DRAFT','ENABLED','DISABLED'))
+);
+
+CREATE TABLE biz_quality_usage_change_set (
+  change_set_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  revision INT NOT NULL DEFAULT 0,
+  submitted_revision INT,
+  created_by BIGINT NOT NULL,
+  has_been_submitted TINYINT NOT NULL DEFAULT 0,
+  title VARCHAR(100) NOT NULL,
+  description VARCHAR(1000),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  submitted_at TIMESTAMP(3),
+  published_at TIMESTAMP(3),
+  cancelled_at TIMESTAMP(3),
+  last_failure_code VARCHAR(64),
+  CONSTRAINT chk_quality_usage_change_set_status CHECK (status IN ('DRAFT','PENDING','PUBLISHED','CANCELLED')),
+  CONSTRAINT chk_quality_usage_change_set_revision CHECK (revision >= 0),
+  CONSTRAINT chk_quality_usage_change_set_submitted CHECK (has_been_submitted IN (0,1))
+);
+
+CREATE INDEX idx_quality_usage_change_set_building
+  ON biz_quality_usage_change_set (building_id, status, create_time);
+
+CREATE TABLE biz_quality_usage_policy (
+  policy_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  point_id VARCHAR(32) NOT NULL,
+  scenario_id VARCHAR(32) NOT NULL,
+  current_active_version_id VARCHAR(32),
+  pending_review_request_id VARCHAR(32),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_quality_usage_policy_identity UNIQUE (point_id, scenario_id),
+  CONSTRAINT fk_quality_usage_policy_scenario
+    FOREIGN KEY (scenario_id) REFERENCES biz_quality_usage_scenario (scenario_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_quality_usage_policy_building
+  ON biz_quality_usage_policy (building_id, point_id);
+
+CREATE TABLE biz_quality_usage_policy_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  policy_id VARCHAR(32) NOT NULL,
+  change_set_id VARCHAR(32),
+  version_no INT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  base_active_version_id VARCHAR(32),
+  copied_from_version_id VARCHAR(32),
+  effective_from_ms BIGINT,
+  effective_to_ms BIGINT,
+  initial_baseline TINYINT NOT NULL DEFAULT 0,
+  published_config_revision BIGINT,
+  change_source VARCHAR(40) NOT NULL,
+  change_reason VARCHAR(500) NOT NULL,
+  created_by BIGINT,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  published_by BIGINT,
+  published_at TIMESTAMP(3),
+  retired_at TIMESTAMP(3),
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_quality_usage_version_no UNIQUE (policy_id, version_no),
+  CONSTRAINT chk_quality_usage_version_no CHECK (version_no > 0),
+  CONSTRAINT chk_quality_usage_version_status CHECK (status IN ('DRAFT','ACTIVE','RETIRED')),
+  CONSTRAINT chk_quality_usage_initial_baseline CHECK (initial_baseline IN (0,1)),
+  CONSTRAINT chk_quality_usage_effective_range CHECK (
+    effective_to_ms IS NULL OR effective_from_ms IS NULL OR effective_to_ms >= effective_from_ms
+  ),
+  CONSTRAINT chk_quality_usage_formal_effective_from CHECK (
+    status = 'DRAFT' OR initial_baseline = 1
+    OR (effective_from_ms IS NOT NULL AND MOD(effective_from_ms, 60000) = 0)
+  ),
+  CONSTRAINT chk_quality_usage_effective_to_alignment CHECK (
+    effective_to_ms IS NULL OR MOD(effective_to_ms, 60000) = 0
+  ),
+  CONSTRAINT chk_quality_usage_initial_baseline_shape CHECK (
+    initial_baseline = 0
+    OR (version_no = 1 AND change_set_id IS NULL AND effective_from_ms IS NULL)
+  ),
+  CONSTRAINT fk_quality_usage_version_policy
+    FOREIGN KEY (policy_id) REFERENCES biz_quality_usage_policy (policy_id) ON DELETE RESTRICT,
+  CONSTRAINT fk_quality_usage_version_change_set
+    FOREIGN KEY (change_set_id) REFERENCES biz_quality_usage_change_set (change_set_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_quality_usage_version_policy_status
+  ON biz_quality_usage_policy_version (policy_id, status, version_no);
+CREATE INDEX idx_quality_usage_version_change_set
+  ON biz_quality_usage_policy_version (change_set_id, status, version_no);
+
+CREATE TABLE biz_quality_usage_policy_level (
+  policy_level_id VARCHAR(32) PRIMARY KEY,
+  version_id VARCHAR(32) NOT NULL,
+  quality_level VARCHAR(2) NOT NULL,
+  CONSTRAINT uk_quality_usage_policy_level UNIQUE (version_id, quality_level),
+  CONSTRAINT chk_quality_usage_policy_level CHECK (quality_level IN ('Q0','Q1','Q2')),
+  CONSTRAINT fk_quality_usage_policy_level_version
+    FOREIGN KEY (version_id) REFERENCES biz_quality_usage_policy_version (version_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE biz_quality_usage_review_request (
+  request_id VARCHAR(32) PRIMARY KEY,
+  change_set_id VARCHAR(32) NOT NULL,
+  request_no INT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  review_mode VARCHAR(20) NOT NULL,
+  submitted_revision INT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  snapshot_sha256 CHAR(64) NOT NULL,
+  submitted_by BIGINT NOT NULL,
+  submitted_at TIMESTAMP(3) NOT NULL,
+  reviewer_id BIGINT,
+  review_comment VARCHAR(500),
+  reviewed_at TIMESTAMP(3),
+  withdrawn_by BIGINT,
+  withdrawn_at TIMESTAMP(3),
+  idempotency_key VARCHAR(160),
+  request_sha256 CHAR(64),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_quality_usage_review_no UNIQUE (change_set_id, request_no),
+  CONSTRAINT uk_quality_usage_review_idempotency UNIQUE (idempotency_key),
+  CONSTRAINT chk_quality_usage_review_status CHECK (status IN ('PENDING','APPROVED','REJECTED','WITHDRAWN')),
+  CONSTRAINT chk_quality_usage_review_mode CHECK (review_mode IN ('NORMAL','DIRECT_PUBLISH')),
+  CONSTRAINT fk_quality_usage_review_change_set
+    FOREIGN KEY (change_set_id) REFERENCES biz_quality_usage_change_set (change_set_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_quality_usage_review_change_set
+  ON biz_quality_usage_review_request (change_set_id, status, submitted_at);
+
+CREATE TABLE biz_quality_usage_audit_log (
+  audit_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  actor_type VARCHAR(20) NOT NULL,
+  operator_id BIGINT,
+  action_type VARCHAR(50) NOT NULL,
+  object_type VARCHAR(50) NOT NULL,
+  object_id VARCHAR(32) NOT NULL,
+  version_id VARCHAR(32),
+  before_summary VARCHAR(1000),
+  after_summary VARCHAR(1000),
+  result VARCHAR(20) NOT NULL,
+  reason_code VARCHAR(64),
+  config_revision BIGINT,
+  idempotency_key VARCHAR(160),
+  request_sha256 CHAR(64),
+  operation_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_quality_usage_audit_idempotency UNIQUE (idempotency_key),
+  CONSTRAINT chk_quality_usage_audit_actor CHECK (actor_type IN ('USER','SYSTEM_MIGRATION')),
+  CONSTRAINT chk_quality_usage_audit_result CHECK (result IN ('SUCCESS','REJECTED'))
+);
+
+CREATE INDEX idx_quality_usage_audit_building_time
+  ON biz_quality_usage_audit_log (building_id, operation_time);
+CREATE INDEX idx_quality_usage_audit_operator_time
+  ON biz_quality_usage_audit_log (operator_id, operation_time);
+
+CREATE TABLE biz_quality_usage_config_revision (
+  singleton_id INT PRIMARY KEY,
+  config_revision BIGINT NOT NULL,
+  last_change_summary VARCHAR(500),
+  updated_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT chk_quality_usage_revision_singleton CHECK (singleton_id = 1),
+  CONSTRAINT chk_quality_usage_revision_nonnegative CHECK (config_revision >= 0)
+);
+
+INSERT INTO biz_quality_usage_config_revision
+  (singleton_id, config_revision, last_change_summary)
+VALUES (1, 0, 'H2_TEST_INITIAL');
+
+-- TDengine 当前状态投影写入失败时的 MySQL 持久化幂等对账任务。
+CREATE TABLE biz_quality_usage_recovery_task (
+  task_id VARCHAR(32) PRIMARY KEY,
+  task_type VARCHAR(40) NOT NULL,
+  business_key VARCHAR(200) NOT NULL,
+  payload_json TEXT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  retry_count INT NOT NULL DEFAULT 0,
+  last_error VARCHAR(1000),
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_quality_usage_recovery_business_key UNIQUE (business_key),
+  CONSTRAINT chk_quality_usage_recovery_status CHECK (status IN ('WAITING','RUNNING','DONE','FAILED')),
+  CONSTRAINT chk_quality_usage_recovery_retry CHECK (retry_count >= 0)
+);
+
+CREATE INDEX idx_quality_usage_recovery_status
+  ON biz_quality_usage_recovery_task (status, update_time, task_id);

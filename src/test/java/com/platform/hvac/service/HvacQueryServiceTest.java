@@ -66,7 +66,7 @@ class HvacQueryServiceTest {
         BizDataPoint point = point("POINT001", "A", "BLD001", "ONLINE", null);
         when(dataPointService.listByIds(List.of("POINT001"))).thenReturn(List.of(point));
         when(minuteRepository.findHistory(
-                List.of("POINT001"), FROM, FROM + span, expected)).thenReturn(List.of());
+                List.of("POINT001"), FROM, FROM + span, 1)).thenReturn(List.of());
 
         HvacQueryDtos.HistoryResponse response = service.history(
                 "BLD001", "POINT001", FROM, FROM + span, USER_ID, ADMIN);
@@ -179,7 +179,9 @@ class HvacQueryServiceTest {
                 .containsExactly("POINT002", "POINT001");
         assertThat(response.series().get(1).records())
                 .extracting(HvacQueryDtos.HistoryRecord::time)
-                .containsExactly(FROM, FROM + 120_000L);
+                .containsExactly(FROM, FROM + 60_000L, FROM + 120_000L);
+        assertThat(response.series().get(1).records().get(1).status())
+                .isEqualTo("NO_DATA");
     }
 
     @Test

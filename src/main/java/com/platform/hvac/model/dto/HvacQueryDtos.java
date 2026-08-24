@@ -56,7 +56,25 @@ public final class HvacQueryDtos {
             Double maximum,
             long sampleCount,
             Integer dataQuality,
-            String status) {
+            String status,
+            String usageStatus,
+            Integer actualQuality,
+            String policySource,
+            Integer policyVersion,
+            Long configRevision,
+            String reason) {
+
+        /** 保留旧调用方的构造契约；新增字段由正式查询服务统一填充。 */
+        public SnapshotPoint(
+                String pointId, String pointCode, String pointName,
+                String equipId, String equipCode, String unit,
+                Long minute, Double average, Double minimum, Double maximum,
+                long sampleCount, Integer dataQuality, String status) {
+            this(pointId, pointCode, pointName, equipId, equipCode, unit,
+                    minute, average, minimum, maximum, sampleCount, dataQuality, status,
+                    "AVAILABLE", dataQuality, null, null, null,
+                    minute == null ? "NO_DATA" : "LEGACY_CONSTRUCTOR");
+        }
     }
 
     /**
@@ -105,10 +123,26 @@ public final class HvacQueryDtos {
      */
     public record HistoryRecord(
             long time,
-            double average,
-            double minimum,
-            double maximum,
+            Double average,
+            Double minimum,
+            Double maximum,
             long sampleCount,
-            int dataQuality) {
+            Integer dataQuality,
+            int usableCount,
+            int blockedCount,
+            int missingCount,
+            String status,
+            String policySource,
+            Integer policyVersion,
+            Long configRevision,
+            String reason) {
+
+        /** 保留旧测试和内部调用的 1 分钟可用数据构造方式。 */
+        public HistoryRecord(
+                long time, double average, double minimum, double maximum,
+                long sampleCount, int dataQuality) {
+            this(time, average, minimum, maximum, sampleCount, dataQuality,
+                    1, 0, 0, "AVAILABLE", null, null, null, "LEGACY_CONSTRUCTOR");
+        }
     }
 }

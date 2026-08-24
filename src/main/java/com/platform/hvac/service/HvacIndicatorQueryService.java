@@ -10,6 +10,8 @@ import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.formula.model.IndicatorMinuteKey;
+import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
@@ -97,14 +99,34 @@ public class HvacIndicatorQueryService {
         Map<String, HvacIndicatorDtos.LatestIndicator> resolved =
                 new LinkedHashMap<>();
         List<BizIndicator> misses = new ArrayList<>();
+        Map<String, IndicatorLatestState> cachedCandidates = new LinkedHashMap<>();
         for (BizIndicator indicator : indicators) {
             Optional<IndicatorLatestState> cached = cache.get(
                     indicator.getIndicatorId());
             if (cached.isPresent() && cacheMatches(indicator, cached.orElseThrow())) {
-                resolved.put(indicator.getIndicatorId(),
-                        fromCache(indicator, cached.orElseThrow()));
+                cachedCandidates.put(indicator.getIndicatorId(), cached.orElseThrow());
             } else {
                 misses.add(indicator);
+            }
+        }
+
+        if (!cachedCandidates.isEmpty()) {
+            Map<String, IndicatorMinuteState> projections = queryTdengine(
+                    () -> indicatorRepository.findLatestStates(
+                            List.copyOf(cachedCandidates.keySet())));
+            for (BizIndicator indicator : indicators) {
+                IndicatorLatestState cached = cachedCandidates.get(indicator.getIndicatorId());
+                if (cached == null) {
+                    continue;
+                }
+                IndicatorMinuteState projection = projections.get(cached.indicatorId());
+                if (projection == null
+                        || (projection.minuteStart() == cached.minuteStart()
+                        && projection.currentStatus().equals(cached.status().name()))) {
+                    resolved.put(indicator.getIndicatorId(), fromCache(indicator, cached));
+                } else {
+                    misses.add(indicator);
+                }
             }
         }
 
@@ -112,9 +134,20 @@ public class HvacIndicatorQueryService {
             List<String> missingIds = misses.stream()
                     .map(BizIndicator::getIndicatorId)
                     .toList();
-            LatestRows rows = queryTdengine(() -> new LatestRows(
-                    indicatorRepository.findLatestSuccesses(missingIds),
-                    indicatorRepository.findLatestExceptions(missingIds)));
+            LatestRows rows = queryTdengine(() -> {
+                List<IndicatorMinuteResult> successRows =
+                        indicatorRepository.findLatestSuccesses(missingIds);
+                List<FormulaCalculationException> exceptionRows =
+                        indicatorRepository.findLatestExceptions(missingIds);
+                Map<String, IndicatorMinuteState> latestStates =
+                        indicatorRepository.findLatestStates(missingIds);
+                Map<IndicatorMinuteKey, IndicatorMinuteState> states = latestStates.values()
+                        .stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
+                                state -> new IndicatorMinuteKey(
+                                        state.indicatorId(), state.minuteStart()),
+                                state -> state));
+                return new LatestRows(successRows, exceptionRows, states);
+            });
             Map<String, IndicatorMinuteResult> successes =
                     latestSuccessesById(rows.successes(), misses);
             Map<String, FormulaCalculationException> exceptions =
@@ -123,7 +156,8 @@ public class HvacIndicatorQueryService {
                 resolved.put(indicator.getIndicatorId(), mergeLatest(
                         indicator,
                         successes.get(indicator.getIndicatorId()),
-                        exceptions.get(indicator.getIndicatorId())));
+                        exceptions.get(indicator.getIndicatorId()),
+                        rows.states()));
             }
         }
 
@@ -149,11 +183,18 @@ public class HvacIndicatorQueryService {
         BizIndicator indicator = requireAccessibleIndicator(
                 indicatorId, userId, roles);
         validateHistoryRange(from, to);
-        List<HvacIndicatorDtos.HistoryRecord> records = queryTdengine(
-                () -> indicatorRepository.findHistory(
-                        indicatorId, from, to)).stream()
+        List<IndicatorMinuteResult> successRows = queryTdengine(
+                () -> indicatorRepository.findHistory(indicatorId, from, to));
+        Set<IndicatorMinuteKey> keys = successRows.stream()
+                .map(row -> new IndicatorMinuteKey(row.indicatorId(), row.minuteStart()))
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Map<IndicatorMinuteKey, IndicatorMinuteState> states = queryTdengine(
+                () -> indicatorRepository.findStates(keys));
+        List<HvacIndicatorDtos.HistoryRecord> records = successRows.stream()
                 .filter(row -> successMatches(indicator, row))
                 .filter(row -> row.minuteStart() >= from && row.minuteStart() < to)
+                .filter(row -> stateAllowsSuccess(states.get(new IndicatorMinuteKey(
+                        row.indicatorId(), row.minuteStart()))))
                 .sorted(Comparator.comparingLong(
                         IndicatorMinuteResult::minuteStart))
                 .map(row -> new HvacIndicatorDtos.HistoryRecord(
@@ -192,16 +233,24 @@ public class HvacIndicatorQueryService {
         int resolutionMinutes = historyResolution(span);
         List<IndicatorTrendQueryRow> rows = queryTdengine(
                 () -> indicatorRepository.findTrends(
-                        indicatorIds, from, to, resolutionMinutes));
+                        indicatorIds, from, to, 1));
+        Set<IndicatorMinuteKey> trendKeys = rows.stream()
+                .map(row -> new IndicatorMinuteKey(row.indicatorId(), row.time()))
+                .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
+        Map<IndicatorMinuteKey, IndicatorMinuteState> trendStates = queryTdengine(
+                () -> indicatorRepository.findStates(trendKeys));
         Map<String, List<IndicatorTrendQueryRow>> rowsByIndicator = rows.stream()
                 .filter(row -> trendIdentityMatches(
                         indicators.get(row.indicatorId()), row))
+                .filter(row -> stateAllowsSuccess(trendStates.get(
+                        new IndicatorMinuteKey(row.indicatorId(), row.time()))))
                 .collect(java.util.stream.Collectors.groupingBy(
                         IndicatorTrendQueryRow::indicatorId));
         List<HvacIndicatorDtos.TrendSeries> series = indicatorIds.stream()
                 .map(id -> trendSeries(
                         indicators.get(id),
-                        rowsByIndicator.getOrDefault(id, List.of())))
+                        rowsByIndicator.getOrDefault(id, List.of()),
+                        resolutionMinutes))
                 .toList();
         return new HvacIndicatorDtos.TrendResponse(
                 buildingId, from, to, resolutionMinutes, series);
@@ -225,15 +274,32 @@ public class HvacIndicatorQueryService {
         if (cached.isPresent()
                 && cached.orElseThrow().minuteStart() == minuteStart
                 && cacheMatches(indicator, cached.orElseThrow())) {
-            return fromCacheDetail(indicator, cached.orElseThrow());
+            IndicatorLatestState state = cached.orElseThrow();
+            IndicatorMinuteState projection = queryTdengine(() ->
+                    indicatorRepository.findStates(Set.of(
+                                    new IndicatorMinuteKey(indicatorId, minuteStart)))
+                            .get(new IndicatorMinuteKey(indicatorId, minuteStart)));
+            if (projection == null
+                    || projection.currentStatus().equals(state.status().name())) {
+                return fromCacheDetail(indicator, state);
+            }
         }
 
         PersistedAttempt attempt = queryTdengine(() -> new PersistedAttempt(
                 indicatorRepository.findSuccess(indicatorId, minuteStart)
                         .filter(row -> successMatches(indicator, row)),
                 indicatorRepository.findException(indicatorId, minuteStart)
-                        .filter(row -> exceptionMatches(indicator, row))));
-        // 同一分钟恢复成功后，历史异常仍可能保留；成功结果具有最终优先级。
+                        .filter(row -> exceptionMatches(indicator, row)),
+                indicatorRepository.findStates(Set.of(
+                        new IndicatorMinuteKey(indicatorId, minuteStart)))
+                        .get(new IndicatorMinuteKey(indicatorId, minuteStart))));
+        if (attempt.state() != null
+                && !"SUCCESS".equals(attempt.state().currentStatus())) {
+            if (attempt.exception().isPresent()) {
+                return fromException(indicator, attempt.exception().orElseThrow());
+            }
+            return projectedFailureDetail(indicator, minuteStart, attempt.state());
+        }
         if (attempt.success().isPresent()) {
             IndicatorMinuteResult success = attempt.success().orElseThrow();
             List<RawMinuteAggregate> aggregates = queryTdengine(
@@ -374,22 +440,39 @@ public class HvacIndicatorQueryService {
 
     /** 将同一指标的 TDengine 窗口按时间排序并转换为图表 DTO。 */
     private HvacIndicatorDtos.TrendSeries trendSeries(
-            BizIndicator indicator, List<IndicatorTrendQueryRow> rows) {
+            BizIndicator indicator,
+            List<IndicatorTrendQueryRow> rows,
+            int resolutionMinutes) {
+        long bucketMs = Duration.ofMinutes(resolutionMinutes).toMillis();
         List<HvacIndicatorDtos.TrendRecord> records = rows.stream()
-                .sorted(Comparator.comparingLong(IndicatorTrendQueryRow::time))
-                .map(row -> new HvacIndicatorDtos.TrendRecord(
-                        row.time(),
-                        row.average(),
-                        row.minimum(),
-                        row.maximum(),
-                        row.sampleCount(),
-                        row.dataQuality()))
+                .collect(java.util.stream.Collectors.groupingBy(
+                        row -> row.time() - Math.floorMod(row.time(), bucketMs),
+                        java.util.TreeMap::new,
+                        java.util.stream.Collectors.toList()))
+                .entrySet().stream()
+                .map(entry -> indicatorTrendBucket(entry.getKey(), entry.getValue()))
                 .toList();
         return new HvacIndicatorDtos.TrendSeries(
                 indicator.getIndicatorId(),
                 indicator.getIndicatorCode(),
                 indicator.getEquipId(),
                 records);
+    }
+
+    private HvacIndicatorDtos.TrendRecord indicatorTrendBucket(
+            long bucketStart, List<IndicatorTrendQueryRow> rows) {
+        long samples = rows.stream().mapToLong(IndicatorTrendQueryRow::sampleCount).sum();
+        long weights = rows.stream().mapToLong(
+                row -> Math.max(1L, row.sampleCount())).sum();
+        double weighted = rows.stream().mapToDouble(
+                row -> row.average() * Math.max(1L, row.sampleCount())).sum();
+        return new HvacIndicatorDtos.TrendRecord(
+                bucketStart,
+                weighted / weights,
+                rows.stream().mapToDouble(IndicatorTrendQueryRow::minimum).min().orElseThrow(),
+                rows.stream().mapToDouble(IndicatorTrendQueryRow::maximum).max().orElseThrow(),
+                samples,
+                rows.stream().mapToInt(IndicatorTrendQueryRow::dataQuality).max().orElseThrow());
     }
 
     /**
@@ -491,14 +574,41 @@ public class HvacIndicatorQueryService {
     /**
      * 合并一个指标在 TDengine 中最新的成功与异常事实。
      *
-     * <p>同一分钟同时存在时表示后续补算已经成功，成功优先；不同分钟则取来源分钟
-     * 较新的状态。两者都没有时返回 {@code NO_DATA}。</p>
+     * <p>有当前投影时投影优先；没有投影的旧分钟才沿用同分钟成功优先的兼容语义。
+     * 不同分钟取来源分钟较新的状态，两类事实都没有时返回 {@code NO_DATA}。</p>
      */
     private HvacIndicatorDtos.LatestIndicator mergeLatest(
             BizIndicator indicator,
             IndicatorMinuteResult success,
-            FormulaCalculationException exception) {
-        // 同一分钟的成功表示补算已修复旧异常，不能再向前端暴露失败状态。
+            FormulaCalculationException exception,
+            Map<IndicatorMinuteKey, IndicatorMinuteState> states) {
+        long latestMinute = Math.max(
+                success == null ? Long.MIN_VALUE : success.minuteStart(),
+                exception == null ? Long.MIN_VALUE : exception.minuteStart());
+        IndicatorMinuteState projection = states.values().stream()
+                .filter(state -> indicator.getIndicatorId().equals(state.indicatorId()))
+                .max(Comparator.comparingLong(IndicatorMinuteState::minuteStart))
+                .orElse(null);
+        if (projection != null) {
+            latestMinute = Math.max(latestMinute, projection.minuteStart());
+            if (projection.minuteStart() != latestMinute) {
+                projection = states.get(new IndicatorMinuteKey(
+                        indicator.getIndicatorId(), latestMinute));
+            }
+        }
+        if (projection != null) {
+            if ("SUCCESS".equals(projection.currentStatus())
+                    && success != null && success.minuteStart() == latestMinute) {
+                return fromSuccess(indicator, success);
+            }
+            if (!"SUCCESS".equals(projection.currentStatus())) {
+                if (exception != null && exception.minuteStart() == latestMinute) {
+                    return latestFromException(indicator, exception);
+                }
+                return latestFromProjection(indicator, projection);
+            }
+        }
+        // 没有新投影的旧分钟保持兼容读取；一旦重算即以上面的投影为准。
         if (success != null && exception != null
                 && success.minuteStart() == exception.minuteStart()) {
             return fromSuccess(indicator, success);
@@ -511,6 +621,28 @@ public class HvacIndicatorQueryService {
         return success == null
                 ? noData(indicator)
                 : fromSuccess(indicator, success);
+    }
+
+    private boolean stateAllowsSuccess(IndicatorMinuteState state) {
+        return state == null || "SUCCESS".equals(state.currentStatus());
+    }
+
+    private HvacIndicatorDtos.LatestIndicator latestFromProjection(
+            BizIndicator indicator, IndicatorMinuteState state) {
+        return new HvacIndicatorDtos.LatestIndicator(
+                indicator.getIndicatorId(), indicator.getIndicatorCode(), indicator.getEquipId(),
+                state.minuteStart(), state.currentStatus(), null,
+                unit(indicator.getIndicatorCode()), null, null,
+                state.currentStatus(), List.of());
+    }
+
+    private HvacIndicatorDtos.CalculationDetail projectedFailureDetail(
+            BizIndicator indicator, long minuteStart, IndicatorMinuteState state) {
+        return new HvacIndicatorDtos.CalculationDetail(
+                indicator.getIndicatorId(), indicator.getIndicatorCode(),
+                indicator.getEquipId(), minuteStart, state.currentStatus(),
+                null, unit(indicator.getIndicatorCode()), null, null,
+                List.of(), List.of(), state.currentStatus(), List.of());
     }
 
     /**
@@ -707,11 +839,13 @@ public class HvacIndicatorQueryService {
 
     private record LatestRows(
             List<IndicatorMinuteResult> successes,
-            List<FormulaCalculationException> exceptions) {
+            List<FormulaCalculationException> exceptions,
+            Map<IndicatorMinuteKey, IndicatorMinuteState> states) {
     }
 
     private record PersistedAttempt(
             Optional<IndicatorMinuteResult> success,
-            Optional<FormulaCalculationException> exception) {
+            Optional<FormulaCalculationException> exception,
+            IndicatorMinuteState state) {
     }
 }

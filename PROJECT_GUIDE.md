@@ -52,6 +52,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.hvac`、`hvac.asset` | 继承的建筑、空间、系统、设备、测点档案及 HVAC 查询 |
 | `com.platform.iot.ingest`、`identity` | 标准报文接入、设备身份和归属解析 |
 | `com.platform.iot.quality`、`dataquality` | 运行校验和 Q0/Q1/Q2 预处理 |
+| `com.platform.iot.qualityusage` | Q0/Q1/Q2 消费策略治理、运行快照、门禁、纠正与恢复 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
 | `com.platform.iot.onboarding` | 产品模板、未知设备有界发现、绑定和启停 |
 | `com.platform.iot.temporal` | TDengine 时序访问边界 |
@@ -79,6 +80,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 → 平台接入与归属校验
 → 数据预处理和 Q0/Q1/Q2 质量标识
 → MySQL/TDengine 持久化
+→ 场景化质量使用策略门禁
 → 物理空间树与语义关系模型
 → 能源/碳计量、评价和诊断
 → API/WebSocket
@@ -113,6 +115,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | 本地基础设施 | [`src/env/docker-compose.yml`](src/env/docker-compose.yml) |
 | MQTT 接入 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter) |
 | 资产与设备接入 | [`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding) |
+| 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |
 | 当前状态 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) |
 | Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md) |
 | 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) |

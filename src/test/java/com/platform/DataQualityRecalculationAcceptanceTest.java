@@ -40,7 +40,6 @@ import com.platform.iot.dataquality.model.entity.BizPointTypicalValueConfig;
 import com.platform.iot.formula.HvacFormulaEngine;
 import com.platform.iot.formula.IndicatorConfigProvider;
 import com.platform.iot.formula.IndicatorRealtimePublisher;
-import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.quality.PointAliasKey;
 import com.platform.iot.quality.PointRuntimeConfig;
@@ -80,7 +79,9 @@ import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -89,7 +90,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>当前普通测试环境没有可复用的 TDengine 容器替身，本测试因此使用内存实现替换
  * MySQL/TDengine 仓储边界，但受理、调度领取、所有权作废、Q0 聚合、Q1/Q2 选择、
- * READY 发布和公式失效均运行生产服务。它验证跨服务顺序和恢复游标，不宣称覆盖
+ * READY 发布和公式状态投影均运行生产服务。它验证跨服务顺序和恢复游标，不宣称覆盖
  * MySQL SQL、TDengine SQL、事务锁或真实消息中间件。</p>
  */
 class DataQualityRecalculationAcceptanceTest {
@@ -107,7 +108,7 @@ class DataQualityRecalculationAcceptanceTest {
             List.of(FormalRole.PLATFORM_ADMIN.name());
 
     @Test
-    void completesVoidJobWithMixedQualityFormulaInvalidationAndQueryableChildren() {
+    void completesVoidJobWithMixedQualityFormulaProjectionAndQueryableChildren() {
         AcceptanceFixture fixture = new AcceptanceFixture();
         fixture.seedMixedVoidScenario();
 
@@ -161,9 +162,7 @@ class DataQualityRecalculationAcceptanceTest {
         assertThat(fixture.readyEvents.getLast().minuteStart())
                 .isEqualTo(BASE + 5 * MINUTE);
         assertThat(fixture.readyEvents.getLast().aggregates()).isEmpty();
-        verify(fixture.indicatorRepository).deleteSuccesses(
-                Set.of(new IndicatorMinuteKey(
-                        "PUMP-EFF-1", BASE + 5 * MINUTE)));
+        verify(fixture.indicatorRepository, never()).deleteSuccesses(anySet());
 
         DataQualityRecalculationDtos.Detail detail =
                 fixture.jobService.detail(ADMIN, submitted.jobId());

@@ -5,6 +5,8 @@ import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.formula.model.FormulaCalculationAttempt;
+import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.temporal.impl.TdengineIndicatorMinuteRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -318,7 +320,7 @@ class TdengineIndicatorMinuteRepositoryTest {
     }
 
     @Test
-    void latestAttemptTimeReadsBothSuccessAndExceptionTables() {
+    void latestAttemptTimeReadsSuccessExceptionAndAppendOnlyAttemptTables() {
         doNothing().when(template).query(
                 anyString(), any(RowCallbackHandler.class));
 
@@ -327,7 +329,7 @@ class TdengineIndicatorMinuteRepositoryTest {
                 .isEqualTo(Map.of());
 
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
-        verify(template, times(2)).query(
+        verify(template, times(3)).query(
                 sql.capture(), any(RowCallbackHandler.class));
         assertThat(sql.getAllValues().get(0))
                 .contains("st_indicator_minute")
@@ -337,5 +339,54 @@ class TdengineIndicatorMinuteRepositoryTest {
                 .contains("st_formula_calc_exception")
                 .contains("indicator_id='INDICATOR_A'")
                 .contains("calculated_at");
+        assertThat(sql.getAllValues().get(2))
+                .contains("st_formula_calc_attempt_v2")
+                .contains("minute_start")
+                .contains("indicator_id='INDICATOR_A'");
+    }
+
+    @Test
+    void savesAppendOnlyAttemptsAndCurrentProjectionToSeparateStables() {
+        when(template.queryForObject(anyString(), eq(Long.class))).thenReturn(0L);
+        repository.saveAttempts(List.of(new FormulaCalculationAttempt(
+                "ATTEMPT001", "INDICATOR_A", "WCR_COP", "BLD001",
+                "GROUP001", "EQUIP001", MINUTE, MINUTE + 1_000L,
+                "QUALITY_NOT_ALLOWED", "QUALITY_NOT_ALLOWED",
+                "INDICATOR_CALCULATION", "HVAC_FORMULA_V1", "[]", 8)));
+        repository.saveStates(List.of(new IndicatorMinuteState(
+                "INDICATOR_A", "WCR_COP", "BLD001", "GROUP001", "EQUIP001",
+                MINUTE, "QUALITY_NOT_ALLOWED", null, "ATTEMPT001",
+                MINUTE + 1_000L, 8)));
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template, times(2)).execute(sql.capture());
+        assertThat(sql.getAllValues().get(0))
+                .contains("st_formula_calc_attempt_v2_INDICATOR_A")
+                .contains("attempt_id", "minute_start", "config_revision")
+                .contains("ATTEMPT001", "QUALITY_NOT_ALLOWED");
+        assertThat(sql.getAllValues().get(1))
+                .contains("st_indicator_minute_state_INDICATOR_A")
+                .contains("current_status", "state_updated_at", "config_revision");
+    }
+
+    @Test
+    void latestStateQueryUsesFullIdentityPartition() {
+        IndicatorMinuteState state = new IndicatorMinuteState(
+                "INDICATOR_A", "WCR_COP", "BLD001", "GROUP001", "EQUIP001",
+                MINUTE, "QUALITY_NOT_ALLOWED", null, "ATTEMPT001",
+                MINUTE + 1_000L, 8);
+        when(template.query(anyString(), any(org.springframework.jdbc.core.RowMapper.class)))
+                .thenReturn(List.of(state));
+
+        assertThat(repository.findLatestStates(List.of("INDICATOR_A")))
+                .containsEntry("INDICATOR_A", state);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template).query(sql.capture(), any(org.springframework.jdbc.core.RowMapper.class));
+        assertThat(sql.getValue())
+                .contains("LAST_ROW(ts) AS ts")
+                .contains("LAST_ROW(current_status) AS current_status")
+                .contains("indicator_id IN ('INDICATOR_A')")
+                .contains("PARTITION BY indicator_id,indicator_code,building_id,system_group_id,equip_id");
     }
 }

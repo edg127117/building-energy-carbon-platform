@@ -2,6 +2,9 @@ package com.platform;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
+import com.platform.iot.qualityusage.QualityUsageRuntimeStateService;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
 import org.junit.jupiter.api.BeforeAll;
@@ -39,10 +42,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class HvacQueryControllerFlowTest {
 
     private static final long FROM = 1_800_000_000_000L;
+    private static final RuntimeSnapshot DEFAULT_POLICY_SNAPSHOT =
+            QualityUsagePolicyResolver.systemDefault().runtimeSnapshot();
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
     @MockBean private HvacMinuteRepository minuteRepository;
+    @MockBean private QualityUsageRuntimeStateService qualityUsageRuntimeStateService;
 
     private String adminToken;
     private String ownerToken;
@@ -66,7 +72,12 @@ class HvacQueryControllerFlowTest {
 
     @BeforeEach
     void resetTdengineMock() {
-        reset(minuteRepository);
+        reset(minuteRepository, qualityUsageRuntimeStateService);
+        when(qualityUsageRuntimeStateService.requireSnapshot())
+                .thenReturn(DEFAULT_POLICY_SNAPSHOT);
+        when(qualityUsageRuntimeStateService.loadRange(
+                anySet(), anyString(), anyLong(), anyLong()))
+                .thenReturn(DEFAULT_POLICY_SNAPSHOT);
     }
 
     @Test
@@ -115,7 +126,7 @@ class HvacQueryControllerFlowTest {
     void historyReturnsRequestedSeriesAndAutomaticResolution() throws Exception {
         long to = FROM + 2L * 24 * 60 * 60 * 1_000;
         when(minuteRepository.findHistory(
-                List.of("POINT002", "POINT001"), FROM, to, 5))
+                List.of("POINT002", "POINT001"), FROM, to, 1))
                 .thenReturn(List.of(
                         row("POINT001", FROM, 12.3),
                         row("POINT002", FROM + 300_000L, 13.4)));
@@ -128,7 +139,7 @@ class HvacQueryControllerFlowTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.resolutionMinutes").value(5))
                 .andExpect(jsonPath("$.data.series[0].pointId").value("POINT002"))
-                .andExpect(jsonPath("$.data.series[0].records[0].average")
+                .andExpect(jsonPath("$.data.series[0].records[1].average")
                         .value(13.4))
                 .andExpect(jsonPath("$.data.series[1].pointId").value("POINT001"))
                 .andExpect(jsonPath("$.data.series[1].records[0].time")

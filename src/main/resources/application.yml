@@ -127,6 +127,18 @@ data-quality:
   # MySQL WAITING 是持久化队列；工作线程满时领取会安全回退，不进入 JVM 等待队列。
   recalculation-worker-concurrency: ${RECALCULATION_WORKER_CONCURRENCY:2}
 
+# Q0/Q1/Q2 使用策略只治理消费。修订检查、实时纠正、指标恢复和投影对账均有界，
+# 不与采集线程、设备采样周期或质量生成参数共用执行队列。
+quality-usage:
+  revision-check-ms: ${QUALITY_USAGE_REVISION_CHECK_MS:60000}
+  recovery-batch-size: ${QUALITY_USAGE_RECOVERY_BATCH_SIZE:500}
+  realtime-correction-queue-capacity: ${QUALITY_USAGE_REALTIME_QUEUE_CAPACITY:1000}
+  realtime-correction-concurrency: ${QUALITY_USAGE_REALTIME_CONCURRENCY:1}
+  indicator-recovery-queue-capacity: ${QUALITY_USAGE_INDICATOR_QUEUE_CAPACITY:500}
+  indicator-recovery-concurrency: ${QUALITY_USAGE_INDICATOR_CONCURRENCY:1}
+  reconciliation-batch-size: ${QUALITY_USAGE_RECONCILIATION_BATCH_SIZE:200}
+  reconciliation-delay-ms: ${QUALITY_USAGE_RECONCILIATION_DELAY_MS:60000}
+
 formula:
   # false 时不创建公式引擎、指标查询 API 和补算任务；测试可据此停止公式业务链路。
   enabled: true

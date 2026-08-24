@@ -36,7 +36,9 @@ class TdengineHvacSchemaTest {
                 "st_raw_event",
                 "st_raw_minute",
                 "st_indicator_minute",
-                "st_formula_calc_exception");
+                "st_formula_calc_exception",
+                "st_formula_calc_attempt_v2",
+                "st_indicator_minute_state");
         assertThat(allSql).doesNotContain(
                 "st_" + "electric" + "_data",
                 "voltage" + "_a",
@@ -98,6 +100,9 @@ class TdengineHvacSchemaTest {
                 "data_quality", "formula_version", "calculated_at",
                 "st_formula_calc_exception",
                 "calc_status", "reason_code", "missing_inputs",
+                "st_formula_calc_attempt_v2", "attempt_id", "minute_start",
+                "policy_evidence_json", "config_revision",
+                "st_indicator_minute_state", "current_status", "state_updated_at",
                 "indicator_id", "indicator_code", "building_id",
                 "system_group_id", "equip_id");
         assertThat(allSql).contains(

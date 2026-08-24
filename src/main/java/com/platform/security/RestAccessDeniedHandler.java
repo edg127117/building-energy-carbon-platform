@@ -54,6 +54,8 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         } else if (path.startsWith(request.getContextPath() + "/v1/data-sources")
                 || path.startsWith(request.getContextPath() + "/v1/collection-")) {
             body.put("errorCode", "COLLECTION_CONFIG_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/quality-usage")) {
+            body.put("errorCode", "QUALITY_POLICY_FORBIDDEN");
         }
     }
 }

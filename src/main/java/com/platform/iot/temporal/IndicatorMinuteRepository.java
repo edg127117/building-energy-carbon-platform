@@ -3,6 +3,8 @@ package com.platform.iot.temporal;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.formula.model.FormulaCalculationAttempt;
+import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 
 import java.util.List;
@@ -13,9 +15,9 @@ import java.util.Set;
 /**
  * HVAC 公式结果访问 TDengine 的仓储边界。
  *
- * <p>成功值与失败审计分开保存，但都以指标实例和来源分钟定位。Service 和
- * 公式引擎只依赖该接口，不直接拼接 TDengine SQL；所有时间范围统一采用
- * 半开区间 {@code [fromInclusive,toExclusive)}。</p>
+ * <p>成功值、失败审计、追加尝试和当前状态投影分开保存。Service 和公式引擎只依赖
+ * 该接口，不直接拼接 TDengine SQL；查询先看当前状态，再决定旧成功事实是否仍有效。
+ * 所有时间范围统一采用半开区间 {@code [fromInclusive,toExclusive)}。</p>
  */
 public interface IndicatorMinuteRepository {
 
@@ -26,9 +28,10 @@ public interface IndicatorMinuteRepository {
     void saveExceptions(List<FormulaCalculationException> exceptions);
 
     /**
-     * 删除明确指标分钟键对应的旧成功结果。
+     * 兼容旧流程的精确成功事实删除入口。
      *
-     * <p>只用于质量修正后公式已不再成功的失效处理；不得按建筑或时间范围扩大删除。</p>
+     * <p>质量使用策略闭环不得调用该入口；策略变更通过追加尝试事实和覆盖当前状态投影
+     * 使旧成功失效，保证历史可审计。</p>
      */
     void deleteSuccesses(Set<IndicatorMinuteKey> keys);
 
@@ -68,4 +71,23 @@ public interface IndicatorMinuteRepository {
      */
     Map<IndicatorMinuteKey, Long> findLatestAttemptAt(
             Set<IndicatorMinuteKey> keys);
+
+    /** 追加计算尝试事实；实现必须按 attemptId 幂等。 */
+    default void saveAttempts(List<FormulaCalculationAttempt> attempts) {
+    }
+
+    /** 覆盖同一指标分钟的当前状态投影，不删除成功或失败历史事实。 */
+    default void saveStates(List<IndicatorMinuteState> states) {
+    }
+
+    /** 批量读取当前状态投影；没有投影的旧数据由查询层兼容读取。 */
+    default Map<IndicatorMinuteKey, IndicatorMinuteState> findStates(
+            Set<IndicatorMinuteKey> keys) {
+        return Map.of();
+    }
+
+    /** 批量读取各指标最新的当前状态，防止 Redis 旧分钟掩盖较新的失效投影。 */
+    default Map<String, IndicatorMinuteState> findLatestStates(List<String> indicatorIds) {
+        return Map.of();
+    }
 }
