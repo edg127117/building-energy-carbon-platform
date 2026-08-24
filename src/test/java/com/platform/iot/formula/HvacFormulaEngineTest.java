@@ -10,10 +10,12 @@ import com.platform.iot.dataquality.event.HvacMinuteQualityReadyEvent;
 import com.platform.iot.dataquality.model.QualityEventSource;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
+import com.platform.iot.formula.model.FormulaCalculationAttempt;
 import com.platform.iot.formula.model.IndicatorLatestState;
-import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.quality.DataPointConfigProvider;
+import com.platform.iot.qualityusage.QualityUsageIndicatorRecoveryService;
+import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
@@ -89,7 +91,8 @@ class HvacFormulaEngineTest {
                         IndicatorLatestCacheService.class,
                         IndicatorRealtimePublisher.class,
                         DataPointConfigProvider.class,
-                        FormulaProperties.class);
+                        FormulaProperties.class,
+                        QualityUsagePolicyResolver.class);
         assertThat(productionConstructor.getAnnotation(Autowired.class)).isNotNull();
     }
 
@@ -104,6 +107,8 @@ class HvacFormulaEngineTest {
                 .withBean(IndicatorRealtimePublisher.class, () -> publisher)
                 .withBean(DataPointConfigProvider.class, () -> pointConfigProvider)
                 .withBean(FormulaProperties.class, FormulaProperties::new)
+                .withBean(QualityUsagePolicyResolver.class,
+                        QualityUsagePolicyResolver::systemDefault)
                 .withUserConfiguration(HvacFormulaEngine.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -118,11 +123,13 @@ class HvacFormulaEngineTest {
                 .withUserConfiguration(
                         HvacFormulaEngine.class,
                         HvacIndicatorQueryService.class,
+                        QualityUsageIndicatorRecoveryService.class,
                         HvacIndicatorController.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
                     assertThat(context).doesNotHaveBean(HvacFormulaEngine.class);
                     assertThat(context).doesNotHaveBean(HvacIndicatorQueryService.class);
+                    assertThat(context).doesNotHaveBean(QualityUsageIndicatorRecoveryService.class);
                     assertThat(context).doesNotHaveBean(HvacIndicatorController.class);
                 });
     }
@@ -514,7 +521,7 @@ class HvacFormulaEngineTest {
     }
 
     @Test
-    void correctionFailureDeletesOldSuccessBeforeAuditAndPublishesAuthoritativeState() {
+    void correctionFailurePreservesFactsAndPublishesAuthoritativeProjection() {
         RawMinuteAggregate trigger = aggregate("P1", "BLD001");
         BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
         IndicatorFormula formula = formula("PUMP_EFF", "V1");
@@ -535,12 +542,13 @@ class HvacFormulaEngineTest {
                 MINUTE, FINALIZED_AT, QualityEventSource.LATE_REAL_CORRECTION,
                 Set.of("BLD001"), List.of(trigger), Set.of("P1")));
 
-        IndicatorMinuteKey key = new IndicatorMinuteKey("I1", MINUTE);
         InOrder ordered = inOrder(indicatorRepository, cache, publisher);
-        ordered.verify(indicatorRepository).deleteSuccesses(Set.of(key));
         ordered.verify(indicatorRepository).saveExceptions(any());
+        ordered.verify(indicatorRepository).saveAttempts(any());
+        ordered.verify(indicatorRepository).saveStates(any());
         ordered.verify(cache).setIfNotOlder(any(), eq(true));
         ordered.verify(publisher).publish(any());
+        verify(indicatorRepository, never()).deleteSuccesses(any());
         verify(indicatorRepository, never()).saveSuccesses(any());
     }
 
@@ -589,7 +597,46 @@ class HvacFormulaEngineTest {
     }
 
     @Test
-    void correctionDeleteFailurePropagatesAndBlocksAuditCacheAndWebSocket() {
+    void actualQ1InputBlockedByDefaultPolicyBecomesAuditableFailure() {
+        RawMinuteAggregate aggregate = aggregate("P1", "BLD001");
+        BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
+        IndicatorFormula formula = formula("PUMP_EFF", "V1");
+        FormulaInputs inputs = new FormulaInputs(List.of());
+        when(configProvider.findAllActive()).thenReturn(List.of(indicator));
+        when(assembler.assemble(indicator, MINUTE, List.of(aggregate))).thenReturn(inputs);
+        when(formula.calculate(inputs)).thenReturn(new FormulaCalculation(
+                FormulaCalculation.Status.SUCCESS,
+                "PUMP_EFF", "V1", 2.5, 1,
+                List.of(new FormulaCalculation.Input(
+                        "Pc/PPE", "P1", "PUMP_POWER", 12.5, "kW", 1)),
+                List.of(), null, List.of()));
+
+        engine(List.of(formula)).onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                MINUTE, FINALIZED_AT, false, List.of(aggregate)));
+
+        ArgumentCaptor<List<FormulaCalculationException>> failures = listCaptor();
+        verify(indicatorRepository).saveExceptions(failures.capture());
+        assertThat(failures.getValue()).singleElement().satisfies(failure -> {
+            assertThat(failure.status()).isEqualTo(
+                    FormulaCalculation.Status.QUALITY_NOT_ALLOWED);
+            assertThat(failure.reasonCode()).isEqualTo("QUALITY_NOT_ALLOWED");
+        });
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<FormulaCalculationAttempt>> attempts =
+                ArgumentCaptor.forClass(List.class);
+        verify(indicatorRepository).saveAttempts(attempts.capture());
+        assertThat(attempts.getValue()).singleElement().satisfies(attempt -> {
+            assertThat(attempt.calcStatus()).isEqualTo("QUALITY_NOT_ALLOWED");
+            assertThat(attempt.policyEvidenceJson())
+                    .contains("\"pointId\":\"P1\"")
+                    .contains("\"quality\":1")
+                    .contains("\"decision\":\"BLOCK\"");
+        });
+        verify(indicatorRepository, never()).saveSuccesses(any());
+    }
+
+    @Test
+    void correctionDoesNotInvokeLegacySuccessDeletion() {
         RawMinuteAggregate trigger = aggregate("P1", "BLD001");
         BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
         IndicatorFormula formula = formula("PUMP_EFF", "V1");
@@ -607,19 +654,16 @@ class HvacFormulaEngineTest {
         doThrow(new IllegalStateException("delete failed"))
                 .when(indicatorRepository).deleteSuccesses(any());
 
-        assertThatThrownBy(() -> engine(List.of(formula)).onMinuteQualityReady(
-                new HvacMinuteQualityReadyEvent(
-                        MINUTE, FINALIZED_AT, QualityEventSource.MANUAL_RECALCULATION,
-                        Set.of("BLD001"), List.of(trigger), Set.of("P1"))))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessage("delete failed");
+        engine(List.of(formula)).onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
+                MINUTE, FINALIZED_AT, QualityEventSource.MANUAL_RECALCULATION,
+                Set.of("BLD001"), List.of(trigger), Set.of("P1")));
 
-        verify(indicatorRepository, never()).saveExceptions(any());
-        verifyNoInteractions(cache, publisher);
+        verify(indicatorRepository, never()).deleteSuccesses(any());
+        verify(indicatorRepository).saveExceptions(any());
     }
 
     @Test
-    void correctionAuditFailureAfterDeletionStillBlocksCacheAndWebSocket() {
+    void correctionAuditFailurePreservesOldFactsAndBlocksProjectionAndPublish() {
         RawMinuteAggregate trigger = aggregate("P1", "BLD001");
         BizIndicator indicator = indicator("I1", "PUMP_EFF", "BLD001");
         IndicatorFormula formula = formula("PUMP_EFF", "V1");
@@ -644,10 +688,8 @@ class HvacFormulaEngineTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("exception write failed");
 
-        InOrder ordered = inOrder(indicatorRepository);
-        ordered.verify(indicatorRepository)
-                .deleteSuccesses(Set.of(new IndicatorMinuteKey("I1", MINUTE)));
-        ordered.verify(indicatorRepository).saveExceptions(any());
+        verify(indicatorRepository, never()).deleteSuccesses(any());
+        verify(indicatorRepository).saveExceptions(any());
         verifyNoInteractions(cache, publisher);
     }
 

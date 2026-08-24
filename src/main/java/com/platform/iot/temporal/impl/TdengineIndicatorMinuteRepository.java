@@ -5,6 +5,8 @@ import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.formula.model.FormulaCalculationAttempt;
+import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -21,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -28,8 +31,8 @@ import java.util.stream.Collectors;
  * 使用专用 TDengine {@link JdbcTemplate} 持久化和查询公式分钟结果。
  *
  * <p>每个指标实例使用独立子表，来源分钟作为主时间戳，因此同一分钟补算会
- * 覆盖而不是追加重复成功值。成功表服务趋势查询，异常表保留缺失项和失败原因；
- * 本类只负责时序数据访问，不参与公式选择、权限判断或缓存更新。</p>
+ * 覆盖而不是追加重复成功值。成功与异常表保留既有事实，尝试表追加质量策略证据，
+ * 状态表决定某指标分钟当前是否有效；本类不参与公式选择、权限判断或缓存更新。</p>
  */
 @Repository
 public class TdengineIndicatorMinuteRepository implements IndicatorMinuteRepository {
@@ -38,6 +41,8 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
 
     private final JdbcTemplate template;
     private final TdengineProperties properties;
+    private final Map<String, Long> latestAttemptTimestamps = new ConcurrentHashMap<>();
+    private final Set<String> persistedAttemptIds = ConcurrentHashMap.newKeySet();
 
     public TdengineIndicatorMinuteRepository(
             // 必须显式选择 TDengine 数据源，避免多数据源环境误用 MySQL。
@@ -115,6 +120,154 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                     .append(timestamp(exception.calculatedAt())).append(") ");
         }
         template.execute(sql.toString().trim());
+    }
+
+    /**
+     * 追加计算尝试；同一指标的物理时间戳在单实例内严格递增，attemptId 作为业务幂等证据。
+     */
+    @Override
+    public synchronized void saveAttempts(List<FormulaCalculationAttempt> attempts) {
+        if (attempts.isEmpty()) {
+            return;
+        }
+        String stable = attemptStable();
+        StringBuilder sql = new StringBuilder("INSERT INTO ");
+        int appended = 0;
+        for (FormulaCalculationAttempt attempt : attempts) {
+            if (persistedAttemptIds.contains(attempt.attemptId())
+                    || attemptExists(attempt.attemptId())) {
+                persistedAttemptIds.add(attempt.attemptId());
+                continue;
+            }
+            long timestamp = nextAttemptTimestamp(attempt);
+            if (attempt.policyEvidenceJson() != null
+                    && attempt.policyEvidenceJson().length() > 2_048) {
+                throw new IllegalArgumentException("Policy evidence exceeds TDengine boundary");
+            }
+            sql.append(attemptChild(attempt.indicatorId())).append(" USING ").append(stable)
+                    .append(" (indicator_id,indicator_code,building_id,system_group_id,equip_id)")
+                    .append(" TAGS (")
+                    .append(quote(attempt.indicatorId())).append(",")
+                    .append(quote(attempt.indicatorCode())).append(",")
+                    .append(quote(attempt.buildingId())).append(",")
+                    .append(nullableQuote(attempt.systemGroupId())).append(",")
+                    .append(nullableQuote(attempt.equipId())).append(") ")
+                    .append("(ts,attempt_id,minute_start,calc_status,reason_code,scenario_code,")
+                    .append("formula_version,policy_evidence_json,config_revision) VALUES (")
+                    .append(timestamp(timestamp)).append(",")
+                    .append(quote(attempt.attemptId())).append(",")
+                    .append(timestamp(attempt.minuteStart())).append(",")
+                    .append(quote(attempt.calcStatus())).append(",")
+                    .append(nullableQuote(attempt.reasonCode())).append(",")
+                    .append(quote(attempt.scenarioCode())).append(",")
+                    .append(quote(attempt.formulaVersion())).append(",")
+                    .append(nullableQuote(attempt.policyEvidenceJson())).append(",")
+                    .append(attempt.configRevision()).append(") ");
+            persistedAttemptIds.add(attempt.attemptId());
+            appended++;
+        }
+        if (appended > 0) {
+            try {
+                template.execute(sql.toString().trim());
+            } catch (RuntimeException exception) {
+                attempts.forEach(attempt -> persistedAttemptIds.remove(attempt.attemptId()));
+                throw exception;
+            }
+        }
+    }
+
+    private boolean attemptExists(String attemptId) {
+        String sql = "SELECT COUNT(*) FROM " + attemptStable()
+                + " WHERE attempt_id=" + quote(attemptId);
+        Long count = template.queryForObject(sql, Long.class);
+        return count != null && count > 0;
+    }
+
+    private long nextAttemptTimestamp(FormulaCalculationAttempt attempt) {
+        Long persistedMaximum = latestAttemptTimestamps.get(attempt.indicatorId());
+        if (persistedMaximum == null) {
+            Timestamp maximumTimestamp = template.queryForObject(
+                    "SELECT MAX(ts) FROM " + attemptStable()
+                            + " WHERE indicator_id=" + quote(attempt.indicatorId()),
+                    Timestamp.class);
+            persistedMaximum = maximumTimestamp == null ? null : maximumTimestamp.getTime();
+        }
+        long minimum = persistedMaximum == null ? Long.MIN_VALUE : persistedMaximum + 1;
+        long next = Math.max(attempt.attemptedAt(), minimum);
+        latestAttemptTimestamps.put(attempt.indicatorId(), next);
+        return next;
+    }
+
+    /** 当前状态以来源分钟为主键覆盖更新，历史成功和尝试事实不受影响。 */
+    @Override
+    public void saveStates(List<IndicatorMinuteState> states) {
+        if (states.isEmpty()) {
+            return;
+        }
+        String stable = stateStable();
+        StringBuilder sql = new StringBuilder("INSERT INTO ");
+        for (IndicatorMinuteState state : states) {
+            sql.append(stateChild(state.indicatorId())).append(" USING ").append(stable)
+                    .append(" (indicator_id,indicator_code,building_id,system_group_id,equip_id)")
+                    .append(" TAGS (")
+                    .append(quote(state.indicatorId())).append(",")
+                    .append(quote(state.indicatorCode())).append(",")
+                    .append(quote(state.buildingId())).append(",")
+                    .append(nullableQuote(state.systemGroupId())).append(",")
+                    .append(nullableQuote(state.equipId())).append(") ")
+                    .append("(ts,current_status,source_fact_id,attempt_id,state_updated_at,config_revision)")
+                    .append(" VALUES (")
+                    .append(timestamp(state.minuteStart())).append(",")
+                    .append(quote(state.currentStatus())).append(",")
+                    .append(nullableQuote(state.sourceFactId())).append(",")
+                    .append(quote(state.attemptId())).append(",")
+                    .append(timestamp(state.stateUpdatedAt())).append(",")
+                    .append(state.configRevision()).append(") ");
+        }
+        template.execute(sql.toString().trim());
+    }
+
+    @Override
+    public Map<IndicatorMinuteKey, IndicatorMinuteState> findStates(
+            Set<IndicatorMinuteKey> keys) {
+        if (keys.isEmpty()) {
+            return Map.of();
+        }
+        String predicates = keys.stream()
+                .sorted(Comparator.comparing(IndicatorMinuteKey::indicatorId)
+                        .thenComparingLong(IndicatorMinuteKey::minuteStart))
+                .map(key -> "(indicator_id=" + quote(key.indicatorId())
+                        + " AND ts=" + timestamp(key.minuteStart()) + ")")
+                .collect(Collectors.joining(" OR "));
+        String sql = "SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,"
+                + "ts,current_status,source_fact_id,attempt_id,state_updated_at,config_revision FROM "
+                + stateStable() + " WHERE " + predicates;
+        return template.query(sql, (rs, row) -> mapState(rs)).stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        state -> new IndicatorMinuteKey(state.indicatorId(), state.minuteStart()),
+                        state -> state,
+                        (left, right) -> left.stateUpdatedAt() >= right.stateUpdatedAt()
+                                ? left : right));
+    }
+
+    @Override
+    public Map<String, IndicatorMinuteState> findLatestStates(List<String> indicatorIds) {
+        if (indicatorIds.isEmpty()) {
+            return Map.of();
+        }
+        String sql = "SELECT indicator_id,indicator_code,building_id,system_group_id,equip_id,"
+                + "LAST_ROW(ts) AS ts,LAST_ROW(current_status) AS current_status,"
+                + "LAST_ROW(source_fact_id) AS source_fact_id,LAST_ROW(attempt_id) AS attempt_id,"
+                + "LAST_ROW(state_updated_at) AS state_updated_at,"
+                + "LAST_ROW(config_revision) AS config_revision FROM " + stateStable()
+                + " WHERE indicator_id IN (" + values(indicatorIds) + ")"
+                + latestIdentityPartition();
+        return template.query(sql, (rs, row) -> mapState(rs)).stream()
+                .collect(Collectors.toUnmodifiableMap(
+                        IndicatorMinuteState::indicatorId,
+                        state -> state,
+                        (left, right) -> left.minuteStart() >= right.minuteStart()
+                                ? left : right));
     }
 
     /** 只删除调用方给出的“指标 + 来源分钟”成功键，质量修正时不会扩大到整段历史。 */
@@ -309,7 +462,29 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         Map<IndicatorMinuteKey, Long> calculatedAt = new LinkedHashMap<>();
         collectAttemptTimes(indicatorStable(), predicates, calculatedAt);
         collectAttemptTimes(exceptionStable(), predicates, calculatedAt);
+        collectV2AttemptTimes(keys, calculatedAt);
         return Map.copyOf(calculatedAt);
+    }
+
+    private void collectV2AttemptTimes(
+            Set<IndicatorMinuteKey> keys,
+            Map<IndicatorMinuteKey, Long> calculatedAt) {
+        String predicates = keys.stream()
+                .sorted(Comparator.comparing(IndicatorMinuteKey::indicatorId)
+                        .thenComparingLong(IndicatorMinuteKey::minuteStart))
+                .map(key -> "(indicator_id=" + quote(key.indicatorId())
+                        + " AND minute_start=" + timestamp(key.minuteStart()) + ")")
+                .collect(Collectors.joining(" OR "));
+        String sql = "SELECT indicator_id,minute_start,ts FROM "
+                + attemptStable() + " WHERE " + predicates
+                + " ORDER BY indicator_id,minute_start,ts";
+        template.query(sql, resultSet -> {
+            IndicatorMinuteKey key = new IndicatorMinuteKey(
+                    resultSet.getString("indicator_id"),
+                    resultSet.getTimestamp("minute_start").getTime());
+            calculatedAt.merge(
+                    key, resultSet.getTimestamp("ts").getTime(), Math::max);
+        });
     }
 
     /** 将一个超级表的尝试时间合并到结果，同键只保留较晚时间。 */
@@ -420,12 +595,43 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return qualified(properties.getStFormulaCalcException());
     }
 
+    private String attemptStable() {
+        return qualified(properties.getStFormulaCalcAttemptV2());
+    }
+
+    private String stateStable() {
+        return qualified(properties.getStIndicatorMinuteState());
+    }
+
     private String indicatorChild(String indicatorId) {
         return qualified(properties.getStIndicatorMinute() + "_" + safe(indicatorId));
     }
 
     private String exceptionChild(String indicatorId) {
         return qualified(properties.getStFormulaCalcException() + "_" + safe(indicatorId));
+    }
+
+    private String attemptChild(String indicatorId) {
+        return qualified(properties.getStFormulaCalcAttemptV2() + "_" + safe(indicatorId));
+    }
+
+    private String stateChild(String indicatorId) {
+        return qualified(properties.getStIndicatorMinuteState() + "_" + safe(indicatorId));
+    }
+
+    private IndicatorMinuteState mapState(ResultSet resultSet) throws SQLException {
+        return new IndicatorMinuteState(
+                resultSet.getString("indicator_id"),
+                resultSet.getString("indicator_code"),
+                resultSet.getString("building_id"),
+                resultSet.getString("system_group_id"),
+                resultSet.getString("equip_id"),
+                resultSet.getTimestamp("ts").getTime(),
+                resultSet.getString("current_status"),
+                resultSet.getString("source_fact_id"),
+                resultSet.getString("attempt_id"),
+                resultSet.getTimestamp("state_updated_at").getTime(),
+                resultSet.getLong("config_revision"));
     }
 
     private String qualified(String identifier) {

@@ -1,6 +1,7 @@
 package com.platform.config;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.EnableAsync;
@@ -10,6 +11,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.util.Objects;
 import java.util.concurrent.ThreadPoolExecutor;
+import com.platform.iot.qualityusage.QualityUsageProperties;
 
 /**
  * 隔离 IoT 业务定时扫描、人工重算和迟到真实数据修正的执行资源。
@@ -25,18 +27,28 @@ public class AsyncConfig {
 
     private final DataQualityProperties properties;
     private final int businessSchedulerPoolSize;
+    private final QualityUsageProperties qualityUsageProperties;
 
+    @Autowired
     public AsyncConfig(
             DataQualityProperties properties,
+            QualityUsageProperties qualityUsageProperties,
             @Value("${scheduling.business-pool-size:4}")
             int businessSchedulerPoolSize) {
         this.properties = Objects.requireNonNull(
                 properties, "properties 不能为空");
+        this.qualityUsageProperties = Objects.requireNonNull(
+                qualityUsageProperties, "qualityUsageProperties 不能为空");
         if (businessSchedulerPoolSize < 1) {
             throw new IllegalArgumentException(
                     "businessSchedulerPoolSize 必须大于 0");
         }
         this.businessSchedulerPoolSize = businessSchedulerPoolSize;
+    }
+
+    /** 兼容只验证既有执行器的单元测试。 */
+    AsyncConfig(DataQualityProperties properties, int businessSchedulerPoolSize) {
+        this(properties, new QualityUsageProperties(), businessSchedulerPoolSize);
     }
 
     /** 承载普通业务定时任务，禁止框架从 WebSocket/MQTT 专用 Bean 中随机选择。 */
@@ -79,6 +91,22 @@ public class AsyncConfig {
                 properties.getRecalculationWorkerConcurrency(),
                 0,
                 "iot-recalculation-");
+    }
+
+    /** 质量策略变化后的测点状态纠正，队列满时丢弃旧任务而不反压采集。 */
+    @Bean("qualityUsageRealtimeExecutor")
+    public ThreadPoolTaskExecutor qualityUsageRealtimeExecutor() {
+        return boundedExecutor(qualityUsageProperties.getRealtimeCorrectionConcurrency(),
+                qualityUsageProperties.getRealtimeCorrectionQueueCapacity(),
+                "iot-quality-usage-realtime-");
+    }
+
+    /** 指标策略恢复与重算使用独立队列，避免 WebSocket 拥塞占用计算资源。 */
+    @Bean("qualityUsageIndicatorExecutor")
+    public ThreadPoolTaskExecutor qualityUsageIndicatorExecutor() {
+        return boundedExecutor(qualityUsageProperties.getIndicatorRecoveryConcurrency(),
+                qualityUsageProperties.getIndicatorRecoveryQueueCapacity(),
+                "iot-quality-usage-indicator-");
     }
 
     private ThreadPoolTaskExecutor boundedExecutor(

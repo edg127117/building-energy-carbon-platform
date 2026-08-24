@@ -27,7 +27,14 @@ public record FormulaCalculation(
         List<String> missingInputs) {
 
     /** 公式执行状态；失败状态必须持久化到异常审计表。 */
-    public enum Status { SUCCESS, MISSING_INPUT, INVALID_INPUT, ENGINE_ERROR }
+    public enum Status {
+        SUCCESS,
+        MISSING_INPUT,
+        INVALID_INPUT,
+        QUALITY_NOT_ALLOWED,
+        POLICY_SNAPSHOT_UNAVAILABLE,
+        ENGINE_ERROR
+    }
 
     /**
      * 一个公式输入及其来源身份。

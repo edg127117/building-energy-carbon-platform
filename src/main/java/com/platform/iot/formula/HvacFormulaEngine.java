@@ -9,9 +9,17 @@ import com.platform.iot.dataquality.model.QualityEventSource;
 import com.platform.iot.formula.model.FormulaCalculation;
 import com.platform.iot.formula.model.FormulaCalculationException;
 import com.platform.iot.formula.model.IndicatorLatestState;
-import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
+import com.platform.iot.formula.model.FormulaCalculationAttempt;
+import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.quality.DataPointConfigProvider;
+import com.platform.iot.qualityusage.QualityUsageModels.Decision;
+import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
+import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
+import com.platform.iot.qualityusage.QualityUsageErrors;
+import com.platform.iot.qualityusage.QualityUsageSnapshotUnavailableException;
+import com.platform.iot.qualityusage.QualityUsageRecoveryTaskService;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
@@ -30,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -59,6 +68,8 @@ public class HvacFormulaEngine {
     private final FormulaInputAssembler assembler;
     private final FormulaDependencyResolver dependencyResolver;
     private final Map<String, IndicatorFormula> formulas;
+    private final QualityUsagePolicyResolver qualityUsageResolver;
+    private QualityUsageRecoveryTaskService recoveryTasks;
 
     @Autowired
     public HvacFormulaEngine(
@@ -68,7 +79,8 @@ public class HvacFormulaEngine {
             IndicatorLatestCacheService cache,
             IndicatorRealtimePublisher publisher,
             DataPointConfigProvider pointConfigProvider,
-            FormulaProperties properties) {
+            FormulaProperties properties,
+            QualityUsagePolicyResolver qualityUsageResolver) {
         this(configProvider, minuteRepository, indicatorRepository, cache, publisher,
                 new FormulaInputAssembler(),
                 new FormulaDependencyResolver(pointConfigProvider),
@@ -77,7 +89,21 @@ public class HvacFormulaEngine {
                         new CoolingTowerEfficiencyFormula(
                                 new PsychrometricWetBulbCalculator(), properties),
                         new PumpEfficiencyFormula(),
-                        new AhuPowerEfficiencyFormula()));
+                        new AhuPowerEfficiencyFormula()),
+                qualityUsageResolver);
+    }
+
+    /** 兼容不启动治理数据库的旧单元测试，正式 Spring 装配使用完整构造器。 */
+    public HvacFormulaEngine(
+            IndicatorConfigProvider configProvider,
+            HvacMinuteRepository minuteRepository,
+            IndicatorMinuteRepository indicatorRepository,
+            IndicatorLatestCacheService cache,
+            IndicatorRealtimePublisher publisher,
+            DataPointConfigProvider pointConfigProvider,
+            FormulaProperties properties) {
+        this(configProvider, minuteRepository, indicatorRepository, cache, publisher,
+                pointConfigProvider, properties, QualityUsagePolicyResolver.systemDefault());
     }
 
     HvacFormulaEngine(
@@ -89,6 +115,21 @@ public class HvacFormulaEngine {
             FormulaInputAssembler assembler,
             FormulaDependencyResolver dependencyResolver,
             Collection<IndicatorFormula> formulas) {
+        this(configProvider, minuteRepository, indicatorRepository, cache, publisher,
+                assembler, dependencyResolver, formulas,
+                QualityUsagePolicyResolver.systemDefault());
+    }
+
+    HvacFormulaEngine(
+            IndicatorConfigProvider configProvider,
+            HvacMinuteRepository minuteRepository,
+            IndicatorMinuteRepository indicatorRepository,
+            IndicatorLatestCacheService cache,
+            IndicatorRealtimePublisher publisher,
+            FormulaInputAssembler assembler,
+            FormulaDependencyResolver dependencyResolver,
+            Collection<IndicatorFormula> formulas,
+            QualityUsagePolicyResolver qualityUsageResolver) {
         this.configProvider = Objects.requireNonNull(configProvider, "configProvider");
         this.minuteRepository = Objects.requireNonNull(minuteRepository, "minuteRepository");
         this.indicatorRepository = Objects.requireNonNull(
@@ -99,6 +140,13 @@ public class HvacFormulaEngine {
         this.dependencyResolver = Objects.requireNonNull(
                 dependencyResolver, "dependencyResolver");
         this.formulas = indexFormulas(formulas);
+        this.qualityUsageResolver = Objects.requireNonNull(
+                qualityUsageResolver, "qualityUsageResolver");
+    }
+
+    @Autowired(required = false)
+    void setRecoveryTasks(QualityUsageRecoveryTaskService recoveryTasks) {
+        this.recoveryTasks = recoveryTasks;
     }
 
     /**
@@ -143,6 +191,20 @@ public class HvacFormulaEngine {
                 minuteStart, calculatedAt, aggregates,
                 affectedBuildings, onlyIndicatorIds,
                 configProvider.findAllActive(), false);
+    }
+
+    /** 策略刷新恢复只重算调用方已经按依赖关系筛出的指标。 */
+    public void recalculateForQualityPolicy(
+            long minuteStart,
+            List<RawMinuteAggregate> aggregates,
+            Set<String> indicatorIds) {
+        Set<String> buildings = aggregates.stream()
+                .map(RawMinuteAggregate::buildingId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+        calculateAndPersist(
+                minuteStart, System.currentTimeMillis(), aggregates,
+                buildings, indicatorIds, configProvider.findAllActive(), true);
     }
 
     /**
@@ -190,8 +252,8 @@ public class HvacFormulaEngine {
      * 为受影响建筑筛选指标，逐个计算后按“TDengine → Redis → WebSocket”顺序提交结果。
      *
      * <p>单个公式缺失、输入失败或策略异常只生成该指标的异常审计，不阻断同分钟其他
-     * 指标。迟到、插值或人工修正属于权威修正：如果新计算由成功变为失败，必须先删除
-     * 同一指标分钟的旧成功行，再保存失败审计，防止趋势查询继续返回已经失效的值。</p>
+     * 指标。迟到、插值或人工修正属于权威修正：成功和失败都保留为不可变尝试事实，
+     * 当前状态投影负责使旧成功不再参与查询。</p>
      *
      * <p>本轮所有 TDengine 写入均成功后才更新最新缓存；缓存接受该分钟后才广播，
      * 从而保证查询真相先于实时状态，并阻止历史补算把页面最新状态回拨到旧分钟。</p>
@@ -220,7 +282,9 @@ public class HvacFormulaEngine {
                     FormulaCalculation calculation = failureCalculation(
                             indicator.getIndicatorCode(), formulaVersion,
                             MISSING_STRATEGY_REASON);
-                    failures.add(failure(indicator, minuteStart, calculatedAt, calculation));
+                    failures.add(failure(
+                            indicator, minuteStart, calculatedAt, calculation,
+                            List.of(), 0));
                     continue;
                 }
                 formulaVersion = Objects.requireNonNull(
@@ -230,11 +294,47 @@ public class HvacFormulaEngine {
                         formula.calculate(inputs), "formula calculation");
                 validateCalculation(indicator, formula, formulaVersion, calculation);
                 if (calculation.status() == FormulaCalculation.Status.SUCCESS) {
-                    successes.add(new CalculatedSuccess(
-                            successRow(indicator, minuteStart, calculatedAt, calculation),
-                            latestState(indicator, minuteStart, calculation)));
+                    try {
+                        RuntimeSnapshot policySnapshot = qualityUsageResolver.runtimeSnapshot();
+                        List<Resolution> decisions = calculation.inputs().stream()
+                                .map(input -> qualityUsageResolver.resolve(
+                                        policySnapshot,
+                                        input.pointId(),
+                                        com.platform.iot.qualityusage.QualityUsageModels
+                                                .INDICATOR_CALCULATION,
+                                        minuteStart,
+                                        input.dataQuality()))
+                                .toList();
+                        if (decisions.stream().anyMatch(
+                                decision -> decision.decision() == Decision.BLOCK)) {
+                            calculation = qualityBlockedCalculation(calculation);
+                            failures.add(failure(
+                                    indicator, minuteStart, calculatedAt, calculation,
+                                    decisions, policySnapshot.revision()));
+                        } else {
+                            successes.add(success(
+                                    indicator, minuteStart, calculatedAt, calculation,
+                                    decisions, policySnapshot.revision()));
+                        }
+                    } catch (QualityUsageSnapshotUnavailableException exception) {
+                        calculation = policyUnavailableCalculation(calculation);
+                        failures.add(failure(
+                                indicator, minuteStart, calculatedAt, calculation,
+                                List.of(), 0));
+                    } catch (BusinessException exception) {
+                        if (!QualityUsageErrors.SCENARIO_DISABLED.equals(
+                                exception.getErrorCode())) {
+                            throw exception;
+                        }
+                        calculation = policyUnavailableCalculation(calculation);
+                        failures.add(failure(
+                                indicator, minuteStart, calculatedAt, calculation,
+                                List.of(), 0));
+                    }
                 } else {
-                    failures.add(failure(indicator, minuteStart, calculatedAt, calculation));
+                    failures.add(failure(
+                            indicator, minuteStart, calculatedAt, calculation,
+                            List.of(), 0));
                 }
             } catch (RuntimeException exception) {
                 log.warn("HVAC formula attempt failed: indicatorId={}, minuteStart={}",
@@ -242,25 +342,37 @@ public class HvacFormulaEngine {
                 FormulaCalculation calculation = failureCalculation(
                         indicator.getIndicatorCode(), formulaVersion,
                         ENGINE_ERROR_REASON);
-                failures.add(failure(indicator, minuteStart, calculatedAt, calculation));
+                failures.add(failure(
+                        indicator, minuteStart, calculatedAt, calculation,
+                        List.of(), 0));
             }
         }
 
-        // TDengine 是指标真相来源；本事件所有写入/删除全部成功后才允许刷新缓存。
+        // TDengine 是指标真相来源；事实和当前状态投影都成功后才允许刷新缓存。
         if (!successes.isEmpty()) {
             indicatorRepository.saveSuccesses(
                     successes.stream().map(CalculatedSuccess::row).toList());
         }
-        if (allowSuccessInvalidation && !failures.isEmpty()) {
-            indicatorRepository.deleteSuccesses(failures.stream()
-                    .map(failure -> new IndicatorMinuteKey(
-                            failure.row().indicatorId(),
-                            failure.row().minuteStart()))
-                    .collect(Collectors.toCollection(LinkedHashSet::new)));
-        }
         if (!failures.isEmpty()) {
             indicatorRepository.saveExceptions(
                     failures.stream().map(CalculatedFailure::row).toList());
+        }
+        List<FormulaCalculationAttempt> attempts = new ArrayList<>();
+        successes.forEach(success -> attempts.add(success.attempt()));
+        failures.forEach(failure -> attempts.add(failure.attempt()));
+        indicatorRepository.saveAttempts(attempts);
+        List<IndicatorMinuteState> states = new ArrayList<>();
+        successes.forEach(success -> states.add(success.projection()));
+        failures.forEach(failure -> states.add(failure.projection()));
+        try {
+            indicatorRepository.saveStates(states);
+        } catch (RuntimeException exception) {
+            if (recoveryTasks != null) {
+                recoveryTasks.recordProjectionFailure(states, exception);
+            }
+            log.warn("Indicator facts persisted but state projection failed; recovery was recorded",
+                    exception);
+            return;
         }
         successes.forEach(success ->
                 notifyLatest(success.state(), allowSuccessInvalidation));
@@ -347,10 +459,77 @@ public class HvacFormulaEngine {
             BizIndicator indicator,
             long minuteStart,
             long calculatedAt,
-            FormulaCalculation calculation) {
+            FormulaCalculation calculation,
+            List<Resolution> decisions,
+            long configRevision) {
+        String attemptId = id();
         return new CalculatedFailure(
                 exceptionRow(indicator, minuteStart, calculatedAt, calculation),
-                latestState(indicator, minuteStart, calculation));
+                latestState(indicator, minuteStart, calculation),
+                attempt(indicator, minuteStart, calculatedAt, calculation,
+                        attemptId, decisions, configRevision),
+                projection(indicator, minuteStart, calculatedAt,
+                        calculation.status().name(), null, attemptId, configRevision));
+    }
+
+    private CalculatedSuccess success(
+            BizIndicator indicator,
+            long minuteStart,
+            long calculatedAt,
+            FormulaCalculation calculation,
+            List<Resolution> decisions,
+            long configRevision) {
+        String attemptId = id();
+        IndicatorMinuteResult row = successRow(
+                indicator, minuteStart, calculatedAt, calculation);
+        return new CalculatedSuccess(
+                row,
+                latestState(indicator, minuteStart, calculation),
+                attempt(indicator, minuteStart, calculatedAt, calculation,
+                        attemptId, decisions, configRevision),
+                projection(indicator, minuteStart, calculatedAt,
+                        "SUCCESS", indicator.getIndicatorId() + ':' + minuteStart,
+                        attemptId, configRevision));
+    }
+
+    private FormulaCalculationAttempt attempt(
+            BizIndicator indicator,
+            long minuteStart,
+            long calculatedAt,
+            FormulaCalculation calculation,
+            String attemptId,
+            List<Resolution> decisions,
+            long configRevision) {
+        return new FormulaCalculationAttempt(
+                attemptId,
+                indicator.getIndicatorId(),
+                indicator.getIndicatorCode(),
+                indicator.getBuildingId(),
+                indicator.getSystemGroupId(),
+                indicator.getEquipId(),
+                minuteStart,
+                calculatedAt,
+                calculation.status().name(),
+                calculation.reasonCode(),
+                com.platform.iot.qualityusage.QualityUsageModels.INDICATOR_CALCULATION,
+                calculation.formulaVersion(),
+                policyEvidence(calculation.inputs(), decisions),
+                configRevision);
+    }
+
+    private IndicatorMinuteState projection(
+            BizIndicator indicator,
+            long minuteStart,
+            long calculatedAt,
+            String status,
+            String sourceFactId,
+            String attemptId,
+            long configRevision) {
+        return new IndicatorMinuteState(
+                indicator.getIndicatorId(), indicator.getIndicatorCode(),
+                indicator.getBuildingId(), indicator.getSystemGroupId(),
+                indicator.getEquipId(), minuteStart, status, sourceFactId,
+                attemptId, calculatedAt, configRevision);
     }
 
     private IndicatorMinuteResult successRow(
@@ -424,6 +603,49 @@ public class HvacFormulaEngine {
                 List.of());
     }
 
+    private FormulaCalculation qualityBlockedCalculation(FormulaCalculation successful) {
+        return new FormulaCalculation(
+                FormulaCalculation.Status.QUALITY_NOT_ALLOWED,
+                successful.indicatorCode(), successful.formulaVersion(),
+                null, null, successful.inputs(), List.of(),
+                "QUALITY_NOT_ALLOWED", List.of());
+    }
+
+    private FormulaCalculation policyUnavailableCalculation(FormulaCalculation successful) {
+        return new FormulaCalculation(
+                FormulaCalculation.Status.POLICY_SNAPSHOT_UNAVAILABLE,
+                successful.indicatorCode(), successful.formulaVersion(),
+                null, null, successful.inputs(), List.of(),
+                "POLICY_SNAPSHOT_UNAVAILABLE", List.of());
+    }
+
+    private String policyEvidence(
+            List<FormulaCalculation.Input> inputs,
+            List<Resolution> decisions) {
+        if (decisions.isEmpty()) {
+            return "[]";
+        }
+        List<String> blocked = new ArrayList<>();
+        for (int index = 0; index < decisions.size(); index++) {
+            Resolution decision = decisions.get(index);
+            if (decision.decision() != Decision.BLOCK) {
+                continue;
+            }
+            blocked.add("{\"pointId\":\"" + inputs.get(index).pointId()
+                        + "\",\"quality\":" + decision.actualQuality()
+                        + ",\"decision\":\"" + decision.decision().name()
+                        + "\",\"policyVersion\":"
+                        + (decision.policyVersion() == null
+                                ? "null" : decision.policyVersion())
+                        + ",\"configRevision\":" + decision.configRevision() + "}");
+        }
+        return blocked.stream().sorted().collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private static String id() {
+        return UUID.randomUUID().toString().replace("-", "");
+    }
+
     private Map<String, IndicatorFormula> indexFormulas(
             Collection<IndicatorFormula> formulaStrategies) {
         Objects.requireNonNull(formulaStrategies, "formulaStrategies");
@@ -443,8 +665,14 @@ public class HvacFormulaEngine {
     }
 
     private record CalculatedSuccess(
-            IndicatorMinuteResult row, IndicatorLatestState state) {}
+            IndicatorMinuteResult row,
+            IndicatorLatestState state,
+            FormulaCalculationAttempt attempt,
+            IndicatorMinuteState projection) {}
 
     private record CalculatedFailure(
-            FormulaCalculationException row, IndicatorLatestState state) {}
+            FormulaCalculationException row,
+            IndicatorLatestState state,
+            FormulaCalculationAttempt attempt,
+            IndicatorMinuteState projection) {}
 }

@@ -2,6 +2,7 @@ package com.platform.iot.dataquality;
 
 import com.platform.config.AsyncConfig;
 import com.platform.config.DataQualityProperties;
+import com.platform.iot.qualityusage.QualityUsageProperties;
 import com.platform.iot.dataquality.model.RecalculationJobPhase;
 import com.platform.iot.dataquality.model.RecalculationJobStatus;
 import com.platform.iot.dataquality.model.RecalculationJobType;
@@ -64,6 +65,8 @@ class DataQualityRecalculationSchedulingIntegrationTest {
                         "scheduling.business-pool-size=2")
                 .withBean(DataQualityProperties.class,
                         DataQualityProperties::new)
+                .withBean(QualityUsageProperties.class,
+                        QualityUsageProperties::new)
                 .withBean(RecalculationJobRepository.class,
                         () -> jobRepository)
                 .withBean(FillTaskRepository.class,

@@ -18,7 +18,7 @@ import javax.sql.DataSource;
 import java.util.*;
 
 /**
- * HVAC 时序数据源与四张超级表的启动装配。
+ * HVAC 时序数据源与六张超级表的启动装配。
  *
  * <p>该数据源通过明确 Bean 名称与 MySQL 物理隔离，避免把两类 SQL 发往错误
  * 数据库。生产默认在启动期创建 HVAC Schema；普通自动化测试通过
@@ -103,7 +103,7 @@ public class TdengineConfig {
     }
 
     /**
-     * 创建时序数据库及原始事件、正式分钟、指标成功和公式异常四张超级表，并执行
+     * 创建时序数据库及原始事件、正式分钟、指标成功、公式异常、追加尝试和当前状态表，并执行
      * 非破坏式字段补齐与存在性验证。
      */
     private void doInitialize(JdbcTemplate template) {
@@ -126,17 +126,21 @@ public class TdengineConfig {
         // 3. 自动创建公式成功结果和异常审计结构，并迁移旧指标表。
         initializeFormulaSchema(template);
 
-        log.info("✅ TDengine HVAC 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}]",
+        log.info("✅ TDengine HVAC 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}/{}]",
                 database, properties.getStRawEvent(),
                 properties.getStRawMinute(), properties.getStIndicatorMinute(),
-                properties.getStFormulaCalcException());
+                properties.getStFormulaCalcException(),
+                properties.getStFormulaCalcAttemptV2(),
+                properties.getStIndicatorMinuteState());
 
         // 启动验证只覆盖当前运行需要的四张 HVAC 超级表。
         List.of(
                 properties.getStRawEvent(),
                 properties.getStRawMinute(),
                 properties.getStIndicatorMinute(),
-                properties.getStFormulaCalcException()
+                properties.getStFormulaCalcException(),
+                properties.getStFormulaCalcAttemptV2(),
+                properties.getStIndicatorMinuteState()
         ).forEach(stable -> verifyInitialization(template, database, stable));
     }
 
@@ -289,6 +293,8 @@ public class TdengineConfig {
     void initializeFormulaSchema(JdbcTemplate template) {
         initStIndicatorMinute(template);
         initStFormulaCalcException(template);
+        initStFormulaCalcAttemptV2(template);
+        initStIndicatorMinuteState(template);
     }
 
     private void initStIndicatorMinute(JdbcTemplate template) {
@@ -335,6 +341,34 @@ public class TdengineConfig {
                 db, stable
         );
         template.execute(createException);
+        log.info("超级表 [{}] 已创建/已存在", stable);
+    }
+
+    private void initStFormulaCalcAttemptV2(JdbcTemplate template) {
+        String db = properties.getDatabase();
+        String stable = properties.getStFormulaCalcAttemptV2();
+        template.execute(String.format(
+                "CREATE STABLE IF NOT EXISTS %s.%s ("
+                        + "ts TIMESTAMP, attempt_id NCHAR(32), minute_start TIMESTAMP, "
+                        + "calc_status NCHAR(40), reason_code NCHAR(64), "
+                        + "scenario_code NCHAR(64), formula_version NCHAR(32), "
+                        + "policy_evidence_json NCHAR(2048), config_revision BIGINT"
+                        + ") TAGS (indicator_id NCHAR(32), indicator_code NCHAR(100), "
+                        + "building_id NCHAR(32), system_group_id NCHAR(32), equip_id NCHAR(32));",
+                db, stable));
+        log.info("超级表 [{}] 已创建/已存在", stable);
+    }
+
+    private void initStIndicatorMinuteState(JdbcTemplate template) {
+        String db = properties.getDatabase();
+        String stable = properties.getStIndicatorMinuteState();
+        template.execute(String.format(
+                "CREATE STABLE IF NOT EXISTS %s.%s ("
+                        + "ts TIMESTAMP, current_status NCHAR(40), source_fact_id NCHAR(64), "
+                        + "attempt_id NCHAR(32), state_updated_at TIMESTAMP, config_revision BIGINT"
+                        + ") TAGS (indicator_id NCHAR(32), indicator_code NCHAR(100), "
+                        + "building_id NCHAR(32), system_group_id NCHAR(32), equip_id NCHAR(32));",
+                db, stable));
         log.info("超级表 [{}] 已创建/已存在", stable);
     }
 
