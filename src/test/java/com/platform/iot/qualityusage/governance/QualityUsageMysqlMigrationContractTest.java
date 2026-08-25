@@ -51,7 +51,7 @@ class QualityUsageMysqlMigrationContractTest {
 
     private static String migrationSql() throws IOException {
         return Files.readString(
-                Path.of("src/env/init/18-migrate-mysql-quality-usage-policy-governance.sql"),
+                Path.of("src/env/init/V18__mysql_quality_usage_policy_governance.sql"),
                 StandardCharsets.UTF_8).toLowerCase();
     }
 }

@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** 锁定工作包 C 两条受控页面路由及平台管理员菜单边界。 */
 class AssetManagementMenuSeedContractTest {
-    private final String migration = read("src/env/init/15-migrate-mysql-asset-management-menu.sql");
+    private final String migration = read("src/env/init/V15__mysql_asset_management_menu.sql");
 
     @Test
     void migrationAddsOnlyConfirmedAssetPagesAndRemainsIdempotent() {

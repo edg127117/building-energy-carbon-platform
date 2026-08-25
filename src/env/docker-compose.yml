@@ -13,12 +13,8 @@ services:
     volumes:
       # 固定名称 Volume 不依赖 Git worktree；删除分支目录不会删除 MySQL 业务数据。
       - mysql-data:/var/lib/mysql
-      # 仅自动执行全新 MySQL 所需脚本。已有数据卷不会重跑 init 目录。
-      # 04/06/07/09 属于 TDengine，05/08/10 属于旧库手工迁移；
-      # 这些脚本都不能挂入 MySQL 首次启动目录。
-      - ./init/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
-      - ./init/03-init-hvac-schema.sql:/docker-entrypoint-initdb.d/03-init-hvac-schema.sql:ro
-      - ./init/20-migrate-mysql-telemetry-reliability-v2.sql:/docker-entrypoint-initdb.d/20-migrate-mysql-telemetry-reliability-v2.sql:ro
+      # MySQL 容器只创建空数据库；应用启动时由打包进 JAR 的 Flyway 版本链建表和升级。
+      # 不再把 SQL 挂入 docker-entrypoint-initdb.d，避免新库和已有库使用两套结构来源。
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]

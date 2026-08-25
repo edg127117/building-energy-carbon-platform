@@ -27,6 +27,17 @@ spring:
       connection-timeout: 5000
       connection-init-sql: SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci
 
+  # MySQL 结构只由应用内 Flyway 版本链推进。非空旧库默认拒绝自动接管，完成结构
+  # 核验后才可通过一次性环境变量显式启用 baseline-on-migrate。
+  flyway:
+    enabled: ${MYSQL_FLYWAY_ENABLED:true}
+    locations: classpath:db/migration/mysql
+    validate-on-migrate: true
+    validate-migration-naming: true
+    clean-disabled: true
+    baseline-on-migrate: ${MYSQL_FLYWAY_BASELINE_ON_MIGRATE:false}
+    baseline-version: ${MYSQL_FLYWAY_BASELINE_VERSION:3}
+
 # Spring 业务定时任务必须使用显式调度器，不能误用 MQTT 或 WebSocket 专用线程。
 scheduling:
   business-pool-size: ${BUSINESS_SCHEDULER_POOL_SIZE:4}

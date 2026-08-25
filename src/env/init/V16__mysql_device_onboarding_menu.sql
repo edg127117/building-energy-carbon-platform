@@ -1,4 +1,4 @@
--- 工作包 D 产品模板与设备接入菜单；手工用于已有 MySQL 卷，重复执行结果不变。
+-- 工作包 D 产品模板与设备接入菜单；由 Flyway 在新库和受控升级库中仅执行一次。
 USE `iot_platform`;
 
 DROP PROCEDURE IF EXISTS `validate_device_onboarding_menu`;

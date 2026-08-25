@@ -69,6 +69,13 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 - MQTT/HTTP：统一北向接入契约；
 - WebSocket：实时展示通知，权威结果仍由持久化和受保护查询接口提供。
 
+MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件位于
+[`src/env/init`](src/env/init)，构建时只将 `V*.sql` 打包到
+`classpath:db/migration/mysql`。Docker Compose 只创建空数据库，不再并行执行 SQL。
+新库自动执行完整版本链；没有 Flyway 历史表的非空旧库默认拒绝启动，必须先核验
+结构与备份，再按 [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md)
+执行一次性受控接管。已成功应用的版本脚本不得原地修改。
+
 未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务。多数据源必须使用明确 Bean 和 `Qualifier`，不得跨数据源执行 SQL。
 
 ## 5. 目标数据链路
@@ -119,6 +126,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 后端 | [`PlatformApplication.java`](src/main/java/com/platform/PlatformApplication.java)、[`pom.xml`](pom.xml) |
 | 前端 | [`web/src`](web/src)、[`web/package.json`](web/package.json) |
 | 本地基础设施 | [`src/env/docker-compose.yml`](src/env/docker-compose.yml) |
+| MySQL 迁移治理 | [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md)、[`src/env/init`](src/env/init) |
 | MQTT 接入 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter) |
 | 资产与设备接入 | [`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding) |
 | 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |

@@ -45,7 +45,7 @@
 4. 云端创建 MQTT 账号、Topic ACL、协议模板和字段映射；
 5. 确认全部配置后再启用设备和模板。
 
-现有数据库先执行 [`12-migrate-device-identity.sql`](../src/env/init/12-migrate-device-identity.sql)。
+现有数据库由 Flyway 执行 [`V12__device_identity.sql`](../src/env/init/V12__device_identity.sql)。
 当前设备身份和标准多字段别名没有管理页面，需通过受控 SQL/运维流程配置。未来管理页面可以
 复用这些表和缓存刷新机制，但尚未实现，不能把“自动发现设备”当成当前能力。
 

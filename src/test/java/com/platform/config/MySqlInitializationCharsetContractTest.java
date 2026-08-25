@@ -24,10 +24,10 @@ class MySqlInitializationCharsetContractTest {
             throws IOException {
         List<InitScript> scripts = List.of(
                 new InitScript(
-                        Path.of("src/env/init/01-init-tables.sql"),
+                        Path.of("src/env/init/V01__init_tables.sql"),
                         List.of("超级管理员", "建筑业主")),
                 new InitScript(
-                        Path.of("src/env/init/03-init-hvac-schema.sql"),
+                        Path.of("src/env/init/V03__init_hvac_schema.sql"),
                         List.of("试点大楼", "冷冻水进水温度")));
 
         for (InitScript script : scripts) {

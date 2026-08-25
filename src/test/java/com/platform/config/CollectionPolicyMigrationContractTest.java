@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class CollectionPolicyMigrationContractTest {
     private static final Path MIGRATION = Path.of(
-            "src/env/init/17-migrate-mysql-collection-policy-governance.sql");
+            "src/env/init/V17__mysql_collection_policy_governance.sql");
 
     @Test
     void migrationContainsGovernanceModelAndFailClosedChecksWithoutCascadeDelete() throws Exception {

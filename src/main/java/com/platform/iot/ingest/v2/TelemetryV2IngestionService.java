@@ -127,7 +127,7 @@ public class TelemetryV2IngestionService {
         if (storage.outcome() == StandardTelemetryOutcome.RETRYABLE_FAILURE) {
             meterRegistry.counter("iot.telemetry.v2", "outcome", "retryable").increment();
             return retryable(message.canonicalMessageId(), "STORAGE_TEMPORARILY_UNAVAILABLE",
-                    storage.detail());
+                    storage.detail(), storage.processedMetrics());
         }
         if (storage.outcome() == StandardTelemetryOutcome.REJECTED) {
             boolean conflict = storage.detail() != null
@@ -176,7 +176,8 @@ public class TelemetryV2IngestionService {
         receiptMapper.insert(receipt);
         meterRegistry.counter("iot.telemetry.v2", "outcome", "persisted").increment();
         return permanent(message.canonicalMessageId(), ReceiptStatus.PLATFORM_PERSISTED,
-                "PLATFORM_PERSISTED", mode, platformReceivedAt, persistedAt, null);
+                "PLATFORM_PERSISTED", mode, platformReceivedAt, persistedAt, null,
+                storage.processedMetrics());
     }
 
     public void markDeliveryCompleted(
@@ -210,18 +211,36 @@ public class TelemetryV2IngestionService {
             long platformReceivedAt,
             LocalDateTime persistedAt,
             String detail) {
+        return permanent(canonicalMessageId, status, resultCode, mode,
+                platformReceivedAt, persistedAt, detail, 0);
+    }
+
+    private V2ProcessingResult permanent(
+            String canonicalMessageId,
+            ReceiptStatus status,
+            String resultCode,
+            AckModeResolution mode,
+            long platformReceivedAt,
+            LocalDateTime persistedAt,
+            String detail,
+            int processedMetrics) {
         AckMode actual = mode == null ? AckMode.EVIDENCE_ONLY : mode.actualMode();
         PlatformApplicationAck ack = new PlatformApplicationAck(
                 "1.0", canonicalMessageId, status, resultCode,
                 platformReceivedAt, epoch(persistedAt), actual,
                 actual == AckMode.ADAPTER_PROXY ? "ADAPTER_ONLY"
                         : actual == AckMode.DEVICE_DIRECT ? "DEVICE" : "EVIDENCE_ONLY");
-        return new V2ProcessingResult(canonicalMessageId, status, resultCode, 0,
+        return new V2ProcessingResult(canonicalMessageId, status, resultCode, processedMetrics,
                 false, actual, mode == null ? null : mode.ackTopic(), ack, detail);
     }
 
     private V2ProcessingResult retryable(String canonicalMessageId, String code, String detail) {
-        return new V2ProcessingResult(canonicalMessageId, null, code, 0,
+        return retryable(canonicalMessageId, code, detail, 0);
+    }
+
+    private V2ProcessingResult retryable(
+            String canonicalMessageId, String code, String detail, int processedMetrics) {
+        return new V2ProcessingResult(canonicalMessageId, null, code, processedMetrics,
                 true, AckMode.EVIDENCE_ONLY, null, null, detail);
     }
 

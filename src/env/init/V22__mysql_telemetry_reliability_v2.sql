@@ -1,14 +1,56 @@
 USE `iot_platform`;
 
-ALTER TABLE `biz_device_identity`
-    ADD COLUMN `max_ack_mode` VARCHAR(30) NOT NULL DEFAULT 'EVIDENCE_ONLY'
-        COMMENT 'DEVICE_DIRECT/ADAPTER_PROXY/EVIDENCE_ONLY' AFTER `expected_profile_code`,
-    ADD COLUMN `correlation_policy` VARCHAR(40) NOT NULL DEFAULT 'NONE'
-        COMMENT '受信任消息关联策略' AFTER `max_ack_mode`,
-    ADD COLUMN `device_ack_topic` VARCHAR(200) DEFAULT NULL
-        COMMENT '平台配置的设备响应Topic' AFTER `correlation_policy`,
-    ADD COLUMN `adapter_ack_topic` VARCHAR(200) DEFAULT NULL
-        COMMENT '平台配置的适配器响应Topic' AFTER `device_ack_topic`;
+-- 受控接管的旧库可能已经人工执行过本迁移。逐列补齐可以让 Flyway 从 V3
+-- baseline 继续推进，同时避免重复 ALTER 因“列已存在”中断整个升级链。
+DROP PROCEDURE IF EXISTS `migrate_telemetry_reliability_v2_identity`;
+DELIMITER //
+CREATE PROCEDURE `migrate_telemetry_reliability_v2_identity`()
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.`COLUMNS`
+        WHERE `TABLE_SCHEMA`=DATABASE() AND `TABLE_NAME`='biz_device_identity'
+          AND `COLUMN_NAME`='max_ack_mode'
+    ) THEN
+        ALTER TABLE `biz_device_identity`
+            ADD COLUMN `max_ack_mode` VARCHAR(30) NOT NULL DEFAULT 'EVIDENCE_ONLY'
+                COMMENT 'DEVICE_DIRECT/ADAPTER_PROXY/EVIDENCE_ONLY'
+                AFTER `expected_profile_code`;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.`COLUMNS`
+        WHERE `TABLE_SCHEMA`=DATABASE() AND `TABLE_NAME`='biz_device_identity'
+          AND `COLUMN_NAME`='correlation_policy'
+    ) THEN
+        ALTER TABLE `biz_device_identity`
+            ADD COLUMN `correlation_policy` VARCHAR(40) NOT NULL DEFAULT 'NONE'
+                COMMENT '受信任消息关联策略' AFTER `max_ack_mode`;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.`COLUMNS`
+        WHERE `TABLE_SCHEMA`=DATABASE() AND `TABLE_NAME`='biz_device_identity'
+          AND `COLUMN_NAME`='device_ack_topic'
+    ) THEN
+        ALTER TABLE `biz_device_identity`
+            ADD COLUMN `device_ack_topic` VARCHAR(200) DEFAULT NULL
+                COMMENT '平台配置的设备响应Topic' AFTER `correlation_policy`;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.`COLUMNS`
+        WHERE `TABLE_SCHEMA`=DATABASE() AND `TABLE_NAME`='biz_device_identity'
+          AND `COLUMN_NAME`='adapter_ack_topic'
+    ) THEN
+        ALTER TABLE `biz_device_identity`
+            ADD COLUMN `adapter_ack_topic` VARCHAR(200) DEFAULT NULL
+                COMMENT '平台配置的适配器响应Topic' AFTER `device_ack_topic`;
+    END IF;
+END//
+DELIMITER ;
+
+CALL `migrate_telemetry_reliability_v2_identity`();
+DROP PROCEDURE `migrate_telemetry_reliability_v2_identity`;
 
 CREATE TABLE IF NOT EXISTS `biz_telemetry_receipt` (
     `canonical_message_id` VARCHAR(64) NOT NULL,

@@ -10,7 +10,7 @@ class DeviceParameterMigrationContractTest {
 
     @Test
     void mysqlMigrationContainsGovernanceBitemporalRecalculationAndLegacyBoundaries() throws Exception {
-        String sql = resource("20-migrate-mysql-device-parameter-governance.sql");
+        String sql = resource("V20__mysql_device_parameter_governance.sql");
 
         assertThat(sql).contains(
                 "CREATE TABLE IF NOT EXISTS biz_device_parameter_definition",
@@ -22,6 +22,9 @@ class DeviceParameterMigrationContractTest {
                 "CREATE TABLE IF NOT EXISTS biz_device_parameter_legacy_staging",
                 "CREATE TABLE IF NOT EXISTS biz_device_parameter_audit_log",
                 "source_type VARCHAR(20) NOT NULL",
+                "equipment_type_code VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL",
+                "building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL",
+                "equip_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL",
                 "business_effective_from TIMESTAMP(3) NOT NULL",
                 "published_at TIMESTAMP(3) NOT NULL",
                 "recalculation_status VARCHAR(30) NOT NULL");

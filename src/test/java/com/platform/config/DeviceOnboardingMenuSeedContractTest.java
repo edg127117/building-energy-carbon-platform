@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** 锁定工作包 D 两个受控页面入口及平台管理员菜单边界。 */
 class DeviceOnboardingMenuSeedContractTest {
-    private final String migration = read("src/env/init/16-migrate-mysql-device-onboarding-menu.sql");
+    private final String migration = read("src/env/init/V16__mysql_device_onboarding_menu.sql");
 
     @Test
     void migrationAddsOnlyConfirmedOnboardingPagesAndRemainsIdempotent() {

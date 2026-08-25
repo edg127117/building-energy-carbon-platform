@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** 锁定设备接入绑定迁移的中断恢复和同名结构冲突边界。 */
 class DeviceOnboardingMigrationContractTest {
-    private final String migration = read("src/env/init/14-migrate-device-onboarding-binding.sql");
+    private final String migration = read("src/env/init/V14__device_onboarding_binding.sql");
 
     @Test
     void bindingMigrationGuardsEachSchemaObjectBeforeCreatingIt() {
