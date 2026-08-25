@@ -84,6 +84,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static com.platform.iot.qualityusage.QualityUsageTestFixtures.systemDefaultResolver;
 
 /**
  * 人工重算跨模块验收测试。
@@ -291,7 +292,8 @@ class DataQualityRecalculationAcceptanceTest {
                     mock(IndicatorLatestCacheService.class),
                     mock(IndicatorRealtimePublisher.class),
                     pointProvider,
-                    new FormulaProperties());
+                    new FormulaProperties(),
+                    systemDefaultResolver());
             ApplicationEventPublisher publisher = event -> {
                 if (event instanceof HvacMinuteQualityReadyEvent ready) {
                     readyEvents.add(ready);

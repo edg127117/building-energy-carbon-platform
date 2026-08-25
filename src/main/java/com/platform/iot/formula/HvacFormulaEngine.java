@@ -15,7 +15,7 @@ import com.platform.iot.formula.model.IndicatorMinuteState;
 import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
-import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.qualityusage.QualityUsageErrors;
 import com.platform.iot.qualityusage.QualityUsageSnapshotUnavailableException;
@@ -91,33 +91,6 @@ public class HvacFormulaEngine {
                         new PumpEfficiencyFormula(),
                         new AhuPowerEfficiencyFormula()),
                 qualityUsageResolver);
-    }
-
-    /** 兼容不启动治理数据库的旧单元测试，正式 Spring 装配使用完整构造器。 */
-    public HvacFormulaEngine(
-            IndicatorConfigProvider configProvider,
-            HvacMinuteRepository minuteRepository,
-            IndicatorMinuteRepository indicatorRepository,
-            IndicatorLatestCacheService cache,
-            IndicatorRealtimePublisher publisher,
-            DataPointConfigProvider pointConfigProvider,
-            FormulaProperties properties) {
-        this(configProvider, minuteRepository, indicatorRepository, cache, publisher,
-                pointConfigProvider, properties, QualityUsagePolicyResolver.systemDefault());
-    }
-
-    HvacFormulaEngine(
-            IndicatorConfigProvider configProvider,
-            HvacMinuteRepository minuteRepository,
-            IndicatorMinuteRepository indicatorRepository,
-            IndicatorLatestCacheService cache,
-            IndicatorRealtimePublisher publisher,
-            FormulaInputAssembler assembler,
-            FormulaDependencyResolver dependencyResolver,
-            Collection<IndicatorFormula> formulas) {
-        this(configProvider, minuteRepository, indicatorRepository, cache, publisher,
-                assembler, dependencyResolver, formulas,
-                QualityUsagePolicyResolver.systemDefault());
     }
 
     HvacFormulaEngine(
@@ -295,10 +268,10 @@ public class HvacFormulaEngine {
                 validateCalculation(indicator, formula, formulaVersion, calculation);
                 if (calculation.status() == FormulaCalculation.Status.SUCCESS) {
                     try {
-                        RuntimeSnapshot policySnapshot = qualityUsageResolver.runtimeSnapshot();
+                        ResolutionContext policyContext = qualityUsageResolver.runtimeContext();
                         List<Resolution> decisions = calculation.inputs().stream()
                                 .map(input -> qualityUsageResolver.resolve(
-                                        policySnapshot,
+                                        policyContext,
                                         input.pointId(),
                                         com.platform.iot.qualityusage.QualityUsageModels
                                                 .INDICATOR_CALCULATION,
@@ -310,11 +283,11 @@ public class HvacFormulaEngine {
                             calculation = qualityBlockedCalculation(calculation);
                             failures.add(failure(
                                     indicator, minuteStart, calculatedAt, calculation,
-                                    decisions, policySnapshot.revision()));
+                                    decisions, policyContext.configRevision()));
                         } else {
                             successes.add(success(
                                     indicator, minuteStart, calculatedAt, calculation,
-                                    decisions, policySnapshot.revision()));
+                                    decisions, policyContext.configRevision()));
                         }
                     } catch (QualityUsageSnapshotUnavailableException exception) {
                         calculation = policyUnavailableCalculation(calculation);

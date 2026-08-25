@@ -109,15 +109,56 @@ public final class QualityUsageModels {
         }
     }
 
-    public record RuntimeSnapshot(
-            long revision,
-            java.util.Map<String, Scenario> scenarios,
-            java.util.Map<PolicyKey, List<PolicyInterval>> policies) {
-        public RuntimeSnapshot {
-            scenarios = java.util.Map.copyOf(scenarios);
-            policies = policies.entrySet().stream().collect(java.util.stream.Collectors.toUnmodifiableMap(
-                    java.util.Map.Entry::getKey,
-                    entry -> List.copyOf(entry.getValue())));
+    /**
+     * 消费模块可持有的单次解析上下文，只公开配置修订号，不公开策略索引。
+     *
+     * <p>同一 HTTP 响应、WebSocket 事件或公式计算复用一个上下文，既保证批内决策一致，
+     * 又避免调用方依赖当前内存 Map 的组织方式。</p>
+     */
+    public static final class ResolutionContext {
+        private final RuntimeSnapshot snapshot;
+
+        ResolutionContext(RuntimeSnapshot snapshot) {
+            this.snapshot = Objects.requireNonNull(snapshot, "snapshot");
+        }
+
+        RuntimeSnapshot snapshot() {
+            return snapshot;
+        }
+
+        public long configRevision() {
+            return snapshot.revision();
+        }
+    }
+
+    /** 仅供质量使用策略包内部加载、刷新和解析的不可变索引。 */
+    static final class RuntimeSnapshot {
+        private final long revision;
+        private final java.util.Map<String, Scenario> scenarios;
+        private final java.util.Map<PolicyKey, List<PolicyInterval>> policies;
+
+        RuntimeSnapshot(
+                long revision,
+                java.util.Map<String, Scenario> scenarios,
+                java.util.Map<PolicyKey, List<PolicyInterval>> policies) {
+            this.revision = revision;
+            this.scenarios = java.util.Map.copyOf(scenarios);
+            this.policies = policies.entrySet().stream().collect(
+                    java.util.stream.Collectors.toUnmodifiableMap(
+                            java.util.Map.Entry::getKey,
+                            entry -> List.copyOf(entry.getValue())));
+        }
+
+        long revision() {
+            return revision;
+        }
+
+        java.util.Map<String, Scenario> scenarios() {
+            return scenarios;
+        }
+
+        java.util.Map<PolicyKey, List<PolicyInterval>> policies() {
+            return policies;
         }
     }
 }

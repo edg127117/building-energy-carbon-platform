@@ -2,9 +2,9 @@ package com.platform;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
-import com.platform.iot.qualityusage.QualityUsageRuntimeStateService;
+import com.platform.iot.qualityusage.QualityUsageTestFixtures;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
 import org.junit.jupiter.api.BeforeAll;
@@ -42,13 +42,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class HvacQueryControllerFlowTest {
 
     private static final long FROM = 1_800_000_000_000L;
-    private static final RuntimeSnapshot DEFAULT_POLICY_SNAPSHOT =
-            QualityUsagePolicyResolver.systemDefault().runtimeSnapshot();
+    private static final ResolutionContext DEFAULT_POLICY_CONTEXT =
+            QualityUsageTestFixtures.systemDefaultContext();
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
     @MockBean private HvacMinuteRepository minuteRepository;
-    @MockBean private QualityUsageRuntimeStateService qualityUsageRuntimeStateService;
+    @MockBean private QualityUsagePolicyResolver qualityUsagePolicyResolver;
 
     private String adminToken;
     private String ownerToken;
@@ -72,12 +72,17 @@ class HvacQueryControllerFlowTest {
 
     @BeforeEach
     void resetTdengineMock() {
-        reset(minuteRepository, qualityUsageRuntimeStateService);
-        when(qualityUsageRuntimeStateService.requireSnapshot())
-                .thenReturn(DEFAULT_POLICY_SNAPSHOT);
-        when(qualityUsageRuntimeStateService.loadRange(
+        reset(minuteRepository, qualityUsagePolicyResolver);
+        when(qualityUsagePolicyResolver.runtimeContext())
+                .thenReturn(DEFAULT_POLICY_CONTEXT);
+        when(qualityUsagePolicyResolver.historyContext(
                 anySet(), anyString(), anyLong(), anyLong()))
-                .thenReturn(DEFAULT_POLICY_SNAPSHOT);
+                .thenReturn(DEFAULT_POLICY_CONTEXT);
+        when(qualityUsagePolicyResolver.resolve(
+                any(ResolutionContext.class), anyString(), anyString(), anyLong(), anyInt()))
+                .thenAnswer(invocation -> QualityUsageTestFixtures.systemDefaultResolver().resolve(
+                        invocation.getArgument(1), invocation.getArgument(2),
+                        invocation.getArgument(3), invocation.getArgument(4)));
     }
 
     @Test

@@ -8,7 +8,7 @@ import com.platform.hvac.model.entity.BizEquipment;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
-import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import static com.platform.iot.qualityusage.QualityUsageModels.POINT_HISTORY_VIEW;
 import static com.platform.iot.qualityusage.QualityUsageModels.POINT_REALTIME_VIEW;
@@ -70,18 +70,6 @@ public class HvacQueryService {
         this.qualityUsageResolver = qualityUsageResolver;
     }
 
-    /** 兼容不启动 Spring/MySQL 的旧单元测试，正式运行始终注入数据库快照解析器。 */
-    public HvacQueryService(
-            BuildingService buildingService,
-            BuildingScopeService buildingScopeService,
-            BizDataPointService dataPointService,
-            BizEquipmentService equipmentService,
-            HvacMinuteRepository minuteRepository,
-            HvacSnapshotFreshnessPolicy freshnessPolicy) {
-        this(buildingService, buildingScopeService, dataPointService, equipmentService,
-                minuteRepository, freshnessPolicy, QualityUsagePolicyResolver.systemDefault());
-    }
-
     /**
      * 生成建筑全部在线测点的最新快照。
      *
@@ -99,7 +87,7 @@ public class HvacQueryService {
             Long userId,
             Set<String> roles) {
         checkBuildingAccess(buildingId, userId, roles);
-        RuntimeSnapshot policySnapshot = qualityUsageResolver.runtimeSnapshot();
+        ResolutionContext policyContext = qualityUsageResolver.runtimeContext();
 
         // 先以 MySQL 配置确定“应该出现哪些测点”，TDengine 只负责补充最新数值。
         List<BizDataPoint> points = new ArrayList<>(dataPointService.list(
@@ -135,7 +123,7 @@ public class HvacQueryService {
                 .map(point -> snapshotPoint(
                         point, point.getEquipId() == null
                                 ? null : equipmentCodes.get(point.getEquipId()),
-                        latestByPoint.get(point.getPointId()), generatedAt, policySnapshot))
+                        latestByPoint.get(point.getPointId()), generatedAt, policyContext))
                 .toList();
         return new HvacQueryDtos.SnapshotResponse(
                 buildingId, generatedAt, responsePoints);
@@ -170,7 +158,7 @@ public class HvacQueryService {
                 validateConfiguredPoints(buildingId, pointIds);
         int resolutionMinutes = resolution(span);
 
-        RuntimeSnapshot policySnapshot = qualityUsageResolver.historySnapshot(
+        ResolutionContext policyContext = qualityUsageResolver.historyContext(
                 Set.copyOf(pointIds), POINT_HISTORY_VIEW, from, to);
         // 门禁必须逐个正式分钟执行，禁止在 TDengine 先聚合后再用最差质量猜测策略。
         List<HvacMinuteQueryRow> rows = queryTdengine(
@@ -184,7 +172,7 @@ public class HvacQueryService {
                 .map(pointId -> historySeries(
                         configuredPoints.get(pointId),
                         rowsByPoint.getOrDefault(pointId, List.of()),
-                        from, to, resolutionMinutes, policySnapshot))
+                        from, to, resolutionMinutes, policyContext))
                 .toList();
         return new HvacQueryDtos.HistoryResponse(
                 buildingId, from, to, resolutionMinutes, series);
@@ -350,7 +338,7 @@ public class HvacQueryService {
             String equipmentCode,
             HvacMinuteQueryRow row,
             long generatedAt,
-            RuntimeSnapshot policySnapshot) {
+            ResolutionContext policyContext) {
         if (row == null) {
             // 保留测点和设备元数据，让调用方区分“没有配置”和“已配置但暂无数据”。
             return new HvacQueryDtos.SnapshotPoint(
@@ -371,11 +359,11 @@ public class HvacQueryService {
                     null,
                     null,
                     null,
-                    policySnapshot.revision(),
+                    policyContext.configRevision(),
                     "NO_DATA");
         }
         Resolution resolution = qualityUsageResolver.resolve(
-                policySnapshot, point.getPointId(), POINT_REALTIME_VIEW,
+                policyContext, point.getPointId(), POINT_REALTIME_VIEW,
                 row.time(), row.dataQuality());
         boolean allowed = resolution.decision()
                 == com.platform.iot.qualityusage.QualityUsageModels.Decision.ALLOW;
@@ -411,7 +399,7 @@ public class HvacQueryService {
             long from,
             long to,
             int resolutionMinutes,
-            RuntimeSnapshot policySnapshot) {
+            ResolutionContext policyContext) {
         long bucketMs = Duration.ofMinutes(resolutionMinutes).toMillis();
         Map<Long, List<HvacMinuteQueryRow>> byBucket = rows.stream()
                 .sorted(Comparator.comparingLong(HvacMinuteQueryRow::time))
@@ -424,7 +412,7 @@ public class HvacQueryService {
         for (long bucketStart = firstBucket; bucketStart < to; bucketStart += bucketMs) {
             records.add(historyBucket(
                     point.getPointId(), bucketStart, resolutionMinutes,
-                    byBucket.getOrDefault(bucketStart, List.of()), policySnapshot));
+                    byBucket.getOrDefault(bucketStart, List.of()), policyContext));
         }
         return new HvacQueryDtos.HistorySeries(
                 point.getPointId(),
@@ -439,12 +427,12 @@ public class HvacQueryService {
             long bucketStart,
             int resolutionMinutes,
             List<HvacMinuteQueryRow> rows,
-            RuntimeSnapshot policySnapshot) {
+            ResolutionContext policyContext) {
         List<HvacMinuteQueryRow> usable = new ArrayList<>();
         List<Resolution> decisions = new ArrayList<>();
         for (HvacMinuteQueryRow row : rows) {
             Resolution decision = qualityUsageResolver.resolve(
-                    policySnapshot, pointId, POINT_HISTORY_VIEW,
+                    policyContext, pointId, POINT_HISTORY_VIEW,
                     row.time(), row.dataQuality());
             decisions.add(decision);
             if (decision.decision()
@@ -464,7 +452,7 @@ public class HvacQueryService {
                     0, blockedCount, missingCount, status,
                     evidence == null ? null : evidence.policySource().name(),
                     evidence == null ? null : evidence.policyVersion(),
-                    policySnapshot.revision(),
+                    policyContext.configRevision(),
                     evidence == null ? "NO_DATA" : evidence.reason());
         }
         long samples = usable.stream().mapToLong(HvacMinuteQueryRow::sampleCount).sum();
@@ -487,7 +475,7 @@ public class HvacQueryService {
                         ? decisions.get(0).policySource().name() : "MIXED",
                 decisions.stream().map(Resolution::policyVersion).distinct().count() == 1
                         ? decisions.get(0).policyVersion() : null,
-                policySnapshot.revision(),
+                policyContext.configRevision(),
                 blockedCount > 0 ? "QUALITY_FILTERED" : "QUALITY_ALLOWED");
     }
 

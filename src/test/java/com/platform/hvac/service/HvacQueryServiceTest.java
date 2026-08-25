@@ -25,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
+import static com.platform.iot.qualityusage.QualityUsageTestFixtures.systemDefaultResolver;
 
 @ExtendWith(MockitoExtension.class)
 class HvacQueryServiceTest {
@@ -50,7 +51,8 @@ class HvacQueryServiceTest {
                 dataPointService,
                 equipmentService,
                 minuteRepository,
-                freshnessPolicy);
+                freshnessPolicy,
+                systemDefaultResolver());
     }
 
     @ParameterizedTest
