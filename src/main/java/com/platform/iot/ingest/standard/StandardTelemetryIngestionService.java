@@ -58,6 +58,17 @@ public class StandardTelemetryIngestionService {
     /** 使用本地 MQTT 接收时间执行整批预检和单点幂等写入。 */
     public StandardTelemetryResult ingest(
             StandardTelemetryMessage message, long localReceivedTime) {
+        return ingestInternal(message, localReceivedTime, false);
+    }
+
+    /** V2 复用整批校验，但禁止同一测点同一事件时间的新值覆盖旧证据。 */
+    public StandardTelemetryResult ingestImmutable(
+            StandardTelemetryMessage message, long localReceivedTime) {
+        return ingestInternal(message, localReceivedTime, true);
+    }
+
+    private StandardTelemetryResult ingestInternal(
+            StandardTelemetryMessage message, long localReceivedTime, boolean immutable) {
         String malformed = validateEnvelope(message, localReceivedTime);
         if (malformed != null) {
             return StandardTelemetryResult.rejected(malformed);
@@ -119,13 +130,21 @@ public class StandardTelemetryIngestionService {
                     "pointCode", item.sourcePointCode(),
                     "val", item.metric().value(),
                     "timestamp", message.eventTime());
-            HvacIngestionResult result = hvacIngestionService.ingest(
-                    singlePointPayload, localReceivedTime, standardSourceSystem);
+            HvacIngestionResult result = immutable
+                    ? hvacIngestionService.ingestImmutable(
+                            singlePointPayload, localReceivedTime, standardSourceSystem)
+                    : hvacIngestionService.ingest(
+                            singlePointPayload, localReceivedTime, standardSourceSystem);
             if (!result.shouldAcknowledge()) {
                 return StandardTelemetryResult.retryable(processed, result.detail());
             }
             if (result.outcome() == com.platform.iot.ingest.IngestionOutcome.REJECTED) {
                 return StandardTelemetryResult.rejected(result.detail());
+            }
+            if (immutable && result.outcome()
+                    == com.platform.iot.ingest.IngestionOutcome.CONFLICT_UPDATED) {
+                return StandardTelemetryResult.rejected(
+                        "MESSAGE_CONFLICT: 同一测点同一采集时间存在不同值");
             }
             processed++;
         }

@@ -6,7 +6,16 @@ import com.platform.iot.ingest.HvacIngestionResult;
 import com.platform.iot.ingest.HvacMqttMessageHandler;
 import com.platform.iot.ingest.standard.StandardTelemetryMqttMessageHandler;
 import com.platform.iot.ingest.standard.StandardTelemetryResult;
+import com.platform.iot.ingest.v2.TelemetryV2MqttMessageHandler;
+import com.platform.iot.ingest.v2.V2ProcessingResult;
+import com.platform.iot.mqtt.MqttFailureCategory;
+import com.platform.iot.mqtt.MqttFailureClassifier;
+import com.platform.iot.mqtt.MqttFailureEvidenceRecorder;
+import com.platform.iot.mqtt.MqttSslContextFactory;
+import com.platform.iot.mqtt.MqttTlsException;
+import com.platform.iot.mqtt.MqttTlsProperties;
 import com.platform.iot.quality.DataPointConfigSnapshotUnavailableException;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
@@ -33,6 +42,10 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ThreadLocalRandom;
+
+import javax.net.ssl.HttpsURLConnection;
 
 @Configuration
 @ConditionalOnProperty(
@@ -60,7 +73,14 @@ public class MqttConfig {
     private final ObjectMapper objectMapper;
     private final HvacMqttMessageHandler hvacMqttMessageHandler;
     private final StandardTelemetryMqttMessageHandler standardTelemetryMqttMessageHandler;
+    private final TelemetryV2MqttMessageHandler telemetryV2MqttMessageHandler;
+    private final MqttTlsProperties tlsProperties;
+    private final MqttSslContextFactory sslContextFactory;
+    private final MqttFailureClassifier failureClassifier;
+    private final MeterRegistry meterRegistry;
+    private final MqttFailureEvidenceRecorder failureEvidenceRecorder;
     private final AtomicBoolean connecting = new AtomicBoolean();
+    private final AtomicInteger consecutiveFailures = new AtomicInteger();
 
     @Value("${mqtt.broker-url}")
     private String brokerUrl;
@@ -80,16 +100,43 @@ public class MqttConfig {
     @Value("${mqtt.topics.standard-upstream:device/telemetry/up}")
     private String[] standardUpstreamTopics;
 
+    @Value("${mqtt.topics.v2-upstream:platform/telemetry/v2/up}")
+    private String[] v2UpstreamTopics;
+
     @Value("${mqtt.initial-retry-millis:5000}")
     private long initialRetryMillis;
+
+    @Value("${mqtt.max-retry-millis:120000}")
+    private long maxRetryMillis;
+
+    @Value("${mqtt.security-retry-millis:300000}")
+    private long securityRetryMillis;
+
+    @Value("${mqtt.retry-multiplier:2.0}")
+    private double retryMultiplier;
+
+    @Value("${mqtt.retry-jitter-ratio:0.2}")
+    private double retryJitterRatio;
 
     public MqttConfig(
             ObjectMapper objectMapper,
             HvacMqttMessageHandler hvacMqttMessageHandler,
-            StandardTelemetryMqttMessageHandler standardTelemetryMqttMessageHandler) {
+            StandardTelemetryMqttMessageHandler standardTelemetryMqttMessageHandler,
+            TelemetryV2MqttMessageHandler telemetryV2MqttMessageHandler,
+            MqttTlsProperties tlsProperties,
+            MqttSslContextFactory sslContextFactory,
+            MqttFailureClassifier failureClassifier,
+            MeterRegistry meterRegistry,
+            MqttFailureEvidenceRecorder failureEvidenceRecorder) {
         this.objectMapper = objectMapper;
         this.hvacMqttMessageHandler = hvacMqttMessageHandler;
         this.standardTelemetryMqttMessageHandler = standardTelemetryMqttMessageHandler;
+        this.telemetryV2MqttMessageHandler = telemetryV2MqttMessageHandler;
+        this.tlsProperties = tlsProperties;
+        this.sslContextFactory = sslContextFactory;
+        this.failureClassifier = failureClassifier;
+        this.meterRegistry = meterRegistry;
+        this.failureEvidenceRecorder = failureEvidenceRecorder;
     }
 
     /** 首次连接失败后的单线程重试调度器，不承载 MQTT 消息业务处理。 */
@@ -127,25 +174,69 @@ public class MqttConfig {
             return;
         }
         try {
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setUserName(username);
-            options.setPassword(password.toCharArray());
-            options.setAutomaticReconnect(true);
-            options.setCleanSession(false);
-            options.setConnectionTimeout(10);
+            MqttConnectOptions options = connectOptions();
             client.connect(options);
             subscribeUpstream(client);
+            consecutiveFailures.set(0);
             log.info("本地MQTT客户端已连接云端EMQX: broker={}, topics={}",
                     brokerUrl, configuredTopics());
-        } catch (MqttException exception) {
-            log.warn("本地MQTT首次连接失败，将在{}毫秒后重试: {}",
-                    initialRetryMillis, exception.getMessage());
+        } catch (MqttException | MqttTlsException exception) {
+            MqttFailureCategory category = failureClassifier.classify(exception);
+            meterRegistry.counter("iot.mqtt.connection.failure", "category", category.name())
+                    .increment();
+            failureEvidenceRecorder.record("PLATFORM", category, brokerUrl);
+            long retryDelay = retryDelay(category);
+            log.warn("本地MQTT连接失败: category={}, retryMillis={}, broker={}",
+                    category, retryDelay, brokerUrl);
             scheduler.schedule(
                     () -> connectOrScheduleRetry(client, scheduler),
-                    Instant.now().plusMillis(initialRetryMillis));
+                    Instant.now().plusMillis(retryDelay));
         } finally {
             connecting.set(false);
         }
+    }
+
+    private MqttConnectOptions connectOptions() {
+        MqttConnectOptions options = new MqttConnectOptions();
+        options.setUserName(username);
+        options.setPassword(password.toCharArray());
+        options.setAutomaticReconnect(true);
+        options.setCleanSession(false);
+        options.setConnectionTimeout(10);
+        if (tlsProperties.isEnabled()) {
+            if (!(brokerUrl.startsWith("ssl://") || brokerUrl.startsWith("wss://"))) {
+                throw new MqttTlsException("启用 TLS 时 broker-url 必须使用 ssl:// 或 wss://");
+            }
+            options.setSocketFactory(sslContextFactory.create(tlsProperties).getSocketFactory());
+            options.setSSLHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
+            options.setHttpsHostnameVerificationEnabled(true);
+        } else if (!tlsProperties.isAllowPlaintextForTests()) {
+            throw new MqttTlsException(
+                    "禁止明文 MQTT；仅隔离自动化测试可显式开启 allow-plaintext-for-tests");
+        }
+        return options;
+    }
+
+    private long retryDelay(MqttFailureCategory category) {
+        int failures = consecutiveFailures.getAndIncrement();
+        if (isSecurityFailure(category)) {
+            return securityRetryMillis;
+        }
+        double exponential = initialRetryMillis * Math.pow(retryMultiplier, Math.min(failures, 20));
+        long capped = Math.min(maxRetryMillis, Math.max(initialRetryMillis, (long) exponential));
+        double jitter = Math.max(0.0, Math.min(retryJitterRatio, 1.0));
+        long delta = (long) (capped * jitter);
+        return delta == 0 ? capped : ThreadLocalRandom.current().nextLong(
+                Math.max(1L, capped - delta), capped + delta + 1L);
+    }
+
+    private boolean isSecurityFailure(MqttFailureCategory category) {
+        return switch (category) {
+            case CA_UNTRUSTED, CERTIFICATE_TIME_INVALID, HOSTNAME_MISMATCH,
+                 CLIENT_CERTIFICATE_REJECTED, BAD_CREDENTIALS, NOT_AUTHORIZED,
+                 SUBSCRIBE_DENIED, PUBLISH_DENIED, TLS_CONFIGURATION -> true;
+            default -> false;
+        };
     }
 
     private MqttCallbackExtended callback(IMqttClient client) {
@@ -172,6 +263,8 @@ public class MqttConfig {
             @Override
             public void messageArrived(String topic, MqttMessage message) {
                 boolean acknowledge = true;
+                boolean applicationAckPublished = false;
+                V2ProcessingResult v2Result = null;
                 try {
                     byte[] payloadBytes = message.getPayload();
                     if (payloadBytes == null || payloadBytes.length == 0) {
@@ -185,6 +278,21 @@ public class MqttConfig {
                     }
 
                     long localReceivedTime = System.currentTimeMillis();
+                    if (containsTopic(v2UpstreamTopics, topic)) {
+                        v2Result = telemetryV2MqttMessageHandler.handle(
+                                payloadBytes, localReceivedTime);
+                        acknowledge = !v2Result.retryable();
+                        if (acknowledge && v2Result.requiresApplicationAck()) {
+                            byte[] ackPayload = objectMapper.writeValueAsBytes(
+                                    v2Result.applicationAck());
+                            client.publish(v2Result.ackTopic(), ackPayload, 1, false);
+                            applicationAckPublished = true;
+                        }
+                        log.debug("V2 MQTT 报文处理完成: resultCode={}, ackMode={}, metrics={}",
+                                v2Result.resultCode(), v2Result.actualAckMode(),
+                                v2Result.processedMetrics());
+                        return;
+                    }
                     if (containsTopic(standardUpstreamTopics, topic)) {
                         StandardTelemetryResult result = standardTelemetryMqttMessageHandler.handle(
                                 payloadBytes, localReceivedTime);
@@ -211,6 +319,13 @@ public class MqttConfig {
                         return;
                     }
                     log.warn("拒绝未配置路由的MQTT主题并确认丢弃: topic={}", topic);
+                } catch (MqttException exception) {
+                    acknowledge = false;
+                    if (v2Result != null) {
+                        telemetryV2MqttMessageHandler.recordApplicationAckFailure(
+                                v2Result.canonicalMessageId(), exception.getMessage());
+                    }
+                    log.error("V2 应用 ACK 发布失败，保留原消息重投: topic={}", topic);
                 } catch (IOException | IllegalArgumentException exception) {
                     log.warn("MQTT报文JSON格式错误，已确认丢弃: topic={}, reason={}",
                             topic, exception.getMessage());
@@ -223,7 +338,16 @@ public class MqttConfig {
                             topic, exception.getMessage());
                 } finally {
                     if (acknowledge) {
-                        acknowledge(client, topic, message);
+                        boolean inboundAckObserved = acknowledge(client, topic, message);
+                        if (inboundAckObserved && v2Result != null) {
+                            try {
+                                telemetryV2MqttMessageHandler.markDeliveryCompleted(
+                                        v2Result.canonicalMessageId(), applicationAckPublished);
+                            } catch (RuntimeException exception) {
+                                log.error("V2 投递证据回写失败，原消息已完成消费确认: messageId={}",
+                                        v2Result.canonicalMessageId());
+                            }
+                        }
                     }
                 }
             }
@@ -245,14 +369,18 @@ public class MqttConfig {
     private boolean routingConfigurationValid() {
         Set<String> legacy = topicSet(upstreamTopics);
         Set<String> standard = topicSet(standardUpstreamTopics);
-        if (legacy.isEmpty() || standard.isEmpty()) {
-            log.error("MQTT客户端初始化失败：旧单点和标准多字段上行主题都必须配置");
+        Set<String> v2 = topicSet(v2UpstreamTopics);
+        if (legacy.isEmpty() || standard.isEmpty() || v2.isEmpty()) {
+            log.error("MQTT客户端初始化失败：旧单点、标准V1和V2上行主题都必须配置");
             return false;
         }
-        Set<String> overlap = new LinkedHashSet<>(legacy);
-        overlap.retainAll(standard);
-        if (!overlap.isEmpty()) {
-            log.error("MQTT客户端初始化失败：旧单点与标准主题不能重叠: {}", overlap);
+        Set<String> all = new LinkedHashSet<>();
+        int configuredCount = legacy.size() + standard.size() + v2.size();
+        all.addAll(legacy);
+        all.addAll(standard);
+        all.addAll(v2);
+        if (all.size() != configuredCount) {
+            log.error("MQTT客户端初始化失败：旧单点、标准V1与V2主题不能重叠");
             return false;
         }
         return true;
@@ -261,6 +389,7 @@ public class MqttConfig {
     private Set<String> configuredTopics() {
         Set<String> topics = new LinkedHashSet<>(topicSet(upstreamTopics));
         topics.addAll(topicSet(standardUpstreamTopics));
+        topics.addAll(topicSet(v2UpstreamTopics));
         return topics;
     }
 
@@ -279,12 +408,14 @@ public class MqttConfig {
         return topicSet(topics).contains(actualTopic);
     }
 
-    private void acknowledge(IMqttClient client, String topic, MqttMessage message) {
+    private boolean acknowledge(IMqttClient client, String topic, MqttMessage message) {
         try {
             client.messageArrivedComplete(message.getId(), message.getQos());
+            return true;
         } catch (MqttException exception) {
             log.error("MQTT手动确认失败: topic={}, messageId={}",
                     topic, message.getId(), exception);
+            return false;
         }
     }
 }

@@ -12,5 +12,11 @@ public record ProtocolProfile(
         String expectedProtocolVersion,
         String timestampPath,
         String seqPath,
+        String messageIdPath,
+        String bootIdPath,
+        String batchIdPath,
+        String retransmittedAtPath,
+        String maxAckMode,
+        String correlationPolicy,
         boolean enabled) {
 }

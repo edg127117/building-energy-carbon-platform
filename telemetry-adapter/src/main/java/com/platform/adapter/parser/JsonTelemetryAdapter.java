@@ -3,6 +3,8 @@ package com.platform.adapter.parser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.adapter.model.DeviceIdentity;
+import com.platform.adapter.model.DedupMode;
+import com.platform.adapter.model.IdSource;
 import com.platform.adapter.model.StandardMetric;
 import com.platform.adapter.model.StandardTelemetryMessage;
 import com.platform.adapter.model.TimeSource;
@@ -17,6 +19,11 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
+import java.util.UUID;
 
 /**
  * 按 MySQL 协议模板把一条不可信 JSON 报文转换为标准多指标报文。
@@ -47,6 +54,11 @@ public class JsonTelemetryAdapter {
         DeviceIdentity identity = readIdentity(root, profile);
         Long deviceTime = readOptionalInteger(root, profile.timestampPath(), "timestamp");
         Long seq = readOptionalInteger(root, profile.seqPath(), "seq");
+        String sourceMessageId = readOptionalText(root, profile.messageIdPath());
+        String bootId = readOptionalText(root, profile.bootIdPath());
+        String batchId = readOptionalText(root, profile.batchIdPath());
+        Long retransmittedAt = readOptionalInteger(
+                root, profile.retransmittedAtPath(), "retransmittedAt");
         if (deviceTime != null && (deviceTime < MIN_MILLISECOND_TIMESTAMP
                 || deviceTime >= MAX_MILLISECOND_TIMESTAMP_EXCLUSIVE)) {
             throw error("INVALID_TIMESTAMP", "timestamp必须是13位Unix毫秒时间戳");
@@ -87,19 +99,87 @@ public class JsonTelemetryAdapter {
             throw error("NO_METRICS", "报文没有可发布的标准指标");
         }
 
-        long eventTime = deviceTime == null ? receivedTime : deviceTime;
         TimeSource timeSource = deviceTime == null
-                ? TimeSource.SERVER_RECEIVED : TimeSource.DEVICE_REPORTED;
+                ? TimeSource.ADAPTER_RECEIVED : TimeSource.DEVICE_REPORTED;
+        MessageIdentity messageIdentity = createIdentity(
+                identity, sourceMessageId, bootId, seq, deviceTime);
         return new StandardTelemetryMessage(
-                "1.0",
+                "2.0",
                 requiredText(profile.profileCode(), "profileCode"),
                 profile.profileVersion(),
                 identity,
-                eventTime,
-                receivedTime,
-                timeSource,
+                messageIdentity.canonicalMessageId(),
+                sourceMessageId,
+                bootId,
                 seq,
+                deviceTime,
+                receivedTime,
+                retransmittedAt,
+                batchId,
+                null,
+                null,
+                messageIdentity.idSource(),
+                timeSource,
+                messageIdentity.dedupMode(),
+                defaultText(profile.maxAckMode(), "EVIDENCE_ONLY"),
+                defaultText(profile.correlationPolicy(), "NONE"),
                 metrics);
+    }
+
+    private MessageIdentity createIdentity(
+            DeviceIdentity identity,
+            String sourceMessageId,
+            String bootId,
+            Long seq,
+            Long collectedAt) {
+        String deviceScope = identity.type() + "\u001f" + identity.value() + "\u001f";
+        if (sourceMessageId != null) {
+            return new MessageIdentity(hash(deviceScope + "mid\u001f" + sourceMessageId),
+                    IdSource.DEVICE_REPORTED, DedupMode.EXACT);
+        }
+        if (bootId != null && seq != null) {
+            return new MessageIdentity(hash(deviceScope + "boot-seq\u001f" + bootId + "\u001f" + seq),
+                    IdSource.ADAPTER_DERIVED, DedupMode.DERIVED);
+        }
+        if (seq != null && collectedAt != null) {
+            return new MessageIdentity(hash(deviceScope + "seq-time\u001f" + seq + "\u001f" + collectedAt),
+                    IdSource.ADAPTER_DERIVED, DedupMode.DERIVED);
+        }
+        if (collectedAt != null) {
+            return new MessageIdentity(hash(deviceScope + "time\u001f" + collectedAt),
+                    IdSource.ADAPTER_DERIVED, DedupMode.DERIVED);
+        }
+        return new MessageIdentity(UUID.randomUUID().toString(),
+                IdSource.ADAPTER_GENERATED, DedupMode.NONE);
+    }
+
+    private String hash(String value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("JDK 缺少 SHA-256", exception);
+        }
+    }
+
+    private String readOptionalText(JsonNode root, String path) {
+        if (path == null || path.isBlank()) {
+            return null;
+        }
+        JsonNode node = root.at(requiredPointer(path, "optionalTextPath"));
+        if (node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        if (!node.isValueNode()) {
+            throw error("INVALID_TEXT", "关联字段必须是标量");
+        }
+        String value = node.asText().trim();
+        return value.isEmpty() ? null : value;
+    }
+
+    private String defaultText(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private JsonNode parseObject(byte[] payload) {
@@ -189,5 +269,9 @@ public class JsonTelemetryAdapter {
 
     private TelemetryAdaptationException error(String code, String message) {
         return new TelemetryAdaptationException(code, message);
+    }
+
+    private record MessageIdentity(
+            String canonicalMessageId, IdSource idSource, DedupMode dedupMode) {
     }
 }

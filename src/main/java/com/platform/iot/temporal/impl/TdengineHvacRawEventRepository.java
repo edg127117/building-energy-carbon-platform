@@ -56,6 +56,15 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
      */
     @Override
     public RawEventWriteResult upsert(RawTelemetryEvent event) {
+        return write(event, true);
+    }
+
+    @Override
+    public RawEventWriteResult insertImmutable(RawTelemetryEvent event) {
+        return write(event, false);
+    }
+
+    private RawEventWriteResult write(RawTelemetryEvent event, boolean overwriteConflict) {
         String table = qualifiedChild(event.pointId());
         ensureChildTable(event, table);
         Timestamp eventTimestamp = new Timestamp(event.eventTime());
@@ -70,6 +79,9 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                     && event.sourcePointCode().equals(text(currentRow, "source_point_code"))
                     && event.sourceDeviceId().equals(text(currentRow, "source_device_id"))) {
                 return RawEventWriteResult.DUPLICATE;
+            }
+            if (!overwriteConflict) {
+                return RawEventWriteResult.CONFLICT_UPDATED;
             }
         }
 

@@ -40,6 +40,18 @@ public class BizDeviceIdentity implements Serializable {
     /** 本地允许该设备使用的云端协议模板代码。 */
     private String expectedProfileCode;
 
+    /** 该绑定允许的最高应用 ACK 能力。 */
+    private String maxAckMode;
+
+    /** 该绑定允许使用的稳定关联键。 */
+    private String correlationPolicy;
+
+    /** 仅由平台管理员配置的设备响应 Topic，可空。 */
+    private String deviceAckTopic;
+
+    /** 仅由平台管理员配置的适配器响应 Topic，可空。 */
+    private String adapterAckTopic;
+
     /** 1-启用，0-停用。 */
     private Integer status;
 

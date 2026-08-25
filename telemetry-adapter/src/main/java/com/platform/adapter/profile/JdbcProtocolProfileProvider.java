@@ -45,7 +45,9 @@ public class JdbcProtocolProfileProvider implements ProtocolProfileProvider {
                     SELECT profile_id, profile_code, profile_version, source_topic,
                            device_identity_type, device_identity_path,
                            protocol_version_path, expected_protocol_version,
-                           timestamp_path, seq_path, enabled
+                           timestamp_path, seq_path, message_id_path, boot_id_path,
+                           batch_id_path, retransmitted_at_path, max_ack_mode,
+                           correlation_policy, enabled
                     FROM iot_protocol_profile
                     WHERE enabled = 1
                     ORDER BY source_topic, profile_code, profile_version
@@ -60,6 +62,12 @@ public class JdbcProtocolProfileProvider implements ProtocolProfileProvider {
                     rs.getString("expected_protocol_version"),
                     rs.getString("timestamp_path"),
                     rs.getString("seq_path"),
+                    rs.getString("message_id_path"),
+                    rs.getString("boot_id_path"),
+                    rs.getString("batch_id_path"),
+                    rs.getString("retransmitted_at_path"),
+                    rs.getString("max_ack_mode"),
+                    rs.getString("correlation_policy"),
                     rs.getBoolean("enabled")));
             List<ProtocolFieldMapping> mappings = jdbcTemplate.query("""
                     SELECT mapping_id, profile_id, source_path, metric_code, value_type,

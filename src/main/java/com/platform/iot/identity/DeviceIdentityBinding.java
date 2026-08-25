@@ -1,5 +1,8 @@
 package com.platform.iot.identity;
 
+import com.platform.iot.reliability.AckMode;
+import com.platform.iot.reliability.CorrelationPolicy;
+
 /**
  * MQTT 热路径使用的不可变设备归属。
  *
@@ -16,6 +19,10 @@ public record DeviceIdentityBinding(
         String equipmentId,
         String equipmentCode,
         String buildingId,
-        String expectedProfileCode
+        String expectedProfileCode,
+        AckMode maxAckMode,
+        CorrelationPolicy correlationPolicy,
+        String deviceAckTopic,
+        String adapterAckTopic
 ) {
 }

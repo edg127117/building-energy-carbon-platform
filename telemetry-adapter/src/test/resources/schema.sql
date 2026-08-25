@@ -12,6 +12,12 @@ CREATE TABLE iot_protocol_profile (
     expected_protocol_version VARCHAR(50),
     timestamp_path VARCHAR(200),
     seq_path VARCHAR(200),
+    message_id_path VARCHAR(200),
+    boot_id_path VARCHAR(200),
+    batch_id_path VARCHAR(200),
+    retransmitted_at_path VARCHAR(200),
+    max_ack_mode VARCHAR(30) NOT NULL DEFAULT 'EVIDENCE_ONLY',
+    correlation_policy VARCHAR(40) NOT NULL DEFAULT 'NONE',
     enabled TINYINT NOT NULL
 );
 

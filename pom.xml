@@ -43,7 +43,7 @@
     <dependency>
       <groupId>org.eclipse.paho</groupId>
       <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
-      <version>1.2.2</version>
+      <version>${paho-mqtt.version}</version>
     </dependency>
     <!-- 1. Web核心与参数校验  -->
     <dependency>
