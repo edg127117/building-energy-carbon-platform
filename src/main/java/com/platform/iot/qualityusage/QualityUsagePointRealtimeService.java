@@ -7,7 +7,7 @@ import com.platform.iot.dataquality.event.HvacMinuteQualityReadyEvent;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.PolicyKey;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
-import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
@@ -94,9 +94,9 @@ public class QualityUsagePointRealtimeService {
         List<RawMinuteAggregate> rows = event.affectedPointIds().isEmpty()
                 ? event.aggregates()
                 : minuteRepository.findByMinute(event.minuteStart(), event.buildingIds());
-        RuntimeSnapshot snapshot;
+        ResolutionContext context;
         try {
-            snapshot = resolver.runtimeSnapshot();
+            context = resolver.runtimeContext();
         } catch (QualityUsageSnapshotUnavailableException exception) {
             publishUnavailable(event.buildingIds());
             return;
@@ -104,16 +104,16 @@ public class QualityUsagePointRealtimeService {
         for (RawMinuteAggregate row : rows) {
             publish(row.buildingId(), row.pointId(), row.pointCode(), row.minuteStart(),
                     row.averageValue(), row.minimumValue(), row.maximumValue(),
-                    row.sampleCount(), row.dataQuality(), snapshot);
+                    row.sampleCount(), row.dataQuality(), context);
         }
     }
 
     private void correctLatest(Set<String> pointIds) {
         Map<String, BizDataPoint> points = pointService.listByIds(pointIds).stream()
                 .collect(Collectors.toMap(BizDataPoint::getPointId, point -> point));
-        RuntimeSnapshot snapshot;
+        ResolutionContext context;
         try {
-            snapshot = resolver.runtimeSnapshot();
+            context = resolver.runtimeContext();
         } catch (QualityUsageSnapshotUnavailableException exception) {
             publishUnavailable(points.values().stream()
                     .map(BizDataPoint::getBuildingId)
@@ -125,7 +125,7 @@ public class QualityUsagePointRealtimeService {
             if (point != null && "ONLINE".equalsIgnoreCase(point.getStatus())) {
                 publish(point.getBuildingId(), point.getPointId(), point.getPointCode(), row.time(),
                         row.average(), row.minimum(), row.maximum(), row.sampleCount(),
-                        row.dataQuality(), snapshot);
+                        row.dataQuality(), context);
             }
         }
     }
@@ -155,9 +155,9 @@ public class QualityUsagePointRealtimeService {
             double maximum,
             long sampleCount,
             int actualQuality,
-            RuntimeSnapshot snapshot) {
+            ResolutionContext context) {
         Resolution decision = resolver.resolve(
-                snapshot, pointId, POINT_REALTIME_VIEW, minuteStart, actualQuality);
+                context, pointId, POINT_REALTIME_VIEW, minuteStart, actualQuality);
         boolean allowed = decision.decision() == Decision.ALLOW;
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("businessKey", pointId + ':' + minuteStart);

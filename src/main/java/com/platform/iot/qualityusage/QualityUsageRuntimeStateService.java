@@ -131,7 +131,7 @@ public class QualityUsageRuntimeStateService {
         }
     }
 
-    public RuntimeSnapshot requireSnapshot() {
+    RuntimeSnapshot requireSnapshot() {
         RuntimeSnapshot current = snapshot.get();
         if (current == null) {
             throw new QualityUsageSnapshotUnavailableException(
@@ -140,7 +140,7 @@ public class QualityUsageRuntimeStateService {
         return current;
     }
 
-    public RuntimeSnapshot loadRange(
+    RuntimeSnapshot loadRange(
             Set<String> pointIds, String scenarioCode, long from, long to) {
         try {
             return repository.loadRange(pointIds, scenarioCode, from, to);

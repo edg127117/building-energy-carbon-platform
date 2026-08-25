@@ -46,6 +46,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
+import static com.platform.iot.qualityusage.QualityUsageTestFixtures.systemDefaultResolver;
 
 @ExtendWith(MockitoExtension.class)
 class LateRealMinuteCorrectionServiceTest {
@@ -317,7 +318,8 @@ class LateRealMinuteCorrectionServiceTest {
                 mock(IndicatorLatestCacheService.class),
                 mock(IndicatorRealtimePublisher.class),
                 configProvider,
-                new FormulaProperties());
+                new FormulaProperties(),
+                systemDefaultResolver());
         ApplicationEventPublisher formulaPublisher = event -> {
             if (event instanceof HvacMinuteQualityReadyEvent ready) {
                 formulaEngine.onMinuteQualityReady(ready);

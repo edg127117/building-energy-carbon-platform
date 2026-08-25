@@ -55,6 +55,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static com.platform.iot.qualityusage.QualityUsageTestFixtures.systemDefaultResolver;
 
 /**
  * 固化人工重算的批量读取边界，防止后续实现退化为逐测点、逐分钟查询。
@@ -207,7 +208,8 @@ class DataQualityRecalculationPerformanceContractTest {
                 dataPointService,
                 equipmentService,
                 queryMinuteRepository,
-                mock(HvacSnapshotFreshnessPolicy.class));
+                mock(HvacSnapshotFreshnessPolicy.class),
+                systemDefaultResolver());
 
         hvacQueryService.history(
                 "BLD001",

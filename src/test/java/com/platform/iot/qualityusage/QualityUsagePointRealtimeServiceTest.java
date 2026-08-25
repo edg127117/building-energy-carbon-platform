@@ -6,7 +6,7 @@ import com.platform.iot.dataquality.event.HvacMinuteQualityReadyEvent;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.PolicySource;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
-import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
+import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.RawMinuteAggregate;
 import com.platform.iot.websocket.RealtimeMessageGateway;
@@ -15,9 +15,6 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
 import static com.platform.iot.qualityusage.QualityUsageModels.POINT_REALTIME_VIEW;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,9 +33,9 @@ class QualityUsagePointRealtimeServiceTest {
         BizDataPointService points = mock(BizDataPointService.class);
         RealtimeMessageGateway gateway = mock(RealtimeMessageGateway.class);
         ThreadPoolTaskExecutor executor = mock(ThreadPoolTaskExecutor.class);
-        RuntimeSnapshot snapshot = new RuntimeSnapshot(9, Map.of(), Map.of());
-        when(resolver.runtimeSnapshot()).thenReturn(snapshot);
-        when(resolver.resolve(snapshot, "POINT001", POINT_REALTIME_VIEW, 60_000L, 2))
+        ResolutionContext context = mock(ResolutionContext.class);
+        when(resolver.runtimeContext()).thenReturn(context);
+        when(resolver.resolve(context, "POINT001", POINT_REALTIME_VIEW, 60_000L, 2))
                 .thenReturn(new Resolution(
                         Decision.BLOCK, 2, POINT_REALTIME_VIEW,
                         PolicySource.PUBLISHED_POLICY, 3, 9,

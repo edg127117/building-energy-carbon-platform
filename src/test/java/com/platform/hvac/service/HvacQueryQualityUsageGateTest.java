@@ -6,10 +6,9 @@ import com.platform.hvac.model.entity.Building;
 import com.platform.iot.qualityusage.QualityUsageModels.PolicyInterval;
 import com.platform.iot.qualityusage.QualityUsageModels.PolicyKey;
 import com.platform.iot.qualityusage.QualityUsageModels.QualityLevel;
-import com.platform.iot.qualityusage.QualityUsageModels.RuntimeSnapshot;
 import com.platform.iot.qualityusage.QualityUsageModels.Scenario;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
-import com.platform.iot.qualityusage.QualityUsageRuntimeStateService;
+import com.platform.iot.qualityusage.QualityUsageTestFixtures;
 import com.platform.iot.temporal.HvacMinuteRepository;
 import com.platform.iot.temporal.model.HvacMinuteQueryRow;
 import com.platform.system.service.BuildingScopeService;
@@ -35,8 +34,6 @@ class HvacQueryQualityUsageGateTest {
     private final HvacMinuteRepository minuteRepository = mock(HvacMinuteRepository.class);
     private final HvacSnapshotFreshnessPolicy freshnessPolicy =
             mock(HvacSnapshotFreshnessPolicy.class);
-    private final QualityUsageRuntimeStateService runtimeState =
-            mock(QualityUsageRuntimeStateService.class);
     private HvacQueryService service;
 
     @BeforeEach
@@ -44,10 +41,6 @@ class HvacQueryQualityUsageGateTest {
         Building building = new Building();
         building.setBuildingId("BLD001");
         when(buildingService.getById("BLD001")).thenReturn(building);
-        service = new HvacQueryService(
-                buildingService, scopeService, pointService, equipmentService,
-                minuteRepository, freshnessPolicy,
-                new QualityUsagePolicyResolver(runtimeState));
     }
 
     @Test
@@ -58,9 +51,7 @@ class HvacQueryQualityUsageGateTest {
                 .thenReturn(List.of(point));
         when(minuteRepository.findLatestByPointIds(List.of("POINT001")))
                 .thenReturn(List.of(row(0, 12.0, 1)));
-        RuntimeSnapshot snapshot = snapshot(
-                POINT_REALTIME_VIEW, Set.of(QualityLevel.Q0));
-        when(runtimeState.requireSnapshot()).thenReturn(snapshot);
+        service = service(POINT_REALTIME_VIEW, Set.of(QualityLevel.Q0));
 
         var result = service.snapshot("BLD001", 1L, Set.of("PLATFORM_ADMIN"));
 
@@ -80,11 +71,8 @@ class HvacQueryQualityUsageGateTest {
                         row(0, 10.0, 0),
                         row(60_000, 20.0, 1),
                         row(120_000, 30.0, 2)));
-        RuntimeSnapshot snapshot = snapshot(
-                POINT_HISTORY_VIEW, Set.of(QualityLevel.Q0, QualityLevel.Q2));
-        when(runtimeState.loadRange(
-                Set.of("POINT001"), POINT_HISTORY_VIEW, 0, to))
-                .thenReturn(snapshot);
+        service = service(POINT_HISTORY_VIEW,
+                Set.of(QualityLevel.Q0, QualityLevel.Q2));
 
         var result = service.history(
                 "BLD001", "POINT001", 0L, to, 1L, Set.of("PLATFORM_ADMIN"));
@@ -99,8 +87,8 @@ class HvacQueryQualityUsageGateTest {
         assertThat(first.dataQuality()).isEqualTo(2);
     }
 
-    private RuntimeSnapshot snapshot(String scenarioCode, Set<QualityLevel> levels) {
-        return new RuntimeSnapshot(3,
+    private HvacQueryService service(String scenarioCode, Set<QualityLevel> levels) {
+        QualityUsagePolicyResolver resolver = QualityUsageTestFixtures.resolver(3,
                 Map.of(scenarioCode, new Scenario(
                         scenarioCode,
                         scenarioCode.equals(POINT_REALTIME_VIEW)
@@ -108,6 +96,9 @@ class HvacQueryQualityUsageGateTest {
                         "ENABLED")),
                 Map.of(new PolicyKey("POINT001", scenarioCode),
                         List.of(new PolicyInterval("POL001", 2, null, null, levels))));
+        return new HvacQueryService(
+                buildingService, scopeService, pointService, equipmentService,
+                minuteRepository, freshnessPolicy, resolver);
     }
 
     private BizDataPoint point() {

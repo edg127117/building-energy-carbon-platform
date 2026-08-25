@@ -50,6 +50,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
+import static com.platform.iot.qualityusage.QualityUsageTestFixtures.systemDefaultResolver;
 
 class HvacFormulaEngineTest {
 
@@ -108,7 +109,7 @@ class HvacFormulaEngineTest {
                 .withBean(DataPointConfigProvider.class, () -> pointConfigProvider)
                 .withBean(FormulaProperties.class, FormulaProperties::new)
                 .withBean(QualityUsagePolicyResolver.class,
-                        QualityUsagePolicyResolver::systemDefault)
+                        () -> systemDefaultResolver())
                 .withUserConfiguration(HvacFormulaEngine.class)
                 .run(context -> {
                     assertThat(context).hasNotFailed();
@@ -227,7 +228,8 @@ class HvacFormulaEngineTest {
 
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, pointConfigProvider, new FormulaProperties())
+                publisher, pointConfigProvider, new FormulaProperties(),
+                systemDefaultResolver())
                 .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, false, aggregates));
 
@@ -298,7 +300,7 @@ class HvacFormulaEngineTest {
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
                 publisher, new FormulaInputAssembler(), dependencyResolver,
-                List.of(new ChillerCopFormula()))
+                List.of(new ChillerCopFormula()), systemDefaultResolver())
                 .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE, FINALIZED_AT, true, List.of(trigger)));
 
@@ -322,7 +324,8 @@ class HvacFormulaEngineTest {
 
         new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, pointConfigProvider, new FormulaProperties())
+                publisher, pointConfigProvider, new FormulaProperties(),
+                systemDefaultResolver())
                 .onMinuteQualityReady(new HvacMinuteQualityReadyEvent(
                         MINUTE,
                         FINALIZED_AT,
@@ -819,7 +822,8 @@ class HvacFormulaEngineTest {
     private HvacFormulaEngine engine(List<IndicatorFormula> formulas) {
         return new HvacFormulaEngine(
                 configProvider, minuteRepository, indicatorRepository, cache,
-                publisher, assembler, dependencyResolver, formulas);
+                publisher, assembler, dependencyResolver, formulas,
+                systemDefaultResolver());
     }
 
     private static IndicatorFormula formula(String code, String version) {
