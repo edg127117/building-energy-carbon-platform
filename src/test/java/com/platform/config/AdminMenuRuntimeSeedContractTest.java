@@ -11,8 +11,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** 锁定新库种子与已有库手工迁移的真实前端路由和固定角色边界。 */
 class AdminMenuRuntimeSeedContractTest {
 
-    private final String baseSql = read("src/env/init/03-init-hvac-schema.sql");
-    private final String migrationSql = read("src/env/init/11-migrate-mysql-admin-menu-runtime.sql");
+    private final String baseSql = read("src/env/init/V03__init_hvac_schema.sql");
+    private final String migrationSql = read("src/env/init/V11__mysql_admin_menu_runtime.sql");
 
     @Test
     void baseSeedContainsOnlyConfirmedRuntimeCatalogAsVisibleEntries() {

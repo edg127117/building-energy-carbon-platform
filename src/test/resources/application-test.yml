@@ -4,6 +4,10 @@ spring:
     url: jdbc:h2:mem:testdb;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false
     username: sa
     password:
+  # H2 测试继续使用受控 schema-test.sql；MySQL Flyway 脚本只在专用 MySQL 8
+  # 集成环境执行，避免普通单元测试连接或模拟真实外部资源。
+  flyway:
+    enabled: false
   sql:
     init:
       mode: always

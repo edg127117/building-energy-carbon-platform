@@ -62,6 +62,7 @@ class TelemetryV2IngestionServiceTest {
                 1_785_398_400_500L);
 
         assertThat(result.status()).isEqualTo(ReceiptStatus.PLATFORM_PERSISTED);
+        assertThat(result.processedMetrics()).isEqualTo(1);
         assertThat(result.actualAckMode()).isEqualTo(AckMode.EVIDENCE_ONLY);
         ArgumentCaptor<TelemetryReceipt> receipt =
                 ArgumentCaptor.forClass(TelemetryReceipt.class);
@@ -110,12 +111,13 @@ class TelemetryV2IngestionServiceTest {
     @Test
     void storageFailureKeepsBrokerRedeliveryAndDoesNotCreateSuccessReceipt() {
         when(standardService.ingestImmutable(any(), anyLong()))
-                .thenReturn(StandardTelemetryResult.retryable(0, "tdengine unavailable"));
+                .thenReturn(StandardTelemetryResult.retryable(1, "tdengine unavailable"));
 
         V2ProcessingResult result = service.ingest(message("C2", BigDecimal.ONE),
                 1_785_398_400_500L);
 
         assertThat(result.retryable()).isTrue();
+        assertThat(result.processedMetrics()).isEqualTo(1);
         assertThat(result.applicationAck()).isNull();
         verify(receiptMapper, never()).insert(any());
     }

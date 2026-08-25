@@ -49,7 +49,7 @@ class HvacSeedUnitContractTest {
     void productionSeedUsesDimensionlessUnitForPowerFactor() throws IOException {
         Path productionSeed = Path.of(
                 System.getProperty("user.dir"),
-                "src", "env", "init", "03-init-hvac-schema.sql");
+                "src", "env", "init", "V03__init_hvac_schema.sql");
         String pointLine = Files.readAllLines(
                         productionSeed, StandardCharsets.UTF_8)
                 .stream()

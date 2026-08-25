@@ -1,4 +1,4 @@
--- 已有 MySQL 测试库的 HVAC/管理菜单对齐；手工执行，Docker 已有卷不会自动重跑。
+-- HVAC/管理菜单对齐；由 Flyway 在新库和受控升级库中仅执行一次。
 USE `iot_platform`;
 
 INSERT INTO `sys_menu`

@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_definition (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_applicability (
   applicability_id VARCHAR(32) PRIMARY KEY,
-  equipment_type_code VARCHAR(20) NOT NULL,
+  equipment_type_code VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   definition_id VARCHAR(32) NOT NULL,
   required_flag TINYINT NOT NULL DEFAULT 0,
   formula_readable TINYINT NOT NULL DEFAULT 0,
@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_mapping_version (
 
 CREATE TABLE IF NOT EXISTS biz_product_parameter_template (
   template_id VARCHAR(32) PRIMARY KEY,
-  product_id VARCHAR(32) NOT NULL,
+  product_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   current_active_revision_id VARCHAR(32),
   config_revision INT NOT NULL DEFAULT 0,
   create_by BIGINT NOT NULL,
@@ -167,8 +167,8 @@ CREATE TABLE IF NOT EXISTS biz_product_parameter_template_value (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_candidate (
   candidate_id VARCHAR(32) PRIMARY KEY,
-  building_id VARCHAR(32) NOT NULL,
-  equip_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  equip_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   definition_id VARCHAR(32),
   source_type VARCHAR(20) NOT NULL,
   source_reference VARCHAR(255) NOT NULL,
@@ -215,8 +215,8 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_candidate (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_conflict (
   conflict_id VARCHAR(32) PRIMARY KEY,
-  building_id VARCHAR(32) NOT NULL,
-  equip_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  equip_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   definition_id VARCHAR(32) NOT NULL,
   status VARCHAR(20) NOT NULL,
   config_revision INT NOT NULL DEFAULT 0,
@@ -250,8 +250,8 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_conflict_member (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_set (
   parameter_set_id VARCHAR(32) PRIMARY KEY,
-  building_id VARCHAR(32) NOT NULL,
-  equip_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  equip_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   current_timeline_revision_id VARCHAR(32),
   config_revision INT NOT NULL DEFAULT 0,
   create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) NOT NULL,
@@ -331,7 +331,7 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_version_value (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_review_request (
   request_id VARCHAR(32) PRIMARY KEY,
-  building_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   version_id VARCHAR(32) NOT NULL,
   request_no INT NOT NULL,
   status VARCHAR(20) NOT NULL,
@@ -402,7 +402,7 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_timeline_segment (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_import_batch (
   import_batch_id VARCHAR(32) PRIMARY KEY,
-  building_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   safe_file_name VARCHAR(255) NOT NULL,
   file_sha256 CHAR(64) NOT NULL,
   status VARCHAR(20) NOT NULL,
@@ -443,8 +443,8 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_recalc_job (
   job_id VARCHAR(32) PRIMARY KEY,
   idempotency_key VARCHAR(160) NOT NULL,
   timeline_revision_id VARCHAR(32) NOT NULL,
-  building_id VARCHAR(32) NOT NULL,
-  equip_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  equip_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   indicator_ids_json JSON NOT NULL,
   from_minute TIMESTAMP(3) NOT NULL,
   to_minute TIMESTAMP(3) NOT NULL,
@@ -470,8 +470,8 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_recalc_job (
 CREATE TABLE IF NOT EXISTS biz_device_parameter_legacy_staging (
   staging_id VARCHAR(32) PRIMARY KEY,
   migration_batch_id VARCHAR(32) NOT NULL,
-  building_id VARCHAR(32) NOT NULL,
-  equip_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  equip_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   legacy_field VARCHAR(50) NOT NULL,
   raw_value DECIMAL(30,12) NOT NULL,
   raw_unit_evidence VARCHAR(100),
@@ -498,7 +498,7 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_legacy_staging (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_legacy_mapping (
   legacy_mapping_id VARCHAR(32) PRIMARY KEY,
-  equipment_type_code VARCHAR(20) NOT NULL,
+  equipment_type_code VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
   legacy_field VARCHAR(50) NOT NULL,
   mapping_mode VARCHAR(20) NOT NULL,
   definition_id VARCHAR(32),
@@ -531,7 +531,7 @@ CREATE TABLE IF NOT EXISTS biz_device_parameter_legacy_mapping (
 
 CREATE TABLE IF NOT EXISTS biz_device_parameter_audit_log (
   audit_id VARCHAR(32) PRIMARY KEY,
-  building_id VARCHAR(32),
+  building_id VARCHAR(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci,
   actor_type VARCHAR(20) NOT NULL,
   operator_id BIGINT,
   action_type VARCHAR(50) NOT NULL,

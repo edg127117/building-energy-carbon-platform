@@ -353,10 +353,10 @@ function Invoke-Taos([string]$Sql) {
 
 function Invoke-OnboardingMigrations {
     $migrationNames = @(
-        '13-migrate-device-onboarding-discovery.sql',
-        '14-migrate-device-onboarding-binding.sql',
-        '15-migrate-mysql-asset-management-menu.sql',
-        '16-migrate-mysql-device-onboarding-menu.sql'
+        'V13__device_onboarding_discovery.sql',
+        'V14__device_onboarding_binding.sql',
+        'V15__mysql_asset_management_menu.sql',
+        'V16__mysql_device_onboarding_menu.sql'
     )
     $password = if ($env:MYSQL_PASSWORD) {
         $env:MYSQL_PASSWORD

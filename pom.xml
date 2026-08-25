@@ -88,6 +88,14 @@
       <artifactId>mysql-connector-j</artifactId>
       <scope>runtime</scope>
     </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
+    </dependency>
     <!-- 3. TDengine JDBC (用于时序测点落盘) -->
     <dependency>
       <groupId>com.taosdata.jdbc</groupId>
@@ -166,6 +174,18 @@
     </dependency>
   </dependencies>
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>src/env/init</directory>
+        <targetPath>db/migration/mysql</targetPath>
+        <includes>
+          <include>V*.sql</include>
+        </includes>
+      </resource>
+    </resources>
     <plugins>
       <!--
         在编译和测试前统一校验开发环境，避免 JAVA_HOME、PATH 和 CI

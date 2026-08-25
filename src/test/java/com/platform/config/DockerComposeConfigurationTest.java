@@ -8,9 +8,7 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * 锁定空数据环境所使用的 Compose 边界，防止旧电表初始化重新进入部署链路。
- */
+/** 锁定基础设施 Compose 边界，数据库结构由应用内 Flyway 单一治理。 */
 class DockerComposeConfigurationTest {
 
     private final String compose = readCompose();
@@ -63,8 +61,10 @@ class DockerComposeConfigurationTest {
     }
 
     @Test
-    void existingDatabaseMenuMigrationIsNotMountedAsAutomaticInitialization() {
-        assertThat(compose).doesNotContain("11-migrate-mysql-admin-menu-runtime.sql");
+    void mysqlContainerDoesNotOwnSchemaInitialization() {
+        assertThat(compose)
+                .doesNotContain(":/docker-entrypoint-initdb.d")
+                .doesNotContain(".sql:/");
     }
 
     private int countOccurrences(String text, String needle) {
