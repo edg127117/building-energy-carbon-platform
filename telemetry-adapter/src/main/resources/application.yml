@@ -15,14 +15,29 @@ adapter:
   profile-refresh-ms: ${ADAPTER_PROFILE_REFRESH_MS:60000}
   mqtt:
     enabled: ${ADAPTER_MQTT_ENABLED:true}
-    broker-url: ${ADAPTER_MQTT_BROKER_URL:tcp://127.0.0.1:1883}
+    broker-url: ${ADAPTER_MQTT_BROKER_URL:ssl://127.0.0.1:8883}
     client-id: ${ADAPTER_MQTT_CLIENT_ID:telemetry-adapter-01}
     username: ${ADAPTER_MQTT_USER:adapter}
     password: ${ADAPTER_MQTT_PASSWORD:change-me}
     raw-topic: ${ADAPTER_RAW_TOPIC:device/raw/#}
-    standard-topic: ${ADAPTER_STANDARD_TOPIC:device/telemetry/up}
+    standard-topic: ${ADAPTER_STANDARD_TOPIC:platform/telemetry/v2/up}
+    application-ack-topic: ${ADAPTER_APPLICATION_ACK_TOPIC:platform/telemetry/v2/ack/adapter}
     max-payload-bytes: ${ADAPTER_MAX_PAYLOAD_BYTES:65536}
     initial-retry-millis: ${ADAPTER_INITIAL_RETRY_MILLIS:5000}
+    max-retry-millis: ${ADAPTER_MAX_RETRY_MILLIS:120000}
+    security-retry-millis: ${ADAPTER_SECURITY_RETRY_MILLIS:300000}
+    retry-multiplier: ${ADAPTER_RETRY_MULTIPLIER:2.0}
+    retry-jitter-ratio: ${ADAPTER_RETRY_JITTER_RATIO:0.2}
+    tls:
+      enabled: ${ADAPTER_MQTT_TLS_ENABLED:true}
+      # 仅供隔离自动化测试；研发和部署环境不得用它绕过 TLS。
+      allow-plaintext-for-tests: ${ADAPTER_MQTT_ALLOW_PLAINTEXT_TEST_MODE:false}
+      trust-store: ${ADAPTER_MQTT_TLS_TRUST_STORE:}
+      trust-store-password: ${ADAPTER_MQTT_TLS_TRUST_STORE_PASSWORD:}
+      trust-store-type: ${ADAPTER_MQTT_TLS_TRUST_STORE_TYPE:PKCS12}
+      key-store: ${ADAPTER_MQTT_TLS_KEY_STORE:}
+      key-store-password: ${ADAPTER_MQTT_TLS_KEY_STORE_PASSWORD:}
+      key-store-type: ${ADAPTER_MQTT_TLS_KEY_STORE_TYPE:PKCS12}
 
 management:
   endpoints:

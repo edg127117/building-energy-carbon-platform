@@ -59,15 +59,34 @@ mybatis-plus:
 mqtt:
   # true：本地平台主动连接云端 EMQX；false：完全不连接 Broker，供自动化测试隔离。
   enabled: ${MQTT_ENABLED:true}
-  broker-url: ${MQTT_BROKER_URL:tcp://127.0.0.1:1883}
+  broker-url: ${MQTT_BROKER_URL:ssl://127.0.0.1:8883}
   client-id: ${MQTT_CLIENT_ID:platform-backend-01}
   username: ${MQTT_USER:admin}
   password: ${MQTT_PASSWORD:change-me}
   initial-retry-millis: ${MQTT_INITIAL_RETRY_MILLIS:5000}
+  max-retry-millis: ${MQTT_MAX_RETRY_MILLIS:120000}
+  security-retry-millis: ${MQTT_SECURITY_RETRY_MILLIS:300000}
+  retry-multiplier: ${MQTT_RETRY_MULTIPLIER:2.0}
+  retry-jitter-ratio: ${MQTT_RETRY_JITTER_RATIO:0.2}
+  tls:
+    enabled: ${MQTT_TLS_ENABLED:true}
+    # 仅供隔离自动化测试；研发和部署环境不得用它绕过 TLS。
+    allow-plaintext-for-tests: ${MQTT_ALLOW_PLAINTEXT_TEST_MODE:false}
+    trust-store: ${MQTT_TLS_TRUST_STORE:}
+    trust-store-password: ${MQTT_TLS_TRUST_STORE_PASSWORD:}
+    trust-store-type: ${MQTT_TLS_TRUST_STORE_TYPE:PKCS12}
+    # key-store 为空时使用单向 TLS；配置后启用客户端证书认证。
+    key-store: ${MQTT_TLS_KEY_STORE:}
+    key-store-password: ${MQTT_TLS_KEY_STORE_PASSWORD:}
+    key-store-type: ${MQTT_TLS_KEY_STORE_TYPE:PKCS12}
   topics:
     # 旧单点协议仅保留迁移窗口；新设备统一走标准多字段主题。
     upstream: ${MQTT_UPSTREAM_TOPIC:device/data/up}
     standard-upstream: ${MQTT_STANDARD_UPSTREAM_TOPIC:device/telemetry/up}
+    # 受 ACL 保护的适配器到平台内部 V2 Topic，不要求设备直接发布。
+    v2-upstream: ${MQTT_V2_UPSTREAM_TOPIC:platform/telemetry/v2/up}
+    # 未绑定设备的永久拒绝也经该可信内部路由通知代理适配器。
+    v2-adapter-ack: ${MQTT_V2_ADAPTER_ACK_TOPIC:platform/telemetry/v2/ack/adapter}
 
 # TDengine 配置 (使用 RESTful 端口 6041)
 tdengine:
@@ -181,9 +200,18 @@ device-onboarding:
 
 # 只清理逐条原始事件；分钟汇总和后续COP指标长期保留。
 data-retention:
-  raw-event-days: 90
-  cleanup-enabled: true
-  cleanup-cron: "0 30 3 * * ?"
+  raw-event-days: ${TDENGINE_RAW_RETENTION_DAYS:90}
+  cleanup-enabled: ${TDENGINE_RAW_CLEANUP_ENABLED:true}
+  cleanup-cron: "${TDENGINE_RAW_CLEANUP_CRON:0 30 3 * * ?}"
+
+# 当前值仅用于研发和软件模拟，生产部署必须结合容量与合规要求重新批准。
+telemetry-reliability:
+  retention:
+    receipt-days: ${TELEMETRY_RECEIPT_RETENTION_DAYS:7}
+    failure-days: ${TELEMETRY_FAILURE_RETENTION_DAYS:180}
+    batch-size: ${TELEMETRY_RETENTION_BATCH_SIZE:500}
+    max-batches: ${TELEMETRY_RETENTION_MAX_BATCHES:20}
+    cleanup-cron: "${TELEMETRY_RETENTION_CLEANUP_CRON:0 15 4 * * ?}"
 
 logging:
   level:

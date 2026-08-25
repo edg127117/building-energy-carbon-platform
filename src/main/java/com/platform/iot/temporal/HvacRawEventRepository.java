@@ -24,6 +24,13 @@ public interface HvacRawEventRepository {
     RawEventWriteResult upsert(RawTelemetryEvent event);
 
     /**
+     * V2 可靠链使用的不可覆盖写入；相同键不同值返回冲突，但保留原值。
+     */
+    default RawEventWriteResult insertImmutable(RawTelemetryEvent event) {
+        return upsert(event);
+    }
+
+    /**
      * 一次查询半开窗口内全部测点的原始事件。
      *
      * <p>分钟聚合使用超级表范围查询，而不是按 pointCode 循环查询子表，

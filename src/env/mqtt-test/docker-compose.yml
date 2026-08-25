@@ -1,0 +1,25 @@
+services:
+  emqx-test:
+    image: emqx/emqx:5.6.0
+    container_name: building-energy-emqx-tls-test
+    ports:
+      - "127.0.0.1:8883:8883"
+    environment:
+      EMQX_NODE_NAME: emqx@127.0.0.1
+      EMQX_DASHBOARD__DEFAULT_USERNAME: test-admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: test-dashboard-only
+      EMQX_LISTENERS__SSL__DEFAULT__BIND: "0.0.0.0:8883"
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CACERTFILE: /opt/emqx/etc/test-certs/ca.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__CERTFILE: /opt/emqx/etc/test-certs/server.crt
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__KEYFILE: /opt/emqx/etc/test-certs/server.key
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__VERIFY: verify_none
+      EMQX_LISTENERS__SSL__DEFAULT__SSL_OPTIONS__FAIL_IF_NO_PEER_CERT: "false"
+    volumes:
+      - ./certs/ca.crt:/opt/emqx/etc/test-certs/ca.crt:ro
+      - ./certs/server.crt:/opt/emqx/etc/test-certs/server.crt:ro
+      - ./certs/server.key:/opt/emqx/etc/test-certs/server.key:ro
+    healthcheck:
+      test: ["CMD", "emqx", "ctl", "status"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

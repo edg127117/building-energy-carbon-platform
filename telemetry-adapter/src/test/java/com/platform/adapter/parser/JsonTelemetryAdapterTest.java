@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.adapter.model.StandardMetric;
 import com.platform.adapter.model.StandardTelemetryMessage;
 import com.platform.adapter.model.TimeSource;
+import com.platform.adapter.model.DedupMode;
+import com.platform.adapter.model.IdSource;
 import com.platform.adapter.profile.ProtocolFieldMapping;
 import com.platform.adapter.profile.ProtocolProfile;
 import org.junit.jupiter.api.BeforeEach;
@@ -49,9 +51,12 @@ class JsonTelemetryAdapterTest {
         assertThat(message.deviceIdentity().type()).isEqualTo("MAC");
         assertThat(message.deviceIdentity().value()).isEqualTo("123456789012345");
         assertThat(message.profileCode()).isEqualTo("ENERGY_METER_V1");
-        assertThat(message.eventTime()).isEqualTo(RECEIVED_TIME);
-        assertThat(message.timeSource()).isEqualTo(TimeSource.SERVER_RECEIVED);
-        assertThat(message.seq()).isNull();
+        assertThat(message.standardVersion()).isEqualTo("2.0");
+        assertThat(message.collectedAt()).isNull();
+        assertThat(message.adapterReceivedAt()).isEqualTo(RECEIVED_TIME);
+        assertThat(message.timeSource()).isEqualTo(TimeSource.ADAPTER_RECEIVED);
+        assertThat(message.sourceSeq()).isNull();
+        assertThat(message.canonicalMessageId()).isNotBlank();
         assertThat(message.metrics()).extracting(StandardMetric::code)
                 .containsExactly(
                         "CURRENT_ENERGY",
@@ -102,9 +107,61 @@ class JsonTelemetryAdapterTest {
                         "M1", "/current_energy", "CURRENT_ENERGY", "kWh", "kWh",
                         "1", "0", true, 1)));
 
-        assertThat(message.eventTime()).isEqualTo(1_785_398_400_123L);
+        assertThat(message.collectedAt()).isEqualTo(1_785_398_400_123L);
         assertThat(message.timeSource()).isEqualTo(TimeSource.DEVICE_REPORTED);
-        assertThat(message.seq()).isEqualTo(10_001L);
+        assertThat(message.sourceSeq()).isEqualTo(10_001L);
+    }
+
+    @Test
+    void usesDeviceMessageIdForExactDeviceScopedDeduplication() {
+        ProtocolProfile profile = new ProtocolProfile(
+                "PROFILE1", "ENERGY_METER_V1", 1,
+                "device/raw/energy-meter/v1/up", "MAC", "/MAC",
+                null, null, null, null, "/messageId", null, null, null,
+                "ADAPTER_PROXY", "SOURCE_MESSAGE_ID", true);
+
+        StandardTelemetryMessage first = adapter.adapt(
+                profile.sourceTopic(),
+                bytes("{\"MAC\":\"ABC\",\"messageId\":\"M-1\",\"current_energy\":1}"),
+                RECEIVED_TIME, profile, List.of(mapping(
+                        "M1", "/current_energy", "CURRENT_ENERGY", "kWh", "kWh",
+                        "1", "0", true, 1)));
+        StandardTelemetryMessage repeated = adapter.adapt(
+                profile.sourceTopic(),
+                bytes("{\"MAC\":\"ABC\",\"messageId\":\"M-1\",\"current_energy\":1}"),
+                RECEIVED_TIME + 1_000, profile, List.of(mapping(
+                        "M1", "/current_energy", "CURRENT_ENERGY", "kWh", "kWh",
+                        "1", "0", true, 1)));
+
+        assertThat(first.canonicalMessageId()).isEqualTo(repeated.canonicalMessageId());
+        assertThat(first.idSource()).isEqualTo(IdSource.DEVICE_REPORTED);
+        assertThat(first.dedupMode()).isEqualTo(DedupMode.EXACT);
+    }
+
+    @Test
+    void adaptsEverySupportedCombinationWhenCorrelationFieldsArePartlyMissing() {
+        StandardTelemetryMessage bootAndSeq = adaptCorrelation(
+                identityProfile(null, "/bootId", null, "/seq"),
+                "{\"MAC\":\"ABC\",\"bootId\":\"B1\",\"seq\":7,\"current_energy\":1}");
+        StandardTelemetryMessage seqAndTime = adaptCorrelation(
+                identityProfile(null, null, "/timestamp", "/seq"),
+                "{\"MAC\":\"ABC\",\"timestamp\":1785398400123,\"seq\":7,\"current_energy\":1}");
+        StandardTelemetryMessage timeOnly = adaptCorrelation(
+                identityProfile(null, null, "/timestamp", "/seq"),
+                "{\"MAC\":\"ABC\",\"timestamp\":1785398400123,\"current_energy\":1}");
+        StandardTelemetryMessage seqOnly = adaptCorrelation(
+                identityProfile(null, null, "/timestamp", "/seq"),
+                "{\"MAC\":\"ABC\",\"seq\":7,\"current_energy\":1}");
+
+        assertThat(List.of(bootAndSeq, seqAndTime, timeOnly))
+                .allSatisfy(message -> {
+                    assertThat(message.canonicalMessageId()).hasSize(64);
+                    assertThat(message.idSource()).isEqualTo(IdSource.ADAPTER_DERIVED);
+                    assertThat(message.dedupMode()).isEqualTo(DedupMode.DERIVED);
+                });
+        assertThat(seqOnly.canonicalMessageId()).isNotBlank();
+        assertThat(seqOnly.idSource()).isEqualTo(IdSource.ADAPTER_GENERATED);
+        assertThat(seqOnly.dedupMode()).isEqualTo(DedupMode.NONE);
     }
 
     @Test
@@ -172,7 +229,32 @@ class JsonTelemetryAdapterTest {
                 null,
                 timestampPath,
                 seqPath,
+                null,
+                null,
+                null,
+                null,
+                "EVIDENCE_ONLY",
+                "NONE",
                 true);
+    }
+
+    private ProtocolProfile identityProfile(
+            String messageIdPath,
+            String bootIdPath,
+            String timestampPath,
+            String seqPath) {
+        return new ProtocolProfile(
+                "PROFILE1", "ENERGY_METER_V1", 1,
+                "device/raw/energy-meter/v1/up", "MAC", "/MAC",
+                null, null, timestampPath, seqPath, messageIdPath, bootIdPath,
+                null, null, "EVIDENCE_ONLY", "NONE", true);
+    }
+
+    private StandardTelemetryMessage adaptCorrelation(
+            ProtocolProfile profile, String json) {
+        return adapter.adapt(profile.sourceTopic(), bytes(json), RECEIVED_TIME, profile,
+                List.of(mapping("M1", "/current_energy", "CURRENT_ENERGY",
+                        "kWh", "kWh", "1", "0", true, 1)));
     }
 
     private List<ProtocolFieldMapping> sixMappings() {

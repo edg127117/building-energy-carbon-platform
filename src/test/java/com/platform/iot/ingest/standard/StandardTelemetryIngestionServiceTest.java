@@ -1,6 +1,8 @@
 package com.platform.iot.ingest.standard;
 
 import com.platform.iot.identity.DeviceIdentityBinding;
+import com.platform.iot.reliability.AckMode;
+import com.platform.iot.reliability.CorrelationPolicy;
 import com.platform.iot.identity.DeviceIdentityKey;
 import com.platform.iot.identity.DeviceIdentityProvider;
 import com.platform.iot.identity.DeviceIdentitySnapshotUnavailableException;
@@ -196,6 +198,30 @@ class StandardTelemetryIngestionServiceTest {
         assertThat(result.shouldAcknowledge()).isFalse();
     }
 
+    @Test
+    void immutableRetryAcceptsEarlierDuplicateAndContinuesRemainingMetrics() {
+        when(identityProvider.find(identityKey())).thenReturn(Optional.of(binding()));
+        when(pointProvider.find(any())).thenReturn(Optional.of(
+                point("POINT", "kWh", "EQUIP001", "BLD001")));
+        when(hvacIngestionService.ingestImmutable(anyMap(), eq(LOCAL_RECEIVED_TIME),
+                eq("MQTT_STANDARD_V1")))
+                .thenReturn(HvacIngestionResult.of(IngestionOutcome.ACCEPTED))
+                .thenReturn(HvacIngestionResult.storageFailed("tdengine unavailable"))
+                .thenReturn(HvacIngestionResult.of(IngestionOutcome.DUPLICATE))
+                .thenReturn(HvacIngestionResult.of(IngestionOutcome.ACCEPTED));
+        StandardTelemetryMessage message = message(List.of(
+                metric("CURRENT_ENERGY", "12.34", "kWh"),
+                metric("LAST_PERIOD_ENERGY", "0.25", "kWh")));
+
+        StandardTelemetryResult first = service.ingestImmutable(message, LOCAL_RECEIVED_TIME);
+        StandardTelemetryResult retry = service.ingestImmutable(message, LOCAL_RECEIVED_TIME);
+
+        assertThat(first.outcome()).isEqualTo(StandardTelemetryOutcome.RETRYABLE_FAILURE);
+        assertThat(first.processedMetrics()).isEqualTo(1);
+        assertThat(retry.outcome()).isEqualTo(StandardTelemetryOutcome.ACCEPTED);
+        assertThat(retry.processedMetrics()).isEqualTo(2);
+    }
+
     private StandardTelemetryMessage message(List<StandardMetric> metrics) {
         return new StandardTelemetryMessage(
                 "1.0", "ENERGY_METER_V1", 1, identityKey(), EVENT_TIME,
@@ -213,7 +239,8 @@ class StandardTelemetryIngestionServiceTest {
     private DeviceIdentityBinding binding() {
         return new DeviceIdentityBinding(
                 "IDENTITY001", identityKey(), "EQUIP001", "METER001",
-                "BLD001", "ENERGY_METER_V1");
+                "BLD001", "ENERGY_METER_V1", AckMode.EVIDENCE_ONLY,
+                CorrelationPolicy.NONE, null, null);
     }
 
     private PointRuntimeConfig point(

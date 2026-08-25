@@ -83,6 +83,22 @@ public class HvacIngestionService {
             Map<String, Object> payload,
             long receivedTime,
             String trustedSourceSystem) {
+        return ingestInternal(payload, receivedTime, trustedSourceSystem, false);
+    }
+
+    /** V2 使用不可覆盖写入，冲突结果交由消息级服务拒绝并留痕。 */
+    public HvacIngestionResult ingestImmutable(
+            Map<String, Object> payload,
+            long receivedTime,
+            String trustedSourceSystem) {
+        return ingestInternal(payload, receivedTime, trustedSourceSystem, true);
+    }
+
+    private HvacIngestionResult ingestInternal(
+            Map<String, Object> payload,
+            long receivedTime,
+            String trustedSourceSystem,
+            boolean immutable) {
         // 来源系统由服务端配置，不允许设备载荷伪造命名空间。
         TelemetryValidationResult validation = validator.validate(
                 payload, receivedTime, trustedSourceSystem);
@@ -111,7 +127,8 @@ public class HvacIngestionService {
                 telemetry.receivedTime(), 0, telemetry.isForCalc(), late);
 
         try {
-            RawEventWriteResult writeResult = retryTemplate.execute(context -> repository.upsert(event));
+            RawEventWriteResult writeResult = retryTemplate.execute(context -> immutable
+                    ? repository.insertImmutable(event) : repository.upsert(event));
             return mapOutcome(writeResult, event);
         } catch (RuntimeException exception) {
             meterRegistry.counter("iot.hvac.ingestion.storage_failed").increment();

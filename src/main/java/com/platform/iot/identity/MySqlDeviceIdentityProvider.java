@@ -5,6 +5,8 @@ import com.platform.hvac.mapper.BizDeviceIdentityMapper;
 import com.platform.hvac.mapper.BizEquipmentMapper;
 import com.platform.hvac.model.entity.BizDeviceIdentity;
 import com.platform.hvac.model.entity.BizEquipment;
+import com.platform.iot.reliability.AckMode;
+import com.platform.iot.reliability.CorrelationPolicy;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -69,7 +71,11 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
                         owner.getEquipId(),
                         owner.getEquipCode(),
                         owner.getBuildingId(),
-                        identity.getExpectedProfileCode());
+                        identity.getExpectedProfileCode(),
+                        parseAckMode(identity.getMaxAckMode()),
+                        parseCorrelationPolicy(identity.getCorrelationPolicy()),
+                        trimToNull(identity.getDeviceAckTopic()),
+                        trimToNull(identity.getAdapterAckTopic()));
                 if (next.putIfAbsent(key, binding) != null) {
                     throw new IllegalStateException("存在重复启用设备身份: type=" + key.type());
                 }
@@ -80,6 +86,20 @@ public class MySqlDeviceIdentityProvider implements DeviceIdentityProvider {
         } catch (RuntimeException exception) {
             log.warn("设备身份快照刷新失败，继续使用上一完整版本: {}", exception.getMessage());
         }
+    }
+
+    private AckMode parseAckMode(String value) {
+        return value == null || value.isBlank()
+                ? AckMode.EVIDENCE_ONLY : AckMode.valueOf(value.trim());
+    }
+
+    private CorrelationPolicy parseCorrelationPolicy(String value) {
+        return value == null || value.isBlank()
+                ? CorrelationPolicy.NONE : CorrelationPolicy.valueOf(value.trim());
+    }
+
+    private String trimToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     @Override

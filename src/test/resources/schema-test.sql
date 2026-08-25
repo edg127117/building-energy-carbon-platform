@@ -22,6 +22,9 @@ DROP TABLE IF EXISTS biz_indicator;
 DROP TABLE IF EXISTS biz_point_alias;
 DROP TABLE IF EXISTS biz_data_source;
 DROP TABLE IF EXISTS biz_data_point;
+DROP TABLE IF EXISTS biz_telemetry_receipt_failure;
+DROP TABLE IF EXISTS biz_telemetry_receipt;
+DROP TABLE IF EXISTS biz_mqtt_failure_aggregate;
 DROP TABLE IF EXISTS biz_device_identity;
 DROP TABLE IF EXISTS biz_equipment;
 DROP TABLE IF EXISTS biz_point_naming_rule;
@@ -191,10 +194,74 @@ CREATE TABLE biz_device_identity (
   equip_id VARCHAR(32) NOT NULL,
   building_id VARCHAR(32) NOT NULL,
   expected_profile_code VARCHAR(50) NOT NULL,
+  max_ack_mode VARCHAR(30) NOT NULL DEFAULT 'EVIDENCE_ONLY',
+  correlation_policy VARCHAR(40) NOT NULL DEFAULT 'NONE',
+  device_ack_topic VARCHAR(200),
+  adapter_ack_topic VARCHAR(200),
   status TINYINT DEFAULT 1,
   create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   UNIQUE (identity_type, identity_value)
+);
+
+CREATE TABLE biz_telemetry_receipt (
+  canonical_message_id VARCHAR(64) PRIMARY KEY,
+  identity_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  equip_id VARCHAR(32) NOT NULL,
+  profile_code VARCHAR(50) NOT NULL,
+  source_message_id VARCHAR(128),
+  source_seq BIGINT,
+  collected_at TIMESTAMP(3),
+  adapter_received_at TIMESTAMP(3) NOT NULL,
+  first_platform_received_at TIMESTAMP(3) NOT NULL,
+  last_platform_received_at TIMESTAMP(3) NOT NULL,
+  persisted_at TIMESTAMP(3) NOT NULL,
+  retransmitted_at TIMESTAMP(3),
+  batch_id VARCHAR(128),
+  id_source VARCHAR(30) NOT NULL,
+  time_source VARCHAR(30) NOT NULL,
+  dedup_mode VARCHAR(20) NOT NULL,
+  payload_hash CHAR(64) NOT NULL,
+  configured_ack_mode VARCHAR(30) NOT NULL,
+  actual_ack_mode VARCHAR(30) NOT NULL,
+  downgrade_reason VARCHAR(100),
+  receipt_status VARCHAR(40) NOT NULL,
+  result_code VARCHAR(60) NOT NULL,
+  metric_count INT NOT NULL,
+  attempt_count INT NOT NULL DEFAULT 1,
+  device_puback_state VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
+  adapter_publish_puback_state VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
+  platform_consumer_ack_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+  application_ack_puback_state VARCHAR(20) NOT NULL DEFAULT 'NOT_APPLICABLE',
+  application_ack_published_at TIMESTAMP(3)
+);
+
+CREATE INDEX idx_receipt_building_persisted
+  ON biz_telemetry_receipt (building_id, persisted_at);
+CREATE INDEX idx_receipt_equip_persisted
+  ON biz_telemetry_receipt (equip_id, persisted_at);
+
+CREATE TABLE biz_telemetry_receipt_failure (
+  failure_id VARCHAR(32) PRIMARY KEY,
+  canonical_message_id VARCHAR(64),
+  building_id VARCHAR(32),
+  failure_stage VARCHAR(40) NOT NULL,
+  failure_code VARCHAR(60) NOT NULL,
+  safe_detail VARCHAR(500),
+  occurred_at TIMESTAMP(3) NOT NULL
+);
+
+CREATE TABLE biz_mqtt_failure_aggregate (
+  aggregate_id VARCHAR(32) PRIMARY KEY,
+  bucket_start TIMESTAMP(3) NOT NULL,
+  component VARCHAR(30) NOT NULL,
+  failure_category VARCHAR(60) NOT NULL,
+  broker_endpoint VARCHAR(255) NOT NULL,
+  occurrence_count BIGINT NOT NULL,
+  first_occurred_at TIMESTAMP(3) NOT NULL,
+  last_occurred_at TIMESTAMP(3) NOT NULL,
+  UNIQUE (bucket_start, component, failure_category, broker_endpoint)
 );
 
 CREATE TABLE biz_device_product (

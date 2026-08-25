@@ -51,13 +51,14 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.system`、`security` | 登录、JWT、角色、菜单和建筑权限 |
 | `com.platform.hvac`、`hvac.asset` | 继承的建筑、空间、系统、设备、测点档案及 HVAC 查询 |
 | `com.platform.iot.ingest`、`identity` | 标准报文接入、设备身份和归属解析 |
+| `com.platform.iot.reliability`、`mqtt` | V2 消息级幂等、持久化回执、ACK 证据、TLS 与连接故障分类 |
 | `com.platform.iot.quality`、`dataquality` | 运行校验和 Q0/Q1/Q2 预处理 |
 | `com.platform.iot.qualityusage` | Q0/Q1/Q2 消费策略治理、运行快照、门禁、纠正与恢复 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
 | `com.platform.iot.onboarding` | 产品模板、未知设备有界发现、绑定和启停 |
 | `com.platform.iot.temporal` | TDengine 时序访问边界 |
 | `com.platform.cache`、`config` | Redis 缓存和基础设施装配 |
-| `telemetry-adapter` | 现有 MQTT 报文适配基础；不等于完整多协议网关 |
+| `telemetry-adapter` | 厂商 Topic 到内部 V2 契约的 MQTT 适配与代理 ACK 基础；不等于边缘持久化网关 |
 
 数据源职责保持不变：
 
@@ -78,6 +79,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 → 字段、单位、时间和身份归一化
 → 统一 MQTT/HTTP
 → 平台接入与归属校验
+→ V2 消息幂等、不可覆盖原始持久化与平台应用 ACK
 → 数据预处理和 Q0/Q1/Q2 质量标识
 → MySQL/TDengine 持久化
 → 场景化质量使用策略门禁
@@ -88,6 +90,8 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 ```
 
 当前继承代码主要覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、部分 HVAC 指标、查询和展示。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
+
+V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认是不同证据；聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
 
 ## 6. 空间与语义模型
 

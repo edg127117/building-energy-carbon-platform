@@ -18,6 +18,7 @@ services:
       # 这些脚本都不能挂入 MySQL 首次启动目录。
       - ./init/01-init-tables.sql:/docker-entrypoint-initdb.d/01-init-tables.sql:ro
       - ./init/03-init-hvac-schema.sql:/docker-entrypoint-initdb.d/03-init-hvac-schema.sql:ro
+      - ./init/20-migrate-mysql-telemetry-reliability-v2.sql:/docker-entrypoint-initdb.d/20-migrate-mysql-telemetry-reliability-v2.sql:ro
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]

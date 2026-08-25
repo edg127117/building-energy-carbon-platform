@@ -27,6 +27,13 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.Map;
+
+import javax.net.ssl.HttpsURLConnection;
 
 /**
  * 云端原始设备 Topic 与标准多指标 Topic 之间的可靠桥接。
@@ -51,7 +58,11 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     private final ObjectMapper objectMapper;
     private final JsonTelemetryAdapter telemetryAdapter;
     private final ProtocolProfileProvider profileProvider;
+    private final AdapterMqttSslContextFactory sslContextFactory;
     private final AtomicBoolean connecting = new AtomicBoolean();
+    private final AtomicInteger consecutiveFailures = new AtomicInteger();
+    private final Map<String, ConcurrentLinkedQueue<MqttMessage>> pendingProxyAcks =
+            new ConcurrentHashMap<>();
 
     public TelemetryAdapterMqttBridge(
             IMqttClient client,
@@ -59,13 +70,15 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
             AdapterMqttProperties properties,
             ObjectMapper objectMapper,
             JsonTelemetryAdapter telemetryAdapter,
-            ProtocolProfileProvider profileProvider) {
+            ProtocolProfileProvider profileProvider,
+            AdapterMqttSslContextFactory sslContextFactory) {
         this.client = client;
         this.scheduler = scheduler;
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.telemetryAdapter = telemetryAdapter;
         this.profileProvider = profileProvider;
+        this.sslContextFactory = sslContextFactory;
     }
 
     @PostConstruct
@@ -80,25 +93,68 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
             return;
         }
         try {
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setUserName(properties.getUsername());
-            options.setPassword(properties.getPassword().toCharArray());
-            options.setAutomaticReconnect(true);
-            options.setCleanSession(false);
-            options.setConnectionTimeout(10);
+            MqttConnectOptions options = connectOptions();
             client.connect(options);
             subscribeRawTopic();
+            consecutiveFailures.set(0);
             log.info("云端报文适配器已连接EMQX: rawTopic={}, standardTopic={}",
                     properties.getRawTopic(), properties.getStandardTopic());
-        } catch (MqttException exception) {
-            log.warn("云端报文适配器首次连接失败，将在{}毫秒后重试: {}",
-                    properties.getInitialRetryMillis(), exception.getMessage());
+        } catch (MqttException | AdapterMqttTlsException exception) {
+            long retryDelay = retryDelay(isSecurityFailure(exception));
+            log.warn("云端报文适配器连接失败: failureType={}, retryMillis={}, broker={}",
+                    exception.getClass().getSimpleName(), retryDelay, properties.getBrokerUrl());
             scheduler.schedule(
                     this::connectOrScheduleRetry,
-                    Instant.now().plusMillis(properties.getInitialRetryMillis()));
+                    Instant.now().plusMillis(retryDelay));
         } finally {
             connecting.set(false);
         }
+    }
+
+    private MqttConnectOptions connectOptions() {
+        MqttConnectOptions options = new MqttConnectOptions();
+        options.setUserName(properties.getUsername());
+        options.setPassword(properties.getPassword().toCharArray());
+        options.setAutomaticReconnect(true);
+        options.setCleanSession(false);
+        options.setConnectionTimeout(10);
+        AdapterMqttProperties.Tls tls = properties.getTls();
+        if (tls != null && tls.isEnabled()) {
+            String brokerUrl = properties.getBrokerUrl();
+            if (!(brokerUrl.startsWith("ssl://") || brokerUrl.startsWith("wss://"))) {
+                throw new AdapterMqttTlsException(
+                        "启用 TLS 时 adapter.mqtt.broker-url 必须使用 ssl:// 或 wss://");
+            }
+            options.setSocketFactory(sslContextFactory.create(tls).getSocketFactory());
+            options.setSSLHostnameVerifier(HttpsURLConnection.getDefaultHostnameVerifier());
+            options.setHttpsHostnameVerificationEnabled(true);
+        } else if (tls == null || !tls.isAllowPlaintextForTests()) {
+            throw new AdapterMqttTlsException(
+                    "禁止明文 MQTT；仅隔离自动化测试可显式开启 allow-plaintext-for-tests");
+        }
+        return options;
+    }
+
+    private long retryDelay(boolean securityFailure) {
+        if (securityFailure) {
+            consecutiveFailures.incrementAndGet();
+            return properties.getSecurityRetryMillis();
+        }
+        int failures = consecutiveFailures.getAndIncrement();
+        double raw = properties.getInitialRetryMillis()
+                * Math.pow(properties.getRetryMultiplier(), Math.min(failures, 20));
+        long capped = Math.min(properties.getMaxRetryMillis(),
+                Math.max(properties.getInitialRetryMillis(), (long) raw));
+        double jitter = Math.max(0.0, Math.min(properties.getRetryJitterRatio(), 1.0));
+        long delta = (long) (capped * jitter);
+        return delta == 0 ? capped : ThreadLocalRandom.current().nextLong(
+                Math.max(1L, capped - delta), capped + delta + 1L);
+    }
+
+    private boolean isSecurityFailure(Throwable exception) {
+        String message = exception.getMessage();
+        return exception instanceof AdapterMqttTlsException
+                || message != null && (message.contains("授权") || message.contains("认证"));
     }
 
     @Override
@@ -121,7 +177,12 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) {
+        if (topic.equals(properties.getApplicationAckTopic())) {
+            handleApplicationAck(message);
+            return;
+        }
         boolean acknowledge = true;
+        String pendingCanonicalId = null;
         try {
             byte[] rawPayload = message.getPayload();
             if (rawPayload == null || rawPayload.length == 0
@@ -139,6 +200,12 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
                     resolved.profile(),
                     resolved.mappings());
             byte[] canonicalPayload = objectMapper.writeValueAsBytes(canonical);
+            if ("ADAPTER_PROXY".equals(canonical.declaredAckMode())) {
+                pendingCanonicalId = canonical.canonicalMessageId();
+                pendingProxyAcks.computeIfAbsent(pendingCanonicalId,
+                        ignored -> new ConcurrentLinkedQueue<>()).add(message);
+                acknowledge = false;
+            }
             client.publish(properties.getStandardTopic(), canonicalPayload, 1, false);
             log.debug("设备报文转换完成: profile={}, identityType={}, metrics={}",
                     canonical.profileCode(),
@@ -146,6 +213,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
                     canonical.metrics().size());
         } catch (MqttException exception) {
             acknowledge = false;
+            removePending(pendingCanonicalId, message);
             log.error("标准报文发布失败，保留原始消息重投: topic={}, reason={}",
                     topic, exception.getMessage());
         } catch (ProtocolProfileUnavailableException exception) {
@@ -172,7 +240,42 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     }
 
     private void subscribeRawTopic() throws MqttException {
-        client.subscribe(properties.getRawTopic(), 1);
+        client.subscribe(
+                new String[]{properties.getRawTopic(), properties.getApplicationAckTopic()},
+                new int[]{1, 1});
+    }
+
+    private void handleApplicationAck(MqttMessage ackMessage) {
+        try {
+            PlatformAck ack = objectMapper.readValue(ackMessage.getPayload(), PlatformAck.class);
+            if (ack.canonicalMessageId() == null || ack.canonicalMessageId().isBlank()
+                    || !"ADAPTER_ONLY".equals(ack.deliveryScope())) {
+                log.warn("拒绝无法关联或范围不匹配的应用ACK");
+                return;
+            }
+            ConcurrentLinkedQueue<MqttMessage> waiting =
+                    pendingProxyAcks.remove(ack.canonicalMessageId());
+            if (waiting != null) {
+                MqttMessage raw;
+                while ((raw = waiting.poll()) != null) {
+                    acknowledge(raw);
+                }
+            }
+        } catch (IOException exception) {
+            log.warn("拒绝格式无效的应用ACK: reason={}", exception.getMessage());
+        } finally {
+            acknowledge(ackMessage);
+        }
+    }
+
+    private void removePending(String canonicalMessageId, MqttMessage message) {
+        if (canonicalMessageId == null) {
+            return;
+        }
+        pendingProxyAcks.computeIfPresent(canonicalMessageId, (ignored, waiting) -> {
+            waiting.remove(message);
+            return waiting.isEmpty() ? null : waiting;
+        });
     }
 
     private void acknowledge(MqttMessage message) {
@@ -193,5 +296,8 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
         } catch (MqttException exception) {
             log.warn("关闭云端报文适配器MQTT客户端失败: {}", exception.getMessage());
         }
+    }
+
+    private record PlatformAck(String canonicalMessageId, String deliveryScope) {
     }
 }
