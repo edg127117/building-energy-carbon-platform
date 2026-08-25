@@ -20,5 +20,27 @@ public record FormulaCalculationAttempt(
         String scenarioCode,
         String formulaVersion,
         String policyEvidenceJson,
+        String parameterEvidenceJson,
         long configRevision) {
+
+    /** 保留旧调用点的构造契约；没有参数依赖时证据固定为空数组。 */
+    public FormulaCalculationAttempt(
+            String attemptId,
+            String indicatorId,
+            String indicatorCode,
+            String buildingId,
+            String systemGroupId,
+            String equipId,
+            long minuteStart,
+            long attemptedAt,
+            String calcStatus,
+            String reasonCode,
+            String scenarioCode,
+            String formulaVersion,
+            String policyEvidenceJson,
+            long configRevision) {
+        this(attemptId, indicatorId, indicatorCode, buildingId, systemGroupId, equipId,
+                minuteStart, attemptedAt, calcStatus, reasonCode, scenarioCode, formulaVersion,
+                policyEvidenceJson, "[]", configRevision);
+    }
 }

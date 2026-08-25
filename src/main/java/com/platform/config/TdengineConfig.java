@@ -126,11 +126,12 @@ public class TdengineConfig {
         // 3. 自动创建公式成功结果和异常审计结构，并迁移旧指标表。
         initializeFormulaSchema(template);
 
-        log.info("✅ TDengine HVAC 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}/{}]",
+        log.info("✅ TDengine HVAC 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}/{}/{}]",
                 database, properties.getStRawEvent(),
                 properties.getStRawMinute(), properties.getStIndicatorMinute(),
                 properties.getStFormulaCalcException(),
                 properties.getStFormulaCalcAttemptV2(),
+                properties.getStFormulaResultRevision(),
                 properties.getStIndicatorMinuteState());
 
         // 启动验证只覆盖当前运行需要的四张 HVAC 超级表。
@@ -140,6 +141,7 @@ public class TdengineConfig {
                 properties.getStIndicatorMinute(),
                 properties.getStFormulaCalcException(),
                 properties.getStFormulaCalcAttemptV2(),
+                properties.getStFormulaResultRevision(),
                 properties.getStIndicatorMinuteState()
         ).forEach(stable -> verifyInitialization(template, database, stable));
     }
@@ -294,6 +296,7 @@ public class TdengineConfig {
         initStIndicatorMinute(template);
         initStFormulaCalcException(template);
         initStFormulaCalcAttemptV2(template);
+        initStFormulaResultRevision(template);
         initStIndicatorMinuteState(template);
     }
 
@@ -352,7 +355,26 @@ public class TdengineConfig {
                         + "ts TIMESTAMP, attempt_id NCHAR(32), minute_start TIMESTAMP, "
                         + "calc_status NCHAR(40), reason_code NCHAR(64), "
                         + "scenario_code NCHAR(64), formula_version NCHAR(32), "
-                        + "policy_evidence_json NCHAR(2048), config_revision BIGINT"
+                        + "policy_evidence_json NCHAR(2048), parameter_evidence_json NCHAR(4096), "
+                        + "config_revision BIGINT"
+                        + ") TAGS (indicator_id NCHAR(32), indicator_code NCHAR(100), "
+                        + "building_id NCHAR(32), system_group_id NCHAR(32), equip_id NCHAR(32));",
+                db, stable));
+        ensureFields(template, db + "." + stable,
+                Map.of("parameter_evidence_json", "NCHAR(4096)"),
+                Map.of("indicator_id", "NCHAR(32)"));
+        log.info("超级表 [{}] 已创建/已存在", stable);
+    }
+
+    private void initStFormulaResultRevision(JdbcTemplate template) {
+        String db = properties.getDatabase();
+        String stable = properties.getStFormulaResultRevision();
+        template.execute(String.format(
+                "CREATE STABLE IF NOT EXISTS %s.%s ("
+                        + "ts TIMESTAMP, result_revision_id NCHAR(32), attempt_id NCHAR(32), "
+                        + "minute_start TIMESTAMP, val DOUBLE, data_quality TINYINT, "
+                        + "formula_version NCHAR(32), parameter_evidence_json NCHAR(4096), "
+                        + "calculated_at TIMESTAMP"
                         + ") TAGS (indicator_id NCHAR(32), indicator_code NCHAR(100), "
                         + "building_id NCHAR(32), system_group_id NCHAR(32), equip_id NCHAR(32));",
                 db, stable));

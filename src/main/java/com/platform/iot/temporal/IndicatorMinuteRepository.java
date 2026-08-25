@@ -5,6 +5,7 @@ import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.formula.model.FormulaCalculationAttempt;
 import com.platform.iot.formula.model.IndicatorMinuteState;
+import com.platform.iot.formula.model.FormulaResultRevision;
 import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 
 import java.util.List;
@@ -74,6 +75,16 @@ public interface IndicatorMinuteRepository {
 
     /** 追加计算尝试事实；实现必须按 attemptId 幂等。 */
     default void saveAttempts(List<FormulaCalculationAttempt> attempts) {
+    }
+
+    /** 追加成功结果修订；实现必须以 attemptId 幂等且不得覆盖旧结果值。 */
+    default void saveResultRevisions(List<FormulaResultRevision> revisions) {
+    }
+
+    /** 按平台认知时间读取当时已存在的最后一个成功结果修订。 */
+    default Optional<FormulaResultRevision> findResultRevisionAt(
+            String indicatorId, long minuteStart, long knowledgeAt) {
+        return Optional.empty();
     }
 
     /** 覆盖同一指标分钟的当前状态投影，不删除成功或失败历史事实。 */

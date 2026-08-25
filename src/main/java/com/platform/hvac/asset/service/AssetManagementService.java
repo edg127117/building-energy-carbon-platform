@@ -26,6 +26,9 @@ import com.platform.iot.onboarding.mapper.BizProductPointTemplateMapper;
 import com.platform.iot.onboarding.model.entity.BizDeviceProduct;
 import com.platform.iot.onboarding.model.entity.BizPendingDevice;
 import com.platform.iot.onboarding.model.entity.BizProductPointTemplate;
+import com.platform.iot.deviceparameter.DeviceParameterErrors;
+import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService;
+import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService.LegacyProjection;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import com.platform.system.model.entity.SysUserBuilding;
 import lombok.RequiredArgsConstructor;
@@ -74,6 +77,7 @@ public class AssetManagementService {
     private final BizProductPointTemplateMapper productPointMapper;
     private final BizPendingDeviceMapper pendingMapper;
     private final SysUserBuildingMapper userBuildingMapper;
+    private final DeviceParameterLegacyCompatibilityService parameterCompatibilityService;
 
     public PageResponse<BuildingView> listBuildings(
             int page, int size, String keyword, Collection<String> roles) {
@@ -285,9 +289,7 @@ public class AssetManagementService {
         equipment.setEquipName(request.equipmentName());
         equipment.setProductId(request.productId());
         equipment.setManufacturer(request.manufacturer());
-        equipment.setRatedCapacity(request.ratedCapacity());
-        equipment.setRatedPower(request.ratedPower());
-        equipment.setDesignCop(request.designCop());
+        rejectLegacyParameterCreate(request.ratedCapacity(), request.ratedPower(), request.designCop());
         return equipmentListView(call(() -> equipmentService.add(equipment).getData()));
     }
 
@@ -296,6 +298,7 @@ public class AssetManagementService {
             String equipmentId, EquipmentUpdateRequest request, Collection<String> roles) {
         requireAdmin(roles);
         BizEquipment existing = requireEquipment(equipmentId);
+        LegacyProjection currentParameters = parameterCompatibilityService.read(existing);
         requireActiveStatus(request.status());
         if (!existing.getBuildingId().equals(request.buildingId())) {
             throw AssetErrors.error(400, AssetErrors.VALIDATION_FAILED,
@@ -307,9 +310,8 @@ public class AssetManagementService {
         equipment.setSystemGroupId(request.systemGroupId());
         equipment.setEquipName(request.equipmentName());
         equipment.setManufacturer(request.manufacturer());
-        equipment.setRatedCapacity(request.ratedCapacity());
-        equipment.setRatedPower(request.ratedPower());
-        equipment.setDesignCop(request.designCop());
+        rejectLegacyParameterChange(currentParameters, request.ratedCapacity(),
+                request.ratedPower(), request.designCop());
         call(() -> equipmentService.update(equipment).getData());
         return equipmentListView(requireEquipment(equipmentId));
     }
@@ -438,13 +440,15 @@ public class AssetManagementService {
 
     private EquipmentDetailView equipmentDetailView(BizEquipment equipment) {
         EquipmentAggregate aggregate = aggregate(equipment);
+        LegacyProjection parameters = parameterCompatibilityService.read(equipment);
         References refs = equipmentReferences(equipment.getEquipId());
         return new EquipmentDetailView(equipment.getEquipId(), equipment.getEquipCode(),
                 equipment.getEquipName(), equipment.getTypeCode(), equipment.getEquipCategory(),
                 equipment.getBuildingId(), aggregate.buildingName(), equipment.getSpaceId(),
                 aggregate.spaceName(), equipment.getSystemGroupId(), aggregate.systemGroupName(),
                 equipment.getProductId(), aggregate.productName(), equipment.getManufacturer(),
-                equipment.getRatedCapacity(), equipment.getRatedPower(), equipment.getDesignCop(),
+                parameters.ratedCapacity(), parameters.ratedPower(), parameters.designCop(),
+                parameters.governanceStatus(),
                 aggregate.status(), aggregate.expectedProfileCode(), aggregate.lastDiscoveredTime(),
                 aggregate.identities(), aggregate.pointSummary(), refs,
                 actions(refs.points() + refs.identities() == 0),
@@ -601,6 +605,36 @@ public class AssetManagementService {
         if (roles == null || roles.stream().noneMatch("PLATFORM_ADMIN"::equalsIgnoreCase)) {
             throw AssetErrors.error(403, "ASSET_FORBIDDEN", "只有平台管理员可以管理资产档案");
         }
+    }
+
+    private static void rejectLegacyParameterCreate(
+            java.math.BigDecimal ratedCapacity,
+            java.math.BigDecimal ratedPower,
+            java.math.BigDecimal designCop) {
+        if (ratedCapacity != null || ratedPower != null || designCop != null) {
+            throw DeviceParameterErrors.error(409,
+                    DeviceParameterErrors.LEGACY_WRITE_FORBIDDEN,
+                    "新建设备的技术参数必须通过设备参数治理流程录入");
+        }
+    }
+
+    private static void rejectLegacyParameterChange(
+            LegacyProjection current,
+            java.math.BigDecimal ratedCapacity,
+            java.math.BigDecimal ratedPower,
+            java.math.BigDecimal designCop) {
+        if (!decimalEquals(current.ratedCapacity(), ratedCapacity)
+                || !decimalEquals(current.ratedPower(), ratedPower)
+                || !decimalEquals(current.designCop(), designCop)) {
+            throw DeviceParameterErrors.error(409,
+                    DeviceParameterErrors.LEGACY_WRITE_FORBIDDEN,
+                    "额定容量、额定功率和设计 COP 已改为只读，请使用设备参数治理流程");
+        }
+    }
+
+    private static boolean decimalEquals(
+            java.math.BigDecimal left, java.math.BigDecimal right) {
+        return left == null ? right == null : right != null && left.compareTo(right) == 0;
     }
 
     private static void requireActiveStatus(String status) {

@@ -36,6 +36,7 @@ public class TdengineProperties {
 
     /** 追加式公式尝试和质量策略判定事实。 */
     private String stFormulaCalcAttemptV2 = "st_formula_calc_attempt_v2";
+    private String stFormulaResultRevision = "st_formula_result_revision";
 
     /** 指标分钟当前有效状态投影。 */
     private String stIndicatorMinuteState = "st_indicator_minute_state";

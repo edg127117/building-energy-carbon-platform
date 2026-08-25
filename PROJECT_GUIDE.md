@@ -54,6 +54,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.iot.reliability`、`mqtt` | V2 消息级幂等、持久化回执、ACK 证据、TLS 与连接故障分类 |
 | `com.platform.iot.quality`、`dataquality` | 运行校验和 Q0/Q1/Q2 预处理 |
 | `com.platform.iot.qualityusage` | Q0/Q1/Q2 消费策略治理、运行快照、门禁、纠正与恢复 |
+| `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
 | `com.platform.iot.onboarding` | 产品模板、未知设备有界发现、绑定和启停 |
 | `com.platform.iot.temporal` | TDengine 时序访问边界 |
@@ -83,13 +84,14 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 → 数据预处理和 Q0/Q1/Q2 质量标识
 → MySQL/TDengine 持久化
 → 场景化质量使用策略门禁
+→ 标准设备参数版本解析与公式版本证据
 → 物理空间树与语义关系模型
 → 能源/碳计量、评价和诊断
 → API/WebSocket
 → 看板、趋势、下钻、能流和碳排展示
 ```
 
-当前继承代码主要覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、部分 HVAC 指标、查询和展示。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
+当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、标准设备参数平台侧治理、部分 HVAC 指标、查询和展示。其中设备参数治理只提供配置框架、安全拒绝路径和版本证据，不代表已取得专业参数、厂家映射、真实 Excel 或现场报文验收。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
 
 V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认是不同证据；聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
 

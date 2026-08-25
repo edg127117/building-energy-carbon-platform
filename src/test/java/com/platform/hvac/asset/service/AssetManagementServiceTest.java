@@ -18,6 +18,7 @@ import com.platform.iot.onboarding.mapper.BizDeviceProductMapper;
 import com.platform.iot.onboarding.mapper.BizPendingDeviceMapper;
 import com.platform.iot.onboarding.mapper.BizProductPointTemplateMapper;
 import com.platform.iot.onboarding.model.entity.BizProductPointTemplate;
+import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -47,6 +48,7 @@ class AssetManagementServiceTest {
     @Mock private BizProductPointTemplateMapper productPointMapper;
     @Mock private BizPendingDeviceMapper pendingMapper;
     @Mock private SysUserBuildingMapper userBuildingMapper;
+    @Mock private DeviceParameterLegacyCompatibilityService parameterCompatibilityService;
 
     @InjectMocks private AssetManagementService service;
 
@@ -130,6 +132,9 @@ class AssetManagementServiceTest {
         equipment.setProductId("P1");
         when(equipmentService.getById("E1")).thenReturn(equipment);
         when(identityMapper.selectList(any())).thenReturn(List.of());
+        when(parameterCompatibilityService.read(equipment)).thenReturn(
+                new DeviceParameterLegacyCompatibilityService.LegacyProjection(
+                        null, null, null, "LEGACY_UNGOVERNED"));
 
         BizProductPointTemplate required = new BizProductPointTemplate();
         required.setSuffixCode("temp");

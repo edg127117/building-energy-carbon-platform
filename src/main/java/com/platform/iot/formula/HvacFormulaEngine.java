@@ -12,6 +12,11 @@ import com.platform.iot.formula.model.IndicatorLatestState;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.formula.model.FormulaCalculationAttempt;
 import com.platform.iot.formula.model.IndicatorMinuteState;
+import com.platform.iot.formula.model.FormulaResultRevision;
+import com.platform.iot.deviceparameter.DeviceParameterModels.ResolvedParameter;
+import com.platform.iot.deviceparameter.DeviceParameterModels.ResolvedParameters;
+import com.platform.iot.deviceparameter.formula.DeviceParameterFormulaImpactPort;
+import com.platform.iot.deviceparameter.query.DeviceParameterResolver;
 import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
@@ -32,6 +37,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -40,6 +46,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 
 /**
  * HVAC 质量完成分钟到指标结果的核心编排器。
@@ -53,7 +62,7 @@ import java.util.stream.Collectors;
 @ConditionalOnProperty(
         prefix = "formula", name = "enabled",
         havingValue = "true", matchIfMissing = true)
-public class HvacFormulaEngine {
+public class HvacFormulaEngine implements DeviceParameterFormulaImpactPort {
 
     private static final Logger log = LoggerFactory.getLogger(HvacFormulaEngine.class);
     private static final String ENGINE_ERROR_REASON = "FORMULA_ENGINE_ERROR";
@@ -70,6 +79,7 @@ public class HvacFormulaEngine {
     private final Map<String, IndicatorFormula> formulas;
     private final QualityUsagePolicyResolver qualityUsageResolver;
     private QualityUsageRecoveryTaskService recoveryTasks;
+    private DeviceParameterResolver deviceParameterResolver;
 
     @Autowired
     public HvacFormulaEngine(
@@ -120,6 +130,11 @@ public class HvacFormulaEngine {
     @Autowired(required = false)
     void setRecoveryTasks(QualityUsageRecoveryTaskService recoveryTasks) {
         this.recoveryTasks = recoveryTasks;
+    }
+
+    @Autowired(required = false)
+    void setDeviceParameterResolver(DeviceParameterResolver deviceParameterResolver) {
+        this.deviceParameterResolver = deviceParameterResolver;
     }
 
     /**
@@ -249,6 +264,7 @@ public class HvacFormulaEngine {
         List<CalculatedFailure> failures = new ArrayList<>();
         for (BizIndicator indicator : indicators) {
             String formulaVersion = UNKNOWN_FORMULA_VERSION;
+            String parameterEvidence = "[]";
             try {
                 IndicatorFormula formula = formulas.get(indicator.getIndicatorCode());
                 if (formula == null) {
@@ -257,14 +273,21 @@ public class HvacFormulaEngine {
                             MISSING_STRATEGY_REASON);
                     failures.add(failure(
                             indicator, minuteStart, calculatedAt, calculation,
-                            List.of(), 0));
+                            List.of(), 0, parameterEvidence));
                     continue;
                 }
                 formulaVersion = Objects.requireNonNull(
                         formula.formulaVersion(), "formula.formulaVersion");
                 FormulaInputs inputs = assembler.assemble(indicator, minuteStart, aggregates);
+                ResolvedParameters parameters = resolveParameters(
+                        indicator, formula, minuteStart, calculatedAt);
+                parameterEvidence = parameterEvidence(parameters);
                 FormulaCalculation calculation = Objects.requireNonNull(
-                        formula.calculate(inputs), "formula calculation");
+                        formula.requiredParameterCodes() == null
+                                || formula.requiredParameterCodes().isEmpty()
+                                ? formula.calculate(inputs)
+                                : formula.calculate(inputs, parameters),
+                        "formula calculation");
                 validateCalculation(indicator, formula, formulaVersion, calculation);
                 if (calculation.status() == FormulaCalculation.Status.SUCCESS) {
                     try {
@@ -283,17 +306,17 @@ public class HvacFormulaEngine {
                             calculation = qualityBlockedCalculation(calculation);
                             failures.add(failure(
                                     indicator, minuteStart, calculatedAt, calculation,
-                                    decisions, policyContext.configRevision()));
+                                    decisions, policyContext.configRevision(), parameterEvidence));
                         } else {
                             successes.add(success(
                                     indicator, minuteStart, calculatedAt, calculation,
-                                    decisions, policyContext.configRevision()));
+                                    decisions, policyContext.configRevision(), parameterEvidence));
                         }
                     } catch (QualityUsageSnapshotUnavailableException exception) {
                         calculation = policyUnavailableCalculation(calculation);
                         failures.add(failure(
                                 indicator, minuteStart, calculatedAt, calculation,
-                                List.of(), 0));
+                                List.of(), 0, parameterEvidence));
                     } catch (BusinessException exception) {
                         if (!QualityUsageErrors.SCENARIO_DISABLED.equals(
                                 exception.getErrorCode())) {
@@ -302,12 +325,12 @@ public class HvacFormulaEngine {
                         calculation = policyUnavailableCalculation(calculation);
                         failures.add(failure(
                                 indicator, minuteStart, calculatedAt, calculation,
-                                List.of(), 0));
+                                List.of(), 0, parameterEvidence));
                     }
                 } else {
                     failures.add(failure(
                             indicator, minuteStart, calculatedAt, calculation,
-                            List.of(), 0));
+                            List.of(), 0, parameterEvidence));
                 }
             } catch (RuntimeException exception) {
                 log.warn("HVAC formula attempt failed: indicatorId={}, minuteStart={}",
@@ -317,12 +340,14 @@ public class HvacFormulaEngine {
                         ENGINE_ERROR_REASON);
                 failures.add(failure(
                         indicator, minuteStart, calculatedAt, calculation,
-                        List.of(), 0));
+                        List.of(), 0, parameterEvidence));
             }
         }
 
         // TDengine 是指标真相来源；事实和当前状态投影都成功后才允许刷新缓存。
         if (!successes.isEmpty()) {
+            indicatorRepository.saveResultRevisions(
+                    successes.stream().map(CalculatedSuccess::revision).toList());
             indicatorRepository.saveSuccesses(
                     successes.stream().map(CalculatedSuccess::row).toList());
         }
@@ -434,13 +459,14 @@ public class HvacFormulaEngine {
             long calculatedAt,
             FormulaCalculation calculation,
             List<Resolution> decisions,
-            long configRevision) {
+            long configRevision,
+            String parameterEvidence) {
         String attemptId = id();
         return new CalculatedFailure(
                 exceptionRow(indicator, minuteStart, calculatedAt, calculation),
                 latestState(indicator, minuteStart, calculation),
                 attempt(indicator, minuteStart, calculatedAt, calculation,
-                        attemptId, decisions, configRevision),
+                        attemptId, decisions, configRevision, parameterEvidence),
                 projection(indicator, minuteStart, calculatedAt,
                         calculation.status().name(), null, attemptId, configRevision));
     }
@@ -451,17 +477,24 @@ public class HvacFormulaEngine {
             long calculatedAt,
             FormulaCalculation calculation,
             List<Resolution> decisions,
-            long configRevision) {
+            long configRevision,
+            String parameterEvidence) {
         String attemptId = id();
+        String revisionId = id();
         IndicatorMinuteResult row = successRow(
                 indicator, minuteStart, calculatedAt, calculation);
         return new CalculatedSuccess(
                 row,
+                new FormulaResultRevision(revisionId, attemptId,
+                        indicator.getIndicatorId(), indicator.getIndicatorCode(),
+                        indicator.getBuildingId(), indicator.getSystemGroupId(),
+                        indicator.getEquipId(), minuteStart, row.value(), row.dataQuality(),
+                        row.formulaVersion(), parameterEvidence, calculatedAt),
                 latestState(indicator, minuteStart, calculation),
                 attempt(indicator, minuteStart, calculatedAt, calculation,
-                        attemptId, decisions, configRevision),
+                        attemptId, decisions, configRevision, parameterEvidence),
                 projection(indicator, minuteStart, calculatedAt,
-                        "SUCCESS", indicator.getIndicatorId() + ':' + minuteStart,
+                        "SUCCESS", revisionId,
                         attemptId, configRevision));
     }
 
@@ -472,7 +505,8 @@ public class HvacFormulaEngine {
             FormulaCalculation calculation,
             String attemptId,
             List<Resolution> decisions,
-            long configRevision) {
+            long configRevision,
+            String parameterEvidence) {
         return new FormulaCalculationAttempt(
                 attemptId,
                 indicator.getIndicatorId(),
@@ -487,6 +521,7 @@ public class HvacFormulaEngine {
                 com.platform.iot.qualityusage.QualityUsageModels.INDICATOR_CALCULATION,
                 calculation.formulaVersion(),
                 policyEvidence(calculation.inputs(), decisions),
+                parameterEvidence,
                 configRevision);
     }
 
@@ -639,6 +674,7 @@ public class HvacFormulaEngine {
 
     private record CalculatedSuccess(
             IndicatorMinuteResult row,
+            FormulaResultRevision revision,
             IndicatorLatestState state,
             FormulaCalculationAttempt attempt,
             IndicatorMinuteState projection) {}
@@ -648,4 +684,136 @@ public class HvacFormulaEngine {
             IndicatorLatestState state,
             FormulaCalculationAttempt attempt,
             IndicatorMinuteState projection) {}
+
+    private ResolvedParameters resolveParameters(
+            BizIndicator indicator,
+            IndicatorFormula formula,
+            long minuteStart,
+            long calculatedAt) {
+        Set<String> codes = formula.requiredParameterCodes();
+        LocalDateTime businessTime = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(minuteStart), ZoneId.of("Asia/Shanghai"));
+        LocalDateTime knowledgeTime = LocalDateTime.ofInstant(
+                Instant.ofEpochMilli(calculatedAt), ZoneId.of("Asia/Shanghai"));
+        if (codes == null || codes.isEmpty()) {
+            return new ResolvedParameters(indicator.getEquipId(), businessTime, knowledgeTime,
+                    null, null, Map.of());
+        }
+        if (deviceParameterResolver == null || indicator.getEquipId() == null) {
+            throw new IllegalStateException("Formula device parameter resolver unavailable");
+        }
+        return deviceParameterResolver.resolve(
+                indicator.getEquipId(), businessTime, knowledgeTime, codes);
+    }
+
+    private String parameterEvidence(ResolvedParameters parameters) {
+        if (parameters.values().isEmpty()) {
+            return "[]";
+        }
+        return parameters.values().values().stream()
+                .sorted(Comparator.comparing(ResolvedParameter::parameterCode))
+                .map(value -> "{\"parameterCode\":\"" + escape(value.parameterCode())
+                        + "\",\"definitionId\":\"" + escape(value.definitionId())
+                        + "\",\"versionId\":\"" + escape(value.versionId())
+                        + "\",\"timelineRevisionId\":\"" + escape(value.timelineRevisionId())
+                        + "\",\"standardUnit\":\"" + escape(value.standardUnit())
+                        + "\",\"sourceType\":\"" + escape(value.sourceType().name())
+                        + "\",\"sourceReference\":\"" + escape(value.sourceReference())
+                        + "\",\"businessEffectiveFrom\":\""
+                        + value.businessEffectiveFrom() + "\",\"publishedAt\":\""
+                        + value.publishedAt() + "\"}")
+                .collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private String escape(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    @Override
+    public List<String> affectedIndicatorIds(
+            String equipmentId,
+            Collection<String> changedParameterCodes,
+            LocalDateTime from,
+            LocalDateTime to) {
+        Set<String> changed = changedParameterCodes == null
+                ? Set.of() : Set.copyOf(changedParameterCodes);
+        if (changed.isEmpty()) {
+            return List.of();
+        }
+        return configProvider.findAllActive().stream()
+                .filter(indicator -> Objects.equals(equipmentId, indicator.getEquipId()))
+                .filter(indicator -> {
+                    IndicatorFormula formula = formulas.get(indicator.getIndicatorCode());
+                    return formula != null && formula.requiredParameterCodes().stream()
+                            .anyMatch(changed::contains);
+                })
+                .map(BizIndicator::getIndicatorId).distinct().sorted().toList();
+    }
+
+    @Override
+    public void markPending(
+            String timelineRevisionId,
+            String equipmentId,
+            Collection<String> indicatorIds,
+            LocalDateTime from,
+            LocalDateTime to) {
+        markParameterRecalculationState(timelineRevisionId, equipmentId, indicatorIds,
+                from, to, "PENDING_RECALC");
+    }
+
+    @Override
+    public void markFailed(
+            String timelineRevisionId,
+            String equipmentId,
+            Collection<String> indicatorIds,
+            LocalDateTime from,
+            LocalDateTime to) {
+        markParameterRecalculationState(timelineRevisionId, equipmentId, indicatorIds,
+                from, to, "RECALC_FAILED");
+    }
+
+    @Override
+    public void recalculateMinute(
+            String buildingId, long minuteStart, Collection<String> indicatorIds) {
+        List<RawMinuteAggregate> inputs = minuteRepository.findByMinute(
+                minuteStart, Set.of(buildingId));
+        calculateAndPersist(minuteStart, System.currentTimeMillis(), inputs,
+                Set.of(buildingId), Set.copyOf(indicatorIds),
+                configProvider.findAllActive(), true);
+    }
+
+    private void markParameterRecalculationState(
+            String timelineRevisionId,
+            String equipmentId,
+            Collection<String> indicatorIds,
+            LocalDateTime from,
+            LocalDateTime to,
+            String status) {
+        long fromMillis = from.atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli();
+        long toMillis = to.atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli();
+        List<IndicatorMinuteResult> results = indicatorIds.stream()
+                .flatMap(indicatorId -> indicatorRepository.findHistory(
+                        indicatorId, fromMillis, toMillis).stream())
+                .filter(result -> Objects.equals(equipmentId, result.equipId()))
+                .toList();
+        Set<com.platform.iot.formula.model.IndicatorMinuteKey> keys = results.stream()
+                .map(result -> new com.platform.iot.formula.model.IndicatorMinuteKey(
+                        result.indicatorId(), result.minuteStart()))
+                .collect(Collectors.toSet());
+        Map<com.platform.iot.formula.model.IndicatorMinuteKey, IndicatorMinuteState> current =
+                indicatorRepository.findStates(keys);
+        long updatedAt = System.currentTimeMillis();
+        indicatorRepository.saveStates(results.stream().map(result -> {
+            IndicatorMinuteState previous = current.get(
+                    new com.platform.iot.formula.model.IndicatorMinuteKey(
+                            result.indicatorId(), result.minuteStart()));
+            return new IndicatorMinuteState(result.indicatorId(), result.indicatorCode(),
+                    result.buildingId(), result.systemGroupId(), result.equipId(),
+                    result.minuteStart(), status,
+                    previous == null ? result.indicatorId() + ':' + result.minuteStart()
+                            : previous.sourceFactId(),
+                    timelineRevisionId, updatedAt,
+                    previous == null ? 0 : previous.configRevision());
+        }).toList());
+    }
 }
