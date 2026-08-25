@@ -203,6 +203,7 @@ public final class AssetManagementContracts {
             BigDecimal ratedCapacity,
             BigDecimal ratedPower,
             BigDecimal designCop,
+            String parameterGovernanceStatus,
             String status,
             String expectedProfileCode,
             Long lastDiscoveredTime,

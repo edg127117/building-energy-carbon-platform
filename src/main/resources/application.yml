@@ -198,6 +198,23 @@ device-onboarding:
     cleanup-timeout-ms: ${PENDING_DEVICE_CLEANUP_TIMEOUT_MS:5000}
     cleanup-cron: ${PENDING_DEVICE_CLEANUP_CRON:0 45 3 * * ?}
 
+# 厂家参数报文契约未确认前保持关闭；启用时必须显式声明已经确认的 FULL/DELTA 语义。
+device-parameter:
+  ingest:
+    enabled: ${DEVICE_PARAMETER_INGEST_ENABLED:false}
+    allowed-semantics: ${DEVICE_PARAMETER_ALLOWED_SEMANTICS:}
+    max-items: ${DEVICE_PARAMETER_MAX_ITEMS:128}
+  importing:
+    max-file-bytes: ${DEVICE_PARAMETER_IMPORT_MAX_FILE_BYTES:2000000}
+    max-rows: ${DEVICE_PARAMETER_IMPORT_MAX_ROWS:5000}
+    max-text-length: ${DEVICE_PARAMETER_IMPORT_MAX_TEXT_LENGTH:255}
+  recalculation:
+    enabled: ${DEVICE_PARAMETER_RECALCULATION_ENABLED:true}
+    delay-ms: ${DEVICE_PARAMETER_RECALCULATION_DELAY_MS:60000}
+    batch-size: ${DEVICE_PARAMETER_RECALCULATION_BATCH_SIZE:2}
+    max-retries: ${DEVICE_PARAMETER_RECALCULATION_MAX_RETRIES:5}
+    chunk-minutes: ${DEVICE_PARAMETER_RECALCULATION_CHUNK_MINUTES:60}
+
 # 只清理逐条原始事件；分钟汇总和后续COP指标长期保留。
 data-retention:
   raw-event-days: ${TDENGINE_RAW_RETENTION_DAYS:90}

@@ -1,6 +1,7 @@
 package com.platform.iot.formula;
 
 import com.platform.iot.formula.model.FormulaCalculation;
+import com.platform.iot.deviceparameter.DeviceParameterModels.ResolvedParameters;
 
 import java.util.Set;
 
@@ -28,9 +29,26 @@ public interface IndicatorFormula {
     Set<String> requiredInputKeys();
 
     /**
+     * 返回经能源专家确认的标准设备参数编码；现有公式默认不读取任何设计或额定参数。
+     * 该声明同时用于追溯发布前的影响分析。
+     */
+    default Set<String> requiredParameterCodes() {
+        return Set.of();
+    }
+
+    /**
      * 使用一个冻结分钟的输入计算指标。
      *
      * @return 成功值或包含缺失项、失败原因的结构化结果，不返回 {@code null}
      */
     FormulaCalculation calculate(FormulaInputs inputs);
+
+    /**
+     * 使用冻结测点和同一次批量解析的正式设备参数计算。
+     * 未声明参数依赖的既有公式继续委托原方法，保持当前口径不变。
+     */
+    default FormulaCalculation calculate(
+            FormulaInputs inputs, ResolvedParameters parameters) {
+        return calculate(inputs);
+    }
 }

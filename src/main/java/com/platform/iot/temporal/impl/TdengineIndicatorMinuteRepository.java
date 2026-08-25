@@ -7,6 +7,7 @@ import com.platform.iot.formula.model.IndicatorMinuteKey;
 import com.platform.iot.formula.model.IndicatorMinuteResult;
 import com.platform.iot.formula.model.FormulaCalculationAttempt;
 import com.platform.iot.formula.model.IndicatorMinuteState;
+import com.platform.iot.formula.model.FormulaResultRevision;
 import com.platform.iot.temporal.IndicatorMinuteRepository;
 import com.platform.iot.temporal.model.IndicatorTrendQueryRow;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -42,7 +43,9 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     private final JdbcTemplate template;
     private final TdengineProperties properties;
     private final Map<String, Long> latestAttemptTimestamps = new ConcurrentHashMap<>();
+    private final Map<String, Long> latestResultRevisionTimestamps = new ConcurrentHashMap<>();
     private final Set<String> persistedAttemptIds = ConcurrentHashMap.newKeySet();
+    private final Set<String> persistedResultAttemptIds = ConcurrentHashMap.newKeySet();
 
     public TdengineIndicatorMinuteRepository(
             // 必须显式选择 TDengine 数据源，避免多数据源环境误用 MySQL。
@@ -144,6 +147,10 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                     && attempt.policyEvidenceJson().length() > 2_048) {
                 throw new IllegalArgumentException("Policy evidence exceeds TDengine boundary");
             }
+            if (attempt.parameterEvidenceJson() != null
+                    && attempt.parameterEvidenceJson().length() > 4_096) {
+                throw new IllegalArgumentException("Parameter evidence exceeds TDengine boundary");
+            }
             sql.append(attemptChild(attempt.indicatorId())).append(" USING ").append(stable)
                     .append(" (indicator_id,indicator_code,building_id,system_group_id,equip_id)")
                     .append(" TAGS (")
@@ -153,7 +160,8 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                     .append(nullableQuote(attempt.systemGroupId())).append(",")
                     .append(nullableQuote(attempt.equipId())).append(") ")
                     .append("(ts,attempt_id,minute_start,calc_status,reason_code,scenario_code,")
-                    .append("formula_version,policy_evidence_json,config_revision) VALUES (")
+                    .append("formula_version,policy_evidence_json,parameter_evidence_json,")
+                    .append("config_revision) VALUES (")
                     .append(timestamp(timestamp)).append(",")
                     .append(quote(attempt.attemptId())).append(",")
                     .append(timestamp(attempt.minuteStart())).append(",")
@@ -162,6 +170,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                     .append(quote(attempt.scenarioCode())).append(",")
                     .append(quote(attempt.formulaVersion())).append(",")
                     .append(nullableQuote(attempt.policyEvidenceJson())).append(",")
+                    .append(nullableQuote(attempt.parameterEvidenceJson())).append(",")
                     .append(attempt.configRevision()).append(") ");
             persistedAttemptIds.add(attempt.attemptId());
             appended++;
@@ -174,6 +183,84 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
                 throw exception;
             }
         }
+    }
+
+    /** 成功值按 attemptId 追加到独立子表，当前分钟成功投影覆盖不会影响旧修订。 */
+    @Override
+    public synchronized void saveResultRevisions(List<FormulaResultRevision> revisions) {
+        if (revisions.isEmpty()) {
+            return;
+        }
+        StringBuilder sql = new StringBuilder("INSERT INTO ");
+        int appended = 0;
+        for (FormulaResultRevision revision : revisions) {
+            if (persistedResultAttemptIds.contains(revision.attemptId())
+                    || resultRevisionExists(revision.attemptId())) {
+                persistedResultAttemptIds.add(revision.attemptId());
+                continue;
+            }
+            if (!Double.isFinite(revision.value())
+                    || revision.parameterEvidenceJson() != null
+                    && revision.parameterEvidenceJson().length() > 4_096) {
+                throw new IllegalArgumentException("Formula result revision exceeds boundary");
+            }
+            sql.append(resultRevisionChild(revision.indicatorId())).append(" USING ")
+                    .append(resultRevisionStable())
+                    .append(" (indicator_id,indicator_code,building_id,system_group_id,equip_id)")
+                    .append(" TAGS (")
+                    .append(quote(revision.indicatorId())).append(",")
+                    .append(quote(revision.indicatorCode())).append(",")
+                    .append(quote(revision.buildingId())).append(",")
+                    .append(nullableQuote(revision.systemGroupId())).append(",")
+                    .append(nullableQuote(revision.equipId())).append(") ")
+                    .append("(ts,result_revision_id,attempt_id,minute_start,val,data_quality,")
+                    .append("formula_version,parameter_evidence_json,calculated_at) VALUES (")
+                    .append(timestamp(nextResultRevisionTimestamp(revision))).append(",")
+                    .append(quote(revision.resultRevisionId())).append(",")
+                    .append(quote(revision.attemptId())).append(",")
+                    .append(timestamp(revision.minuteStart())).append(",")
+                    .append(number(revision.value())).append(",")
+                    .append(revision.dataQuality()).append(",")
+                    .append(quote(revision.formulaVersion())).append(",")
+                    .append(nullableQuote(revision.parameterEvidenceJson())).append(",")
+                    .append(timestamp(revision.calculatedAt())).append(") ");
+            persistedResultAttemptIds.add(revision.attemptId());
+            appended++;
+        }
+        if (appended > 0) {
+            try {
+                template.execute(sql.toString().trim());
+            } catch (RuntimeException exception) {
+                revisions.forEach(revision -> persistedResultAttemptIds.remove(revision.attemptId()));
+                throw exception;
+            }
+        }
+    }
+
+    private boolean resultRevisionExists(String attemptId) {
+        Long count = template.queryForObject("SELECT COUNT(*) FROM " + resultRevisionStable()
+                + " WHERE attempt_id=" + quote(attemptId), Long.class);
+        return count != null && count > 0;
+    }
+
+    @Override
+    public Optional<FormulaResultRevision> findResultRevisionAt(
+            String indicatorId, long minuteStart, long knowledgeAt) {
+        String sql = "SELECT result_revision_id,attempt_id,indicator_id,indicator_code,"
+                + "building_id,system_group_id,equip_id,minute_start,val,data_quality,"
+                + "formula_version,parameter_evidence_json,calculated_at FROM "
+                + resultRevisionStable() + " WHERE indicator_id=" + quote(indicatorId)
+                + " AND minute_start=" + timestamp(minuteStart)
+                + " AND calculated_at<=" + timestamp(knowledgeAt)
+                + " ORDER BY calculated_at DESC,ts DESC LIMIT 1";
+        return template.query(sql, (rs, row) -> new FormulaResultRevision(
+                rs.getString("result_revision_id"), rs.getString("attempt_id"),
+                rs.getString("indicator_id"), rs.getString("indicator_code"),
+                rs.getString("building_id"), rs.getString("system_group_id"),
+                rs.getString("equip_id"), rs.getTimestamp("minute_start").getTime(),
+                rs.getDouble("val"), rs.getInt("data_quality"),
+                rs.getString("formula_version"), rs.getString("parameter_evidence_json"),
+                rs.getTimestamp("calculated_at").getTime())).stream().findFirst();
     }
 
     private boolean attemptExists(String attemptId) {
@@ -195,6 +282,21 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         long minimum = persistedMaximum == null ? Long.MIN_VALUE : persistedMaximum + 1;
         long next = Math.max(attempt.attemptedAt(), minimum);
         latestAttemptTimestamps.put(attempt.indicatorId(), next);
+        return next;
+    }
+
+    private long nextResultRevisionTimestamp(FormulaResultRevision revision) {
+        Long persistedMaximum = latestResultRevisionTimestamps.get(revision.indicatorId());
+        if (persistedMaximum == null) {
+            Timestamp maximumTimestamp = template.queryForObject(
+                    "SELECT MAX(ts) FROM " + resultRevisionStable()
+                            + " WHERE indicator_id=" + quote(revision.indicatorId()),
+                    Timestamp.class);
+            persistedMaximum = maximumTimestamp == null ? null : maximumTimestamp.getTime();
+        }
+        long minimum = persistedMaximum == null ? Long.MIN_VALUE : persistedMaximum + 1;
+        long next = Math.max(revision.calculatedAt(), minimum);
+        latestResultRevisionTimestamps.put(revision.indicatorId(), next);
         return next;
     }
 
@@ -603,6 +705,10 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
         return qualified(properties.getStIndicatorMinuteState());
     }
 
+    private String resultRevisionStable() {
+        return qualified(properties.getStFormulaResultRevision());
+    }
+
     private String indicatorChild(String indicatorId) {
         return qualified(properties.getStIndicatorMinute() + "_" + safe(indicatorId));
     }
@@ -617,6 +723,10 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
 
     private String stateChild(String indicatorId) {
         return qualified(properties.getStIndicatorMinuteState() + "_" + safe(indicatorId));
+    }
+
+    private String resultRevisionChild(String indicatorId) {
+        return qualified(properties.getStFormulaResultRevision() + "_" + safe(indicatorId));
     }
 
     private IndicatorMinuteState mapState(ResultSet resultSet) throws SQLException {
