@@ -1,0 +1,11 @@
+package com.platform.audit;
+
+/** 固定后台职责目录。职责不是正式业务角色，也不写入 JWT。 */
+public enum BackendDuty {
+    BACKOFFICE_CHANGE_SUBMITTER,
+    BACKOFFICE_CHANGE_REVIEWER,
+    AUDIT_EVIDENCE_VIEWER,
+    AUDIT_EVIDENCE_EXPORTER,
+    AUDIT_RETENTION_MANAGER,
+    AUDIT_EVIDENCE_HOLD_MANAGER
+}

@@ -1,8 +1,10 @@
 package com.platform.system.controller;
 
-import com.platform.framework.common.Result;
+import com.platform.audit.SecurityAuditService;
 import com.platform.cache.MenuCacheService;
 import com.platform.cache.TokenCacheService;
+import com.platform.framework.common.Result;
+import com.platform.framework.exception.BusinessException;
 import com.platform.security.JwtService;
 import com.platform.security.JwtUserPrincipal;
 import com.platform.system.model.dto.LoginRequest;
@@ -38,13 +40,16 @@ public class AuthController {
     private final JwtService jwtService;
     private final TokenCacheService tokenCacheService;
     private final MenuCacheService menuCacheService;
+    private final SecurityAuditService securityAuditService;
 
     public AuthController(SysUserService sysUserService, JwtService jwtService,
-                          TokenCacheService tokenCacheService, MenuCacheService menuCacheService) {
+                          TokenCacheService tokenCacheService, MenuCacheService menuCacheService,
+                          SecurityAuditService securityAuditService) {
         this.sysUserService = sysUserService;
         this.jwtService = jwtService;
         this.tokenCacheService = tokenCacheService;
         this.menuCacheService = menuCacheService;
+        this.securityAuditService = securityAuditService;
     }
 
     /** 注册普通账号；服务层固定分配 BUILDING_OWNER，但不会授予任何建筑范围。 */
@@ -56,9 +61,18 @@ public class AuthController {
 
     /** 校验账号密码和正式角色，返回已写入 Redis 单账号白名单的 JWT。 */
     @PostMapping("/login")
-    public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
-        LoginResponse response = sysUserService.login(request.getUsername(), request.getPassword());
-        return Result.success(response);
+    public Result<LoginResponse> login(@Valid @RequestBody LoginRequest request,
+                                       HttpServletRequest httpRequest) {
+        try {
+            LoginResponse response = sysUserService.login(request.getUsername(), request.getPassword());
+            securityAuditService.recordAuthentication(httpRequest, response.getUser().getId(),
+                    "LOGIN_SUCCESS", "SUCCESS", null);
+            return Result.success(response);
+        } catch (BusinessException failure) {
+            securityAuditService.recordAuthentication(httpRequest, null,
+                    "LOGIN_FAILED", "DENIED", "LOGIN_FAILED");
+            throw failure;
+        }
     }
 
     /**
@@ -110,6 +124,8 @@ public class AuthController {
         }
         tokenCacheService.removeFromWhitelist(principal.getId());
         menuCacheService.evict(principal.getId());
+        securityAuditService.recordAuthentication(request, principal.getId(),
+                "TOKEN_REVOKED", "SUCCESS", null);
         return Result.success("已安全退出");
     }
 }

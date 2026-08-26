@@ -250,6 +250,9 @@ telemetry-reliability:
     max-run-millis: ${TELEMETRY_RETENTION_MAX_RUN_MILLIS:30000}
 
 logging:
+  pattern:
+    # traceId 由服务端生成并写入 MDC；客户端请求 ID 不覆盖该主追踪标识。
+    level: "%5p [traceId=%X{traceId:-}]"
   level:
     com.platform: debug
 
@@ -271,3 +274,9 @@ security:
   jwt:
     secret: ${JWT_SECRET:iot-platform-demo-jwt-secret-please-change-32-bytes-min}
     expire-seconds: ${JWT_EXPIRE_SECONDS:86400}
+
+# 后台治理环境模式必须由部署显式复核。研发自审默认关闭；当前单人研发如需使用，
+# 仅在 DEVELOPMENT/TEST 中设置 AUDIT_ALLOW_SELF_APPROVAL=true，PRODUCTION 误开会拒绝启动。
+audit-governance:
+  environment-mode: ${AUDIT_ENVIRONMENT_MODE:DEVELOPMENT}
+  allow-self-approval: ${AUDIT_ALLOW_SELF_APPROVAL:false}
