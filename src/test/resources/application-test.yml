@@ -55,3 +55,9 @@ formula:
   recovery-enabled: false
   recovery-minutes: 10
   recovery-delay-ms: 3600000
+
+relation-governance:
+  deployment-environment: test
+  self-approval-enabled: false
+  max-context-depth: 3
+  max-page-size: 100

@@ -47,7 +47,8 @@ public class GlobalExceptionHandler {
         response.put("success", false);
         addVersionedErrorCode(response, request,
                 "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED",
-                "COLLECTION_CONFIG_VALIDATION_FAILED", "QUALITY_POLICY_VALIDATION_FAILED");
+                "COLLECTION_CONFIG_VALIDATION_FAILED", "QUALITY_POLICY_VALIDATION_FAILED",
+                "RELATION_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -89,7 +90,8 @@ public class GlobalExceptionHandler {
         response.put("success", false);
         addVersionedErrorCode(response, request,
                 "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED",
-                "COLLECTION_CONFIG_UNAUTHORIZED", "QUALITY_POLICY_UNAUTHORIZED");
+                "COLLECTION_CONFIG_UNAUTHORIZED", "QUALITY_POLICY_UNAUTHORIZED",
+                "RELATION_UNAUTHORIZED");
         return response;
     }
 
@@ -104,7 +106,8 @@ public class GlobalExceptionHandler {
         response.put("success", false);
         addVersionedErrorCode(response, request,
                 "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN",
-                "COLLECTION_CONFIG_FORBIDDEN", "QUALITY_POLICY_FORBIDDEN");
+                "COLLECTION_CONFIG_FORBIDDEN", "QUALITY_POLICY_FORBIDDEN",
+                "RELATION_FORBIDDEN");
         return response;
     }
 
@@ -112,7 +115,8 @@ public class GlobalExceptionHandler {
     private static void addVersionedErrorCode(
             Map<String, Object> response, HttpServletRequest request,
             String onboardingErrorCode, String assetErrorCode,
-            String collectionErrorCode, String qualityUsageErrorCode) {
+            String collectionErrorCode, String qualityUsageErrorCode,
+            String relationErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
@@ -124,6 +128,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", collectionErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/quality-usage")) {
             response.put("errorCode", qualityUsageErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
+            response.put("errorCode", relationErrorCode);
         }
     }
 

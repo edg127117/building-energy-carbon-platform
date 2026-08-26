@@ -9,6 +9,7 @@ import com.platform.hvac.model.entity.BizDataPoint;
 import com.platform.hvac.model.entity.BizPointNamingRule;
 import com.platform.hvac.service.impl.BizDataPointServiceImpl;
 import com.platform.iot.quality.MySqlDataPointConfigProvider;
+import com.platform.relation.RelationGovernanceGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -53,6 +54,8 @@ class BizDataPointServiceImplTest {
     private BizPointNamingRuleMapper namingRuleMapper;
     @Mock
     private PointCodeNamingValidator namingValidator;
+    @Mock
+    private RelationGovernanceGuard relationGuard;
 
     private BizDataPointServiceImpl service;
 
@@ -63,7 +66,8 @@ class BizDataPointServiceImplTest {
                 equipmentMapper,
                 systemGroupMapper,
                 namingRuleMapper,
-                namingValidator);
+                namingValidator,
+                relationGuard);
         ReflectionTestUtils.setField(service, "baseMapper", dataPointMapper);
     }
 
@@ -135,6 +139,7 @@ class BizDataPointServiceImplTest {
         verify(dataPointMapper).updateById(saved.capture());
         assertThat(saved.getValue().getStatus()).isEqualTo("ONLINE");
         assertThat(saved.getValue().getIsForCalc()).isEqualTo(1);
+        verify(relationGuard, never()).rejectChangedProjection(any(), any(), any());
         verify(configProvider).refreshAll();
     }
 

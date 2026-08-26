@@ -6,6 +6,8 @@ import com.platform.framework.common.Result;
 import com.platform.hvac.mapper.BizSpaceMapper;
 import com.platform.hvac.model.entity.BizSpace;
 import com.platform.hvac.service.BizSpaceService;
+import com.platform.relation.RelationGovernanceGuard;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -21,7 +23,10 @@ import java.util.List;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> implements BizSpaceService {
+
+    private final RelationGovernanceGuard relationGuard;
 
     /** 从 MySQL 读取一个建筑的全部空间，并按楼层值倒序返回。 */
     @Override
@@ -47,6 +52,7 @@ public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> i
     /** 清除客户端内部 ID、校验父空间归属后新增 MySQL 空间档案。 */
     @Override
     public Result<BizSpace> add(BizSpace space) {
+        relationGuard.requireLegacyForStructuralCreate(space.getBuildingId());
         space.setSpaceId(null);
         validateParent(space);
         this.save(space);
@@ -60,6 +66,8 @@ public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> i
         if (existing == null) {
             throw new com.platform.framework.exception.BusinessException(404, "空间不存在");
         }
+        relationGuard.rejectChangedProjection(
+                existing.getBuildingId(), existing.getParentSpaceId(), space.getParentSpaceId());
         space.setBuildingId(existing.getBuildingId());
         validateParent(space);
         this.updateById(space);
@@ -69,6 +77,7 @@ public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> i
     /** 逻辑删除空间；不会自动删除子空间或解除设备关系。 */
     @Override
     public Result<Void> delete(String spaceId) {
+        relationGuard.requireDeletable("SPACE", spaceId);
         this.removeById(spaceId);
         return Result.success();
     }

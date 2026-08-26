@@ -114,6 +114,13 @@ database:
   charset-fix:
     enabled: true
 
+# 建筑关系治理。部署环境必须显式分类；生产环境若误开研发自审，应用会拒绝启动。
+relation-governance:
+  deployment-environment: ${RELATION_GOVERNANCE_ENVIRONMENT:unspecified}
+  self-approval-enabled: ${RELATION_GOVERNANCE_SELF_APPROVAL_ENABLED:false}
+  max-context-depth: ${RELATION_GOVERNANCE_MAX_CONTEXT_DEPTH:3}
+  max-page-size: ${RELATION_GOVERNANCE_MAX_PAGE_SIZE:100}
+
 # HVAC 最新快照新鲜度只判断记录是否仍可作为实时值，不推断设备或网络故障原因。
 hvac:
   snapshot:

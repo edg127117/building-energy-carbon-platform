@@ -43,7 +43,8 @@ class FlywayMigrationConfigurationTest {
                 "V18__mysql_quality_usage_policy_governance.sql",
                 "V20__mysql_device_parameter_governance.sql",
                 "V22__mysql_telemetry_reliability_v2.sql",
-                "V23__optimize_telemetry_receipt_retention.sql");
+                "V23__optimize_telemetry_receipt_retention.sql",
+                "V24__mysql_relation_governance.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

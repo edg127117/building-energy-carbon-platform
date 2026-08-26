@@ -57,6 +57,8 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
             body.put("errorCode", "COLLECTION_CONFIG_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/quality-usage")) {
             body.put("errorCode", "QUALITY_POLICY_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
+            body.put("errorCode", "RELATION_UNAUTHORIZED");
         }
     }
 }

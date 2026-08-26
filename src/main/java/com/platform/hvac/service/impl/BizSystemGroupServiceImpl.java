@@ -8,6 +8,8 @@ import com.platform.framework.common.Result;
 import com.platform.hvac.mapper.BizSystemGroupMapper;
 import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.hvac.service.BizSystemGroupService;
+import com.platform.relation.RelationGovernanceGuard;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -22,7 +24,10 @@ import java.util.Set;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper, BizSystemGroup> implements BizSystemGroupService {
+
+    private final RelationGovernanceGuard relationGuard;
 
     /**
      * 在调用方传入的建筑范围内查询 MySQL 系统分组，并支持建筑和名称/编码筛选。
@@ -75,6 +80,7 @@ public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper,
     /** 逻辑删除系统分组；现有设备和测点不会由此方法级联处理。 */
     @Override
     public Result<Void> delete(String systemGroupId) {
+        relationGuard.requireDeletable("SYSTEM", systemGroupId);
         this.removeById(systemGroupId);
         return Result.success();
     }
