@@ -21,7 +21,7 @@ CREATE TABLE biz_relation_model (
   CONSTRAINT chk_relation_model_revision CHECK (config_revision >= 0),
   CONSTRAINT fk_relation_model_building FOREIGN KEY (building_id)
     REFERENCES building (building_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE biz_relation_version (
   version_id VARCHAR(32) PRIMARY KEY,
@@ -59,7 +59,7 @@ CREATE TABLE biz_relation_version (
     REFERENCES biz_relation_version (version_id) ON DELETE RESTRICT,
   CONSTRAINT fk_relation_version_copy FOREIGN KEY (copied_from_version_id)
     REFERENCES biz_relation_version (version_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 ALTER TABLE biz_relation_model
   ADD CONSTRAINT fk_relation_model_active_version FOREIGN KEY (active_version_id)
@@ -90,7 +90,7 @@ CREATE TABLE biz_metering_boundary (
   CONSTRAINT chk_metering_boundary_status CHECK (status IN ('ACTIVE','RETIRED')),
   CONSTRAINT fk_metering_boundary_building FOREIGN KEY (building_id)
     REFERENCES building (building_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE biz_relation_node (
   node_id VARCHAR(32) PRIMARY KEY,
@@ -109,7 +109,7 @@ CREATE TABLE biz_relation_node (
   CONSTRAINT chk_relation_node_status CHECK (status IN ('ACTIVE','RETIRED')),
   CONSTRAINT fk_relation_node_building FOREIGN KEY (building_id)
     REFERENCES building (building_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE biz_space_parent_version_item (
   version_id VARCHAR(32) NOT NULL,
@@ -126,7 +126,7 @@ CREATE TABLE biz_space_parent_version_item (
     REFERENCES biz_space (space_id, building_id) ON DELETE RESTRICT,
   CONSTRAINT fk_relation_space_parent FOREIGN KEY (parent_space_id, building_id)
     REFERENCES biz_space (space_id, building_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE biz_asset_assignment_version_item (
   version_id VARCHAR(32) NOT NULL,
@@ -151,7 +151,7 @@ CREATE TABLE biz_asset_assignment_version_item (
     REFERENCES biz_system_group (system_group_id, building_id) ON DELETE RESTRICT,
   CONSTRAINT fk_relation_assignment_equipment FOREIGN KEY (equipment_id, building_id)
     REFERENCES biz_equipment (equip_id, building_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE biz_semantic_relation_version_item (
   relation_item_id VARCHAR(32) PRIMARY KEY,
@@ -183,7 +183,7 @@ CREATE TABLE biz_semantic_relation_version_item (
     REFERENCES biz_relation_node (building_id, node_id) ON DELETE RESTRICT,
   CONSTRAINT fk_semantic_relation_target_node FOREIGN KEY (building_id, target_node_id)
     REFERENCES biz_relation_node (building_id, node_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE INDEX idx_semantic_relation_source
   ON biz_semantic_relation_version_item (version_id, source_node_id);
@@ -217,7 +217,7 @@ CREATE TABLE biz_metering_assignment_version_item (
     REFERENCES biz_relation_node (building_id, node_id) ON DELETE RESTRICT,
   CONSTRAINT fk_metering_assignment_target_node FOREIGN KEY (building_id, target_node_id)
     REFERENCES biz_relation_node (building_id, node_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE INDEX idx_metering_assignment_version_status
   ON biz_metering_assignment_version_item (version_id, allocation_status);
@@ -248,7 +248,7 @@ CREATE TABLE biz_relation_review_request (
     REFERENCES biz_relation_version (version_id) ON DELETE RESTRICT,
   CONSTRAINT fk_relation_review_version_building FOREIGN KEY (version_id, building_id)
     REFERENCES biz_relation_version (version_id, building_id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE INDEX idx_relation_review_building_status
   ON biz_relation_review_request (building_id, status, submitted_at);
@@ -267,7 +267,7 @@ CREATE TABLE biz_relation_validation_issue (
     (issue_level IN ('ERROR','PENDING_EXPERT','WARNING')),
   CONSTRAINT fk_relation_issue_version FOREIGN KEY (version_id)
     REFERENCES biz_relation_version (version_id) ON DELETE CASCADE
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE INDEX idx_relation_issue_version_level
   ON biz_relation_validation_issue (version_id, issue_level, issue_code);
@@ -291,7 +291,7 @@ CREATE TABLE biz_relation_audit_log (
   operation_time DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   CONSTRAINT uk_relation_audit_idempotency UNIQUE (idempotency_key),
   CONSTRAINT chk_relation_audit_result CHECK (result IN ('SUCCESS','REJECTED'))
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE INDEX idx_relation_audit_building_time
   ON biz_relation_audit_log (building_id, operation_time);
