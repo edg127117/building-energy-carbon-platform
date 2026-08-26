@@ -59,7 +59,7 @@
 4. 有受信任 ACK 路由时，以 QoS 1 发布应用 ACK；
 5. 应用 ACK 获得 Broker `PUBACK` 后，完成原入站消息的手动消费确认。
 
-MySQL 或 TDengine 暂时失败、应用 ACK 发布失败时，不返回成功 ACK，也不完成原入站消费确认，由 Broker 重投。应用 ACK 发布失败写异常明细；成功路径不写完整载荷。
+MySQL 或 TDengine 暂时失败、应用 ACK 发布失败时，不返回成功 ACK，也不完成原入站消费确认，由 Broker 重投。应用 ACK 发布失败写异常明细；应用 ACK 成功只增加 Micrometer 计数，不再更新逐条回执。正常首次消息因此只有一条 MySQL 终态回执 `INSERT`，成功路径不写完整载荷。
 
 相同设备业务键和相同载荷返回 `DUPLICATE_PERSISTED`；相同业务键但不同载荷返回 `MESSAGE_CONFLICT`，禁止覆盖原值。永久业务错误返回 `PLATFORM_REJECTED`；未绑定设备返回 `DISCOVERED_NOT_ACTIVE`。
 
@@ -76,7 +76,9 @@ MySQL 或 TDengine 暂时失败、应用 ACK 发布失败时，不返回成功 A
 - 正常首报每个逻辑消息只保存一条轻量终态回执，不保存完整载荷，也不写 `RECEIVED -> PERSISTED` 双记录；
 - 重投、重复、冲突、拒绝、存储失败和 ACK 失败才追加异常明细或累加尝试次数；
 - Redis 只能加速查询，不能作为幂等权威；
-- 开发/测试默认保留：成功回执 7 天、异常明细 180 天、TLS/MQTT 失败聚合 180 天、TDengine 原始数据 90 天，均由环境配置覆盖；生产值必须重新批准。
+- 开发/测试默认保留：成功回执 24 小时、异常明细及其关联回执 180 天、TLS/MQTT 失败聚合 180 天、TDengine 原始数据 90 天，均由环境配置覆盖；生产值必须重新批准；
+- 成功 ACK 不持久化逐条证据，小时成功量由 Micrometer/监控系统聚合；以后若需要平台内 180 天成功趋势，应独立增加设备/小时汇总，禁止重新在热路径增加逐消息 MySQL 写入；
+- 回执清理默认每分钟执行，单批 2000 条、单轮最多 10 批且不超过 30 秒。删除顺序为普通成功回执、异常关联回执、异常明细、TLS/MQTT 失败聚合，共享批次和时间预算。
 
 按 1000 台设备、15 秒周期、每报 5 点估算约 66.67 消息/秒、333.33 测点值/秒；软件短压测目标取 3 倍，即 200 消息/秒、1000 测点值/秒。本数字不是生产容量承诺。
 
@@ -95,12 +97,19 @@ MySQL 或 TDengine 暂时失败、应用 ACK 发布失败时，不返回成功 A
 - `GET /api/v1/telemetry-receipts`
 - `GET /api/v1/telemetry-receipts/{canonicalMessageId}`
 - `GET /api/v1/telemetry-receipts/statistics`
+- `GET /api/v1/telemetry-receipts/failure-statistics`
 - `GET /api/v1/telemetry-receipts/transport-failures`（仅平台管理员）
 
-接口返回独立 DTO 和稳定分页结构，明确区分全部时间和 ACK 证据字段。普通用户必须按建筑和设备范围过滤；TLS、账号、证书和 Broker 异常只允许平台管理员查询。任何接口都不得返回密码、私钥、完整证书或完整原始载荷。
+列表和成功回执统计接口接受可选 `fromEpochMillis`、`toEpochMillis`，默认最近 24 小时，单次成功回执查询跨度最多 24 小时，并强制按 `persisted_at` 过滤。成功统计响应声明 `windowStartEpochMillis`、`windowEndEpochMillis` 和 `scope=HOT_RECEIPT_WINDOW`，不得解释为历史累计。异常统计使用独立接口和 `occurred_at`，默认及最大跨度为 180 天，响应 `scope=FAILURE_RETENTION_WINDOW`。
 
-## 9. 验证边界
+接口返回独立 DTO 和稳定分页结构。为保持 `/api/v1` 兼容，旧 ACK 字段暂不删除，但固定表达为：设备和适配器 `PUBACK=UNKNOWN`，平台入站与应用 ACK 成功证据 `NOT_TRACKED`，应用 ACK 发布时间为 `null`。含义是平台不再逐条持久化成功投递证据；成功状态由监控指标提供，逐条接口只返回持久化结果和异常证据。普通用户必须按建筑和设备范围过滤；TLS、账号、证书和 Broker 异常只允许平台管理员查询。任何接口都不得返回密码、私钥、完整证书或完整原始载荷。
 
-自动化覆盖 TLS 加载/主机名校验/错误分类、所有缺字段组合、ACK 模式降级、ID 生成、去重/冲突、批次、迟到、部分写入恢复和 ACK 发布失败。隔离集成环境使用测试 Broker 和临时测试证书。
+## 9. 监控与告警边界
+
+监控至少覆盖成功回执 `INSERT` 耗时、应用 ACK 成功/失败、Broker 重投、重复/冲突、每轮各类清理数量、清理耗时、最老过期回执滞留、当前回执/异常行数和清理失败。告警系统应关注清理速度低于到期速度、过期滞留超过两小时、ACK 失败率持续上升及热回执行数超过预计 24 小时容量。
+
+## 10. 验证边界
+
+自动化覆盖 TLS 加载/主机名校验/错误分类、所有缺字段组合、ACK 模式降级、ID 生成、去重/冲突、批次、迟到、部分写入恢复、ACK 发布失败、24 小时查询窗口和持续清理预算。隔离 MySQL 8 验证 V22 到 V23 升级、索引、超过单轮默认容量的数据清理、异常保护、180 天删除和 Flyway 幂等；隔离 MQTT 环境使用测试 Broker 和临时测试证书。
 
 软件模拟通过不代表生产 Broker/TLS、真实网络、真实设备或网关断电缓存已经验收。

@@ -2,7 +2,13 @@ package com.platform.iot.reliability.api;
 
 import java.util.List;
 
-/** `/v1/telemetry-receipts` 的稳定只读 DTO，不暴露数据库实体。 */
+/**
+ * `/v1/telemetry-receipts` 的稳定只读 DTO，不暴露数据库实体。
+ *
+ * <p>四个历史 ACK 证据字段为兼容 V1 调用方暂时保留。平台不再逐条持久化
+ * 成功投递证据，因此返回 {@code UNKNOWN}/{@code NOT_TRACKED}，成功趋势应从
+ * Micrometer 监控读取。</p>
+ */
 public final class TelemetryReceiptContracts {
     private TelemetryReceiptContracts() {
     }
@@ -56,7 +62,21 @@ public final class TelemetryReceiptContracts {
             long evidenceOnlyMessages,
             long conflictFailures,
             long rejectedFailures,
-            long applicationAckFailures) {
+            long applicationAckFailures,
+            long windowStartEpochMillis,
+            long windowEndEpochMillis,
+            String scope) {
+    }
+
+    public record FailureStatistics(
+            long totalFailures,
+            long conflictFailures,
+            long rejectedFailures,
+            long storageFailures,
+            long applicationAckFailures,
+            long windowStartEpochMillis,
+            long windowEndEpochMillis,
+            String scope) {
     }
 
     public record TransportFailureView(

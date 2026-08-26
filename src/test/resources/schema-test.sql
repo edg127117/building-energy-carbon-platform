@@ -229,18 +229,15 @@ CREATE TABLE biz_telemetry_receipt (
   receipt_status VARCHAR(40) NOT NULL,
   result_code VARCHAR(60) NOT NULL,
   metric_count INT NOT NULL,
-  attempt_count INT NOT NULL DEFAULT 1,
-  device_puback_state VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
-  adapter_publish_puback_state VARCHAR(20) NOT NULL DEFAULT 'UNKNOWN',
-  platform_consumer_ack_state VARCHAR(20) NOT NULL DEFAULT 'PENDING',
-  application_ack_puback_state VARCHAR(20) NOT NULL DEFAULT 'NOT_APPLICABLE',
-  application_ack_published_at TIMESTAMP(3)
+  attempt_count INT NOT NULL DEFAULT 1
 );
 
 CREATE INDEX idx_receipt_building_persisted
   ON biz_telemetry_receipt (building_id, persisted_at);
 CREATE INDEX idx_receipt_equip_persisted
   ON biz_telemetry_receipt (equip_id, persisted_at);
+CREATE INDEX idx_receipt_cleanup
+  ON biz_telemetry_receipt (persisted_at, canonical_message_id);
 
 CREATE TABLE biz_telemetry_receipt_failure (
   failure_id VARCHAR(32) PRIMARY KEY,
@@ -251,6 +248,13 @@ CREATE TABLE biz_telemetry_receipt_failure (
   safe_detail VARCHAR(500),
   occurred_at TIMESTAMP(3) NOT NULL
 );
+
+CREATE INDEX idx_receipt_failure_message_time
+  ON biz_telemetry_receipt_failure (canonical_message_id, occurred_at);
+CREATE INDEX idx_receipt_failure_building_time
+  ON biz_telemetry_receipt_failure (building_id, occurred_at);
+CREATE INDEX idx_receipt_failure_occurred
+  ON biz_telemetry_receipt_failure (occurred_at);
 
 CREATE TABLE biz_mqtt_failure_aggregate (
   aggregate_id VARCHAR(32) PRIMARY KEY,

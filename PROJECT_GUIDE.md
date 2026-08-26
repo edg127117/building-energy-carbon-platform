@@ -51,7 +51,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.system`、`security` | 登录、JWT、角色、菜单和建筑权限 |
 | `com.platform.hvac`、`hvac.asset` | 继承的建筑、空间、系统、设备、测点档案及 HVAC 查询 |
 | `com.platform.iot.ingest`、`identity` | 标准报文接入、设备身份和归属解析 |
-| `com.platform.iot.reliability`、`mqtt` | V2 消息级幂等、持久化回执、ACK 证据、TLS 与连接故障分类 |
+| `com.platform.iot.reliability`、`mqtt` | V2 消息级幂等、24 小时热回执、ACK 失败证据与成功监控、TLS 与连接故障分类 |
 | `com.platform.iot.quality`、`dataquality` | 运行校验和 Q0/Q1/Q2 预处理 |
 | `com.platform.iot.qualityusage` | Q0/Q1/Q2 消费策略治理、运行快照、门禁、纠正与恢复 |
 | `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
@@ -100,7 +100,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、标准设备参数平台侧治理、部分 HVAC 指标、查询和展示。其中设备参数治理只提供配置框架、安全拒绝路径和版本证据，不代表已取得专业参数、厂家映射、真实 Excel 或现场报文验收。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
 
-V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认是不同证据；聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
+V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认语义不同；平台不逐条持久化成功 ACK，成功量进入监控，失败保留异常明细。成功回执默认只作为 24 小时热证据，聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
 
 ## 6. 空间与语义模型
 

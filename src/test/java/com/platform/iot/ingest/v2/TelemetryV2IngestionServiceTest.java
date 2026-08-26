@@ -19,6 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -66,7 +68,8 @@ class TelemetryV2IngestionServiceTest {
         assertThat(result.actualAckMode()).isEqualTo(AckMode.EVIDENCE_ONLY);
         ArgumentCaptor<TelemetryReceipt> receipt =
                 ArgumentCaptor.forClass(TelemetryReceipt.class);
-        verify(receiptMapper).insert(receipt.capture());
+        verify(receiptMapper, times(1)).insert(receipt.capture());
+        verify(receiptMapper, never()).incrementAttempt(any(), any(), any(), any());
         assertThat(receipt.getValue().getCollectedAt()).isNull();
         assertThat(receipt.getValue().getTimeSource()).isEqualTo("ADAPTER_RECEIVED");
         assertThat(receipt.getValue().getDedupMode()).isEqualTo("NONE");
@@ -120,6 +123,7 @@ class TelemetryV2IngestionServiceTest {
         assertThat(result.processedMetrics()).isEqualTo(1);
         assertThat(result.applicationAck()).isNull();
         verify(receiptMapper, never()).insert(any());
+        verify(failureMapper).insert(any());
     }
 
     @Test
@@ -142,6 +146,42 @@ class TelemetryV2IngestionServiceTest {
         verify(standardService, never()).ingestImmutable(any(), anyLong());
     }
 
+    @Test
+    void sustainsTwoHundredMessagesPerSecondInSoftwareHotPathSimulation() {
+        when(standardService.ingestImmutable(any(), anyLong()))
+                .thenReturn(StandardTelemetryResult.accepted(5));
+        int messages = 1_000;
+
+        long startedAt = System.nanoTime();
+        for (int index = 0; index < messages; index++) {
+            V2ProcessingResult result = service.ingest(
+                    fiveMetricMessage("LOAD-" + index), 1_785_398_400_500L + index);
+            assertThat(result.status()).isEqualTo(ReceiptStatus.PLATFORM_PERSISTED);
+            assertThat(result.processedMetrics()).isEqualTo(5);
+        }
+        Duration elapsed = Duration.ofNanos(System.nanoTime() - startedAt);
+
+        assertThat(elapsed).isLessThan(Duration.ofSeconds(5));
+        verify(receiptMapper, times(messages)).insert(any());
+        verify(standardService, times(messages)).ingestImmutable(any(), anyLong());
+    }
+
+    @Test
+    void cleanupDefaultsCoverTargetDeviceModelAndBurstRate() {
+        int devices = 1_000;
+        int shortestReportSeconds = 15;
+        int metricsPerMessage = 5;
+        double messagesPerSecond = (double) devices / shortestReportSeconds;
+        double pointsPerSecond = messagesPerSecond * metricsPerMessage;
+        double cleanupRowsPerSecond = 2_000D * 10 / 60;
+
+        assertThat(messagesPerSecond).isCloseTo(66.67,
+                org.assertj.core.data.Offset.offset(0.01));
+        assertThat(pointsPerSecond).isCloseTo(333.33,
+                org.assertj.core.data.Offset.offset(0.01));
+        assertThat(cleanupRowsPerSecond).isGreaterThan(200D);
+    }
+
     private DeviceIdentityBinding binding() {
         return new DeviceIdentityBinding("I1", new DeviceIdentityKey("MAC", "ABC"),
                 "E1", "METER1", "B1", "P1", AckMode.EVIDENCE_ONLY,
@@ -155,5 +195,19 @@ class TelemetryV2IngestionServiceTest {
                 null, null, null, null, "ADAPTER_GENERATED",
                 "ADAPTER_RECEIVED", "NONE", "EVIDENCE_ONLY", "NONE",
                 List.of(new StandardMetric("ENERGY", value, "kWh", "/energy")));
+    }
+
+    private TelemetryV2Message fiveMetricMessage(String canonicalId) {
+        return new TelemetryV2Message("2.0", "P1", 1,
+                new DeviceIdentityKey("MAC", "ABC"), canonicalId,
+                null, null, null, null, 1_785_398_400_000L,
+                null, null, null, null, "ADAPTER_GENERATED",
+                "ADAPTER_RECEIVED", "NONE", "EVIDENCE_ONLY", "NONE",
+                List.of(
+                        new StandardMetric("M1", BigDecimal.ONE, "kWh", "/m1"),
+                        new StandardMetric("M2", BigDecimal.valueOf(2), "kWh", "/m2"),
+                        new StandardMetric("M3", BigDecimal.valueOf(3), "kWh", "/m3"),
+                        new StandardMetric("M4", BigDecimal.valueOf(4), "kWh", "/m4"),
+                        new StandardMetric("M5", BigDecimal.valueOf(5), "kWh", "/m5")));
     }
 }

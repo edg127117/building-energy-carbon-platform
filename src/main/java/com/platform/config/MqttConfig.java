@@ -263,7 +263,6 @@ public class MqttConfig {
             @Override
             public void messageArrived(String topic, MqttMessage message) {
                 boolean acknowledge = true;
-                boolean applicationAckPublished = false;
                 V2ProcessingResult v2Result = null;
                 try {
                     byte[] payloadBytes = message.getPayload();
@@ -279,6 +278,10 @@ public class MqttConfig {
 
                     long localReceivedTime = System.currentTimeMillis();
                     if (containsTopic(v2UpstreamTopics, topic)) {
+                        if (message.isDuplicate()) {
+                            meterRegistry.counter("iot.telemetry.v2.broker_redelivery")
+                                    .increment();
+                        }
                         v2Result = telemetryV2MqttMessageHandler.handle(
                                 payloadBytes, localReceivedTime);
                         acknowledge = !v2Result.retryable();
@@ -286,7 +289,8 @@ public class MqttConfig {
                             byte[] ackPayload = objectMapper.writeValueAsBytes(
                                     v2Result.applicationAck());
                             client.publish(v2Result.ackTopic(), ackPayload, 1, false);
-                            applicationAckPublished = true;
+                            meterRegistry.counter("iot.telemetry.v2.application_ack",
+                                    "result", "published").increment();
                         }
                         log.debug("V2 MQTT 报文处理完成: resultCode={}, ackMode={}, metrics={}",
                                 v2Result.resultCode(), v2Result.actualAckMode(),
@@ -322,8 +326,11 @@ public class MqttConfig {
                 } catch (MqttException exception) {
                     acknowledge = false;
                     if (v2Result != null) {
+                        meterRegistry.counter("iot.telemetry.v2.application_ack",
+                                "result", "failed").increment();
                         telemetryV2MqttMessageHandler.recordApplicationAckFailure(
-                                v2Result.canonicalMessageId(), exception.getMessage());
+                                v2Result.canonicalMessageId(),
+                                "MQTT_QOS1_APPLICATION_ACK_PUBLISH_FAILED");
                     }
                     log.error("V2 应用 ACK 发布失败，保留原消息重投: topic={}", topic);
                 } catch (IOException | IllegalArgumentException exception) {
@@ -339,15 +346,13 @@ public class MqttConfig {
                 } finally {
                     if (acknowledge) {
                         boolean inboundAckObserved = acknowledge(client, topic, message);
-                        if (inboundAckObserved && v2Result != null) {
-                            try {
-                                telemetryV2MqttMessageHandler.markDeliveryCompleted(
-                                        v2Result.canonicalMessageId(), applicationAckPublished);
-                            } catch (RuntimeException exception) {
-                                log.error("V2 投递证据回写失败，原消息已完成消费确认: messageId={}",
-                                        v2Result.canonicalMessageId());
-                            }
+                        if (v2Result != null) {
+                            meterRegistry.counter("iot.telemetry.v2.inbound_ack", "result",
+                                    inboundAckObserved ? "completed" : "failed").increment();
                         }
+                    } else if (v2Result != null) {
+                        meterRegistry.counter("iot.telemetry.v2.inbound_ack", "result", "failed")
+                                .increment();
                     }
                 }
             }

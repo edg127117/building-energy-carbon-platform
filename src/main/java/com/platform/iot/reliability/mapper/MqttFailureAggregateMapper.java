@@ -25,7 +25,12 @@ public interface MqttFailureAggregateMapper extends BaseMapper<MqttFailureAggreg
             """)
     int upsert(MqttFailureAggregate aggregate);
 
-    @Delete("DELETE FROM biz_mqtt_failure_aggregate WHERE bucket_start < #{before} LIMIT #{limit}")
+    @Delete("""
+            DELETE FROM biz_mqtt_failure_aggregate
+            WHERE bucket_start < #{before}
+            ORDER BY bucket_start, aggregate_id
+            LIMIT #{limit}
+            """)
     int deleteExpired(@Param("before") java.time.LocalDateTime before,
                       @Param("limit") int limit);
 }

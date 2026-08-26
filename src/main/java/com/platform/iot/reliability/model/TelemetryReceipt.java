@@ -36,9 +36,4 @@ public class TelemetryReceipt {
     private String resultCode;
     private Integer metricCount;
     private Integer attemptCount;
-    private String devicePubackState;
-    private String adapterPublishPubackState;
-    private String platformConsumerAckState;
-    private String applicationAckPubackState;
-    private LocalDateTime applicationAckPublishedAt;
 }

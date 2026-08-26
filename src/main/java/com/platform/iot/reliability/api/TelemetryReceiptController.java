@@ -4,6 +4,7 @@ import com.platform.framework.common.Result;
 import com.platform.framework.web.PageResponse;
 import com.platform.iot.reliability.TelemetryReceiptQueryService;
 import com.platform.security.SecurityUser;
+import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -29,18 +30,25 @@ public class TelemetryReceiptController {
     }
 
     @GetMapping("/v1/telemetry-receipts")
+    @Operation(summary = "查询24小时热回执",
+            description = "默认查询最近24小时，单次跨度不得超过24小时。平台不再逐条持久化成功ACK证据，兼容字段返回UNKNOWN或NOT_TRACKED。")
     public Result<PageResponse<ReceiptView>> list(
             Authentication authentication,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String buildingId,
             @RequestParam(required = false) String equipmentId,
-            @RequestParam(required = false) String status) {
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Long fromEpochMillis,
+            @RequestParam(required = false) Long toEpochMillis) {
         return Result.success(queryService.list(SecurityUser.userId(authentication),
-                SecurityUser.roles(authentication), buildingId, equipmentId, status, page, size));
+                SecurityUser.roles(authentication), buildingId, equipmentId, status,
+                fromEpochMillis, toEpochMillis, page, size));
     }
 
     @GetMapping("/v1/telemetry-receipts/{canonicalMessageId}")
+    @Operation(summary = "查询回执处理链",
+            description = "成功回执最多保留24小时；关联异常的回执和异常明细最多保留180天。ACK成功状态只通过监控指标提供。")
     public Result<ReceiptDetail> detail(
             Authentication authentication,
             @PathVariable String canonicalMessageId) {
@@ -49,11 +57,29 @@ public class TelemetryReceiptController {
     }
 
     @GetMapping("/v1/telemetry-receipts/statistics")
+    @Operation(summary = "统计24小时热回执",
+            description = "默认统计最近24小时，单次跨度不得超过24小时，响应scope固定为HOT_RECEIPT_WINDOW。")
     public Result<ReceiptStatistics> statistics(
             Authentication authentication,
-            @RequestParam(required = false) String buildingId) {
+            @RequestParam(required = false) String buildingId,
+            @RequestParam(required = false) Long fromEpochMillis,
+            @RequestParam(required = false) Long toEpochMillis) {
         return Result.success(queryService.statistics(SecurityUser.userId(authentication),
-                SecurityUser.roles(authentication), buildingId));
+                SecurityUser.roles(authentication), buildingId,
+                fromEpochMillis, toEpochMillis));
+    }
+
+    @GetMapping("/v1/telemetry-receipts/failure-statistics")
+    @Operation(summary = "统计异常明细",
+            description = "默认统计最近180天，单次跨度不得超过180天，响应scope固定为FAILURE_RETENTION_WINDOW。")
+    public Result<FailureStatistics> failureStatistics(
+            Authentication authentication,
+            @RequestParam(required = false) String buildingId,
+            @RequestParam(required = false) Long fromEpochMillis,
+            @RequestParam(required = false) Long toEpochMillis) {
+        return Result.success(queryService.failureStatistics(
+                SecurityUser.userId(authentication), SecurityUser.roles(authentication),
+                buildingId, fromEpochMillis, toEpochMillis));
     }
 
     @GetMapping("/v1/telemetry-receipts/transport-failures")
