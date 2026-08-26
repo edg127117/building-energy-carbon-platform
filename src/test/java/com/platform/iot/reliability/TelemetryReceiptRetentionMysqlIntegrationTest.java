@@ -62,7 +62,7 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
                 .isTrue();
 
         Flyway flyway = Flyway.configure().dataSource(dataSource)
-                .locations("filesystem:src/env/init").load();
+                .locations("filesystem:src/env/init").target("23").load();
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
         assertThat(columnExists(jdbc, "biz_telemetry_receipt", "application_ack_puback_state"))
                 .isFalse();
