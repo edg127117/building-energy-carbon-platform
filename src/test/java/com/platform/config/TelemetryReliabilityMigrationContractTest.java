@@ -27,4 +27,22 @@ class TelemetryReliabilityMigrationContractTest {
         assertThat(migration).contains("biz_mqtt_failure_aggregate", "occurrence_count");
         assertThat(migration).doesNotContain("raw_payload");
     }
+
+    @Test
+    void v23RemovesPerMessageAckSuccessEvidenceAndAddsCleanupIndexes()
+            throws IOException {
+        String migration = Files.readString(Path.of(
+                "src/env/init/V23__optimize_telemetry_receipt_retention.sql"));
+
+        assertThat(migration).contains(
+                "DROP INDEX `idx_receipt_status_persisted`",
+                "DROP COLUMN `device_puback_state`",
+                "DROP COLUMN `adapter_publish_puback_state`",
+                "DROP COLUMN `platform_consumer_ack_state`",
+                "DROP COLUMN `application_ack_puback_state`",
+                "DROP COLUMN `application_ack_published_at`",
+                "ADD INDEX `idx_receipt_cleanup` (`persisted_at`, `canonical_message_id`)",
+                "ADD INDEX `idx_receipt_failure_occurred` (`occurred_at`)");
+        assertThat(migration).doesNotContain("ALTER TABLE `biz_telemetry_receipt` ADD COLUMN");
+    }
 }

@@ -28,6 +28,7 @@ import org.springframework.scheduling.TaskScheduler;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.any;
@@ -218,7 +219,47 @@ class MqttConfigTest {
                 any(byte[].class), org.mockito.ArgumentMatchers.eq(1),
                 org.mockito.ArgumentMatchers.eq(false));
         ordered.verify(client).messageArrivedComplete(47, 1);
-        ordered.verify(fixture.v2Handler()).markDeliveryCompleted("C-1", true);
+        assertThat(fixture.meterRegistry().counter(
+                "iot.telemetry.v2.application_ack", "result", "published").count())
+                .isEqualTo(1);
+        assertThat(fixture.meterRegistry().counter(
+                "iot.telemetry.v2.inbound_ack", "result", "completed").count())
+                .isEqualTo(1);
+    }
+
+    @Test
+    void applicationAckFailureRecordsEvidenceAndLeavesInboundMessageUnacknowledged()
+            throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        ConfigFixture fixture = configuredConfig(
+                mock(HvacMqttMessageHandler.class),
+                mock(StandardTelemetryMqttMessageHandler.class));
+        PlatformApplicationAck ack = new PlatformApplicationAck(
+                "1.0", "C-2", ReceiptStatus.PLATFORM_PERSISTED,
+                "PLATFORM_PERSISTED", 1_785_398_400_500L, 1_785_398_400_600L,
+                AckMode.ADAPTER_PROXY, "ADAPTER_ONLY");
+        when(fixture.v2Handler().handle(any(byte[].class), anyLong()))
+                .thenReturn(new V2ProcessingResult("C-2",
+                        ReceiptStatus.PLATFORM_PERSISTED, "PLATFORM_PERSISTED", 5,
+                        false, AckMode.ADAPTER_PROXY, "platform/ack/adapter", ack, null));
+        doThrow(new MqttException(MqttException.REASON_CODE_CLIENT_EXCEPTION))
+                .when(client).publish(any(String.class), any(byte[].class),
+                        org.mockito.ArgumentMatchers.eq(1),
+                        org.mockito.ArgumentMatchers.eq(false));
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+
+        capturedCallback(client).messageArrived(
+                "platform/telemetry/v2/up", mqttMessage(48, "{}"));
+
+        verify(fixture.v2Handler()).recordApplicationAckFailure(
+                org.mockito.ArgumentMatchers.eq("C-2"), any());
+        verify(client, never()).messageArrivedComplete(48, 1);
+        assertThat(fixture.meterRegistry().counter(
+                "iot.telemetry.v2.application_ack", "result", "failed").count())
+                .isEqualTo(1);
+        assertThat(fixture.meterRegistry().counter(
+                "iot.telemetry.v2.inbound_ack", "result", "failed").count())
+                .isEqualTo(1);
     }
 
     private ConfigFixture configuredConfig(
@@ -230,11 +271,12 @@ class MqttConfigTest {
         MqttTlsProperties tls = new MqttTlsProperties();
         tls.setEnabled(false);
         tls.setAllowPlaintextForTests(true);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
         MqttConfig config = new MqttConfig(
                 new ObjectMapper().findAndRegisterModules(), handler, standardHandler,
                 v2Handler, tls,
                 new MqttSslContextFactory(), new MqttFailureClassifier(),
-                new SimpleMeterRegistry(), mock(MqttFailureEvidenceRecorder.class));
+                meterRegistry, mock(MqttFailureEvidenceRecorder.class));
         ReflectionTestUtils.setField(config, "brokerUrl", "tcp://localhost:1883");
         ReflectionTestUtils.setField(config, "clientId", "test-client");
         ReflectionTestUtils.setField(config, "username", "test");
@@ -250,7 +292,7 @@ class MqttConfigTest {
         ReflectionTestUtils.setField(config, "securityRetryMillis", 30_000L);
         ReflectionTestUtils.setField(config, "retryMultiplier", 2.0);
         ReflectionTestUtils.setField(config, "retryJitterRatio", 0.0);
-        return new ConfigFixture(config, scheduler, v2Handler);
+        return new ConfigFixture(config, scheduler, v2Handler, meterRegistry);
     }
 
     private MqttCallback capturedCallback(IMqttClient client) throws Exception {
@@ -271,6 +313,7 @@ class MqttConfigTest {
     private record ConfigFixture(
             MqttConfig config,
             TaskScheduler scheduler,
-            TelemetryV2MqttMessageHandler v2Handler) {
+            TelemetryV2MqttMessageHandler v2Handler,
+            SimpleMeterRegistry meterRegistry) {
     }
 }

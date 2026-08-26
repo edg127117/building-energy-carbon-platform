@@ -235,11 +235,12 @@ data-retention:
 # 当前值仅用于研发和软件模拟，生产部署必须结合容量与合规要求重新批准。
 telemetry-reliability:
   retention:
-    receipt-days: ${TELEMETRY_RECEIPT_RETENTION_DAYS:7}
+    receipt-hours: ${TELEMETRY_RECEIPT_RETENTION_HOURS:24}
     failure-days: ${TELEMETRY_FAILURE_RETENTION_DAYS:180}
-    batch-size: ${TELEMETRY_RETENTION_BATCH_SIZE:500}
-    max-batches: ${TELEMETRY_RETENTION_MAX_BATCHES:20}
-    cleanup-cron: "${TELEMETRY_RETENTION_CLEANUP_CRON:0 15 4 * * ?}"
+    cleanup-delay-ms: ${TELEMETRY_RETENTION_CLEANUP_DELAY_MS:60000}
+    batch-size: ${TELEMETRY_RETENTION_BATCH_SIZE:2000}
+    max-batches: ${TELEMETRY_RETENTION_MAX_BATCHES:10}
+    max-run-millis: ${TELEMETRY_RETENTION_MAX_RUN_MILLIS:30000}
 
 logging:
   level:

@@ -9,7 +9,6 @@ import com.platform.iot.ingest.standard.StandardTelemetryMessage;
 import com.platform.iot.ingest.standard.StandardTelemetryOutcome;
 import com.platform.iot.ingest.standard.StandardTelemetryResult;
 import com.platform.iot.reliability.AckMode;
-import com.platform.iot.reliability.EvidenceState;
 import com.platform.iot.reliability.ReceiptStatus;
 import com.platform.iot.reliability.mapper.TelemetryReceiptFailureMapper;
 import com.platform.iot.reliability.mapper.TelemetryReceiptMapper;
@@ -109,6 +108,8 @@ public class TelemetryV2IngestionService {
             receiptMapper.incrementAttempt(message.canonicalMessageId(), receivedTime,
                     trimToNull(message.batchId()), nullableTime(message.retransmittedAt()));
             if (!payloadHash.equals(existing.getPayloadHash())) {
+                meterRegistry.counter("iot.telemetry.v2.message", "result", "conflict")
+                        .increment();
                 recordFailure(message.canonicalMessageId(), binding.buildingId(),
                         "IDEMPOTENCY", "MESSAGE_CONFLICT",
                         "相同设备业务键对应不同有效载荷");
@@ -117,6 +118,8 @@ public class TelemetryV2IngestionService {
                         existing.getPersistedAt(), "相同设备业务键对应不同有效载荷");
             }
             meterRegistry.counter("iot.telemetry.v2", "outcome", "duplicate").increment();
+            meterRegistry.counter("iot.telemetry.v2.message", "result", "duplicate")
+                    .increment();
             return permanent(message.canonicalMessageId(), ReceiptStatus.DUPLICATE_PERSISTED,
                     "DUPLICATE_PERSISTED", mode, platformReceivedAt,
                     existing.getPersistedAt(), null);
@@ -126,6 +129,9 @@ public class TelemetryV2IngestionService {
                 toStandardMessage(message), platformReceivedAt);
         if (storage.outcome() == StandardTelemetryOutcome.RETRYABLE_FAILURE) {
             meterRegistry.counter("iot.telemetry.v2", "outcome", "retryable").increment();
+            recordFailure(message.canonicalMessageId(), binding.buildingId(),
+                    "STORAGE", "STORAGE_TEMPORARILY_UNAVAILABLE",
+                    "标准测点存储暂时不可用");
             return retryable(message.canonicalMessageId(), "STORAGE_TEMPORARILY_UNAVAILABLE",
                     storage.detail(), storage.processedMetrics());
         }
@@ -168,27 +174,12 @@ public class TelemetryV2IngestionService {
         receipt.setResultCode("PLATFORM_PERSISTED");
         receipt.setMetricCount(message.metrics().size());
         receipt.setAttemptCount(1);
-        receipt.setDevicePubackState(EvidenceState.UNKNOWN.name());
-        receipt.setAdapterPublishPubackState(EvidenceState.UNKNOWN.name());
-        receipt.setPlatformConsumerAckState(EvidenceState.PENDING.name());
-        receipt.setApplicationAckPubackState(mode.actualMode() == AckMode.EVIDENCE_ONLY
-                ? EvidenceState.NOT_APPLICABLE.name() : EvidenceState.PENDING.name());
-        receiptMapper.insert(receipt);
+        meterRegistry.timer("iot.telemetry.v2.receipt_insert")
+                .record(() -> receiptMapper.insert(receipt));
         meterRegistry.counter("iot.telemetry.v2", "outcome", "persisted").increment();
         return permanent(message.canonicalMessageId(), ReceiptStatus.PLATFORM_PERSISTED,
                 "PLATFORM_PERSISTED", mode, platformReceivedAt, persistedAt, null,
                 storage.processedMetrics());
-    }
-
-    public void markDeliveryCompleted(
-            String canonicalMessageId, boolean applicationAckPublished) {
-        if (canonicalMessageId == null) {
-            return;
-        }
-        receiptMapper.markDeliveryCompleted(canonicalMessageId,
-                applicationAckPublished ? EvidenceState.OBSERVED.name()
-                        : EvidenceState.NOT_APPLICABLE.name(),
-                applicationAckPublished ? LocalDateTime.now(PROJECT_ZONE) : null);
     }
 
     public void recordApplicationAckFailure(String canonicalMessageId, String safeDetail) {

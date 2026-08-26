@@ -8,7 +8,7 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 
 @Component
-/** V2 内部 Topic 的反序列化边界和投递证据回写入口。 */
+/** V2 内部 Topic 的反序列化边界和 ACK 失败留痕入口。 */
 public class TelemetryV2MqttMessageHandler {
 
     private final ObjectMapper objectMapper;
@@ -35,10 +35,6 @@ public class TelemetryV2MqttMessageHandler {
             return new V2ProcessingResult(null, null, "V2_TEMPORARY_FAILURE", 0,
                     true, AckMode.EVIDENCE_ONLY, null, null, exception.getMessage());
         }
-    }
-
-    public void markDeliveryCompleted(String canonicalMessageId, boolean applicationAckPublished) {
-        ingestionService.markDeliveryCompleted(canonicalMessageId, applicationAckPublished);
     }
 
     public void recordApplicationAckFailure(String canonicalMessageId, String detail) {

@@ -8,8 +8,10 @@ import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 import org.apache.ibatis.annotations.Delete;
 
+import java.time.LocalDateTime;
+
 @Mapper
-/** V2 终态回执和投递证据的 MySQL 入口。 */
+/** V2 终态回执的 MySQL 入口；成功 ACK 证据只进入监控系统。 */
 public interface TelemetryReceiptMapper extends BaseMapper<TelemetryReceipt> {
 
     @Select("SELECT * FROM biz_telemetry_receipt WHERE canonical_message_id=#{id} FOR UPDATE")
@@ -28,18 +30,53 @@ public interface TelemetryReceiptMapper extends BaseMapper<TelemetryReceipt> {
                          @Param("batchId") String batchId,
                          @Param("retransmittedAt") java.time.LocalDateTime retransmittedAt);
 
-    @Update("""
-            UPDATE biz_telemetry_receipt
-            SET platform_consumer_ack_state='OBSERVED',
-                application_ack_puback_state=#{applicationAckState},
-                application_ack_published_at=#{applicationAckPublishedAt}
-            WHERE canonical_message_id=#{id}
+    @Delete("""
+            DELETE FROM biz_telemetry_receipt
+            WHERE persisted_at < #{before}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM biz_telemetry_receipt_failure f
+                WHERE f.canonical_message_id =
+                      biz_telemetry_receipt.canonical_message_id
+              )
+            ORDER BY persisted_at, canonical_message_id
+            LIMIT #{limit}
             """)
-    int markDeliveryCompleted(@Param("id") String canonicalMessageId,
-                              @Param("applicationAckState") String applicationAckState,
-                              @Param("applicationAckPublishedAt") java.time.LocalDateTime publishedAt);
+    int deleteExpiredWithoutFailure(@Param("before") LocalDateTime before,
+                                    @Param("limit") int limit);
 
-    @Delete("DELETE FROM biz_telemetry_receipt WHERE persisted_at < #{before} LIMIT #{limit}")
-    int deleteExpired(@Param("before") java.time.LocalDateTime before,
-                      @Param("limit") int limit);
+    @Delete("""
+            DELETE FROM biz_telemetry_receipt
+            WHERE persisted_at < #{before}
+              AND EXISTS (
+                SELECT 1
+                FROM biz_telemetry_receipt_failure f
+                WHERE f.canonical_message_id =
+                      biz_telemetry_receipt.canonical_message_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM biz_telemetry_receipt_failure recent
+                WHERE recent.canonical_message_id =
+                      biz_telemetry_receipt.canonical_message_id
+                  AND recent.occurred_at >= #{before}
+              )
+            ORDER BY persisted_at, canonical_message_id
+            LIMIT #{limit}
+            """)
+    int deleteExpiredWithFailure(@Param("before") LocalDateTime before,
+                                 @Param("limit") int limit);
+
+    @Select("""
+            SELECT MIN(persisted_at)
+            FROM biz_telemetry_receipt
+            WHERE persisted_at < #{before}
+              AND NOT EXISTS (
+                SELECT 1
+                FROM biz_telemetry_receipt_failure f
+                WHERE f.canonical_message_id =
+                      biz_telemetry_receipt.canonical_message_id
+              )
+            """)
+    LocalDateTime selectOldestDeletablePersistedAt(@Param("before") LocalDateTime before);
 }
