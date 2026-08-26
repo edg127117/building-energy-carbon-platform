@@ -4,6 +4,7 @@ import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
 import com.platform.hvac.model.entity.Building;
 import com.platform.hvac.service.impl.BuildingServiceImpl;
+import com.platform.relation.RelationGovernanceGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,12 +21,14 @@ class BuildingServiceImplTest {
 
     @Mock
     private BuildingMapper mapper;
+    @Mock
+    private RelationGovernanceGuard relationGuard;
 
     private BuildingServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new BuildingServiceImpl();
+        service = new BuildingServiceImpl(relationGuard);
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
     }
 

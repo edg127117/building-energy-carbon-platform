@@ -15,6 +15,7 @@ import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.hvac.service.BizDataPointService;
 import com.platform.hvac.service.PointCodeNamingValidator;
 import com.platform.iot.quality.MySqlDataPointConfigProvider;
+import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -41,6 +42,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
     private final BizSystemGroupMapper systemGroupMapper;
     private final BizPointNamingRuleMapper namingRuleMapper;
     private final PointCodeNamingValidator namingValidator;
+    private final RelationGovernanceGuard relationGuard;
 
     /** 按设备 ID 从 MySQL 返回测点档案；设备存在性和建筑权限由 Controller 校验。 */
     @Override
@@ -68,6 +70,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
      */
     @Override
     public Result<BizDataPoint> add(BizDataPoint point) {
+        relationGuard.requireLegacyForStructuralCreate(point.getBuildingId());
         point.setPointId(null);
         validateRelationships(point);
         validateCalculationPointUnit(point);
@@ -87,6 +90,15 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
         BizDataPoint existing = this.getById(point.getPointId());
         if (existing == null) {
             throw new BusinessException(404, "测点不存在");
+        }
+        // null 在旧的部分更新契约中表示“未提供”，不会清空数据库关系字段。
+        if (point.getEquipId() != null) {
+            relationGuard.rejectChangedProjection(
+                    existing.getBuildingId(), existing.getEquipId(), point.getEquipId());
+        }
+        if (point.getSystemGroupId() != null) {
+            relationGuard.rejectChangedProjection(
+                    existing.getBuildingId(), existing.getSystemGroupId(), point.getSystemGroupId());
         }
         prepareFinalStateForUpdate(existing, point);
         validateRelationships(point);
@@ -127,6 +139,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
     /** 逻辑删除 MySQL 测点后刷新配置快照，不删除 TDengine 中的历史分钟数据。 */
     @Override
     public Result<Void> delete(String pointId) {
+        relationGuard.requireDeletable("POINT", pointId);
         this.removeById(pointId);
         configProvider.refreshAll();
         return Result.success();

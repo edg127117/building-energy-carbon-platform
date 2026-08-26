@@ -9,6 +9,8 @@ import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
 import com.platform.hvac.model.entity.Building;
 import com.platform.hvac.service.BuildingService;
+import com.platform.relation.RelationGovernanceGuard;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
@@ -23,7 +25,10 @@ import java.util.Set;
  */
 @Slf4j
 @Service
+@RequiredArgsConstructor
 public class BuildingServiceImpl extends ServiceImpl<BuildingMapper, Building> implements BuildingService {
+
+    private final RelationGovernanceGuard relationGuard;
 
     /**
      * 通过建筑主表行锁保护后续“检查重叠任务并创建任务”的事务区间。
@@ -73,6 +78,7 @@ public class BuildingServiceImpl extends ServiceImpl<BuildingMapper, Building> i
     /** 通过实体的 {@code @TableLogic} 标记建筑已删除，不物理清除关联记录。 */
     @Override
     public Result<Void> delete(String buildingId) {
+        relationGuard.requireBuildingDeletable(buildingId);
         // @TableLogic 自动将 del_flag 从 0 置为 1，不走物理删除
         this.removeById(buildingId);
         return Result.success();

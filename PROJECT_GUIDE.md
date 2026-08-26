@@ -98,7 +98,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 → 看板、趋势、下钻、能流和碳排展示
 ```
 
-当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、标准设备参数平台侧治理、部分 HVAC 指标、查询和展示。其中设备参数治理只提供配置框架、安全拒绝路径和版本证据，不代表已取得专业参数、厂家映射、真实 Excel 或现场报文验收。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
+当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、标准设备参数平台侧治理、建筑级关系版本治理、部分 HVAC 指标、查询和展示。其中设备参数和建筑关系治理只提供配置框架、安全拒绝路径和软件版本证据，不代表已取得专业参数、关系映射、真实 Excel、现场报文或现场关系验收。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
 
 V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认语义不同；平台不逐条持久化成功 ACK，成功量进入监控，失败保留异常明细。成功回执默认只作为 24 小时热证据，聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
 
@@ -130,6 +130,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | MQTT 接入 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter) |
 | 资产与设备接入 | [`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding) |
 | 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |
+| 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 当前状态 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) |
 | Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md) |
 | 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) |

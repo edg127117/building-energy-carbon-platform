@@ -16,6 +16,7 @@ import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.hvac.service.BizEquipmentService;
 import com.platform.hvac.service.EquipmentCodeAllocator;
 import com.platform.framework.exception.BusinessException;
+import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -41,6 +42,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     private final BizSystemGroupMapper systemGroupMapper;
     private final BizSpaceMapper spaceMapper;
     private final EquipmentCodeAllocator codeAllocator;
+    private final RelationGovernanceGuard relationGuard;
 
     /**
      * 在调用方传入的建筑范围内分页查询 MySQL 设备，可进一步按建筑、分类和关键字筛选。
@@ -75,6 +77,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
      */
     @Override
     public Result<BizEquipment> add(BizEquipment equipment) {
+        relationGuard.requireLegacyForStructuralCreate(equipment.getBuildingId());
         BizEquipmentType type = equipmentTypeMapper.selectById(equipment.getTypeCode());
         if (type == null || !Integer.valueOf(1).equals(type.getStatus())) {
             throw new BusinessException(400, "设备类型不存在或已停用");
@@ -108,6 +111,10 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     public Result<BizEquipment> update(BizEquipment equipment) {
         BizEquipment existing = this.getById(equipment.getEquipId());
         if (existing == null) throw new BusinessException(404, "设备不存在");
+        relationGuard.rejectChangedProjection(
+                existing.getBuildingId(), existing.getSpaceId(), equipment.getSpaceId());
+        relationGuard.rejectChangedProjection(
+                existing.getBuildingId(), existing.getSystemGroupId(), equipment.getSystemGroupId());
         // 内部身份、建筑、类型和现场编码均为受控字段，普通更新不得改变。
         equipment.setEquipCode(existing.getEquipCode());
         equipment.setBuildingId(existing.getBuildingId());
@@ -121,6 +128,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     /** 逻辑删除设备台账；测点配置和 TDengine 数据不在此方法处理。 */
     @Override
     public Result<Void> delete(String equipId) {
+        relationGuard.requireDeletable("EQUIPMENT", equipId);
         this.removeById(equipId);
         return Result.success();
     }

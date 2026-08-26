@@ -56,6 +56,8 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
             body.put("errorCode", "COLLECTION_CONFIG_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/quality-usage")) {
             body.put("errorCode", "QUALITY_POLICY_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
+            body.put("errorCode", "RELATION_FORBIDDEN");
         }
     }
 }
