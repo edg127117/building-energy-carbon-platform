@@ -1,11 +1,14 @@
 package com.platform.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.audit.SecurityAuditService;
+import com.platform.audit.TraceContext;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.stereotype.Component;
 
@@ -23,9 +26,11 @@ import java.util.Map;
 public class RestAccessDeniedHandler implements AccessDeniedHandler {
 
     private final ObjectMapper objectMapper;
+    private final SecurityAuditService securityAuditService;
 
-    public RestAccessDeniedHandler(ObjectMapper objectMapper) {
+    public RestAccessDeniedHandler(ObjectMapper objectMapper, SecurityAuditService securityAuditService) {
         this.objectMapper = objectMapper;
+        this.securityAuditService = securityAuditService;
     }
 
     /** 写入统一 403 JSON，供前端展示无权限状态而不是误清登录 Token。 */
@@ -35,7 +40,15 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
         body.put("code", 403);
         body.put("msg", "无权限访问");
         body.put("success", false);
+        body.put("traceId", TraceContext.from(request));
         addVersionedErrorCode(request, body);
+        Long operatorId = null;
+        if (SecurityContextHolder.getContext().getAuthentication() != null
+                && SecurityContextHolder.getContext().getAuthentication().getPrincipal()
+                instanceof JwtUserPrincipal principal) {
+            operatorId = principal.getId();
+        }
+        securityAuditService.recordDenied(request, operatorId, "ROLE_DENIED");
 
         response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         response.setCharacterEncoding("UTF-8");
@@ -58,6 +71,8 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
             body.put("errorCode", "QUALITY_POLICY_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
             body.put("errorCode", "RELATION_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
+            body.put("errorCode", "BACKOFFICE_OPERATION_FORBIDDEN");
         }
     }
 }

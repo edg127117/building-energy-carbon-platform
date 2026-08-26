@@ -1,6 +1,8 @@
 package com.platform.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.audit.SecurityAuditService;
+import com.platform.audit.TraceContext;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -24,9 +26,11 @@ import java.util.Map;
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
     private final ObjectMapper objectMapper;
+    private final SecurityAuditService securityAuditService;
 
-    public RestAuthenticationEntryPoint(ObjectMapper objectMapper) {
+    public RestAuthenticationEntryPoint(ObjectMapper objectMapper, SecurityAuditService securityAuditService) {
         this.objectMapper = objectMapper;
+        this.securityAuditService = securityAuditService;
     }
 
     /** 写入脱敏的 401 JSON，不把 JWT 解析失败原因和安全异常细节暴露给客户端。 */
@@ -36,7 +40,11 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         body.put("code", 401);
         body.put("msg", "未登录或登录已过期");
         body.put("success", false);
+        body.put("traceId", TraceContext.from(request));
         addVersionedErrorCode(request, body);
+        String reason = request.getAttribute("jwt_error") == null
+                ? "AUTHENTICATION_REQUIRED" : "TOKEN_INVALID";
+        securityAuditService.recordDenied(request, null, reason);
 
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding("UTF-8");
@@ -59,6 +67,8 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
             body.put("errorCode", "QUALITY_POLICY_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
             body.put("errorCode", "RELATION_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
+            body.put("errorCode", "BACKOFFICE_OPERATION_UNAUTHORIZED");
         }
     }
 }

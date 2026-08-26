@@ -1,5 +1,8 @@
 package com.platform.framework.exception;
 
+import com.platform.audit.SecurityAuditService;
+import com.platform.audit.TraceContext;
+import com.platform.security.JwtUserPrincipal;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -7,6 +10,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.validation.BindException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
@@ -28,6 +32,11 @@ import java.util.Map;
 public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private final SecurityAuditService securityAuditService;
+
+    public GlobalExceptionHandler(SecurityAuditService securityAuditService) {
+        this.securityAuditService = securityAuditService;
+    }
 
     /**
      * 把 Bean Validation、绑定和参数类型错误统一转换为 400。
@@ -45,6 +54,8 @@ public class GlobalExceptionHandler {
         response.put("code", 400);
         response.put("msg", "您输入的格式不正确，请检查后重试");
         response.put("success", false);
+        addTraceId(response, request);
+        securityAuditService.recordDenied(request, null, "AUTHENTICATION_REQUIRED");
         addVersionedErrorCode(response, request,
                 "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED",
                 "COLLECTION_CONFIG_VALIDATION_FAILED", "QUALITY_POLICY_VALIDATION_FAILED",
@@ -56,14 +67,21 @@ public class GlobalExceptionHandler {
      * 401/403 供前端区分重新登录和权限不足，404/409 表示资源或状态冲突，503 表示依赖暂不可用。
      */
     @ExceptionHandler(BusinessException.class)
-    public ResponseEntity<Map<String, Object>> handleBusinessException(BusinessException e) {
+    public ResponseEntity<Map<String, Object>> handleBusinessException(
+            BusinessException e, HttpServletRequest request) {
         log.info("业务逻辑阻断: {}", e.getMessage());
         Map<String, Object> response = new HashMap<>();
         response.put("code", e.getCode());
         response.put("msg", e.getMessage());
         response.put("success", false);
+        addTraceId(response, request);
         if (e.getErrorCode() != null) {
             response.put("errorCode", e.getErrorCode());
+        }
+        if (e.getCode() == 403) {
+            Long operatorId = currentUserId();
+            securityAuditService.recordDenied(request, operatorId,
+                    e.getErrorCode() == null ? "BUILDING_SCOPE_DENIED" : e.getErrorCode());
         }
         HttpStatus status = switch (e.getCode()) {
             case 401 -> HttpStatus.UNAUTHORIZED;
@@ -88,6 +106,7 @@ public class GlobalExceptionHandler {
         response.put("code", 401);
         response.put("msg", "未登录或登录已过期");
         response.put("success", false);
+        addTraceId(response, request);
         addVersionedErrorCode(response, request,
                 "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED",
                 "COLLECTION_CONFIG_UNAUTHORIZED", "QUALITY_POLICY_UNAUTHORIZED",
@@ -104,6 +123,8 @@ public class GlobalExceptionHandler {
         response.put("code", 403);
         response.put("msg", "无权限访问");
         response.put("success", false);
+        addTraceId(response, request);
+        securityAuditService.recordDenied(request, currentUserId(), "ROLE_DENIED");
         addVersionedErrorCode(response, request,
                 "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN",
                 "COLLECTION_CONFIG_FORBIDDEN", "QUALITY_POLICY_FORBIDDEN",
@@ -130,6 +151,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", qualityUsageErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
             response.put("errorCode", relationErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
+            response.put("errorCode", "BACKOFFICE_REQUEST_CONFLICT");
         }
     }
 
@@ -141,12 +164,14 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(NoResourceFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
-    public Map<String, Object> handleNoResourceFoundException(NoResourceFoundException e) {
+    public Map<String, Object> handleNoResourceFoundException(
+            NoResourceFoundException e, HttpServletRequest request) {
         log.info("请求路径不存在: method={}, path={}", e.getHttpMethod(), e.getResourcePath());
         Map<String, Object> response = new HashMap<>();
         response.put("code", 404);
         response.put("msg", "请求路径不存在");
         response.put("success", false);
+        addTraceId(response, request);
         return response;
     }
 
@@ -156,13 +181,27 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(Exception.class)
     @ResponseStatus(HttpStatus.INTERNAL_SERVER_ERROR)
-    public Map<String, Object> handleAllException(Exception e) {
+    public Map<String, Object> handleAllException(Exception e, HttpServletRequest request) {
         log.error("系统发生未知致命异常，已拦截兜底: ", e);
         Map<String, Object> response = new HashMap<>();
         response.put("code", 500);
         // 不暴露 SQL 或代码异常给前端，统一回复系统繁忙
         response.put("msg", "系统当前线路繁忙，请稍后再试");
         response.put("success", false);
+        addTraceId(response, request);
         return response;
+    }
+
+    private static void addTraceId(Map<String, Object> response, HttpServletRequest request) {
+        response.put("traceId", TraceContext.from(request));
+    }
+
+    private static Long currentUserId() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null
+                && authentication.getPrincipal() instanceof JwtUserPrincipal principal) {
+            return principal.getId();
+        }
+        return null;
     }
 }
