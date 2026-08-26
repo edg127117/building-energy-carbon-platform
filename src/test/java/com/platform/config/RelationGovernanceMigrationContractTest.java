@@ -40,6 +40,8 @@ class RelationGovernanceMigrationContractTest {
                 table -> assertThat(sql).contains("CREATE TABLE " + table));
         assertThat(Pattern.compile("(?m)^CREATE TABLE\\s+").matcher(sql)
                 .results().count()).isEqualTo(RELATION_TABLES.size());
+        assertThat(Pattern.compile("COLLATE=utf8mb4_0900_ai_ci", Pattern.CASE_INSENSITIVE)
+                .matcher(sql).results().count()).isEqualTo(RELATION_TABLES.size());
         assertThat(List.of(
                 "DRAFT", "PENDING_REVIEW", "APPROVED", "EFFECTIVE", "SUPERSEDED", "REJECTED", "WITHDRAWN",
                 "BUILDING", "CAMPUS", "LEGACY", "GOVERNED",
