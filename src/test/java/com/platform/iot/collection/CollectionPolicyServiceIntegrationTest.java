@@ -1,5 +1,6 @@
 package com.platform.iot.collection;
 
+import com.platform.audit.BackendDuty;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.collection.api.CollectionPolicyContracts.AliasCreateRequest;
 import com.platform.iot.collection.api.CollectionPolicyContracts.AliasView;
@@ -21,8 +22,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -45,6 +49,9 @@ class CollectionPolicyServiceIntegrationTest {
     void grantBuildingOne() {
         jdbcTemplate.update("INSERT INTO sys_user_building(user_id,building_id) VALUES (?,?)",
                 ENERGY_USER, "BLD001");
+        grantDuty(ENERGY_USER, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grantDuty(ADMIN_USER, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grantDuty(ADMIN_USER, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
     }
 
     @Test
@@ -115,24 +122,31 @@ class CollectionPolicyServiceIntegrationTest {
                 sourceRequest("MQTT_BLD001_TEST_C"));
         AliasView alias = service.createAlias(ADMIN_USER, ADMIN, source.sourceId(),
                 aliasRequest(15, 30));
-        service.enableSource(ADMIN_USER, ADMIN, source.sourceId(), "管理员直接首启");
+        approve(service.submitSource(ADMIN_USER, ADMIN, source.sourceId(), "管理员提交首启").requestId(),
+                "研发自审首启");
         PolicyVersionView v1 = service.listVersions(ADMIN_USER, ADMIN, alias.policyId()).getFirst();
 
         PolicyVersionView draftV2 = service.createVersion(ADMIN_USER, ADMIN, alias.policyId(),
                 new PolicyVersionCreateRequest(policy(300, 10), "调整采集预期"));
-        PolicyVersionView v2 = service.publishVersion(ADMIN_USER, ADMIN, alias.policyId(),
-                draftV2.versionId(), "发布第二版");
+        approve(service.submitVersion(ADMIN_USER, ADMIN, alias.policyId(), draftV2.versionId(),
+                "提交第二版").requestId(), "研发自审第二版");
+        PolicyVersionView v2 = service.listVersions(ADMIN_USER, ADMIN, alias.policyId()).getFirst();
         assertThat(v2.versionNo()).isEqualTo(2);
 
         PolicyVersionView rollbackDraft = service.copyVersion(ADMIN_USER, ADMIN, alias.policyId(),
                 new CopyVersionRequest(v1.versionId(), "回滚到首版参数"));
-        PolicyVersionView v3 = service.publishVersion(ADMIN_USER, ADMIN, alias.policyId(),
-                rollbackDraft.versionId(), "发布回滚版本");
+        approve(service.submitVersion(ADMIN_USER, ADMIN, alias.policyId(), rollbackDraft.versionId(),
+                "提交回滚版本").requestId(), "研发自审回滚版本");
+        PolicyVersionView v3 = service.listVersions(ADMIN_USER, ADMIN, alias.policyId()).getFirst();
         assertThat(v3.versionNo()).isEqualTo(3);
         assertThat(v3.copiedFromVersionId()).isEqualTo(v1.versionId());
         assertThat(service.listVersions(ADMIN_USER, ADMIN, alias.policyId()))
                 .filteredOn(version -> version.versionId().equals(v1.versionId()))
                 .singleElement().extracting(PolicyVersionView::status).isEqualTo("RETIRED");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM biz_collection_config_audit_log
+                WHERE action_type='SELF_APPROVAL_DEV_MODE' AND operator_id=?
+                """, Integer.class, ADMIN_USER)).isEqualTo(3);
     }
 
     @Test
@@ -141,23 +155,44 @@ class CollectionPolicyServiceIntegrationTest {
                 sourceRequest("MQTT_BLD001_TEST_D"));
         AliasView alias = service.createAlias(ADMIN_USER, ADMIN, source.sourceId(),
                 aliasRequest(45, 5));
-        service.enableSource(ADMIN_USER, ADMIN, source.sourceId(), "首启");
+        approve(service.submitSource(ADMIN_USER, ADMIN, source.sourceId(), "提交首启").requestId(),
+                "研发自审首启");
         runtimeStateService.refreshAll();
         assertThat(runtimeStateService.snapshot().aliases()).containsKey(alias.aliasId());
 
-        service.disablePolicy(ADMIN_USER, ADMIN, alias.policyId(), "暂不期待周期上报");
+        PolicyVersionView disableDraft = service.createPolicyDisableDraft(
+                ADMIN_USER, ADMIN, alias.policyId(), "暂不期待周期上报");
+        assertThat(disableDraft.status()).isEqualTo("DRAFT");
+        assertThat(service.listVersions(ADMIN_USER, ADMIN, alias.policyId()).getFirst().status())
+                .isEqualTo("DRAFT");
+        approve(service.submitVersion(ADMIN_USER, ADMIN, alias.policyId(), disableDraft.versionId(),
+                "提交停用版本").requestId(), "研发自审停用版本");
         runtimeStateService.refreshAll();
         assertThat(pointConfigProvider.find(new PointAliasKey(
                 "BLD001", source.sourceCode(), alias.sourcePointCode()))).isPresent();
 
-        DataSourceView disabled = service.disableSource(ADMIN_USER, ADMIN, source.sourceId(), "计划维护");
+        var disableSourceReview = service.submitSourceDisable(
+                ADMIN_USER, ADMIN, source.sourceId(), "计划维护");
+        assertThat(service.sourceDetail(ADMIN_USER, ADMIN, source.sourceId()).status()).isEqualTo("ENABLED");
+        approve(disableSourceReview.requestId(), "研发自审停用来源");
+        DataSourceView disabled = service.sourceDetail(ADMIN_USER, ADMIN, source.sourceId());
         assertThat(disabled.status()).isEqualTo("DISABLED");
         runtimeStateService.refreshAll();
         assertThat(runtimeStateService.snapshot().aliases()).doesNotContainKey(alias.aliasId());
         assertThat(service.listVersions(ADMIN_USER, ADMIN, alias.policyId()))
                 .anyMatch(version -> version.status().equals("ACTIVE"));
 
-        service.enableSource(ADMIN_USER, ADMIN, source.sourceId(), "维护结束");
+        approve(service.submitSourceEnable(ADMIN_USER, ADMIN, source.sourceId(), "维护结束").requestId(),
+                "研发自审重新启用来源");
+        runtimeStateService.refreshAll();
+        assertThat(runtimeStateService.snapshot().aliases()).containsKey(alias.aliasId());
+
+        approve(service.submitAliasDisable(ADMIN_USER, ADMIN, source.sourceId(), alias.aliasId(),
+                "停用单个别名").requestId(), "研发自审停用别名");
+        runtimeStateService.refreshAll();
+        assertThat(runtimeStateService.snapshot().aliases()).doesNotContainKey(alias.aliasId());
+        approve(service.submitAliasEnable(ADMIN_USER, ADMIN, source.sourceId(), alias.aliasId(),
+                "恢复单个别名").requestId(), "研发自审恢复别名");
         runtimeStateService.refreshAll();
         assertThat(runtimeStateService.snapshot().aliases()).containsKey(alias.aliasId());
     }
@@ -176,6 +211,44 @@ class CollectionPolicyServiceIntegrationTest {
         var withdrawn = service.withdrawReview(ENERGY_USER, ENERGY, second.requestId());
         assertThat(withdrawn.status()).isEqualTo("WITHDRAWN");
         assertThat(service.sourceDetail(ENERGY_USER, ENERGY, source.sourceId()).status()).isEqualTo("DRAFT");
+    }
+
+    @Test
+    void directDraftPublicationAndMissingDutiesAreRejected() {
+        DataSourceView source = service.createSource(ADMIN_USER, ADMIN,
+                sourceRequest("MQTT_BLD001_REVIEW_ONLY"));
+        AliasView alias = service.createAlias(ADMIN_USER, ADMIN, source.sourceId(),
+                aliasRequest(70, 9));
+
+        assertThatThrownBy(() -> service.submitSourceEnable(
+                ADMIN_USER, ADMIN, source.sourceId(), "绕过审核首启"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode())
+                                .isEqualTo("BACKOFFICE_REVIEW_REQUIRED"));
+        assertThatThrownBy(() -> service.publishVersion(
+                ADMIN_USER, ADMIN, alias.policyId(), alias.draftVersionId(), "绕过审核发布"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode())
+                                .isEqualTo("BACKOFFICE_REVIEW_REQUIRED"));
+
+        jdbcTemplate.update("DELETE FROM sys_user_backend_duty WHERE user_id=? AND duty_key=?",
+                ADMIN_USER, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER.name());
+        assertThatThrownBy(() -> service.submitSource(
+                ADMIN_USER, ADMIN, source.sourceId(), "无职责提交"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode())
+                                .isEqualTo("BACKOFFICE_DUTY_REQUIRED"));
+
+        grantDuty(ADMIN_USER, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        var submitted = service.submitSource(ADMIN_USER, ADMIN, source.sourceId(), "提交待审");
+        assertThat(submitted.allowedActions()).containsExactly("APPROVE", "REJECT", "WITHDRAW");
+        jdbcTemplate.update("DELETE FROM sys_user_backend_duty WHERE user_id=? AND duty_key=?",
+                ADMIN_USER, BackendDuty.BACKOFFICE_CHANGE_REVIEWER.name());
+        assertThatThrownBy(() -> service.approveReview(
+                ADMIN_USER, ADMIN, submitted.requestId(), "无职责审核"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode())
+                                .isEqualTo("BACKOFFICE_DUTY_REQUIRED"));
     }
 
     @Test
@@ -209,5 +282,19 @@ class CollectionPolicyServiceIntegrationTest {
     private InitialPolicyRequest policy(int interval, int delay) {
         return new InitialPolicyRequest(interval, delay, "FIXED_DAYS", 45,
                 "LONG_TERM", null, true);
+    }
+
+    private void approve(String requestId, String comment) {
+        service.approveReview(ADMIN_USER, ADMIN, requestId, comment);
+    }
+
+    private void grantDuty(long userId, BackendDuty duty) {
+        LocalDateTime now = LocalDateTime.now().minusMinutes(1);
+        jdbcTemplate.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by,created_at)
+                VALUES (?,?,?,'ACTIVE',?,?,?)
+                """, UUID.randomUUID().toString().replace("-", ""), userId, duty.name(),
+                Timestamp.valueOf(now), ADMIN_USER, Timestamp.valueOf(now));
     }
 }

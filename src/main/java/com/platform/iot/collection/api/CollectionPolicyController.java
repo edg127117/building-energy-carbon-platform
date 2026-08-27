@@ -83,7 +83,7 @@ public class CollectionPolicyController {
     }
 
     @PostMapping("/v1/data-sources/{sourceId}/submit")
-    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<ReviewView> submitSource(Authentication authentication,
                                            @PathVariable String sourceId,
                                            @Valid @RequestBody SubmitRequest request) {
@@ -93,19 +93,19 @@ public class CollectionPolicyController {
 
     @PostMapping("/v1/data-sources/{sourceId}/enable")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
-    public Result<DataSourceView> enableSource(Authentication authentication,
-                                               @PathVariable String sourceId,
-                                               @Valid @RequestBody ReasonRequest request) {
-        return Result.success(service.enableSource(SecurityUser.userId(authentication),
+    public Result<ReviewView> enableSource(Authentication authentication,
+                                           @PathVariable String sourceId,
+                                           @Valid @RequestBody ReasonRequest request) {
+        return Result.success(service.submitSourceEnable(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), sourceId, request.reason()));
     }
 
     @PostMapping("/v1/data-sources/{sourceId}/disable")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
-    public Result<DataSourceView> disableSource(Authentication authentication,
-                                                @PathVariable String sourceId,
-                                                @Valid @RequestBody ReasonRequest request) {
-        return Result.success(service.disableSource(SecurityUser.userId(authentication),
+    public Result<ReviewView> disableSource(Authentication authentication,
+                                            @PathVariable String sourceId,
+                                            @Valid @RequestBody ReasonRequest request) {
+        return Result.success(service.submitSourceDisable(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), sourceId, request.reason()));
     }
 
@@ -140,7 +140,7 @@ public class CollectionPolicyController {
     }
 
     @PostMapping("/v1/data-sources/{sourceId}/aliases/{aliasId}/submit")
-    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<ReviewView> submitAlias(Authentication authentication,
                                           @PathVariable String sourceId,
                                           @PathVariable String aliasId,
@@ -151,21 +151,21 @@ public class CollectionPolicyController {
 
     @PostMapping("/v1/data-sources/{sourceId}/aliases/{aliasId}/enable")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
-    public Result<AliasView> enableAlias(Authentication authentication,
-                                         @PathVariable String sourceId,
-                                         @PathVariable String aliasId,
-                                         @Valid @RequestBody ReasonRequest request) {
-        return Result.success(service.enableAlias(SecurityUser.userId(authentication),
+    public Result<ReviewView> enableAlias(Authentication authentication,
+                                          @PathVariable String sourceId,
+                                          @PathVariable String aliasId,
+                                          @Valid @RequestBody ReasonRequest request) {
+        return Result.success(service.submitAliasEnable(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), sourceId, aliasId, request.reason()));
     }
 
     @PostMapping("/v1/data-sources/{sourceId}/aliases/{aliasId}/disable")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
-    public Result<AliasView> disableAlias(Authentication authentication,
-                                          @PathVariable String sourceId,
-                                          @PathVariable String aliasId,
-                                          @Valid @RequestBody ReasonRequest request) {
-        return Result.success(service.disableAlias(SecurityUser.userId(authentication),
+    public Result<ReviewView> disableAlias(Authentication authentication,
+                                           @PathVariable String sourceId,
+                                           @PathVariable String aliasId,
+                                           @Valid @RequestBody ReasonRequest request) {
+        return Result.success(service.submitAliasDisable(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), sourceId, aliasId, request.reason()));
     }
 
@@ -222,7 +222,7 @@ public class CollectionPolicyController {
     }
 
     @PostMapping("/v1/collection-policies/{policyId}/versions/{versionId}/submit")
-    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<ReviewView> submitVersion(Authentication authentication,
                                             @PathVariable String policyId,
                                             @PathVariable String versionId,
@@ -261,7 +261,7 @@ public class CollectionPolicyController {
     public Result<PolicyVersionView> disablePolicy(Authentication authentication,
                                                    @PathVariable String policyId,
                                                    @Valid @RequestBody ReasonRequest request) {
-        return Result.success(service.disablePolicy(SecurityUser.userId(authentication),
+        return Result.success(service.createPolicyDisableDraft(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), policyId, request.reason()));
     }
 
@@ -310,7 +310,7 @@ public class CollectionPolicyController {
     }
 
     @PostMapping("/v1/collection-review-requests/{requestId}/withdraw")
-    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<ReviewView> withdrawReview(Authentication authentication, @PathVariable String requestId) {
         return Result.success(service.withdrawReview(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), requestId));

@@ -550,7 +550,8 @@ CREATE TABLE biz_collection_review_request (
   CONSTRAINT uk_collection_review_pending_target
     UNIQUE (target_type, target_id, pending_marker),
   CONSTRAINT chk_collection_review_target_type
-    CHECK (target_type IN ('SOURCE_ACTIVATION', 'ALIAS_ACTIVATION', 'POLICY_VERSION')),
+    CHECK (target_type IN ('SOURCE_ACTIVATION', 'SOURCE_DEACTIVATION',
+                           'ALIAS_ACTIVATION', 'ALIAS_DEACTIVATION', 'POLICY_VERSION')),
   CONSTRAINT chk_collection_review_status
     CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN')),
   CONSTRAINT chk_collection_review_revision CHECK (target_config_revision >= 0),

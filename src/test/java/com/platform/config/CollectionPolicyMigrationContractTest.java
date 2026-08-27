@@ -11,6 +11,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CollectionPolicyMigrationContractTest {
     private static final Path MIGRATION = Path.of(
             "src/env/init/V17__mysql_collection_policy_governance.sql");
+    private static final Path REVIEW_CLOSURE_MIGRATION = Path.of(
+            "src/env/init/V27__close_collection_direct_publication.sql");
 
     @Test
     void migrationContainsGovernanceModelAndFailClosedChecksWithoutCascadeDelete() throws Exception {
@@ -30,5 +32,18 @@ class CollectionPolicyMigrationContractTest {
         assertThat(sql).doesNotContain("expected_interval_seconds` INT NOT NULL DEFAULT 60");
         assertThat(sql).contains("1, 'ACTIVE', 1, 60, 30, 'DEVICE_EVENT_TIME'",
                 "'FIXED_DAYS', 90, 'LONG_TERM', NULL");
+    }
+
+    @Test
+    void reviewClosureMigrationAllowsOnlyExplicitCollectionReviewTargets() throws Exception {
+        String sql = Files.readString(REVIEW_CLOSURE_MIGRATION, StandardCharsets.UTF_8);
+        assertThat(sql).contains(
+                "DROP CHECK `chk_collection_review_target_type`",
+                "'SOURCE_ACTIVATION'",
+                "'SOURCE_DEACTIVATION'",
+                "'ALIAS_ACTIVATION'",
+                "'ALIAS_DEACTIVATION'",
+                "'POLICY_VERSION'");
+        assertThat(sql).doesNotContain("sys_sensitive_change_request");
     }
 }

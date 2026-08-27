@@ -53,7 +53,7 @@ public final class CollectionPolicyContracts {
             @NotBlank @Size(max = 500) String changeReason) {}
 
     public record SubmitRequest(@NotBlank @Size(max = 500) String comment) {}
-    public record ReviewRequest(@Size(max = 500) String comment) {}
+    public record ReviewRequest(@NotBlank @Size(max = 500) String comment) {}
     public record ReasonRequest(@NotBlank @Size(max = 500) String reason) {}
     public record CopyVersionRequest(
             @NotBlank String sourceVersionId,
