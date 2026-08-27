@@ -9,6 +9,7 @@ public final class AuditGovernanceErrors {
     public static final String SELF_APPROVAL_DENIED = "BACKOFFICE_SELF_APPROVAL_DENIED";
     public static final String REQUEST_CONFLICT = "BACKOFFICE_REQUEST_CONFLICT";
     public static final String REQUEST_HASH_MISMATCH = "BACKOFFICE_REQUEST_HASH_MISMATCH";
+    public static final String REVIEW_REQUIRED = "BACKOFFICE_REVIEW_REQUIRED";
 
     private AuditGovernanceErrors() {
     }
@@ -19,5 +20,10 @@ public final class AuditGovernanceErrors {
 
     public static BusinessException conflict(String errorCode, String message) {
         return new BusinessException(409, errorCode, message);
+    }
+
+    /** 旧直改入口关闭后返回稳定机器码，调用方必须改用通用敏感变更申请。 */
+    public static BusinessException reviewRequired() {
+        return conflict(REVIEW_REQUIRED, "该敏感操作必须通过后台变更申请审核后执行");
     }
 }

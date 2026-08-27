@@ -2,11 +2,15 @@ package com.platform;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.audit.BackendDuty;
+import com.platform.audit.sensitive.SensitiveChangeService;
+import com.platform.support.TestUserFixture;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -25,23 +29,18 @@ class PersonnelLifecycleTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private TestUserFixture userFixture;
+    @Autowired private SensitiveChangeService sensitiveChangeService;
 
     @Test
     void should_logically_delete_restore_and_keep_deleted_username_reserved() throws Exception {
         String adminToken = login("admin", "123456");
-        MvcResult created = mockMvc.perform(post("/system/users")
-                        .header("Authorization", bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"lifecycle_user","password":"123456",
-                                 "roleKeys":["ENERGY_MANAGER"],"buildingIds":["BLD002"]}
-                                """))
-                .andExpect(status().isOk()).andReturn();
-        long userId = json(created).path("data").path("id").asLong();
-
-        mockMvc.perform(delete("/system/users/{id}", userId)
-                        .header("Authorization", bearer(adminToken)))
-                .andExpect(status().isOk());
+        long userId = userFixture.createActiveUser(
+                "lifecycle_user", "123456", "ENERGY_MANAGER", "BLD002");
+        grantDuty(BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grantDuty(BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
+        execute("DELETE_USER_ACCOUNT", userId, "delete-lifecycle-user");
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -63,14 +62,34 @@ class PersonnelLifecycleTest {
                         .content("{\"username\":\"lifecycle_user\",\"password\":\"123456\"}"))
                 .andExpect(status().isBadRequest());
 
-        mockMvc.perform(put("/system/users/{id}/restore", userId)
-                        .header("Authorization", bearer(adminToken)))
-                .andExpect(status().isOk());
+        execute("RESTORE_USER_ACCOUNT", userId, "restore-lifecycle-user");
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"lifecycle_user\",\"password\":\"123456\"}"))
                 .andExpect(status().isForbidden());
+    }
+
+    private void execute(String operationCode, long userId, String idempotencyKey) {
+        var draft = sensitiveChangeService.createDraft(1L, operationCode,
+                objectMapper.createObjectNode().put("userId", userId), idempotencyKey);
+        sensitiveChangeService.submit(1L, draft.requestId());
+        sensitiveChangeService.approve(1L, draft.requestId(), "研发单人完整审批");
+        sensitiveChangeService.execute(1L, draft.requestId());
+    }
+
+    private void grantDuty(BackendDuty duty) {
+        Integer count = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM sys_user_backend_duty
+                WHERE user_id=1 AND duty_key=? AND status='ACTIVE'
+                """, Integer.class, duty.name());
+        if (count != null && count == 0) {
+            jdbcTemplate.update("""
+                    INSERT INTO sys_user_backend_duty
+                    (assignment_id,user_id,duty_key,status,effective_at,created_by,created_at)
+                    VALUES (REPLACE(CAST(RANDOM_UUID() AS VARCHAR),'-',''),1,?,'ACTIVE',CURRENT_TIMESTAMP,1,CURRENT_TIMESTAMP)
+                    """, duty.name());
+        }
     }
 
     private String login(String username, String password) throws Exception {

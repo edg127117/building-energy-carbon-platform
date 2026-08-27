@@ -9,7 +9,8 @@ import java.util.List;
 /**
  * 用户申请建筑查看权限的业务服务。
  *
- * <p>普通业务角色负责提交、查看和取消自己的申请；平台管理员通过管理端接口执行审批。
+ * <p>普通业务角色负责提交、查看和取消自己的申请；具备平台管理员角色和后台审核职责的人员
+ * 通过管理端接口执行审批。
  * 审批通过会创建正式用户建筑授权，审批和授权写入在同一事务中完成。</p>
  */
 public interface BuildingAccessService {
@@ -23,8 +24,8 @@ public interface BuildingAccessService {
     void cancel(Long userId, Long requestId);
     /** 平台管理员按可选状态查询全部申请。 */
     List<BuildingAccessDtos.RequestView> listAll(String status);
-    /** 审批通过并授予建筑权限。 */
+    /** 具备后台审核职责时审批通过并授予建筑权限。 */
     void approve(Long reviewerId, Long requestId, String comment);
-    /** 拒绝待审核申请，不产生建筑授权。 */
+    /** 具备后台审核职责时拒绝待审核申请，不产生建筑授权。 */
     void reject(Long reviewerId, Long requestId, String comment);
 }

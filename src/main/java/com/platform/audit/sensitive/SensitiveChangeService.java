@@ -143,7 +143,7 @@ public class SensitiveChangeService {
         return require(requestId, false);
     }
 
-    public SensitiveChangeRecord execute(long reviewerId, String requestId) {
+    public SensitiveChangeExecutionResult execute(long reviewerId, String requestId) {
         dutyService.requireDuty(reviewerId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         try {
             return Objects.requireNonNull(transactionTemplate.execute(status -> executeApproved(reviewerId, requestId)));
@@ -162,7 +162,7 @@ public class SensitiveChangeService {
         return value;
     }
 
-    private SensitiveChangeRecord executeApproved(long reviewerId, String requestId) {
+    private SensitiveChangeExecutionResult executeApproved(long reviewerId, String requestId) {
         SensitiveChangeRecord value = require(requestId, true);
         requireStatus(value, SensitiveChangeStatus.APPROVED);
         if (!Objects.equals(value.reviewerId(), reviewerId)) {
@@ -171,16 +171,17 @@ public class SensitiveChangeService {
         NormalizedSensitiveCommand normalized = verifyHash(value);
         SensitiveOperationHandler handler = registry.require(value.operationCode());
         try {
-            handler.execute(normalized, new SensitiveOperationContext(value.requestId(), value.submittedBy(),
-                    reviewerId, TraceContext.current()));
+            SensitiveOperationResult operationResult = handler.execute(normalized,
+                    new SensitiveOperationContext(value.requestId(), value.submittedBy(),
+                            reviewerId, TraceContext.current()));
+            LocalDateTime now = LocalDateTime.now();
+            changed(repository.markExecuted(requestId, now, TraceContext.current()));
+            append(value, reviewerId, "EXECUTE_SENSITIVE_CHANGE", "SUCCESS", null,
+                    value.selfApprovalDevMode(), "status=APPROVED", "status=EXECUTED");
+            return new SensitiveChangeExecutionResult(require(requestId, false), operationResult);
         } catch (RuntimeException failure) {
             throw new HandlerExecutionException(failure);
         }
-        LocalDateTime now = LocalDateTime.now();
-        changed(repository.markExecuted(requestId, now, TraceContext.current()));
-        append(value, reviewerId, "EXECUTE_SENSITIVE_CHANGE", "SUCCESS", null,
-                value.selfApprovalDevMode(), "status=APPROVED", "status=EXECUTED");
-        return require(requestId, false);
     }
 
     private void markExecutionFailed(long reviewerId, String requestId) {

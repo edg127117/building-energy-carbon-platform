@@ -1,5 +1,6 @@
 package com.platform.system.controller;
 
+import com.platform.audit.AuditGovernanceErrors;
 import com.platform.framework.common.Result;
 import com.platform.system.model.dto.RoleAdminDtos;
 import com.platform.system.service.SysRoleAdminService;
@@ -26,6 +27,6 @@ public class SysRoleAdminController {
     @GetMapping("/{id}") public Result<RoleAdminDtos.RoleView> detail(@PathVariable Long id) { return Result.success(service.detail(id)); }
     /** 查询角色已经关联的菜单 ID。 */
     @GetMapping("/{id}/menus") public Result<List<Long>> menus(@PathVariable Long id) { return Result.success(service.menuIds(id)); }
-    /** 全量替换角色菜单并使受影响用户的菜单缓存失效。 */
-    @PutMapping("/{id}/menus") public Result<Void> replace(@PathVariable Long id, @RequestBody RoleAdminDtos.MenuAssignmentRequest r) { service.replaceMenus(id, r.menuIds()); return Result.success(); }
+    /** 旧直改入口保留稳定拒绝，角色菜单必须改走通用敏感变更申请。 */
+    @PutMapping("/{id}/menus") public Result<Void> replace(@PathVariable Long id, @RequestBody RoleAdminDtos.MenuAssignmentRequest r) { throw AuditGovernanceErrors.reviewRequired(); }
 }

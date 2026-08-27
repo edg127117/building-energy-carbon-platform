@@ -16,8 +16,10 @@ public interface SysUserAdminService {
     IPage<UserAdminDtos.UserView> page(int page, int size, String keyword, Integer status, boolean includeDeleted);
     /** 查询人员详情，允许查看逻辑删除账号。 */
     UserAdminDtos.UserView detail(Long id);
-    /** 创建人员并在一个事务内分配角色和建筑。 */
-    UserAdminDtos.UserView create(UserAdminDtos.CreateRequest request);
+    /** 审批执行时原子创建账号、角色和建筑授权，并签发一次性激活令牌。 */
+    PasswordSetupTokenService.IssuedToken openAccount(
+            UserAdminDtos.OpenAccountRequest request, String sourceRequestId, long operatorId,
+            boolean selfApprovalDevMode);
     /** 修改昵称、手机等非安全资料。 */
     UserAdminDtos.UserView update(Long id, UserAdminDtos.UpdateRequest request);
     /** 逻辑删除人员，同时撤销角色、建筑、Token 和相关缓存。 */
@@ -26,8 +28,6 @@ public interface SysUserAdminService {
     UserAdminDtos.UserView restore(Long id);
     /** 启用或禁用账号；禁止管理员禁用自己或系统最后一个平台管理员。 */
     void updateStatus(Long currentUserId, Long id, Integer status);
-    /** 重置密码，并使用户当前 Token 失效。 */
-    void resetPassword(Long id, String password);
     /** 全量替换正式角色，并保护当前管理员及最后一个平台管理员。 */
     void replaceRoles(Long currentUserId, Long id, List<String> roleKeys);
     /** 全量替换用户建筑范围。 */

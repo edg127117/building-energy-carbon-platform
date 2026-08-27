@@ -1,5 +1,6 @@
 package com.platform.relation.api;
 
+import com.platform.support.TestUserFixture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeAll;
@@ -31,6 +32,7 @@ class RelationGovernanceApiContractTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private TestUserFixture userFixture;
 
     private String adminToken;
     private String ownerToken;
@@ -137,19 +139,7 @@ class RelationGovernanceApiContractTest {
     }
 
     private String createAndLogin(String username, String role) throws Exception {
-        mockMvc.perform(post("/system/users")
-                        .header("Authorization", bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "username":"%s",
-                                  "password":"123456",
-                                  "nickname":"关系治理 API 测试",
-                                  "roleKeys":["%s"],
-                                  "buildingIds":["%s"]
-                                }
-                                """.formatted(username, role, BUILDING_ID)))
-                .andExpect(status().isOk());
+        userFixture.createActiveUser(username, "123456", role, BUILDING_ID);
         return login(username, "123456");
     }
 

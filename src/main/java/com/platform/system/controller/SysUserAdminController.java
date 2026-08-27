@@ -1,14 +1,14 @@
 package com.platform.system.controller;
 
+import com.platform.audit.AuditGovernanceErrors;
 import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.platform.framework.common.Result;
-import com.platform.security.JwtUserPrincipal;
 import com.platform.system.model.dto.UserAdminDtos;
 import com.platform.system.service.SysUserAdminService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -34,27 +34,23 @@ public class SysUserAdminController {
 
     /** 查询单个人员及其角色、建筑范围。 */
     @GetMapping("/{id}") public Result<UserAdminDtos.UserView> detail(@PathVariable Long id) { return Result.success(service.detail(id)); }
-    /** 创建人员；角色和建筑与账号在同一事务中写入。 */
-    @PostMapping public Result<UserAdminDtos.UserView> create(@Valid @RequestBody UserAdminDtos.CreateRequest r) { return Result.success(service.create(r)); }
+    /** 旧直改入口保留稳定拒绝，账号、角色和建筑必须作为一个开通申请包审核。 */
+    @PostMapping public Result<UserAdminDtos.UserView> create(@RequestBody JsonNode ignored) { throw AuditGovernanceErrors.reviewRequired(); }
     /** 修改昵称和手机等基础资料。 */
     @PutMapping("/{id}") public Result<UserAdminDtos.UserView> update(@PathVariable Long id, @Valid @RequestBody UserAdminDtos.UpdateRequest r) { return Result.success(service.update(id, r)); }
-    /** 逻辑删除人员；当前管理员不能删除自己。 */
-    @DeleteMapping("/{id}") public Result<Void> delete(@PathVariable Long id, Authentication a) { service.delete(currentId(a), id); return Result.success(); }
-    /** 恢复逻辑删除账号，恢复后需重新分配角色和建筑。 */
-    @PutMapping("/{id}/restore") public Result<UserAdminDtos.UserView> restore(@PathVariable Long id) { return Result.success(service.restore(id)); }
-    /** 启用或禁用账号，禁用会撤销当前登录 Token。 */
-    @PutMapping("/{id}/status") public Result<Void> status(@PathVariable Long id, @Valid @RequestBody UserAdminDtos.StatusRequest r, Authentication a) { service.updateStatus(currentId(a), id, r.status()); return Result.success(); }
-    /** 重置用户密码并撤销其当前 Token。 */
-    @PutMapping("/{id}/password") public Result<Void> password(@PathVariable Long id, @Valid @RequestBody UserAdminDtos.PasswordRequest r) { service.resetPassword(id, r.password()); return Result.success(); }
-    /** 全量替换正式角色；角色变化后用户需要重新登录。 */
-    @PutMapping("/{id}/roles") public Result<Void> roles(@PathVariable Long id, @Valid @RequestBody UserAdminDtos.RolesRequest r, Authentication a) { service.replaceRoles(currentId(a), id, r.roleKeys()); return Result.success(); }
-    /** 全量替换建筑授权，空列表表示撤销全部建筑。 */
-    @PutMapping("/{id}/buildings") public Result<Void> buildings(@PathVariable Long id, @RequestBody UserAdminDtos.BuildingsRequest r) { service.replaceBuildings(id, r.buildingIds()); return Result.success(); }
-    /** 只撤销一个指定建筑授权。 */
-    @DeleteMapping("/{id}/buildings/{buildingId}") public Result<Void> revokeBuilding(@PathVariable Long id, @PathVariable String buildingId) { service.revokeBuilding(id, buildingId); return Result.success(); }
+    /** 旧直改入口保留稳定拒绝，逻辑删除账号必须改走通用敏感变更申请。 */
+    @DeleteMapping("/{id}") public Result<Void> delete(@PathVariable Long id) { throw AuditGovernanceErrors.reviewRequired(); }
+    /** 旧直改入口保留稳定拒绝，恢复账号必须改走通用敏感变更申请。 */
+    @PutMapping("/{id}/restore") public Result<UserAdminDtos.UserView> restore(@PathVariable Long id) { throw AuditGovernanceErrors.reviewRequired(); }
+    /** 旧直改入口保留稳定拒绝，账号启停必须改走通用敏感变更申请。 */
+    @PutMapping("/{id}/status") public Result<Void> status(@PathVariable Long id, @Valid @RequestBody UserAdminDtos.StatusRequest r) { throw AuditGovernanceErrors.reviewRequired(); }
+    /** 旧直改入口保留稳定拒绝，密码重置申请只包含账号 ID，执行后返回一次性令牌。 */
+    @PutMapping("/{id}/password") public Result<Void> password(@PathVariable Long id, @RequestBody JsonNode ignored) { throw AuditGovernanceErrors.reviewRequired(); }
+    /** 旧直改入口保留稳定拒绝，正式角色必须改走通用敏感变更申请。 */
+    @PutMapping("/{id}/roles") public Result<Void> roles(@PathVariable Long id, @Valid @RequestBody UserAdminDtos.RolesRequest r) { throw AuditGovernanceErrors.reviewRequired(); }
+    /** 旧直改入口保留稳定拒绝，建筑范围必须改走通用敏感变更申请。 */
+    @PutMapping("/{id}/buildings") public Result<Void> buildings(@PathVariable Long id, @RequestBody UserAdminDtos.BuildingsRequest r) { throw AuditGovernanceErrors.reviewRequired(); }
+    /** 旧直改入口保留稳定拒绝，单建筑撤销必须改走通用敏感变更申请。 */
+    @DeleteMapping("/{id}/buildings/{buildingId}") public Result<Void> revokeBuilding(@PathVariable Long id, @PathVariable String buildingId) { throw AuditGovernanceErrors.reviewRequired(); }
 
-    /** 从 JWT principal 中取得操作者 ID，用于自操作和最后管理员保护。 */
-    private Long currentId(Authentication authentication) {
-        return ((JwtUserPrincipal) authentication.getPrincipal()).getId();
-    }
 }

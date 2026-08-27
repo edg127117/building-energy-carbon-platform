@@ -12,7 +12,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
-/** PLATFORM_ADMIN 专用的建筑访问申请审核接口。 */
+/** 建筑访问申请审核入口；角色负责进入管理域，后台审核职责由 Service 动态校验。 */
 @RestController
 @RequestMapping("/system/building-access/requests")
 @RequiredArgsConstructor

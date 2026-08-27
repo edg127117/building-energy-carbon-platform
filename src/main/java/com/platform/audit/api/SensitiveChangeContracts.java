@@ -2,6 +2,7 @@ package com.platform.audit.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.platform.audit.sensitive.SensitiveChangeRecord;
+import com.platform.audit.sensitive.SensitiveChangeExecutionResult;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -40,14 +41,27 @@ public final class SensitiveChangeContracts {
             String executionErrorCode,
             String environmentMode,
             boolean selfApprovalDevMode,
-            String traceId
+            String traceId,
+            String oneTimeToken,
+            String tokenPurpose,
+            LocalDateTime tokenExpiresAt
     ) {
         static View from(SensitiveChangeRecord value) {
             return new View(value.requestId(), value.operationCode(), value.status().name(), value.buildingId(),
                     value.targetType(), value.targetId(), value.impactSummary(), value.submittedBy(),
                     value.submittedAt(), value.reviewerId(), value.reviewComment(), value.reviewedAt(),
                     value.executedAt(), value.executionErrorCode(), value.environmentMode(),
-                    value.selfApprovalDevMode(), value.traceId());
+                    value.selfApprovalDevMode(), value.traceId(), null, null, null);
+        }
+
+        static View from(SensitiveChangeExecutionResult value) {
+            SensitiveChangeRecord change = value.change();
+            return new View(change.requestId(), change.operationCode(), change.status().name(), change.buildingId(),
+                    change.targetType(), change.targetId(), change.impactSummary(), change.submittedBy(),
+                    change.submittedAt(), change.reviewerId(), change.reviewComment(), change.reviewedAt(),
+                    change.executedAt(), change.executionErrorCode(), change.environmentMode(),
+                    change.selfApprovalDevMode(), change.traceId(), value.operationResult().oneTimeToken(),
+                    value.operationResult().tokenPurpose(), value.operationResult().tokenExpiresAt());
         }
     }
 }

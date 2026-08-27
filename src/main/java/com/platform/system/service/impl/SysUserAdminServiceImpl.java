@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.platform.cache.MenuCacheService;
 import com.platform.cache.TokenCacheService;
+import com.platform.audit.AuditEvidence;
+import com.platform.audit.AuditEvidenceWriter;
+import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.TraceContext;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
 import com.platform.security.FormalRole;
@@ -18,6 +22,7 @@ import com.platform.system.model.entity.SysUserBuilding;
 import com.platform.system.model.entity.SysUserRole;
 import com.platform.system.service.SysUserAdminService;
 import com.platform.system.service.BuildingScopeService;
+import com.platform.system.service.PasswordSetupTokenService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -27,6 +32,8 @@ import org.springframework.util.StringUtils;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.time.LocalDateTime;
+import java.util.UUID;
 
 /**
  * 平台管理端人员服务实现。
@@ -50,6 +57,9 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
     private final TokenCacheService tokenCacheService;
     private final MenuCacheService menuCacheService;
     private final BuildingScopeService buildingScopeService;
+    private final PasswordSetupTokenService passwordSetupTokenService;
+    private final AuditEvidenceWriter auditWriter;
+    private final AuditGovernanceProperties auditProperties;
 
     /**
      * 分页返回人员及其正式角色、建筑范围。
@@ -97,32 +107,38 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
     }
 
     /**
-     * 在一个事务中创建账号并整体写入角色、建筑关系。
-     * 未指定角色时使用 BUILDING_OWNER；建筑可以为空。所有关系写入前先验证正式角色和建筑存在，
-     * 任一步失败都会回滚账号，避免留下无法登录或部分授权的人员记录。
+     * 执行已批准的账号开通申请包。
+     *
+     * <p>账号、角色、建筑、令牌哈希和三类业务审计在同一事务提交。新账号保持停用且待激活，
+     * 原始激活令牌只由执行响应返回；任一授权或审计失败都会整体回滚。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public UserAdminDtos.UserView create(UserAdminDtos.CreateRequest request) {
+    public PasswordSetupTokenService.IssuedToken openAccount(
+            UserAdminDtos.OpenAccountRequest request, String sourceRequestId, long operatorId,
+            boolean selfApprovalDevMode) {
         // 已删除账号的用户名也保留，避免恢复账号后发生用户名冲突。
         if (userMapper.selectAnyByUsername(request.username()) != null) {
             throw new BusinessException(409, "用户名已存在（包括已删除账号）");
         }
         SysUser user = new SysUser();
         user.setUsername(request.username().trim());
-        user.setPassword(passwordEncoder.encode(request.password()));
+        // 数据库非空约束使用不可知随机值；真正密码只能由一次性激活令牌设置。
+        user.setPassword(passwordEncoder.encode(UUID.randomUUID() + UUID.randomUUID().toString()));
         user.setNickname(request.nickname());
         user.setPhone(request.phone());
-        user.setStatus(1);
+        user.setStatus(0);
         user.setDelFlag(0);
+        user.setActivationPending(1);
         userMapper.insert(user);
-        // 管理员创建账号未指定角色时，使用最低权限 BUILDING_OWNER，且不会自动授予建筑。
-        List<String> roles = request.roleKeys() == null || request.roleKeys().isEmpty()
-                ? List.of(FormalRole.BUILDING_OWNER.name()) : request.roleKeys();
-        replaceRolesInternal(user.getId(), roles);
+        replaceRolesInternal(user.getId(), request.roleKeys());
         replaceBuildingsInternal(user.getId(), request.buildingIds());
         menuCacheService.evict(user.getId());
-        return toView(user);
+        PasswordSetupTokenService.IssuedToken token = passwordSetupTokenService.issue(
+                user.getId(), sourceRequestId, operatorId);
+        appendOpeningEvidence(user.getId(), request.roleKeys(), request.buildingIds(), sourceRequestId,
+                operatorId, selfApprovalDevMode);
+        return token;
     }
 
     @Override
@@ -172,19 +188,13 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         if (status == null || (status != 0 && status != 1)) throw new BusinessException(400, "状态只能是0或1");
         if (id.equals(currentUserId) && status == 0) throw new BusinessException(409, "不能禁用当前登录管理员");
         SysUser user = requireActiveUser(id);
+        if (status == 1 && user.getActivationPending() != null && user.getActivationPending() == 1) {
+            throw new BusinessException(409, "账号尚未使用一次性令牌设置初始密码");
+        }
         if (status == 0) protectLastAdmin(user);
         user.setStatus(status);
         userMapper.updateById(user);
         if (status == 0) tokenCacheService.revokeActiveToken(id);
-    }
-
-    /** 重置 BCrypt 密码并撤销当前 Token，防止密码变更后旧登录态继续有效。 */
-    @Override
-    public void resetPassword(Long id, String password) {
-        SysUser user = requireActiveUser(id);
-        user.setPassword(passwordEncoder.encode(password));
-        userMapper.updateById(user);
-        tokenCacheService.revokeActiveToken(id);
     }
 
     /**
@@ -272,6 +282,38 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
             userBuildingMapper.insert(link);
         }
         buildingScopeService.evict(userId);
+    }
+
+    /** 公共申请只保存脱敏影响摘要；账号、角色和逐建筑授权分别形成可检索业务事实。 */
+    private void appendOpeningEvidence(Long userId, List<String> roles, List<String> buildings,
+                                       String sourceRequestId, long operatorId, boolean selfApprovalDevMode) {
+        LocalDateTime now = LocalDateTime.now();
+        appendOpeningEvent(null, operatorId, "CREATE_USER_ACCOUNT", "USER_ACCOUNT", Long.toString(userId),
+                "status=PENDING_ACTIVATION", sourceRequestId, now, selfApprovalDevMode);
+        for (String role : new LinkedHashSet<>(roles)) {
+            appendOpeningEvent(null, operatorId, "GRANT_USER_FORMAL_ROLE", "USER_FORMAL_ROLE",
+                    userId + ":" + role, "roleKey=" + role, sourceRequestId, now, selfApprovalDevMode);
+        }
+        Set<String> buildingIds = buildings == null ? Set.of() : new LinkedHashSet<>(buildings);
+        if (buildingIds.isEmpty()) {
+            appendOpeningEvent(null, operatorId, "ASSIGN_USER_BUILDING_SCOPE", "USER_BUILDING_SCOPE",
+                    Long.toString(userId), "buildingCount=0", sourceRequestId, now, selfApprovalDevMode);
+        } else {
+            for (String buildingId : buildingIds) {
+                appendOpeningEvent(buildingId, operatorId, "GRANT_USER_BUILDING_ACCESS", "USER_BUILDING_SCOPE",
+                        userId + ":" + buildingId, "buildingId=" + buildingId,
+                        sourceRequestId, now, selfApprovalDevMode);
+            }
+        }
+    }
+
+    private void appendOpeningEvent(String buildingId, long operatorId, String action, String objectType,
+                                    String objectId, String afterSummary, String sourceRequestId,
+                                    LocalDateTime now, boolean selfApprovalDevMode) {
+        auditWriter.append(new AuditEvidence("SYSTEM_SECURITY", buildingId, "USER", operatorId,
+                action, objectType, objectId, null, sourceRequestId, null, afterSummary,
+                "SUCCESS", null, TraceContext.current(), now, auditProperties.getEnvironmentMode(),
+                selfApprovalDevMode));
     }
 
     private UserAdminDtos.UserView toView(SysUser user) {

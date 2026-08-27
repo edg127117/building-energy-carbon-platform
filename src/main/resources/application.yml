@@ -280,3 +280,5 @@ security:
 audit-governance:
   environment-mode: ${AUDIT_ENVIRONMENT_MODE:DEVELOPMENT}
   allow-self-approval: ${AUDIT_ALLOW_SELF_APPROVAL:false}
+  # 原始令牌只在批准命令的执行响应中返回一次；生产可按安全制度缩短有效期。
+  password-token-ttl: ${AUDIT_PASSWORD_TOKEN_TTL:PT15M}
