@@ -133,6 +133,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
+| 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |
 | 当前状态 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) |
 | Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md) |
 | 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) |
