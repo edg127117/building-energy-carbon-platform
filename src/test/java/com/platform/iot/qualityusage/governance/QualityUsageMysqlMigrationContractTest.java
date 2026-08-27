@@ -11,6 +11,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** MySQL 增量脚本的静态契约，防止后续编辑放宽治理完整性或重跑边界。 */
 class QualityUsageMysqlMigrationContractTest {
+    private static final Path REVIEW_CLOSURE_MIGRATION = Path.of(
+            "src/env/init/V28__close_quality_usage_direct_publication.sql");
+
     @Test
     void preservesPointerForeignKeysAndFormalVersionTimeConstraints() throws IOException {
         String sql = migrationSql();
@@ -47,6 +50,19 @@ class QualityUsageMysqlMigrationContractTest {
                 .contains("v.`status` in ('active','retired')")
                 .contains("v_revision < 1")
                 .doesNotContain("s.`status` = 'enabled'");
+    }
+
+    @Test
+    void reviewClosurePreservesHistoricalEvidenceButRejectsNewDirectPublicationByDefault() throws IOException {
+        String sql = Files.readString(REVIEW_CLOSURE_MIGRATION, StandardCharsets.UTF_8);
+
+        assertThat(sql).contains(
+                "ADD COLUMN `legacy_direct_publish` TINYINT NOT NULL DEFAULT 0",
+                "SET `legacy_direct_publish` = 1",
+                "DROP CHECK `chk_quality_usage_review_mode`",
+                "`review_mode` = 'NORMAL'",
+                "`review_mode` = 'DIRECT_PUBLISH' AND `legacy_direct_publish` = 1");
+        assertThat(sql).doesNotContain("sys_sensitive_change_request");
     }
 
     private static String migrationSql() throws IOException {

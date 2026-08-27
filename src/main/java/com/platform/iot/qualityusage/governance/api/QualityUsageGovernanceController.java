@@ -150,6 +150,7 @@ public class QualityUsageGovernanceController {
                 changeSetId, idempotencyKey, request.reason()));
     }
 
+    /** 旧直接发布 URL 仅用于返回稳定拒绝码，调用方必须改走提交与审核两个动作。 */
     @PostMapping("/v1/quality-usage/change-sets/{changeSetId}/direct-publish")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<ReviewRequestView> directPublish(

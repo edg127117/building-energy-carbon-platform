@@ -40,7 +40,7 @@ public final class QualityUsageGovernanceContracts {
     public record SubmitRequest(@Size(max = 500) String comment) {
     }
 
-    public record ReviewDecisionRequest(@Size(max = 500) String comment) {
+    public record ReviewDecisionRequest(@NotBlank @Size(max = 500) String comment) {
     }
 
     public record ReasonRequest(@NotBlank @Size(max = 500) String reason) {

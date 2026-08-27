@@ -43,6 +43,27 @@ class QualityUsageGovernanceApiContractTest {
                 .isTrue();
     }
 
+    @Test
+    void oldDirectPublicationIsStablyRejectedAndApprovalRequiresComment() throws Exception {
+        String token = login("admin", "123456");
+        mockMvc.perform(post("/v1/quality-usage/change-sets/NOT_FOUND/direct-publish")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Idempotency-Key", "api-direct-publish")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"reason\":\"绕过审核发布\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("BACKOFFICE_REVIEW_REQUIRED"))
+                .andExpect(jsonPath("$.traceId").isString());
+
+        mockMvc.perform(post("/v1/quality-usage/review-requests/NOT_FOUND/approve")
+                        .header("Authorization", "Bearer " + token)
+                        .header("Idempotency-Key", "api-blank-review")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"comment\":\" \"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.traceId").isString());
+    }
+
     private String login(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)

@@ -1,5 +1,6 @@
 package com.platform.iot.qualityusage.governance;
 
+import com.platform.audit.BackendDuty;
 import com.platform.iot.qualityusage.governance.api.QualityUsageGovernanceContracts.ChangeSetCreateRequest;
 import com.platform.iot.qualityusage.governance.api.QualityUsageGovernanceContracts.PolicyDraftRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,8 +14,11 @@ import org.springframework.test.context.ActiveProfiles;
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -40,6 +44,8 @@ class QualityUsageGovernanceConcurrencyIntegrationTest {
     @BeforeEach
     void seedDirectoryAndScope() {
         jdbc.update("INSERT INTO sys_user_building(user_id,building_id) VALUES (?,?)", ENERGY, "BLD001");
+        grantDuty(ENERGY, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grantDuty(ADMIN, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         jdbc.update("""
                 INSERT INTO biz_quality_usage_scenario
                   (scenario_id,scenario_code,scenario_name,adapter_type,status,introduced_version)
@@ -105,5 +111,15 @@ class QualityUsageGovernanceConcurrencyIntegrationTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("并发审批测试被中断", exception);
         }
+    }
+
+    private void grantDuty(long userId, BackendDuty duty) {
+        LocalDateTime now = LocalDateTime.now().minusMinutes(1);
+        jdbc.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by,created_at)
+                VALUES (?,?,?,'ACTIVE',?,?,?)
+                """, UUID.randomUUID().toString().replace("-", ""), userId, duty.name(),
+                Timestamp.valueOf(now), ADMIN, Timestamp.valueOf(now));
     }
 }

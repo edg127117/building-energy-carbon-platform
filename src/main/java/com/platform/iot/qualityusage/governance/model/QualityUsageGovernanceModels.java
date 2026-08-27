@@ -16,7 +16,7 @@ public final class QualityUsageGovernanceModels {
 
     public enum ReviewStatus { PENDING, APPROVED, REJECTED, WITHDRAWN }
 
-    public enum ReviewMode { NORMAL, DIRECT_PUBLISH }
+    public enum ReviewMode { NORMAL }
 
     public enum ScenarioStatus { DRAFT, ENABLED, DISABLED }
 }
