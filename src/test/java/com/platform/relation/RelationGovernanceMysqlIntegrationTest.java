@@ -28,7 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.when;
 
-/** 专用隔离 MySQL 验证 V24 真实方言、约束和关系版本生效事务。 */
+/** 专用隔离 MySQL 验证完整迁移链真实方言、约束和关系版本生效事务。 */
 @SpringBootTest(properties = {
         "spring.flyway.enabled=true",
         "spring.flyway.locations=classpath:db/migration/mysql",
@@ -86,11 +86,21 @@ class RelationGovernanceMysqlIntegrationTest {
     }
 
     @Test
-    void migratesV24AndKeepsActivationAtomicOnMysql() {
+    void migratesCurrentChainAndKeepsActivationAtomicOnMysql() {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("24");
+                """, String.class)).isEqualTo("29");
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND table_name='sys_audit_export_job'
+                """, Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_schema=DATABASE() AND column_name='trace_id'
+                  AND table_name IN ('biz_collection_config_audit_log','biz_quality_usage_audit_log',
+                    'biz_device_parameter_audit_log','biz_onboarding_audit_log','biz_relation_audit_log')
+                """, Integer.class)).isEqualTo(5);
         assertThat(jdbc.queryForList("""
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE()

@@ -10,6 +10,13 @@ public final class AuditGovernanceErrors {
     public static final String REQUEST_CONFLICT = "BACKOFFICE_REQUEST_CONFLICT";
     public static final String REQUEST_HASH_MISMATCH = "BACKOFFICE_REQUEST_HASH_MISMATCH";
     public static final String REVIEW_REQUIRED = "BACKOFFICE_REVIEW_REQUIRED";
+    public static final String QUERY_FORBIDDEN = "AUDIT_QUERY_FORBIDDEN";
+    public static final String QUERY_INVALID = "AUDIT_QUERY_INVALID";
+    public static final String EXPORT_FORBIDDEN = "AUDIT_EXPORT_FORBIDDEN";
+    public static final String EXPORT_PURPOSE_INVALID = "AUDIT_EXPORT_PURPOSE_INVALID";
+    public static final String EXPORT_LIMIT_EXCEEDED = "AUDIT_EXPORT_LIMIT_EXCEEDED";
+    public static final String EXPORT_NOT_READY = "AUDIT_EXPORT_NOT_READY";
+    public static final String EXPORT_QUEUE_FULL = "AUDIT_EXPORT_QUEUE_FULL";
 
     private AuditGovernanceErrors() {
     }
@@ -20,6 +27,10 @@ public final class AuditGovernanceErrors {
 
     public static BusinessException conflict(String errorCode, String message) {
         return new BusinessException(409, errorCode, message);
+    }
+
+    public static BusinessException invalidQuery(String message) {
+        return new BusinessException(400, QUERY_INVALID, message);
     }
 
     /** 旧直改入口关闭后返回稳定机器码，调用方必须改用通用敏感变更申请。 */

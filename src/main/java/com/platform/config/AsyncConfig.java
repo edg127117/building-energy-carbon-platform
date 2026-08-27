@@ -109,6 +109,12 @@ public class AsyncConfig {
                 "iot-quality-usage-indicator-");
     }
 
+    /** 审计导出使用单独的有界执行器，避免大文件生成占用业务调度线程。 */
+    @Bean("auditExportExecutor")
+    public ThreadPoolTaskExecutor auditExportExecutor() {
+        return boundedExecutor(1, 20, "audit-export-");
+    }
+
     private ThreadPoolTaskExecutor boundedExecutor(
             int concurrency,
             int queueCapacity,

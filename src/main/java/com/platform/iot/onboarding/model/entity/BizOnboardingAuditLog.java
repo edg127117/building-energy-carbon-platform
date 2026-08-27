@@ -18,12 +18,20 @@ public class BizOnboardingAuditLog {
 
     @TableId(type = IdType.ASSIGN_ID)
     private String auditId;
+    private String buildingId;
+    private String actorType;
     private Long operatorId;
     private String actionType;
     private String objectType;
     private String objectId;
+    private String versionId;
+    private String reviewRequestId;
     private String beforeSummary;
     private String afterSummary;
     private String result;
+    private String reasonCode;
+    private String traceId;
+    private String environmentMode;
+    private Boolean selfApprovalDevMode;
     private LocalDateTime operationTime;
 }

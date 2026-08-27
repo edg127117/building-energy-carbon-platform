@@ -98,7 +98,7 @@ public class DeviceProductService {
         } catch (DuplicateKeyException exception) {
             throw error(409, DUPLICATE, "产品编码或指标代码已存在");
         }
-        auditService.record(operatorId, "PRODUCT_CREATE", "DEVICE_PRODUCT", product.getProductId(),
+        auditService.record(operatorId, null, "PRODUCT_CREATE", "DEVICE_PRODUCT", product.getProductId(),
                 null, summary(product));
         return toDetail(product);
     }
@@ -128,7 +128,7 @@ public class DeviceProductService {
         } catch (DuplicateKeyException exception) {
             throw error(409, DUPLICATE, "产品指标代码重复");
         }
-        auditService.record(operatorId, "PRODUCT_UPDATE", "DEVICE_PRODUCT", productId,
+        auditService.record(operatorId, null, "PRODUCT_UPDATE", "DEVICE_PRODUCT", productId,
                 before, summary(product));
         return toDetail(product);
     }
@@ -165,7 +165,7 @@ public class DeviceProductService {
         } catch (DuplicateKeyException exception) {
             throw error(409, DUPLICATE, "新产品编码已存在");
         }
-        auditService.record(operatorId, "PRODUCT_COPY", "DEVICE_PRODUCT", copy.getProductId(),
+        auditService.record(operatorId, null, "PRODUCT_COPY", "DEVICE_PRODUCT", copy.getProductId(),
                 Map.of("sourceProductId", sourceId), summary(copy));
         return toDetail(copy);
     }
@@ -186,7 +186,7 @@ public class DeviceProductService {
         product.setStatus("ENABLED");
         product.setUpdateTime(LocalDateTime.now());
         productMapper.updateById(product);
-        auditService.record(operatorId, "PRODUCT_ENABLE", "DEVICE_PRODUCT", productId,
+        auditService.record(operatorId, null, "PRODUCT_ENABLE", "DEVICE_PRODUCT", productId,
                 Map.of("status", before), Map.of("status", product.getStatus()));
         return toDetail(product);
     }
@@ -204,7 +204,7 @@ public class DeviceProductService {
         product.setStatus("DISABLED");
         product.setUpdateTime(LocalDateTime.now());
         productMapper.updateById(product);
-        auditService.record(operatorId, "PRODUCT_DISABLE", "DEVICE_PRODUCT", productId,
+        auditService.record(operatorId, null, "PRODUCT_DISABLE", "DEVICE_PRODUCT", productId,
                 Map.of("status", "ENABLED"), Map.of("status", "DISABLED"));
         return toDetail(product);
     }

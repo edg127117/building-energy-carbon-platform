@@ -282,3 +282,12 @@ audit-governance:
   allow-self-approval: ${AUDIT_ALLOW_SELF_APPROVAL:false}
   # 原始令牌只在批准命令的执行响应中返回一次；生产可按安全制度缩短有效期。
   password-token-ttl: ${AUDIT_PASSWORD_TOKEN_TTL:PT15M}
+  # 以下为可覆盖的软件候选保护值，不代表生产制度已经确认；上线前由产品和基础设施负责人批准。
+  query-default-range: ${AUDIT_QUERY_DEFAULT_RANGE:PT24H}
+  query-max-range: ${AUDIT_QUERY_MAX_RANGE:P31D}
+  query-default-size: ${AUDIT_QUERY_DEFAULT_SIZE:50}
+  query-max-size: ${AUDIT_QUERY_MAX_SIZE:200}
+  export-max-rows: ${AUDIT_EXPORT_MAX_ROWS:10000}
+  export-file-ttl: ${AUDIT_EXPORT_FILE_TTL:PT15M}
+  export-cleanup-delay: ${AUDIT_EXPORT_CLEANUP_DELAY:PT1M}
+  export-directory: ${AUDIT_EXPORT_DIRECTORY:${java.io.tmpdir}/building-energy-carbon-audit-exports}

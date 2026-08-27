@@ -2,6 +2,8 @@ package com.platform.iot.onboarding;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.TraceContext;
 import com.platform.iot.onboarding.mapper.BizOnboardingAuditLogMapper;
 import com.platform.iot.onboarding.model.entity.BizOnboardingAuditLog;
 import lombok.RequiredArgsConstructor;
@@ -16,15 +18,19 @@ import java.util.Map;
 public class OnboardingAuditService {
     private final BizOnboardingAuditLogMapper mapper;
     private final ObjectMapper objectMapper;
+    private final AuditGovernanceProperties auditProperties;
 
     public void record(
             Long operatorId,
+            String buildingId,
             String action,
             String objectType,
             String objectId,
             Map<String, ?> before,
             Map<String, ?> after) {
         BizOnboardingAuditLog log = new BizOnboardingAuditLog();
+        log.setBuildingId(buildingId);
+        log.setActorType("USER");
         log.setOperatorId(operatorId);
         log.setActionType(action);
         log.setObjectType(objectType);
@@ -32,6 +38,9 @@ public class OnboardingAuditService {
         log.setBeforeSummary(toSummary(before));
         log.setAfterSummary(toSummary(after));
         log.setResult("SUCCESS");
+        log.setTraceId(TraceContext.current());
+        log.setEnvironmentMode(auditProperties.getEnvironmentMode().name());
+        log.setSelfApprovalDevMode(false);
         log.setOperationTime(LocalDateTime.now());
         mapper.insert(log);
     }

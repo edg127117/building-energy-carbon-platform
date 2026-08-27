@@ -4,8 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.audit.AuditGovernanceErrors;
+import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.BackendDuty;
 import com.platform.audit.BackendDutyService;
+import com.platform.audit.TraceContext;
 import com.platform.framework.exception.BusinessException;
 import com.platform.framework.web.PageResponse;
 import com.platform.hvac.mapper.BizDataPointMapper;
@@ -99,6 +101,7 @@ public class QualityUsageGovernanceService {
     private final BizDataPointMapper pointMapper;
     private final BuildingScopeService buildingScopeService;
     private final BackendDutyService dutyService;
+    private final AuditGovernanceProperties auditProperties;
     private final QualityUsageRuntimeStateService runtimeStateService;
     private final ObjectMapper objectMapper;
 
@@ -900,10 +903,14 @@ public class QualityUsageGovernanceService {
         audit.setObjectType(objectType);
         audit.setObjectId(objectId);
         audit.setVersionId(versionId);
+        audit.setReviewRequestId("REVIEW_REQUEST".equals(objectType) ? objectId : null);
         audit.setBeforeSummary(bounded(before, 1000));
         audit.setAfterSummary(bounded(after, 1000));
         audit.setResult(result);
         audit.setReasonCode(reasonCode);
+        audit.setTraceId(TraceContext.current());
+        audit.setEnvironmentMode(auditProperties.getEnvironmentMode().name());
+        audit.setSelfApprovalDevMode("SELF_APPROVAL_DEV_MODE".equals(action));
         audit.setConfigRevision(configRevision);
         audit.setIdempotencyKey(idempotencyKey);
         audit.setRequestSha256(requestSha256);
