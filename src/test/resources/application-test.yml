@@ -18,6 +18,7 @@ audit-governance:
   environment-mode: TEST
   allow-self-approval: true
   password-token-ttl: PT15M
+  retention-cleanup-enabled: false
 
 mybatis-plus:
   configuration:
