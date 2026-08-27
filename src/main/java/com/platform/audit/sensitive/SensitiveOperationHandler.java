@@ -12,5 +12,5 @@ public interface SensitiveOperationHandler {
 
     NormalizedSensitiveCommand normalize(JsonNode command);
 
-    void execute(NormalizedSensitiveCommand command, SensitiveOperationContext context);
+    SensitiveOperationResult execute(NormalizedSensitiveCommand command, SensitiveOperationContext context);
 }

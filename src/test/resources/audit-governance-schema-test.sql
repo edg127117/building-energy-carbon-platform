@@ -1,5 +1,6 @@
 -- 审计治理公共基础的 H2 隔离镜像。普通测试不连接真实 MySQL 或生产账号。
 DROP TABLE IF EXISTS sys_security_audit_event;
+DROP TABLE IF EXISTS sys_password_setup_token;
 DROP TABLE IF EXISTS sys_sensitive_change_request;
 DROP TABLE IF EXISTS sys_user_backend_duty;
 DROP TABLE IF EXISTS sys_backend_duty;
@@ -69,6 +70,23 @@ CREATE INDEX idx_sensitive_change_building
   ON sys_sensitive_change_request(building_id,create_time,request_id);
 CREATE INDEX idx_sensitive_change_trace
   ON sys_sensitive_change_request(trace_id);
+
+CREATE TABLE sys_password_setup_token (
+  token_id VARCHAR(32) PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  token_hash CHAR(64) NOT NULL UNIQUE,
+  purpose VARCHAR(20) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  expires_at TIMESTAMP NOT NULL,
+  source_request_id VARCHAR(32) NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  used_at TIMESTAMP,
+  UNIQUE (source_request_id,purpose)
+);
+
+CREATE INDEX idx_password_setup_user_status
+  ON sys_password_setup_token(user_id,status,expires_at);
 
 CREATE TABLE sys_security_audit_event (
   audit_id VARCHAR(32) PRIMARY KEY,

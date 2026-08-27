@@ -1,6 +1,12 @@
 package com.platform.system.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.platform.audit.AuditEvidence;
+import com.platform.audit.AuditEvidenceWriter;
+import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.BackendDuty;
+import com.platform.audit.BackendDutyService;
+import com.platform.audit.TraceContext;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
 import com.platform.hvac.model.entity.Building;
@@ -21,15 +27,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
+import java.time.LocalDateTime;
 
 /**
  * 建筑访问申请状态机实现。
  *
- * <p>用户侧提交、查询和取消申请，平台管理员侧批准或拒绝；两侧都只传当前 JWT 用户 ID，
+ * <p>用户侧提交、查询和取消申请，具备后台审核职责的平台管理员批准或拒绝；两侧都只传当前 JWT 用户 ID，
  * 不接受客户端冒充申请人或审核人。申请和正式授权写入 MySQL，批准后清理用户建筑范围缓存。</p>
  *
  * <p>审批使用 {@code SELECT ... FOR UPDATE} 锁定申请，并在同一事务内校验 PENDING 状态、
@@ -43,6 +48,9 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
     private final SysUserMapper userMapper;
     private final BuildingMapper buildingMapper;
     private final BuildingScopeService scopeService;
+    private final BackendDutyService dutyService;
+    private final AuditEvidenceWriter auditWriter;
+    private final AuditGovernanceProperties auditProperties;
 
     /**
      * 列出当前用户尚可申请的建筑。
@@ -119,6 +127,7 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void approve(Long reviewerId, Long requestId, String comment) {
+        dutyService.requireDuty(reviewerId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         // 行锁与事务共同保证申请只能从 PENDING 成功流转一次。
         BuildingAccessRequest request = requireLockedRequest(requestId);
         requirePending(request);
@@ -132,6 +141,7 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
             userBuildingMapper.insert(grant);
         }
         finishReview(request, reviewerId, BuildingAccessStatus.APPROVED, comment);
+        appendReviewEvidence(request, reviewerId, BuildingAccessStatus.APPROVED);
         // 建筑权限不写入 JWT，因此只需清理范围缓存，无需强制用户重新登录。
         scopeService.evict(request.getUserId());
     }
@@ -140,9 +150,22 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void reject(Long reviewerId, Long requestId, String comment) {
+        dutyService.requireDuty(reviewerId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         BuildingAccessRequest request = requireLockedRequest(requestId);
         requirePending(request);
         finishReview(request, reviewerId, BuildingAccessStatus.REJECTED, comment);
+        appendReviewEvidence(request, reviewerId, BuildingAccessStatus.REJECTED);
+    }
+
+    /** 公共层只保存跨模块检索索引，完整申请原因和审核意见仍以建筑访问申请记录为准。 */
+    private void appendReviewEvidence(BuildingAccessRequest request, Long reviewerId, BuildingAccessStatus status) {
+        auditWriter.append(new AuditEvidence("BUILDING_ACCESS", request.getBuildingId(), "USER", reviewerId,
+                status == BuildingAccessStatus.APPROVED ? "APPROVE_BUILDING_ACCESS" : "REJECT_BUILDING_ACCESS",
+                "USER_BUILDING_SCOPE", request.getUserId() + ":" + request.getBuildingId(), null,
+                request.getId().toString(), "status=PENDING", "status=" + status.name(),
+                status == BuildingAccessStatus.APPROVED ? "SUCCESS" : "REJECTED",
+                status == BuildingAccessStatus.REJECTED ? "BUILDING_ACCESS_REJECTED" : null,
+                TraceContext.current(), LocalDateTime.now(), auditProperties.getEnvironmentMode(), false));
     }
 
     /** 统一写入审核状态、操作者、意见和时间，保证批准与拒绝使用相同审计字段。 */

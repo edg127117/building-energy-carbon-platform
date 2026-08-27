@@ -2,7 +2,6 @@ package com.platform.system.model.dto;
 
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.Size;
 
@@ -18,12 +17,11 @@ import java.util.List;
 public final class UserAdminDtos {
     private UserAdminDtos() {}
 
-    /** 创建人员账号；未传角色时由业务层默认分配 {@code BUILDING_OWNER}。 */
-    public record CreateRequest(
-            @NotBlank @Size(min = 3, max = 50) String username,
-            @NotBlank @Size(min = 6, max = 50) String password,
-            @Size(max = 50) String nickname,
-            @Size(max = 20) String phone,
+    /** 账号开通申请包；初始密码不进入申请，审批执行后签发一次性激活令牌。 */
+    public record OpenAccountRequest(
+            String username,
+            String nickname,
+            String phone,
             List<String> roleKeys,
             List<String> buildingIds) {}
 
@@ -31,8 +29,6 @@ public final class UserAdminDtos {
     public record UpdateRequest(@Size(max = 50) String nickname, @Size(max = 20) String phone) {}
     /** 启用或禁用账号：1=启用，0=禁用。 */
     public record StatusRequest(@Min(0) @Max(1) Integer status) {}
-    /** 管理员重置用户密码的请求。 */
-    public record PasswordRequest(@NotBlank @Size(min = 6, max = 50) String password) {}
     /** 全量替换用户角色；列表至少包含一个正式角色。 */
     public record RolesRequest(@NotEmpty List<String> roleKeys) {}
     /** 全量替换用户建筑授权；空列表表示撤销全部建筑。 */

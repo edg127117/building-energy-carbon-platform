@@ -1,5 +1,6 @@
 package com.platform;
 
+import com.platform.support.TestUserFixture;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -46,6 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class DataQualityRecalculationControllerFlowTest {
 
     @Autowired private MockMvc mockMvc;
+    @Autowired private TestUserFixture userFixture;
     @Autowired private ObjectMapper objectMapper;
     @MockBean private DataQualityRecalculationJobService service;
 
@@ -57,14 +59,7 @@ class DataQualityRecalculationControllerFlowTest {
         adminToken = login("admin", "123456");
         String username = "recalc_owner_"
                 + UUID.randomUUID().toString().substring(0, 8);
-        mockMvc.perform(post("/system/users")
-                        .header("Authorization", bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"%s","password":"123456","nickname":"重算测试账号",
-                                 "roleKeys":["BUILDING_OWNER"],"buildingIds":["BLD001"]}
-                                """.formatted(username)))
-                .andExpect(status().isOk());
+        userFixture.createActiveUser(username, "123456", "BUILDING_OWNER", "BLD001");
         ownerToken = login(username, "123456");
         // 系统采用单账号单 Token；其他并行流程测试可能也会登录 admin，
         // 在正式发起接口断言前刷新一次，避免测试之间相互覆盖白名单。

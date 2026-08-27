@@ -11,7 +11,6 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -49,37 +48,28 @@ class MenuAdminControllerFlowTest {
                                 """))
                 .andExpect(status().isBadRequest());
 
-        MvcResult created = mockMvc.perform(post("/menu/add")
+        mockMvc.perform(post("/menu/add")
                         .header(auth(), bearer(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
                                 {"parentId":200,"menuName":"隐藏测试页","menuType":"C",
                                  "path":"/system/hidden-contract-test","visible":0,"status":1,"sortOrder":99}
                                 """))
-                .andExpect(status().isOk()).andReturn();
-        long id = objectMapper.readTree(created.getResponse().getContentAsString())
-                .path("data").path("id").asLong();
-        assertThat(id).isPositive();
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("BACKOFFICE_REVIEW_REQUIRED"));
 
         mockMvc.perform(put("/menu/update")
                         .header(auth(), bearer(adminToken))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"id":%d,"parentId":%d,"menuName":"循环测试","menuType":"C",
-                                 "path":"/system/hidden-contract-test","visible":0,"status":1,"sortOrder":99}
-                                """.formatted(id, id)))
-                .andExpect(status().isConflict());
-
-        mockMvc.perform(put("/menu/update")
-                        .header(auth(), bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"id":%d,"parentId":200,"menuName":"隐藏测试页更新","menuType":"C",
+                                {"id":241,"parentId":200,"menuName":"隐藏测试页更新","menuType":"C",
                                  "path":"/system/hidden-contract-test","visible":0,"status":1,"sortOrder":98}
-                                """.formatted(id)))
-                .andExpect(status().isOk());
-        mockMvc.perform(delete("/menu/delete/{id}", id).header(auth(), bearer(adminToken)))
-                .andExpect(status().isOk());
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("BACKOFFICE_REVIEW_REQUIRED"));
+        mockMvc.perform(delete("/menu/delete/{id}", 241).header(auth(), bearer(adminToken)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("BACKOFFICE_REVIEW_REQUIRED"));
     }
 
     private String login(String username, String password) throws Exception {

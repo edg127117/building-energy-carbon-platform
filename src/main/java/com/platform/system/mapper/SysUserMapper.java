@@ -24,8 +24,9 @@ public interface SysUserMapper extends BaseMapper<SysUser> {
     @Select("SELECT * FROM sys_user WHERE id = #{id}")
     SysUser selectAnyById(Long id);
 
-    /** 恢复逻辑删除账号并将状态置为启用。 */
-    @Update("UPDATE sys_user SET del_flag=0, status=1, update_time=CURRENT_TIMESTAMP WHERE id=#{id} AND del_flag=1")
+    /** 恢复逻辑删除账号；尚未设置初始密码的账号继续保持停用。 */
+    @Update("UPDATE sys_user SET del_flag=0, status=CASE WHEN activation_pending=1 THEN 0 ELSE 1 END, "
+            + "update_time=CURRENT_TIMESTAMP WHERE id=#{id} AND del_flag=1")
     int restore(Long id);
 
     /** 执行逻辑删除并同时禁用账号。 */

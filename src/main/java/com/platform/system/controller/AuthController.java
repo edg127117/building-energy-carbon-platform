@@ -10,6 +10,8 @@ import com.platform.security.JwtUserPrincipal;
 import com.platform.system.model.dto.LoginRequest;
 import com.platform.system.model.dto.LoginResponse;
 import com.platform.system.model.dto.RegisterRequest;
+import com.platform.system.model.dto.PasswordSetupRequest;
+import com.platform.system.service.PasswordSetupTokenService;
 import com.platform.system.service.SysUserService;
 import jakarta.validation.Valid;
 import org.springframework.security.core.Authentication;
@@ -41,15 +43,18 @@ public class AuthController {
     private final TokenCacheService tokenCacheService;
     private final MenuCacheService menuCacheService;
     private final SecurityAuditService securityAuditService;
+    private final PasswordSetupTokenService passwordSetupTokenService;
 
     public AuthController(SysUserService sysUserService, JwtService jwtService,
                           TokenCacheService tokenCacheService, MenuCacheService menuCacheService,
-                          SecurityAuditService securityAuditService) {
+                          SecurityAuditService securityAuditService,
+                          PasswordSetupTokenService passwordSetupTokenService) {
         this.sysUserService = sysUserService;
         this.jwtService = jwtService;
         this.tokenCacheService = tokenCacheService;
         this.menuCacheService = menuCacheService;
         this.securityAuditService = securityAuditService;
+        this.passwordSetupTokenService = passwordSetupTokenService;
     }
 
     /** 注册普通账号；服务层固定分配 BUILDING_OWNER，但不会授予任何建筑范围。 */
@@ -71,6 +76,20 @@ public class AuthController {
         } catch (BusinessException failure) {
             securityAuditService.recordAuthentication(httpRequest, null,
                     "LOGIN_FAILED", "DENIED", "LOGIN_FAILED");
+            throw failure;
+        }
+    }
+
+    /** 消费审批执行时返回的一次性令牌；响应和审计都不会回显令牌或密码。 */
+    @PostMapping("/password/setup")
+    public Result<String> setupPassword(@Valid @RequestBody PasswordSetupRequest request,
+                                        HttpServletRequest httpRequest) {
+        try {
+            passwordSetupTokenService.setupPassword(request.token(), request.password());
+            return Result.success("密码设置成功");
+        } catch (BusinessException failure) {
+            securityAuditService.recordAuthentication(httpRequest, null,
+                    "PASSWORD_SETUP_FAILED", "DENIED", PasswordSetupTokenService.INVALID_TOKEN);
             throw failure;
         }
     }

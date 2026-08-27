@@ -1,5 +1,6 @@
 package com.platform;
 
+import com.platform.support.TestUserFixture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +43,7 @@ class DataQualityTypicalValueControllerFlowTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private TestUserFixture userFixture;
     @Autowired private JdbcTemplate jdbcTemplate;
 
     private String adminToken;
@@ -211,14 +213,7 @@ class DataQualityTypicalValueControllerFlowTest {
 
     private String createUserAndLogin(String username, String role, String buildingId)
             throws Exception {
-        mockMvc.perform(post("/system/users")
-                        .header(auth(), bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"%s","password":"123456","nickname":"典型值测试账号",
-                                 "roleKeys":["%s"],"buildingIds":["%s"]}
-                                """.formatted(username, role, buildingId)))
-                .andExpect(status().isOk());
+        userFixture.createActiveUser(username, "123456", role, buildingId);
         return login(username, "123456");
     }
 

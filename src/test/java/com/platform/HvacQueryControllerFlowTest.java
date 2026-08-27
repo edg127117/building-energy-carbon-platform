@@ -1,5 +1,6 @@
 package com.platform;
 
+import com.platform.support.TestUserFixture;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
@@ -47,6 +48,7 @@ class HvacQueryControllerFlowTest {
 
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private TestUserFixture userFixture;
     @MockBean private HvacMinuteRepository minuteRepository;
     @MockBean private QualityUsagePolicyResolver qualityUsagePolicyResolver;
 
@@ -210,19 +212,7 @@ class HvacQueryControllerFlowTest {
 
     private String createAndLogin(
             String username, String role, String buildingId) throws Exception {
-        mockMvc.perform(post("/system/users")
-                        .header(auth(), bearer(adminToken))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "username":"%s",
-                                  "password":"123456",
-                                  "nickname":"HVAC API 测试",
-                                  "roleKeys":["%s"],
-                                  "buildingIds":["%s"]
-                                }
-                                """.formatted(username, role, buildingId)))
-                .andExpect(status().isOk());
+        userFixture.createActiveUser(username, "123456", role, buildingId);
         return login(username, "123456");
     }
 

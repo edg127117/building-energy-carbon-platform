@@ -37,6 +37,9 @@ public class SysUser {
     @TableLogic
     private Integer delFlag;
 
+    /** 1 表示账号仍需用一次性令牌设置初始密码；普通禁用账号保持 0。 */
+    private Integer activationPending;
+
     private Date createTime;
 
     private Date updateTime;

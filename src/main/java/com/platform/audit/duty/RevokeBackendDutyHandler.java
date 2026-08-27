@@ -8,6 +8,7 @@ import com.platform.audit.BackendDuty;
 import com.platform.audit.sensitive.NormalizedSensitiveCommand;
 import com.platform.audit.sensitive.SensitiveOperationContext;
 import com.platform.audit.sensitive.SensitiveOperationHandler;
+import com.platform.audit.sensitive.SensitiveOperationResult;
 import com.platform.framework.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -44,11 +45,12 @@ public class RevokeBackendDutyHandler implements SensitiveOperationHandler {
     }
 
     @Override
-    public void execute(NormalizedSensitiveCommand command, SensitiveOperationContext context) {
+    public SensitiveOperationResult execute(NormalizedSensitiveCommand command, SensitiveOperationContext context) {
         try {
             RevokeCommand value = objectMapper.readValue(command.canonicalJson(), RevokeCommand.class);
             assignmentService.revoke(value.userId(), BackendDuty.valueOf(value.dutyKey()),
                     context.requestId(), context.reviewerId());
+            return SensitiveOperationResult.none();
         } catch (JsonProcessingException e) {
             throw invalid();
         }

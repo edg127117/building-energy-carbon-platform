@@ -1,5 +1,6 @@
 package com.platform.system.controller;
 
+import com.platform.audit.AuditGovernanceErrors;
 import com.platform.framework.common.Result;
 import com.platform.system.model.dto.MenuAdminDtos;
 import com.platform.system.model.entity.SysMenu;
@@ -48,25 +49,25 @@ public class SysMenuController {
         return menuService.listByRole(roleKey);
     }
 
-    /** 新增菜单 */
+    /** 旧直改入口保留稳定拒绝，新增菜单必须改走通用敏感变更申请。 */
     @PostMapping("/add")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<SysMenu> add(@Valid @RequestBody MenuAdminDtos.CreateRequest request) {
-        return menuService.add(request);
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
-    /** 更新菜单 */
+    /** 旧直改入口保留稳定拒绝，更新菜单必须改走通用敏感变更申请。 */
     @PutMapping("/update")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<SysMenu> update(@Valid @RequestBody MenuAdminDtos.UpdateRequest request) {
-        return menuService.update(request);
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
-    /** 删除菜单 */
+    /** 旧直改入口保留稳定拒绝，删除菜单必须改走通用敏感变更申请。 */
     @DeleteMapping("/delete/{id}")
     @PreAuthorize("hasRole('PLATFORM_ADMIN')")
     public Result<Void> delete(@PathVariable Long id) {
-        return menuService.delete(id);
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
     /** 查询当前登录用户所有角色的菜单并集；第三方账号通常返回空列表。 */
