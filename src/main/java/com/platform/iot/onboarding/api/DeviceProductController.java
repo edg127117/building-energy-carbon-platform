@@ -1,5 +1,6 @@
 package com.platform.iot.onboarding.api;
 
+import com.platform.audit.AuditGovernanceErrors;
 import com.platform.framework.common.Result;
 import com.platform.framework.web.PageResponse;
 import com.platform.iot.onboarding.DeviceProductService;
@@ -91,19 +92,17 @@ public class DeviceProductController {
                 productId, request, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
     }
 
-    @Operation(summary = "启用产品模板")
+    @Operation(summary = "旧产品启用入口；稳定拒绝并要求创建后台敏感变更申请")
     @PostMapping("/{productId}/enable")
     public Result<DeviceProductContracts.DetailView> enable(
             @PathVariable String productId, Authentication authentication) {
-        return Result.success(service.enable(
-                productId, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
-    @Operation(summary = "停用产品模板")
+    @Operation(summary = "旧产品停用入口；稳定拒绝并要求创建后台敏感变更申请")
     @PostMapping("/{productId}/disable")
     public Result<DeviceProductContracts.DetailView> disable(
             @PathVariable String productId, Authentication authentication) {
-        return Result.success(service.disable(
-                productId, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
+        throw AuditGovernanceErrors.reviewRequired();
     }
 }

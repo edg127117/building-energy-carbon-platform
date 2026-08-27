@@ -125,6 +125,29 @@ public class DeviceOnboardingService {
         return toDetail(requirePending(pendingId));
     }
 
+    /**
+     * 为公共敏感申请解析可信建筑范围，实际绑定时仍会在同一领域事务内重新校验。
+     */
+    public String resolveBindBuilding(
+            String pendingId, DeviceOnboardingContracts.BindRequest request, Set<String> roles) {
+        requireAdmin(roles);
+        requirePending(pendingId);
+        return validateOwnership(request);
+    }
+
+    /** 从持久化身份解析建筑范围，禁止公共申请使用客户端自报建筑。 */
+    public String resolveIdentityBuilding(String identityId, Set<String> roles) {
+        requireAdmin(roles);
+        BizDeviceIdentity identity = identityMapper.selectById(identityId);
+        if (identity == null) {
+            throw error(404, NOT_FOUND, "设备身份不存在");
+        }
+        if (!StringUtils.hasText(identity.getBuildingId())) {
+            throw error(409, VALIDATION_FAILED, "设备身份缺少可信建筑归属");
+        }
+        return identity.getBuildingId();
+    }
+
     @Transactional
     public DeviceOnboardingContracts.PendingDetailView updatePendingStatus(
             String pendingId,
@@ -293,16 +316,18 @@ public class DeviceOnboardingService {
                 pointResult.aliases());
     }
 
-    private void validateOwnership(DeviceOnboardingContracts.BindRequest request) {
-        if (buildingMapper.selectById(request.buildingId()) == null) {
-            throw error(404, NOT_FOUND, "目标建筑不存在");
-        }
+    private String validateOwnership(DeviceOnboardingContracts.BindRequest request) {
         BizSpace space = spaceMapper.selectById(request.spaceId());
-        if (space == null || !request.buildingId().equals(space.getBuildingId())) {
+        if (space == null) {
+            throw error(404, NOT_FOUND, "目标空间不存在");
+        }
+        String actualBuildingId = space.getBuildingId();
+        if (!request.buildingId().equals(actualBuildingId)
+                || buildingMapper.selectById(actualBuildingId) == null) {
             throw error(400, VALIDATION_FAILED, "空间不属于目标建筑");
         }
         BizSystemGroup group = groupMapper.selectById(request.systemGroupId());
-        if (group == null || !request.buildingId().equals(group.getBuildingId())) {
+        if (group == null || !actualBuildingId.equals(group.getBuildingId())) {
             throw error(400, VALIDATION_FAILED, "系统分组不属于目标建筑");
         }
         boolean existing = StringUtils.hasText(request.existingEquipmentId());
@@ -310,6 +335,18 @@ public class DeviceOnboardingService {
         if (existing == creating) {
             throw error(400, VALIDATION_FAILED, "必须且只能选择已有设备或新建设备之一");
         }
+        if (existing) {
+            BizEquipment equipment = equipmentMapper.selectById(request.existingEquipmentId());
+            if (equipment == null) {
+                throw error(404, NOT_FOUND, "目标设备不存在");
+            }
+            if (!actualBuildingId.equals(equipment.getBuildingId())
+                    || !request.spaceId().equals(equipment.getSpaceId())
+                    || !request.systemGroupId().equals(equipment.getSystemGroupId())) {
+                throw error(400, VALIDATION_FAILED, "设备、空间、系统分组与建筑归属不一致");
+            }
+        }
+        return actualBuildingId;
     }
 
     private BizEquipment resolveEquipment(

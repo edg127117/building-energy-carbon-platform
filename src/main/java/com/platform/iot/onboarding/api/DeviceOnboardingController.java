@@ -1,5 +1,6 @@
 package com.platform.iot.onboarding.api;
 
+import com.platform.audit.AuditGovernanceErrors;
 import com.platform.framework.common.Result;
 import com.platform.framework.web.PageResponse;
 import com.platform.iot.onboarding.DeviceOnboardingService;
@@ -76,29 +77,26 @@ public class DeviceOnboardingController {
                 pendingId, request, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
     }
 
-    @Operation(summary = "事务绑定设备、身份、测点和别名；身份保持停用")
+    @Operation(summary = "旧正式绑定入口；稳定拒绝并要求创建后台敏感变更申请")
     @PostMapping("/pending/{pendingId}/bind")
     public Result<DeviceOnboardingContracts.BindResultView> bind(
             @PathVariable String pendingId,
             @Valid @RequestBody DeviceOnboardingContracts.BindRequest request,
             Authentication authentication) {
-        return Result.success(service.bind(
-                pendingId, request, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
-    @Operation(summary = "启用身份并确认运行时缓存可见")
+    @Operation(summary = "旧身份启用入口；稳定拒绝并要求创建后台敏感变更申请")
     @PostMapping("/identities/{identityId}/activate")
     public Result<DeviceOnboardingContracts.IdentityStatusView> activate(
             @PathVariable String identityId, Authentication authentication) {
-        return Result.success(service.activate(
-                identityId, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
-    @Operation(summary = "停用身份并确认运行时缓存不可用")
+    @Operation(summary = "旧身份停用入口；稳定拒绝并要求创建后台敏感变更申请")
     @PostMapping("/identities/{identityId}/deactivate")
     public Result<DeviceOnboardingContracts.IdentityStatusView> deactivate(
             @PathVariable String identityId, Authentication authentication) {
-        return Result.success(service.deactivate(
-                identityId, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
+        throw AuditGovernanceErrors.reviewRequired();
     }
 }

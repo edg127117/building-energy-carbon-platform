@@ -79,6 +79,32 @@ class DeviceOnboardingApiContractTest {
                 .andExpect(jsonPath("$.errorCode").value("ONBOARDING_VALIDATION_FAILED"));
     }
 
+    @Test
+    void oldSensitiveWriteEndpointsRequireApprovedChangeRequest() throws Exception {
+        String adminToken = login("admin", "123456");
+
+        assertReviewRequired(post("/v1/device-products/PRODUCT-1/enable"), adminToken);
+        assertReviewRequired(post("/v1/device-products/PRODUCT-1/disable"), adminToken);
+        assertReviewRequired(post("/v1/device-onboarding/identities/IDENTITY-1/activate"), adminToken);
+        assertReviewRequired(post("/v1/device-onboarding/identities/IDENTITY-1/deactivate"), adminToken);
+        assertReviewRequired(post("/v1/device-onboarding/pending/PENDING-1/bind")
+                .content("""
+                        {"productId":"PRODUCT-1","buildingId":"BLD001","spaceId":"SPACE001",
+                         "systemGroupId":"GROUP001","existingEquipmentId":"EQUIP_WCR_B1",
+                         "pointBindings":[{"metricCode":"temperature","existingPointId":"POINT001"}]}
+                        """), adminToken);
+    }
+
+    private void assertReviewRequired(
+            org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request,
+            String token) throws Exception {
+        mockMvc.perform(request.header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.errorCode").value("BACKOFFICE_REVIEW_REQUIRED"))
+                .andExpect(jsonPath("$.traceId").isString());
+    }
+
     private String login(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
