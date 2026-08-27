@@ -26,6 +26,10 @@ public class AuditGovernanceProperties {
     private Duration exportCleanupDelay = Duration.ofMinutes(1);
     private String exportDirectory = java.nio.file.Path.of(
             System.getProperty("java.io.tmpdir"), "building-energy-carbon-audit-exports").toString();
+    private boolean retentionCleanupEnabled;
+    private Duration retentionCleanupDelay = Duration.ofHours(1);
+    private int retentionCleanupBatchSize = 500;
+    private int retentionCleanupMaxBatches = 20;
 
     @PostConstruct
     void validate() {
@@ -49,6 +53,11 @@ public class AuditGovernanceProperties {
         if (!positive(exportFileTtl) || !positive(exportCleanupDelay)
                 || exportDirectory == null || exportDirectory.isBlank()) {
             throw new IllegalStateException("审计导出目录、有效期或清理周期配置无效");
+        }
+        if (!positive(retentionCleanupDelay) || retentionCleanupBatchSize < 1
+                || retentionCleanupBatchSize > 10_000 || retentionCleanupMaxBatches < 1
+                || retentionCleanupMaxBatches > 10_000) {
+            throw new IllegalStateException("审计保留清理周期或批次配置无效");
         }
     }
 
@@ -92,6 +101,14 @@ public class AuditGovernanceProperties {
     public void setExportCleanupDelay(Duration value) { this.exportCleanupDelay = value; }
     public String getExportDirectory() { return exportDirectory; }
     public void setExportDirectory(String value) { this.exportDirectory = value; }
+    public boolean isRetentionCleanupEnabled() { return retentionCleanupEnabled; }
+    public void setRetentionCleanupEnabled(boolean value) { this.retentionCleanupEnabled = value; }
+    public Duration getRetentionCleanupDelay() { return retentionCleanupDelay; }
+    public void setRetentionCleanupDelay(Duration value) { this.retentionCleanupDelay = value; }
+    public int getRetentionCleanupBatchSize() { return retentionCleanupBatchSize; }
+    public void setRetentionCleanupBatchSize(int value) { this.retentionCleanupBatchSize = value; }
+    public int getRetentionCleanupMaxBatches() { return retentionCleanupMaxBatches; }
+    public void setRetentionCleanupMaxBatches(int value) { this.retentionCleanupMaxBatches = value; }
 
     private static boolean positive(Duration value) {
         return value != null && !value.isZero() && !value.isNegative();

@@ -49,6 +49,7 @@ public class SensitiveChangeService {
         dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         requireText(idempotencyKey, "幂等键不能为空");
         SensitiveOperationHandler handler = registry.require(operationCode);
+        requireOperationDuties(userId, handler);
         NormalizedSensitiveCommand normalized = handler.normalize(command);
         String hash = hash(operationCode, normalized);
         SensitiveChangeRecord existing = repository.findByIdempotency(userId, idempotencyKey).orElse(null);
@@ -85,6 +86,7 @@ public class SensitiveChangeService {
         SensitiveChangeRecord value = require(requestId, true);
         requireOwner(value, userId);
         requireStatus(value, SensitiveChangeStatus.DRAFT);
+        requireOperationDuties(userId, registry.require(value.operationCode()));
         verifyHash(value);
         LocalDateTime now = LocalDateTime.now();
         changed(repository.submit(requestId, now, TraceContext.current()));
@@ -247,6 +249,12 @@ public class SensitiveChangeService {
     private static void requireText(String value, String message) {
         if (value == null || value.isBlank()) {
             throw new BusinessException(400, AuditGovernanceErrors.REQUEST_CONFLICT, message);
+        }
+    }
+
+    private void requireOperationDuties(long userId, SensitiveOperationHandler handler) {
+        for (BackendDuty duty : handler.requiredSubmitterDuties()) {
+            dutyService.requireDuty(userId, duty);
         }
     }
 

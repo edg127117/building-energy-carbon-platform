@@ -1,5 +1,8 @@
 -- 审计治理公共基础的 H2 隔离镜像。普通测试不连接真实 MySQL 或生产账号。
 DROP TABLE IF EXISTS sys_security_audit_event;
+DROP TABLE IF EXISTS sys_audit_cleanup_run;
+DROP TABLE IF EXISTS sys_audit_evidence_hold;
+DROP TABLE IF EXISTS sys_audit_retention_policy;
 DROP TABLE IF EXISTS sys_audit_export_job;
 DROP TABLE IF EXISTS sys_password_setup_token;
 DROP TABLE IF EXISTS sys_sensitive_change_request;
@@ -175,6 +178,53 @@ CREATE INDEX idx_audit_export_owner_time
   ON sys_audit_export_job(requested_by,created_at,export_id);
 CREATE INDEX idx_audit_export_cleanup
   ON sys_audit_export_job(status,expires_at,export_id);
+
+CREATE TABLE sys_audit_retention_policy (
+  policy_id VARCHAR(32) PRIMARY KEY,
+  data_category VARCHAR(64) NOT NULL,
+  source_module VARCHAR(50) NOT NULL,
+  retention_period VARCHAR(20) NOT NULL,
+  cleanup_enabled BOOLEAN NOT NULL,
+  effective_at TIMESTAMP NOT NULL,
+  policy_version INT NOT NULL,
+  lifecycle_status VARCHAR(20) NOT NULL,
+  change_reason VARCHAR(500) NOT NULL,
+  request_id VARCHAR(32) NOT NULL,
+  approved_by BIGINT NOT NULL,
+  approved_at TIMESTAMP NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (source_module,policy_version)
+);
+
+CREATE TABLE sys_audit_evidence_hold (
+  hold_id VARCHAR(32) PRIMARY KEY,
+  source_module VARCHAR(50), audit_id VARCHAR(32), building_id VARCHAR(32),
+  action_type VARCHAR(64), object_type VARCHAR(64), object_id VARCHAR(128),
+  from_time TIMESTAMP, to_time TIMESTAMP, investigation_id VARCHAR(100),
+  reason VARCHAR(500) NOT NULL, legal_basis VARCHAR(500) NOT NULL,
+  starts_at TIMESTAMP NOT NULL, review_at TIMESTAMP NOT NULL,
+  status VARCHAR(20) NOT NULL, created_by BIGINT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  released_by BIGINT, released_at TIMESTAMP, release_request_id VARCHAR(32),
+  release_reason VARCHAR(500)
+);
+CREATE INDEX idx_audit_hold_active_source
+  ON sys_audit_evidence_hold(status,source_module,review_at,hold_id);
+
+CREATE TABLE sys_audit_cleanup_run (
+  run_id VARCHAR(32) PRIMARY KEY,
+  trigger_type VARCHAR(20) NOT NULL,
+  policy_id VARCHAR(32), policy_version INT,
+  data_category VARCHAR(64) NOT NULL, source_module VARCHAR(50) NOT NULL,
+  building_id VARCHAR(32), cutoff_time TIMESTAMP, scope_json CLOB,
+  candidate_count BIGINT NOT NULL DEFAULT 0, deleted_count BIGINT NOT NULL DEFAULT 0,
+  held_count BIGINT NOT NULL DEFAULT 0, protected_count BIGINT NOT NULL DEFAULT 0,
+  earliest_operation_time TIMESTAMP, latest_operation_time TIMESTAMP,
+  status VARCHAR(20) NOT NULL, error_code VARCHAR(64), system_actor VARCHAR(64) NOT NULL,
+  triggered_by BIGINT, trigger_request_id VARCHAR(32), trace_id VARCHAR(64) NOT NULL,
+  manifest_sha256 CHAR(64), started_at TIMESTAMP NOT NULL, completed_at TIMESTAMP
+);
+CREATE INDEX idx_audit_cleanup_status ON sys_audit_cleanup_run(status,started_at,run_id);
 
 INSERT INTO sys_backend_duty
   (duty_key,duty_name,description,status,risk_level,version)

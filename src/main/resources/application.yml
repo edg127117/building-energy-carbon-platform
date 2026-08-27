@@ -291,3 +291,8 @@ audit-governance:
   export-file-ttl: ${AUDIT_EXPORT_FILE_TTL:PT15M}
   export-cleanup-delay: ${AUDIT_EXPORT_CLEANUP_DELAY:PT1M}
   export-directory: ${AUDIT_EXPORT_DIRECTORY:${java.io.tmpdir}/building-energy-carbon-audit-exports}
+  # 研发仅有虚拟或脱敏数据时默认关闭；启用也只清理已审核策略覆盖的到期证据。
+  retention-cleanup-enabled: ${AUDIT_RETENTION_CLEANUP_ENABLED:false}
+  retention-cleanup-delay: ${AUDIT_RETENTION_CLEANUP_DELAY:PT1H}
+  retention-cleanup-batch-size: ${AUDIT_RETENTION_CLEANUP_BATCH_SIZE:500}
+  retention-cleanup-max-batches: ${AUDIT_RETENTION_CLEANUP_MAX_BATCHES:20}

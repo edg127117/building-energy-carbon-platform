@@ -17,6 +17,10 @@ public final class AuditGovernanceErrors {
     public static final String EXPORT_LIMIT_EXCEEDED = "AUDIT_EXPORT_LIMIT_EXCEEDED";
     public static final String EXPORT_NOT_READY = "AUDIT_EXPORT_NOT_READY";
     public static final String EXPORT_QUEUE_FULL = "AUDIT_EXPORT_QUEUE_FULL";
+    public static final String RETENTION_POLICY_INVALID = "AUDIT_RETENTION_POLICY_INVALID";
+    public static final String EVIDENCE_HOLD_INVALID = "AUDIT_EVIDENCE_HOLD_INVALID";
+    public static final String EVIDENCE_HOLD_CONFLICT = "AUDIT_EVIDENCE_HOLD_CONFLICT";
+    public static final String CLEANUP_SCOPE_CHANGED = "AUDIT_CLEANUP_SCOPE_CHANGED";
 
     private AuditGovernanceErrors() {
     }

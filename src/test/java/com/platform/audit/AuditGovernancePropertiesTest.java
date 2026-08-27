@@ -30,4 +30,14 @@ class AuditGovernancePropertiesTest {
                 .satisfies(error -> assertThat(((BusinessException) error).getErrorCode())
                         .isEqualTo(AuditGovernanceErrors.SELF_APPROVAL_DENIED));
     }
+
+    @Test
+    void cleanupBatchLimitsRejectUnsafeConfiguration() {
+        AuditGovernanceProperties properties = new AuditGovernanceProperties();
+        properties.setRetentionCleanupBatchSize(0);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("清理周期或批次");
+    }
 }
