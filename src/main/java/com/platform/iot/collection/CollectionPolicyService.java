@@ -1,6 +1,9 @@
 package com.platform.iot.collection;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.platform.audit.AuditGovernanceErrors;
+import com.platform.audit.BackendDuty;
+import com.platform.audit.BackendDutyService;
 import com.platform.framework.web.PageResponse;
 import com.platform.hvac.mapper.BizDataPointMapper;
 import com.platform.hvac.mapper.BizPointAliasMapper;
@@ -54,8 +57,9 @@ import static com.platform.iot.collection.api.CollectionPolicyContracts.*;
 /**
  * 数据源、别名、策略版本、审核和审计的单一 MySQL 事务边界。
  *
- * <p>角色入口之外仍在服务层校验建筑归属和草稿所有者。发布路径统一锁定数据源，再锁定策略，
- * 避免两个管理员并发改变活动指针；审计写入失败会让同一事务整体回滚。</p>
+ * <p>角色入口之外仍在服务层校验后台职责、建筑归属和草稿所有者。采集模块保留自己的审核表和
+ * 发布事务，只复用公共职责与研发/生产自审策略；发布路径统一锁定数据源，再锁定策略，避免两个
+ * 审核人并发改变活动指针，审计写入失败会让同一事务整体回滚。</p>
  */
 public class CollectionPolicyService {
     private static final ZoneId MYSQL_ZONE = ZoneId.of("Asia/Shanghai");
@@ -70,6 +74,7 @@ public class CollectionPolicyService {
     private final BizCollectionConfigAuditLogMapper auditMapper;
     private final BuildingScopeService buildingScopeService;
     private final CollectionRuntimeStateService runtimeStateService;
+    private final BackendDutyService dutyService;
 
     public PageResponse<DataSourceView> listSources(Long userId, Collection<String> roles,
                                                     String buildingId, int page, int size) {
@@ -224,7 +229,8 @@ public class CollectionPolicyService {
 
     @Transactional(rollbackFor = Exception.class)
     public ReviewView submitSource(Long userId, Collection<String> roles, String sourceId, String comment) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         BizDataSource source = requireLockedSource(sourceId);
         buildingScopeService.checkAccess(userId, roles, source.getBuildingId());
         requireDraftOwner(source.getCreateBy(), userId);
@@ -232,59 +238,53 @@ public class CollectionPolicyService {
             throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "草稿数据源配置包不完整");
         }
         aliases(sourceId).forEach(alias -> requireInitialDraft(alias.getAliasId()));
-        return submitReview(userId, source, ReviewTargetType.SOURCE_ACTIVATION,
+        return submitReview(userId, roles, source, ReviewTargetType.SOURCE_ACTIVATION,
                 sourceId, source.getConfigRevision(), comment);
     }
 
     @Transactional(rollbackFor = Exception.class)
     public ReviewView submitAlias(Long userId, Collection<String> roles, String sourceId,
                                   String aliasId, String comment) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         BizDataSource source = requireLockedSource(sourceId);
         BizPointAlias alias = requireLockedAlias(aliasId);
         requireAliasSource(alias, source);
         buildingScopeService.checkAccess(userId, roles, source.getBuildingId());
         requireDraftOwner(alias.getCreateBy(), userId);
         requireInitialDraft(aliasId);
-        return submitReview(userId, source, ReviewTargetType.ALIAS_ACTIVATION,
+        return submitReview(userId, roles, source, ReviewTargetType.ALIAS_ACTIVATION,
                 aliasId, source.getConfigRevision(), comment);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public DataSourceView enableSource(Long userId, Collection<String> roles,
-                                       String sourceId, String reason) {
+    public ReviewView submitSourceEnable(Long userId, Collection<String> roles,
+                                         String sourceId, String reason) {
         requireAdmin(roles);
         BizDataSource source = requireLockedSource(sourceId);
         if (SourceStatus.DRAFT.name().equals(source.getStatus())) {
-            publishSourcePackage(source, userId, reason, null);
-        } else if (SourceStatus.DISABLED.name().equals(source.getStatus())) {
-            validateFormalConfiguration(source);
-            source.setStatus(SourceStatus.ENABLED.name());
-            bumpRuntime(source, userId);
-            audit(userId, source.getBuildingId(), "REENABLE_SOURCE", "DATA_SOURCE",
-                    sourceId, null, "status=DISABLED", "status=ENABLED");
-        } else {
+            throw AuditGovernanceErrors.reviewRequired();
+        }
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        if (!SourceStatus.DISABLED.name().equals(source.getStatus())) {
             throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "数据源已启用");
         }
-        runtimeStateService.refreshAfterCommit(sourceId, source.getRuntimeRevision());
-        return sourceView(source, roles);
+        validateFormalConfiguration(source);
+        return submitReview(userId, roles, source, ReviewTargetType.SOURCE_ACTIVATION,
+                sourceId, source.getConfigRevision(), reason);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public DataSourceView disableSource(Long userId, Collection<String> roles,
-                                        String sourceId, String reason) {
+    public ReviewView submitSourceDisable(Long userId, Collection<String> roles,
+                                          String sourceId, String reason) {
         requireAdmin(roles);
-        requireText(reason, "停用原因不能为空");
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         BizDataSource source = requireLockedSource(sourceId);
         if (!SourceStatus.ENABLED.name().equals(source.getStatus())) {
             throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "只有已启用数据源可以停用");
         }
-        source.setStatus(SourceStatus.DISABLED.name());
-        bumpRuntime(source, userId);
-        audit(userId, source.getBuildingId(), "DISABLE_SOURCE", "DATA_SOURCE",
-                sourceId, null, "status=ENABLED", "status=DISABLED;reason=" + safe(reason));
-        runtimeStateService.refreshAfterCommit(sourceId, source.getRuntimeRevision());
-        return sourceView(source, roles);
+        return submitReview(userId, roles, source, ReviewTargetType.SOURCE_DEACTIVATION,
+                sourceId, source.getConfigRevision(), reason);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -322,54 +322,37 @@ public class CollectionPolicyService {
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public AliasView enableAlias(Long userId, Collection<String> roles, String sourceId,
-                                 String aliasId, String reason) {
+    public ReviewView submitAliasEnable(Long userId, Collection<String> roles, String sourceId,
+                                        String aliasId, String reason) {
         requireAdmin(roles);
         BizDataSource source = requireLockedSource(sourceId);
         BizPointAlias alias = requireLockedAlias(aliasId);
         requireAliasSource(alias, source);
         if (Integer.valueOf(2).equals(alias.getStatus())) {
-            publishInitialPolicy(source, alias, userId, now());
-        } else if (Integer.valueOf(0).equals(alias.getStatus())) {
-            requireActivePolicy(aliasId);
-            alias.setStatus(1);
-            alias.setUpdateBy(userId);
-            alias.setUpdateTime(now());
-            aliasMapper.updateById(alias);
-        } else {
+            throw AuditGovernanceErrors.reviewRequired();
+        }
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        if (!Integer.valueOf(0).equals(alias.getStatus())) {
             throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "别名已启用");
         }
-        bumpRuntime(source, userId);
-        audit(userId, source.getBuildingId(), "ENABLE_ALIAS", "POINT_ALIAS",
-                aliasId, null, null, "status=ENABLED;reason=" + safe(reason));
-        if (SourceStatus.ENABLED.name().equals(source.getStatus())) {
-            runtimeStateService.refreshAfterCommit(sourceId, source.getRuntimeRevision());
-        }
-        return aliasView(alias, roles);
+        requireActivePolicy(aliasId);
+        return submitReview(userId, roles, source, ReviewTargetType.ALIAS_ACTIVATION,
+                aliasId, source.getConfigRevision(), reason);
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public AliasView disableAlias(Long userId, Collection<String> roles, String sourceId,
-                                  String aliasId, String reason) {
+    public ReviewView submitAliasDisable(Long userId, Collection<String> roles, String sourceId,
+                                         String aliasId, String reason) {
         requireAdmin(roles);
-        requireText(reason, "停用原因不能为空");
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         BizDataSource source = requireLockedSource(sourceId);
         BizPointAlias alias = requireLockedAlias(aliasId);
         requireAliasSource(alias, source);
         if (!Integer.valueOf(1).equals(alias.getStatus())) {
             throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "只有已启用别名可以停用");
         }
-        alias.setStatus(0);
-        alias.setUpdateBy(userId);
-        alias.setUpdateTime(now());
-        aliasMapper.updateById(alias);
-        bumpRuntime(source, userId);
-        audit(userId, source.getBuildingId(), "DISABLE_ALIAS", "POINT_ALIAS",
-                aliasId, null, "status=ENABLED", "status=DISABLED;reason=" + safe(reason));
-        if (SourceStatus.ENABLED.name().equals(source.getStatus())) {
-            runtimeStateService.refreshAfterCommit(sourceId, source.getRuntimeRevision());
-        }
-        return aliasView(alias, roles);
+        return submitReview(userId, roles, source, ReviewTargetType.ALIAS_DEACTIVATION,
+                aliasId, source.getConfigRevision(), reason);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -477,30 +460,23 @@ public class CollectionPolicyService {
     @Transactional(rollbackFor = Exception.class)
     public ReviewView submitVersion(Long userId, Collection<String> roles, String policyId,
                                     String versionId, String comment) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         BizCollectionPolicy policy = requireLockedPolicy(policyId);
         BizDataSource source = requireLockedSource(policy.getSourceId());
         BizCollectionPolicyVersion version = requireVersion(versionId);
         requirePolicyVersion(policy, version);
         requireDraftOwner(version.getCreatedBy(), userId);
         buildingScopeService.checkAccess(userId, roles, policy.getBuildingId());
-        return submitReview(userId, source, ReviewTargetType.POLICY_VERSION,
+        return submitReview(userId, roles, source, ReviewTargetType.POLICY_VERSION,
                 versionId, source.getConfigRevision(), comment);
     }
 
+    /** 兼容保留旧发布入口，但始终拒绝绕过领域审核状态机。 */
     @Transactional(rollbackFor = Exception.class)
     public PolicyVersionView publishVersion(Long userId, Collection<String> roles, String policyId,
                                             String versionId, String comment) {
-        requireAdmin(roles);
-        BizCollectionPolicy policy = requireLockedPolicy(policyId);
-        BizDataSource source = requireLockedSource(policy.getSourceId());
-        BizCollectionPolicyVersion version = requireLockedVersion(versionId);
-        requirePolicyVersion(policy, version);
-        publishPolicyVersion(source, policy, version, userId, now());
-        audit(userId, policy.getBuildingId(), "DIRECT_ADMIN_PUBLISH", "COLLECTION_POLICY",
-                policyId, versionId, null, "status=ACTIVE;comment=" + safe(comment));
-        runtimeStateService.refreshAfterCommit(source.getSourceId(), source.getRuntimeRevision());
-        return versionView(version, roles);
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -532,9 +508,10 @@ public class CollectionPolicyService {
         return versionView(draft, roles);
     }
 
+    /** 创建启用标志为 false 的领域草稿；不改变当前活动版本或运行快照。 */
     @Transactional(rollbackFor = Exception.class)
-    public PolicyVersionView disablePolicy(Long userId, Collection<String> roles,
-                                           String policyId, String reason) {
+    public PolicyVersionView createPolicyDisableDraft(Long userId, Collection<String> roles,
+                                                      String policyId, String reason) {
         requireAdmin(roles);
         BizCollectionPolicy policy = requireLockedPolicy(policyId);
         BizDataSource source = requireLockedSource(policy.getSourceId());
@@ -550,10 +527,9 @@ public class CollectionPolicyService {
         versionMapper.insert(draft);
         policy.setDraftVersionId(draft.getVersionId());
         policyMapper.updateById(policy);
-        publishPolicyVersion(source, policy, draft, userId, now());
-        audit(userId, policy.getBuildingId(), "DISABLE_POLICY", "COLLECTION_POLICY",
-                policyId, draft.getVersionId(), null, "enabled=false");
-        runtimeStateService.refreshAfterCommit(source.getSourceId(), source.getRuntimeRevision());
+        bumpConfig(source, userId);
+        audit(userId, policy.getBuildingId(), "CREATE_POLICY_DISABLE_DRAFT", "COLLECTION_POLICY",
+                policyId, draft.getVersionId(), null, "status=DRAFT;enabled=false");
         return versionView(draft, roles);
     }
 
@@ -605,21 +581,32 @@ public class CollectionPolicyService {
     public ReviewView approveReview(Long reviewerId, Collection<String> roles,
                                     String requestId, String comment) {
         requireAdmin(roles);
+        dutyService.requireDuty(reviewerId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         BizCollectionReviewRequest request = requireLockedReview(requestId);
         requirePending(request);
+        dutyService.requireSeparation(request.getSubmittedBy(), reviewerId);
+        requireText(comment, "审核意见不能为空");
         BizDataSource source = lockSourceForReview(request);
         if (!Objects.equals(source.getConfigRevision(), request.getTargetConfigRevision())) {
             throw versionConflict();
         }
         LocalDateTime reviewedAt = now();
         switch (ReviewTargetType.valueOf(request.getTargetType())) {
-            case SOURCE_ACTIVATION -> publishSourcePackage(source, reviewerId, comment, request);
+            case SOURCE_ACTIVATION -> {
+                if (SourceStatus.DRAFT.name().equals(source.getStatus())) {
+                    publishSourcePackage(source, reviewerId, comment, request);
+                } else {
+                    activateSource(source, reviewerId, comment);
+                }
+            }
+            case SOURCE_DEACTIVATION -> deactivateSource(source, reviewerId, comment);
             case ALIAS_ACTIVATION -> {
                 BizPointAlias alias = requireLockedAlias(request.getTargetId());
                 requireAliasSource(alias, source);
-                publishInitialPolicy(source, alias, reviewerId, reviewedAt);
-                bumpRuntime(source, reviewerId);
+                activateAlias(source, alias, reviewerId, reviewedAt, comment);
             }
+            case ALIAS_DEACTIVATION -> deactivateAlias(
+                    source, requireLockedAlias(request.getTargetId()), reviewerId, comment);
             case POLICY_VERSION -> {
                 BizCollectionPolicyVersion version = requireLockedVersion(request.getTargetId());
                 BizCollectionPolicy policy = requireLockedPolicy(version.getPolicyId());
@@ -632,7 +619,9 @@ public class CollectionPolicyService {
         request.setReviewedAt(reviewedAt);
         request.setUpdateTime(reviewedAt);
         reviewMapper.updateById(request);
-        audit(reviewerId, request.getBuildingId(), "APPROVE_REVIEW", "REVIEW_REQUEST",
+        boolean selfApproval = Objects.equals(request.getSubmittedBy(), reviewerId);
+        audit(reviewerId, request.getBuildingId(),
+                selfApproval ? "SELF_APPROVAL_DEV_MODE" : "APPROVE_REVIEW", "REVIEW_REQUEST",
                 requestId, null, "status=PENDING", "status=APPROVED");
         runtimeStateService.refreshAfterCommit(source.getSourceId(), source.getRuntimeRevision());
         return reviewView(request, roles, reviewerId);
@@ -642,8 +631,10 @@ public class CollectionPolicyService {
     public ReviewView rejectReview(Long reviewerId, Collection<String> roles,
                                    String requestId, String reason) {
         requireAdmin(roles);
+        dutyService.requireDuty(reviewerId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         BizCollectionReviewRequest request = requireLockedReview(requestId);
         requirePending(request);
+        dutyService.requireSeparation(request.getSubmittedBy(), reviewerId);
         request.setStatus(ReviewStatus.REJECTED.name());
         request.setReviewerId(reviewerId);
         request.setReviewComment(requireText(reason, "拒绝原因不能为空"));
@@ -657,7 +648,7 @@ public class CollectionPolicyService {
 
     @Transactional(rollbackFor = Exception.class)
     public ReviewView withdrawReview(Long userId, Collection<String> roles, String requestId) {
-        requireEnergyManager(roles);
+        requireMaintainer(roles);
         BizCollectionReviewRequest request = requireLockedReview(requestId);
         requirePending(request);
         if (!Objects.equals(request.getSubmittedBy(), userId)) notVisible();
@@ -684,8 +675,8 @@ public class CollectionPolicyService {
                 .map(this::auditView).toList());
     }
 
-    private ReviewView submitReview(Long userId, BizDataSource source, ReviewTargetType type,
-                                    String targetId, int revision, String comment) {
+    private ReviewView submitReview(Long userId, Collection<String> roles, BizDataSource source,
+                                    ReviewTargetType type, String targetId, int revision, String comment) {
         requireText(comment, "提交说明不能为空");
         requireNoPending(type.name(), targetId);
         BizCollectionReviewRequest request = new BizCollectionReviewRequest();
@@ -704,7 +695,7 @@ public class CollectionPolicyService {
         audit(userId, source.getBuildingId(), "SUBMIT_REVIEW", "REVIEW_REQUEST",
                 request.getRequestId(), null, null,
                 "targetType=" + type.name() + ";targetId=" + targetId + ";revision=" + revision);
-        return reviewView(request, Set.of(FormalRole.ENERGY_MANAGER.name()), userId);
+        return reviewView(request, roles, userId);
     }
 
     private void publishSourcePackage(BizDataSource source, Long operatorId,
@@ -723,6 +714,64 @@ public class CollectionPolicyService {
         audit(operatorId, source.getBuildingId(), "ENABLE_SOURCE", "DATA_SOURCE",
                 source.getSourceId(), null, "status=DRAFT",
                 "status=ENABLED;comment=" + safe(comment));
+    }
+
+    private void activateSource(BizDataSource source, Long operatorId, String comment) {
+        if (!SourceStatus.DISABLED.name().equals(source.getStatus())) {
+            throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "只有已停用数据源可以重新启用");
+        }
+        validateFormalConfiguration(source);
+        source.setStatus(SourceStatus.ENABLED.name());
+        bumpRuntime(source, operatorId);
+        audit(operatorId, source.getBuildingId(), "REENABLE_SOURCE", "DATA_SOURCE",
+                source.getSourceId(), null, "status=DISABLED",
+                "status=ENABLED;comment=" + safe(comment));
+    }
+
+    private void deactivateSource(BizDataSource source, Long operatorId, String comment) {
+        if (!SourceStatus.ENABLED.name().equals(source.getStatus())) {
+            throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "只有已启用数据源可以停用");
+        }
+        source.setStatus(SourceStatus.DISABLED.name());
+        bumpRuntime(source, operatorId);
+        audit(operatorId, source.getBuildingId(), "DISABLE_SOURCE", "DATA_SOURCE",
+                source.getSourceId(), null, "status=ENABLED",
+                "status=DISABLED;comment=" + safe(comment));
+    }
+
+    private void activateAlias(BizDataSource source, BizPointAlias alias, Long operatorId,
+                               LocalDateTime reviewedAt, String comment) {
+        requireAliasSource(alias, source);
+        if (Integer.valueOf(2).equals(alias.getStatus())) {
+            publishInitialPolicy(source, alias, operatorId, reviewedAt);
+        } else if (Integer.valueOf(0).equals(alias.getStatus())) {
+            requireActivePolicy(alias.getAliasId());
+            alias.setStatus(1);
+            alias.setUpdateBy(operatorId);
+            alias.setUpdateTime(reviewedAt);
+            aliasMapper.updateById(alias);
+        } else {
+            throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "别名已启用");
+        }
+        bumpRuntime(source, operatorId);
+        audit(operatorId, source.getBuildingId(), "ENABLE_ALIAS", "POINT_ALIAS",
+                alias.getAliasId(), null, null, "status=ENABLED;comment=" + safe(comment));
+    }
+
+    private void deactivateAlias(BizDataSource source, BizPointAlias alias,
+                                 Long operatorId, String comment) {
+        requireAliasSource(alias, source);
+        if (!Integer.valueOf(1).equals(alias.getStatus())) {
+            throw CollectionErrors.error(409, CollectionErrors.STATE_CONFLICT, "只有已启用别名可以停用");
+        }
+        alias.setStatus(0);
+        alias.setUpdateBy(operatorId);
+        alias.setUpdateTime(now());
+        aliasMapper.updateById(alias);
+        bumpRuntime(source, operatorId);
+        audit(operatorId, source.getBuildingId(), "DISABLE_ALIAS", "POINT_ALIAS",
+                alias.getAliasId(), null, "status=ENABLED",
+                "status=DISABLED;comment=" + safe(comment));
     }
 
     private void publishInitialPolicy(BizDataSource source, BizPointAlias alias,
@@ -959,8 +1008,9 @@ public class CollectionPolicyService {
 
     private BizDataSource lockSourceForReview(BizCollectionReviewRequest request) {
         return switch (ReviewTargetType.valueOf(request.getTargetType())) {
-            case SOURCE_ACTIVATION -> requireLockedSource(request.getTargetId());
-            case ALIAS_ACTIVATION -> requireLockedSource(requireAlias(request.getTargetId()).getSourceId());
+            case SOURCE_ACTIVATION, SOURCE_DEACTIVATION -> requireLockedSource(request.getTargetId());
+            case ALIAS_ACTIVATION, ALIAS_DEACTIVATION ->
+                    requireLockedSource(requireAlias(request.getTargetId()).getSourceId());
             case POLICY_VERSION -> requireLockedSource(requirePolicy(
                     requireVersion(request.getTargetId()).getPolicyId()).getSourceId());
         };
@@ -1020,7 +1070,7 @@ public class CollectionPolicyService {
         List<String> actions = new ArrayList<>();
         if (ReviewStatus.PENDING.name().equals(request.getStatus())) {
             if (isAdmin(roles)) { actions.add("APPROVE"); actions.add("REJECT"); }
-            if (Objects.equals(request.getSubmittedBy(), userId) && hasRole(roles, FormalRole.ENERGY_MANAGER)) {
+            if (Objects.equals(request.getSubmittedBy(), userId) && hasAnyMaintainer(roles)) {
                 actions.add("WITHDRAW");
             }
         }
@@ -1053,12 +1103,12 @@ public class CollectionPolicyService {
 
     private List<String> sourceActions(BizDataSource source, Collection<String> roles) {
         List<String> actions = new ArrayList<>();
-        if (SourceStatus.DRAFT.name().equals(source.getStatus()) && hasRole(roles, FormalRole.ENERGY_MANAGER)) {
+        if (SourceStatus.DRAFT.name().equals(source.getStatus()) && hasAnyMaintainer(roles)) {
             actions.add("UPDATE"); actions.add("SUBMIT");
         }
         if (isAdmin(roles)) {
-            if (!SourceStatus.ENABLED.name().equals(source.getStatus())) actions.add("ENABLE");
-            if (SourceStatus.ENABLED.name().equals(source.getStatus())) actions.add("DISABLE");
+            if (SourceStatus.DISABLED.name().equals(source.getStatus())) actions.add("SUBMIT_ENABLE");
+            if (SourceStatus.ENABLED.name().equals(source.getStatus())) actions.add("SUBMIT_DISABLE");
             if (SourceStatus.DRAFT.name().equals(source.getStatus())) actions.add("DELETE");
             actions.add("RUNTIME_REFRESH");
         }
@@ -1067,9 +1117,9 @@ public class CollectionPolicyService {
 
     private List<String> aliasActions(BizPointAlias alias, Collection<String> roles) {
         if (isAdmin(roles)) return switch (aliasStatus(alias.getStatus())) {
-            case DRAFT -> List.of("ENABLE", "DELETE");
-            case ENABLED -> List.of("DISABLE");
-            case DISABLED -> List.of("ENABLE");
+            case DRAFT -> List.of("SUBMIT", "DELETE");
+            case ENABLED -> List.of("SUBMIT_DISABLE");
+            case DISABLED -> List.of("SUBMIT_ENABLE");
         };
         if (hasRole(roles, FormalRole.ENERGY_MANAGER) && Integer.valueOf(2).equals(alias.getStatus())) {
             return List.of("SUBMIT");
@@ -1080,7 +1130,8 @@ public class CollectionPolicyService {
     private List<String> policyActions(BizCollectionPolicy policy, Collection<String> roles) {
         List<String> actions = new ArrayList<>();
         if (policy.getDraftVersionId() == null && hasAnyMaintainer(roles)) actions.add("CREATE_VERSION");
-        if (isAdmin(roles) && policy.getActiveVersionId() != null) actions.add("DISABLE");
+        if (isAdmin(roles) && policy.getActiveVersionId() != null
+                && policy.getDraftVersionId() == null) actions.add("CREATE_DISABLE_DRAFT");
         return List.copyOf(actions);
     }
 
@@ -1088,7 +1139,7 @@ public class CollectionPolicyService {
         if (!PolicyVersionStatus.DRAFT.name().equals(version.getStatus())) {
             return hasAnyMaintainer(roles) ? List.of("COPY") : List.of();
         }
-        if (isAdmin(roles)) return List.of("UPDATE", "PUBLISH", "DELETE");
+        if (isAdmin(roles)) return List.of("UPDATE", "SUBMIT", "DELETE");
         if (hasRole(roles, FormalRole.ENERGY_MANAGER)) return List.of("UPDATE", "SUBMIT", "DELETE");
         return List.of();
     }

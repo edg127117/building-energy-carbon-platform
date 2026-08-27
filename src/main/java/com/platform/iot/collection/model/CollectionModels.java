@@ -8,7 +8,13 @@ public final class CollectionModels {
     public enum AliasStatus { DRAFT, ENABLED, DISABLED }
     public enum PolicyVersionStatus { DRAFT, ACTIVE, RETIRED }
     public enum ReviewStatus { PENDING, APPROVED, REJECTED, WITHDRAWN }
-    public enum ReviewTargetType { SOURCE_ACTIVATION, ALIAS_ACTIVATION, POLICY_VERSION }
+    public enum ReviewTargetType {
+        SOURCE_ACTIVATION,
+        SOURCE_DEACTIVATION,
+        ALIAS_ACTIVATION,
+        ALIAS_DEACTIVATION,
+        POLICY_VERSION
+    }
     public enum RetentionMode { FIXED_DAYS, LONG_TERM }
     public enum ChangeType { CREATE, UPDATE, DISABLE, ROLLBACK, INITIAL_MIGRATION }
     public enum ChangeSource { MANUAL, INITIAL_MIGRATION }
