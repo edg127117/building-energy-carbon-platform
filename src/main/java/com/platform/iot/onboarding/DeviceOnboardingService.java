@@ -174,7 +174,7 @@ public class DeviceOnboardingService {
             throw error(409, STATE_CONFLICT, "待绑定状态已被其他操作修改");
         }
         pending.setStatus(next);
-        auditService.record(operatorId,
+        auditService.record(operatorId, null,
                 "IGNORED".equals(next) ? "PENDING_IGNORE" : "PENDING_RESTORE",
                 "PENDING_DEVICE", pendingId,
                 Map.of("status", before),
@@ -277,7 +277,7 @@ public class DeviceOnboardingService {
         if (pendingMapper.updateStatus(pendingId, "DISCOVERED", "BOUND", identity.getIdentityId()) != 1) {
             throw error(409, STATE_CONFLICT, "待绑定状态已被其他操作修改");
         }
-        auditService.record(operatorId, "PENDING_BIND", "PENDING_DEVICE", pendingId,
+        auditService.record(operatorId, equipment.getBuildingId(), "PENDING_BIND", "PENDING_DEVICE", pendingId,
                 Map.of("status", "DISCOVERED"),
                 Map.of(
                         "status", "BOUND",
@@ -288,21 +288,21 @@ public class DeviceOnboardingService {
                         "pointCount", pointResult.pointIds().size(),
                         "aliasCount", pointResult.aliases().size()));
         if (request.newEquipment() != null) {
-            auditService.record(operatorId, "EQUIPMENT_CREATE", "EQUIPMENT", equipment.getEquipId(),
+            auditService.record(operatorId, equipment.getBuildingId(), "EQUIPMENT_CREATE", "EQUIPMENT", equipment.getEquipId(),
                     null, Map.of(
                             "buildingId", equipment.getBuildingId(),
                             "systemGroupId", equipment.getSystemGroupId(),
                             "spaceId", equipment.getSpaceId(),
                             "productId", product.getProductId()));
         }
-        auditService.record(operatorId, "IDENTITY_CREATE", "DEVICE_IDENTITY", identity.getIdentityId(),
+        auditService.record(operatorId, identity.getBuildingId(), "IDENTITY_CREATE", "DEVICE_IDENTITY", identity.getIdentityId(),
                 null, Map.of(
                         "buildingId", identity.getBuildingId(),
                         "equipmentId", identity.getEquipId(),
                         "profileCode", identity.getExpectedProfileCode(),
                         "status", 0));
         for (BoundAlias alias : pointResult.aliases()) {
-            auditService.record(operatorId,
+            auditService.record(operatorId, alias.key().buildingId(),
                     alias.created() ? "POINT_ALIAS_CREATE" : "POINT_ALIAS_REUSE",
                     "POINT_ALIAS", alias.aliasId(), null,
                     Map.of(
@@ -595,7 +595,7 @@ public class DeviceOnboardingService {
         identity.setStatus(next);
         identity.setUpdateTime(new Date());
         identityMapper.updateById(identity);
-        auditService.record(operatorId, next == 1 ? "IDENTITY_ACTIVATE" : "IDENTITY_DEACTIVATE",
+        auditService.record(operatorId, identity.getBuildingId(), next == 1 ? "IDENTITY_ACTIVATE" : "IDENTITY_DEACTIVATE",
                 "DEVICE_IDENTITY", identityId,
                 Map.of("status", before), Map.of("status", next, "buildingId", identity.getBuildingId()));
         return new IdentityChange(

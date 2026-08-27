@@ -2,8 +2,10 @@ package com.platform.iot.collection;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.platform.audit.AuditGovernanceErrors;
+import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.BackendDuty;
 import com.platform.audit.BackendDutyService;
+import com.platform.audit.TraceContext;
 import com.platform.framework.web.PageResponse;
 import com.platform.hvac.mapper.BizDataPointMapper;
 import com.platform.hvac.mapper.BizPointAliasMapper;
@@ -75,6 +77,7 @@ public class CollectionPolicyService {
     private final BuildingScopeService buildingScopeService;
     private final CollectionRuntimeStateService runtimeStateService;
     private final BackendDutyService dutyService;
+    private final AuditGovernanceProperties auditProperties;
 
     public PageResponse<DataSourceView> listSources(Long userId, Collection<String> roles,
                                                     String buildingId, int page, int size) {
@@ -999,9 +1002,13 @@ public class CollectionPolicyService {
         audit.setObjectType(objectType);
         audit.setObjectId(objectId);
         audit.setVersionId(versionId);
+        audit.setReviewRequestId("REVIEW_REQUEST".equals(objectType) ? objectId : null);
         audit.setBeforeSummary(trimSummary(before));
         audit.setAfterSummary(trimSummary(after));
         audit.setResult("SUCCESS");
+        audit.setTraceId(TraceContext.current());
+        audit.setEnvironmentMode(auditProperties.getEnvironmentMode().name());
+        audit.setSelfApprovalDevMode("SELF_APPROVAL_DEV_MODE".equals(action));
         audit.setOperationTime(now());
         auditMapper.insert(audit);
     }

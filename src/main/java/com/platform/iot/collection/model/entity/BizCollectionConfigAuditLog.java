@@ -20,8 +20,13 @@ public class BizCollectionConfigAuditLog {
     private String objectType;
     private String objectId;
     private String versionId;
+    private String reviewRequestId;
     private String beforeSummary;
     private String afterSummary;
     private String result;
+    private String reasonCode;
+    private String traceId;
+    private String environmentMode;
+    private Boolean selfApprovalDevMode;
     private LocalDateTime operationTime;
 }

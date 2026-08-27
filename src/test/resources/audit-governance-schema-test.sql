@@ -1,5 +1,6 @@
 -- 审计治理公共基础的 H2 隔离镜像。普通测试不连接真实 MySQL 或生产账号。
 DROP TABLE IF EXISTS sys_security_audit_event;
+DROP TABLE IF EXISTS sys_audit_export_job;
 DROP TABLE IF EXISTS sys_password_setup_token;
 DROP TABLE IF EXISTS sys_sensitive_change_request;
 DROP TABLE IF EXISTS sys_user_backend_duty;
@@ -124,6 +125,56 @@ CREATE INDEX idx_security_audit_trace
   ON sys_security_audit_event(trace_id);
 CREATE INDEX idx_security_audit_retention
   ON sys_security_audit_event(operation_time,audit_id);
+
+ALTER TABLE biz_collection_config_audit_log ADD COLUMN review_request_id VARCHAR(32);
+ALTER TABLE biz_collection_config_audit_log ADD COLUMN reason_code VARCHAR(64);
+ALTER TABLE biz_collection_config_audit_log ADD COLUMN trace_id VARCHAR(64);
+ALTER TABLE biz_collection_config_audit_log ADD COLUMN environment_mode VARCHAR(20);
+ALTER TABLE biz_collection_config_audit_log ADD COLUMN self_approval_dev_mode BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE biz_quality_usage_audit_log ADD COLUMN review_request_id VARCHAR(32);
+ALTER TABLE biz_quality_usage_audit_log ADD COLUMN trace_id VARCHAR(64);
+ALTER TABLE biz_quality_usage_audit_log ADD COLUMN environment_mode VARCHAR(20);
+ALTER TABLE biz_quality_usage_audit_log ADD COLUMN self_approval_dev_mode BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE biz_device_parameter_audit_log ADD COLUMN review_request_id VARCHAR(32);
+ALTER TABLE biz_device_parameter_audit_log ADD COLUMN trace_id VARCHAR(64);
+ALTER TABLE biz_device_parameter_audit_log ADD COLUMN environment_mode VARCHAR(20);
+ALTER TABLE biz_device_parameter_audit_log ADD COLUMN self_approval_dev_mode BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE biz_relation_audit_log ADD COLUMN actor_type VARCHAR(20);
+ALTER TABLE biz_relation_audit_log ADD COLUMN trace_id VARCHAR(64);
+ALTER TABLE biz_relation_audit_log ADD COLUMN environment_mode VARCHAR(20);
+ALTER TABLE biz_relation_audit_log ADD COLUMN self_approval_dev_mode BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN building_id VARCHAR(32);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN actor_type VARCHAR(20);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN version_id VARCHAR(32);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN review_request_id VARCHAR(32);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN reason_code VARCHAR(64);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN trace_id VARCHAR(64);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN environment_mode VARCHAR(20);
+ALTER TABLE biz_onboarding_audit_log ADD COLUMN self_approval_dev_mode BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE sys_audit_export_job (
+  export_id VARCHAR(32) PRIMARY KEY,
+  requested_by BIGINT NOT NULL,
+  purpose VARCHAR(500) NOT NULL,
+  query_json CLOB NOT NULL,
+  query_sha256 CHAR(64) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  row_count INT,
+  file_path VARCHAR(1000),
+  file_sha256 CHAR(64),
+  expires_at TIMESTAMP NOT NULL,
+  error_code VARCHAR(64),
+  trace_id VARCHAR(64) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TIMESTAMP,
+  completed_at TIMESTAMP,
+  downloaded_by BIGINT,
+  downloaded_at TIMESTAMP
+);
+CREATE INDEX idx_audit_export_owner_time
+  ON sys_audit_export_job(requested_by,created_at,export_id);
+CREATE INDEX idx_audit_export_cleanup
+  ON sys_audit_export_job(status,expires_at,export_id);
 
 INSERT INTO sys_backend_duty
   (duty_key,duty_name,description,status,risk_level,version)

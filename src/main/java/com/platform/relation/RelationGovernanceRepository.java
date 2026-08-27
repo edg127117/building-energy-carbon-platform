@@ -1,5 +1,7 @@
 package com.platform.relation;
 
+import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.TraceContext;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,6 +26,7 @@ import java.util.Set;
 public class RelationGovernanceRepository {
     @Qualifier("mysqlJdbcTemplate")
     private final JdbcTemplate jdbc;
+    private final AuditGovernanceProperties auditProperties;
 
     public boolean buildingExists(String buildingId) {
         Long count = jdbc.queryForObject(
@@ -756,12 +759,14 @@ public class RelationGovernanceRepository {
             String reason, String summary, String idempotencyKey, String requestHash) {
         jdbc.update("""
                 INSERT INTO biz_relation_audit_log
-                (audit_id,building_id,operator_id,action_type,object_type,object_id,version_id,
-                 request_id,before_state,after_state,reason,result,summary,idempotency_key,
-                 request_sha256,operation_time)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,'SUCCESS',?,?,?,CURRENT_TIMESTAMP)
+                (audit_id,building_id,actor_type,operator_id,action_type,object_type,object_id,version_id,
+                 request_id,before_state,after_state,reason,result,trace_id,environment_mode,
+                 self_approval_dev_mode,summary,idempotency_key,request_sha256,operation_time)
+                VALUES (?,?, 'USER',?,?,?,?,?,?,?,?,?,'SUCCESS',?,?,?,?,?,?,CURRENT_TIMESTAMP)
                 """, id(), buildingId, operatorId, action, objectType, objectId, versionId,
-                requestId, beforeState, afterState, reason, summary, idempotencyKey, requestHash);
+                requestId, beforeState, afterState, reason, TraceContext.current(),
+                auditProperties.getEnvironmentMode().name(), "SELF_APPROVAL_DEV_MODE".equals(action),
+                summary, idempotencyKey, requestHash);
     }
 
     public Optional<AuditRow> findAuditByIdempotency(String key) {

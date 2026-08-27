@@ -1,5 +1,7 @@
 package com.platform.iot.deviceparameter;
 
+import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.TraceContext;
 import com.platform.iot.deviceparameter.DeviceParameterModels.Applicability;
 import com.platform.iot.deviceparameter.DeviceParameterModels.Candidate;
 import com.platform.iot.deviceparameter.DeviceParameterModels.ChangeType;
@@ -40,6 +42,7 @@ import java.util.Optional;
 public class DeviceParameterJdbcRepository {
     @Qualifier("mysqlJdbcTemplate")
     private final JdbcTemplate jdbc;
+    private final AuditGovernanceProperties auditProperties;
 
     public Optional<EquipmentIdentity> findEquipment(String equipmentId) {
         return jdbc.query("""
@@ -930,12 +933,14 @@ public class DeviceParameterJdbcRepository {
         jdbc.update("""
                 INSERT INTO biz_device_parameter_audit_log
                 (audit_id,building_id,actor_type,operator_id,action_type,object_type,object_id,
-                 version_id,before_summary,after_summary,result,reason_code,idempotency_key,
-                 request_sha256,operation_time)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                 version_id,review_request_id,before_summary,after_summary,result,reason_code,trace_id,
+                 environment_mode,self_approval_dev_mode,idempotency_key,request_sha256,operation_time)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
                 """, auditId, buildingId, actorType, operatorId, actionType, objectType, objectId,
-                versionId, beforeSummary, afterSummary, result, reasonCode, idempotencyKey,
-                requestSha256);
+                versionId, "REVIEW_REQUEST".equals(objectType) ? objectId : null,
+                beforeSummary, afterSummary, result, reasonCode, TraceContext.current(),
+                auditProperties.getEnvironmentMode().name(), "SELF_APPROVAL_DEV_MODE".equals(actionType),
+                idempotencyKey, requestSha256);
     }
 
     public boolean auditExistsByIdempotency(String idempotencyKey) {
