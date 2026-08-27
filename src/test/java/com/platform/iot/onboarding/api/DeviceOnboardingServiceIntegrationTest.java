@@ -1,5 +1,12 @@
 package com.platform.iot.onboarding.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.audit.BackendDuty;
+import com.platform.audit.TraceContext;
+import com.platform.audit.sensitive.SensitiveChangeRecord;
+import com.platform.audit.sensitive.SensitiveChangeService;
+import com.platform.audit.sensitive.SensitiveChangeStatus;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.identity.DeviceIdentityKey;
 import com.platform.iot.identity.MySqlDeviceIdentityProvider;
@@ -9,15 +16,19 @@ import com.platform.iot.onboarding.OnboardingErrors;
 import com.platform.iot.onboarding.mapper.BizPendingDeviceMapper;
 import com.platform.iot.onboarding.model.entity.BizPendingDevice;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -33,9 +44,25 @@ class DeviceOnboardingServiceIntegrationTest {
     @Autowired private BizPendingDeviceMapper pendingMapper;
     @Autowired private MySqlDeviceIdentityProvider identityProvider;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private SensitiveChangeService sensitiveChangeService;
+    @Autowired private ObjectMapper objectMapper;
+
+    @BeforeEach
+    void prepareSensitiveDuties() {
+        jdbcTemplate.update("DELETE FROM sys_security_audit_event");
+        jdbcTemplate.update("DELETE FROM sys_sensitive_change_request");
+        jdbcTemplate.update("DELETE FROM sys_user_backend_duty");
+        grant(BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grant(BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
+        MDC.put(TraceContext.MDC_KEY, "abcdef0123456789abcdef0123456789");
+    }
 
     @AfterEach
     void cleanCreatedRecords() {
+        MDC.remove(TraceContext.MDC_KEY);
+        jdbcTemplate.update("DELETE FROM sys_security_audit_event");
+        jdbcTemplate.update("DELETE FROM sys_sensitive_change_request");
+        jdbcTemplate.update("DELETE FROM sys_user_backend_duty");
         jdbcTemplate.update("DELETE FROM biz_pending_device WHERE identity_value LIKE 'BTEST-%'");
         jdbcTemplate.update("DELETE FROM biz_onboarding_audit_log");
         jdbcTemplate.update("DELETE FROM biz_point_alias WHERE source_point_code LIKE '%BTEST-%'");
@@ -55,6 +82,66 @@ class DeviceOnboardingServiceIntegrationTest {
                 """);
         jdbcTemplate.update("DELETE FROM biz_device_product WHERE product_code LIKE 'BTEST_%'");
         identityProvider.refreshAll();
+    }
+
+    @Test
+    void approvedSensitiveChangesReuseOnboardingTransactionsAndTrustedBuildingScope() {
+        DeviceProductContracts.DetailView draft = productService.create(
+                productRequest("BTEST_PRODUCT_APPROVED"), 1L, ADMIN);
+        SensitiveChangeRecord enabled = executeSensitive(
+                "ENABLE_DEVICE_PRODUCT",
+                objectMapper.createObjectNode().put("productId", draft.productId()),
+                "approved-product-enable");
+        assertThat(enabled.status()).isEqualTo(SensitiveChangeStatus.EXECUTED);
+        assertThat(enabled.buildingId()).isNull();
+        insertPending("BTEST-PENDING-APPROVED", PREFIX + "DEVICE-APPROVED", "DISCOVERED");
+
+        var bind = objectMapper.createObjectNode()
+                .put("pendingId", "BTEST-PENDING-APPROVED")
+                .put("productId", draft.productId())
+                .put("buildingId", "BLD001")
+                .put("spaceId", "SPACE001")
+                .put("systemGroupId", "GROUP001")
+                .put("existingEquipmentId", "EQUIP_WCR_B1");
+        bind.putArray("pointBindings").addObject()
+                .put("metricCode", "temperature")
+                .put("existingPointId", "POINT001");
+        JsonNode spoofedBuilding = bind.deepCopy().put("buildingId", "BLD002");
+        assertThatThrownBy(() -> sensitiveChangeService.createDraft(
+                1L, "BIND_PENDING_DEVICE", spoofedBuilding, "spoofed-building-bind"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(OnboardingErrors.VALIDATION_FAILED));
+        SensitiveChangeRecord bound = executeSensitive(
+                "BIND_PENDING_DEVICE", bind, "approved-pending-bind");
+        assertThat(bound.buildingId()).isEqualTo("BLD001");
+
+        String identityId = jdbcTemplate.queryForObject(
+                "SELECT identity_id FROM biz_device_identity WHERE identity_value=?",
+                String.class, PREFIX + "DEVICE-APPROVED");
+        SensitiveChangeRecord activated = executeSensitive(
+                "ACTIVATE_DEVICE_IDENTITY",
+                objectMapper.createObjectNode().put("identityId", identityId),
+                "approved-identity-activate");
+        assertThat(activated.buildingId()).isEqualTo("BLD001");
+        executeSensitive("DEACTIVATE_DEVICE_IDENTITY",
+                objectMapper.createObjectNode().put("identityId", identityId),
+                "approved-identity-deactivate");
+        executeSensitive("DISABLE_DEVICE_PRODUCT",
+                objectMapper.createObjectNode().put("productId", draft.productId()),
+                "approved-product-disable");
+
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM biz_device_identity WHERE identity_id=?", Integer.class, identityId))
+                .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT status FROM biz_device_product WHERE product_id=?", String.class, draft.productId()))
+                .isEqualTo("DISABLED");
+        assertThat(jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM biz_onboarding_audit_log
+                WHERE action_type IN ('PRODUCT_ENABLE','PENDING_BIND','IDENTITY_ACTIVATE',
+                                      'IDENTITY_DEACTIVATE','PRODUCT_DISABLE')
+                """, Integer.class)).isEqualTo(5);
     }
 
     @Test
@@ -263,5 +350,24 @@ class DeviceOnboardingServiceIntegrationTest {
         pending.setCreateTime(now);
         pending.setUpdateTime(now);
         pendingMapper.insert(pending);
+    }
+
+    private SensitiveChangeRecord executeSensitive(
+            String operationCode, JsonNode command, String idempotencyKey) {
+        SensitiveChangeRecord draft = sensitiveChangeService.createDraft(
+                1L, operationCode, command, idempotencyKey);
+        sensitiveChangeService.submit(1L, draft.requestId());
+        sensitiveChangeService.approve(1L, draft.requestId(), "研发阶段完整两步审批");
+        return sensitiveChangeService.execute(1L, draft.requestId()).change();
+    }
+
+    private void grant(BackendDuty duty) {
+        LocalDateTime now = LocalDateTime.now().minusMinutes(1);
+        jdbcTemplate.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by,created_at)
+                VALUES (?,?,?,'ACTIVE',?,?,?)
+                """, UUID.randomUUID().toString().replace("-", ""), 1L, duty.name(),
+                Timestamp.valueOf(now), 1L, Timestamp.valueOf(now));
     }
 }
