@@ -1,5 +1,6 @@
 package com.platform.iot.qualityusage.governance;
 
+import com.platform.audit.BackendDuty;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.qualityusage.governance.api.QualityUsageGovernanceContracts.ChangeSetCreateRequest;
 import com.platform.iot.qualityusage.governance.api.QualityUsageGovernanceContracts.ChangeSetUpdateRequest;
@@ -17,8 +18,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -52,6 +56,9 @@ class QualityUsageGovernanceServiceIntegrationTest {
     void seedGovernanceDirectoryAndScopes() {
         jdbc.update("INSERT INTO sys_user_building(user_id,building_id) VALUES (?,?)", ENERGY, "BLD001");
         jdbc.update("INSERT INTO sys_user_building(user_id,building_id) VALUES (?,?)", OTHER_ENERGY, "BLD001");
+        grantDuty(ENERGY, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grantDuty(ADMIN, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        grantDuty(ADMIN, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         jdbc.update("""
                 INSERT INTO biz_quality_usage_scenario
                   (scenario_id,scenario_code,scenario_name,adapter_type,status,introduced_version)
@@ -158,13 +165,25 @@ class QualityUsageGovernanceServiceIntegrationTest {
     }
 
     @Test
-    void adminDirectPublishAllowsExplicitEmptySetAndRollbackCopiesHistoricalVersion() {
+    void oldDirectPublicationIsRejectedAndDevelopmentSelfApprovalPreservesRollbackFlow() {
         ChangeSetView direct = service.createChangeSet(ADMIN, ADMIN_ROLE,
-                changeSet("管理员直接发布", policy("POINT004", "POINT_HISTORY_VIEW", List.of())));
-        var directReview = service.directPublish(ADMIN, ADMIN_ROLE, direct.changeSetId(),
-                "direct-001", "显式禁止历史消费");
-        assertThat(directReview.reviewMode()).isEqualTo("DIRECT_PUBLISH");
-        assertThat(directReview.status()).isEqualTo("APPROVED");
+                changeSet("管理员完整两步发布", policy("POINT004", "POINT_HISTORY_VIEW", List.of())));
+        assertThatThrownBy(() -> service.directPublish(ADMIN, ADMIN_ROLE, direct.changeSetId(),
+                "direct-001", "绕过审核发布"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode()).isEqualTo("BACKOFFICE_REVIEW_REQUIRED"));
+
+        var submitted = service.submit(ADMIN, ADMIN_ROLE, direct.changeSetId(),
+                "self-submit-001", "研发阶段完整提交");
+        var approved = service.approve(ADMIN, ADMIN_ROLE, submitted.requestId(),
+                "self-approve-001", "研发阶段自审批准");
+        assertThat(approved.reviewMode()).isEqualTo("NORMAL");
+        assertThat(approved.status()).isEqualTo("APPROVED");
+        assertThat(approved.reviewComment()).isEqualTo("研发阶段自审批准");
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_quality_usage_audit_log
+                WHERE action_type='SELF_APPROVAL_DEV_MODE' AND operator_id=?
+                """, Integer.class, ADMIN)).isEqualTo(1);
         PolicyVersionView v1 = service.changeSetDetail(ADMIN, ADMIN_ROLE, direct.changeSetId())
                 .policyVersions().getFirst();
         assertThat(v1.allowedQualities()).isEmpty();
@@ -173,8 +192,9 @@ class QualityUsageGovernanceServiceIntegrationTest {
                 new ChangeSetCreateRequest("BLD001", "复制回滚版本", null,
                         List.of(new PolicyDraftRequest("POINT004", "POINT_HISTORY_VIEW", List.of(),
                                 v1.versionId(), "复制正式历史版本"))));
-        var submitted = service.submit(ENERGY, ENERGY_ROLE, rollback.changeSetId(), "rollback-submit", "提交复制");
-        service.approve(ADMIN, ADMIN_ROLE, submitted.requestId(), "rollback-approve", "批准复制");
+        var rollbackSubmitted = service.submit(ENERGY, ENERGY_ROLE, rollback.changeSetId(),
+                "rollback-submit", "提交复制");
+        service.approve(ADMIN, ADMIN_ROLE, rollbackSubmitted.requestId(), "rollback-approve", "批准复制");
         PolicyVersionView copied = service.changeSetDetail(ENERGY, ENERGY_ROLE, rollback.changeSetId())
                 .policyVersions().getFirst();
         assertThat(copied.versionNo()).isEqualTo(2);
@@ -214,15 +234,6 @@ class QualityUsageGovernanceServiceIntegrationTest {
                 .isInstanceOfSatisfying(BusinessException.class,
                         error -> assertThat(error.getErrorCode()).isEqualTo("QUALITY_POLICY_NOT_FOUND"));
 
-        ChangeSetView adminDraft = service.createChangeSet(ADMIN, ADMIN_ROLE,
-                changeSet("管理员普通提审", policy("POINT011", "INDICATOR_CALCULATION", List.of("Q0"))));
-        var adminSubmit = service.submit(ADMIN, ADMIN_ROLE, adminDraft.changeSetId(),
-                "self-review-submit", "必须走普通审核禁止自审");
-        assertThatThrownBy(() -> service.approve(ADMIN, ADMIN_ROLE, adminSubmit.requestId(),
-                "self-review-approve", "不允许"))
-                .isInstanceOfSatisfying(BusinessException.class,
-                        error -> assertThat(error.getErrorCode()).isEqualTo("QUALITY_POLICY_FORBIDDEN"));
-
         assertThatThrownBy(() -> service.changeSetDetail(OTHER_ENERGY, ENERGY_ROLE, created.changeSetId()))
                 .isInstanceOfSatisfying(BusinessException.class,
                         error -> assertThat(error.getErrorCode()).isEqualTo("QUALITY_POLICY_NOT_FOUND"));
@@ -253,11 +264,49 @@ class QualityUsageGovernanceServiceIntegrationTest {
                         error -> assertThat(error.getErrorCode()).isEqualTo("QUALITY_POLICY_VALIDATION_FAILED"));
     }
 
+    @Test
+    void roleAloneCannotSubmitOrReviewAndApprovalCommentIsRequired() {
+        ChangeSetView created = service.createChangeSet(ENERGY, ENERGY_ROLE,
+                changeSet("职责校验", policy("POINT013", "POINT_REALTIME_VIEW", List.of("Q0"))));
+        jdbc.update("DELETE FROM sys_user_backend_duty WHERE user_id=? AND duty_key=?",
+                ENERGY, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER.name());
+        assertThatThrownBy(() -> service.submit(ENERGY, ENERGY_ROLE, created.changeSetId(),
+                "missing-submitter-duty", "仅有业务角色"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode()).isEqualTo("BACKOFFICE_DUTY_REQUIRED"));
+
+        grantDuty(ENERGY, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        var submitted = service.submit(ENERGY, ENERGY_ROLE, created.changeSetId(),
+                "duty-submit", "具备提交职责");
+        jdbc.update("DELETE FROM sys_user_backend_duty WHERE user_id=? AND duty_key=?",
+                ADMIN, BackendDuty.BACKOFFICE_CHANGE_REVIEWER.name());
+        assertThatThrownBy(() -> service.approve(ADMIN, ADMIN_ROLE, submitted.requestId(),
+                "missing-reviewer-duty", "仅有平台管理员角色"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode()).isEqualTo("BACKOFFICE_DUTY_REQUIRED"));
+
+        grantDuty(ADMIN, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
+        assertThatThrownBy(() -> service.approve(ADMIN, ADMIN_ROLE, submitted.requestId(),
+                "blank-review-comment", " "))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        error -> assertThat(error.getErrorCode()).isEqualTo("QUALITY_POLICY_VALIDATION_FAILED"));
+    }
+
     private ChangeSetCreateRequest changeSet(String title, PolicyDraftRequest... policies) {
         return new ChangeSetCreateRequest("BLD001", title, null, List.of(policies));
     }
 
     private PolicyDraftRequest policy(String pointId, String scenarioCode, List<String> levels) {
         return new PolicyDraftRequest(pointId, scenarioCode, levels, null, "测试策略变更");
+    }
+
+    private void grantDuty(long userId, BackendDuty duty) {
+        LocalDateTime now = LocalDateTime.now().minusMinutes(1);
+        jdbc.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by,created_at)
+                VALUES (?,?,?,'ACTIVE',?,?,?)
+                """, UUID.randomUUID().toString().replace("-", ""), userId, duty.name(),
+                Timestamp.valueOf(now), ADMIN, Timestamp.valueOf(now));
     }
 }

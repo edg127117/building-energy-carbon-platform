@@ -3,6 +3,9 @@ package com.platform.iot.qualityusage.governance;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.audit.AuditGovernanceErrors;
+import com.platform.audit.BackendDuty;
+import com.platform.audit.BackendDutyService;
 import com.platform.framework.exception.BusinessException;
 import com.platform.framework.web.PageResponse;
 import com.platform.hvac.mapper.BizDataPointMapper;
@@ -78,7 +81,8 @@ import java.util.stream.Collectors;
  *
  * <p>这个服务是角色、建筑范围、草稿所有者、审核快照、并发锁和发布事务的唯一边界。
  * 发布先按 {@code pointId + scenarioCode} 的稳定顺序锁定策略身份，再在同一事务内退役、
- * 激活、更新指针、递增一次全局修订号并写审计；任一验证失败都不会留下部分正式版本。</p>
+ * 激活、更新指针、递增一次全局修订号并写审计；任一验证失败都不会留下部分正式版本。
+ * 公共审计治理只提供后台职责和研发/生产自审策略，不复制质量策略快照，也不建立第二套审核状态机。</p>
  */
 public class QualityUsageGovernanceService {
     private static final ZoneId MYSQL_ZONE = ZoneId.of("Asia/Shanghai");
@@ -94,6 +98,7 @@ public class QualityUsageGovernanceService {
     private final BizQualityUsageConfigRevisionMapper configRevisionMapper;
     private final BizDataPointMapper pointMapper;
     private final BuildingScopeService buildingScopeService;
+    private final BackendDutyService dutyService;
     private final QualityUsageRuntimeStateService runtimeStateService;
     private final ObjectMapper objectMapper;
 
@@ -244,6 +249,7 @@ public class QualityUsageGovernanceService {
     public ReviewRequestView submit(
             Long userId, Collection<String> roles, String changeSetId, String idempotencyKey, String comment) {
         requireMaintainer(roles);
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         String key = requireIdempotencyKey(idempotencyKey);
         String requestHash = digest("SUBMIT|" + changeSetId + "|" + safe(comment));
         BizQualityUsageChangeSet changeSet = requireLockedChangeSet(changeSetId);
@@ -333,61 +339,19 @@ public class QualityUsageGovernanceService {
         return changeSetView(requireChangeSet(changeSetId));
     }
 
-    /**
-     * 管理员直接发布仍生成审核快照并走与普通批准相同的锁定与原子发布路径。
-     * 该例外只允许草稿创建人本人显式使用，不能借管理员身份插队他人的待审核内容。
-     */
-    @Transactional(noRollbackFor = BusinessException.class, isolation = Isolation.READ_COMMITTED)
+    /** 兼容保留旧发布入口，但始终拒绝绕过质量策略自己的审核状态机。 */
+    @Transactional(readOnly = true, noRollbackFor = BusinessException.class)
     public ReviewRequestView directPublish(
             Long userId, Collection<String> roles, String changeSetId, String idempotencyKey, String reason) {
-        requireAdmin(roles);
-        String key = requireIdempotencyKey(idempotencyKey);
-        String requestHash = digest("DIRECT_PUBLISH|" + changeSetId + "|" + safe(reason));
-        BizQualityUsageChangeSet changeSet = requireLockedChangeSet(changeSetId);
-        requireChangeSetEditor(changeSet, userId, roles);
-        BizQualityUsageAuditLog lockedReplay = replay(key, requestHash);
-        if (lockedReplay != null) {
-            return reviewView(requireReview(lockedReplay.getVersionId()),
-                    requireChangeSetByReview(lockedReplay.getVersionId()));
-        }
-        requireState(changeSet.getStatus(), ChangeSetStatus.DRAFT.name(), "变更集当前不可直接发布");
-        List<PolicyEnvelope> drafts = lockDraftsInStableOrder(changeSet);
-        if (drafts.isEmpty()) {
-            throw QualityUsageErrors.error(400, QualityUsageErrors.VALIDATION_FAILED, "变更集至少需要一条策略");
-        }
-        for (PolicyEnvelope draft : drafts) {
-            if (draft.policy().getPendingReviewRequestId() != null) {
-                throw QualityUsageErrors.error(409, QualityUsageErrors.PENDING_CONFLICT,
-                        "策略身份已有待审核变更");
-            }
-        }
-        Snapshot snapshot = snapshot(drafts);
-        LocalDateTime now = now();
-        BizQualityUsageReviewRequest review = newReview(changeSet, userId, ReviewMode.DIRECT_PUBLISH,
-                snapshot, key, requestHash, reason, now);
-        reviewMapper.insert(review);
-        for (PolicyEnvelope draft : drafts) {
-            policyMapper.updatePointers(draft.policy().getPolicyId(), draft.policy().getCurrentActiveVersionId(),
-                    review.getRequestId(), now);
-        }
-        changeSetMapper.updateLifecycle(changeSetId, ChangeSetStatus.PENDING.name(), changeSet.getRevision(), 1,
-                now, null, null, null, now);
-        Object publishSavepoint = createPublishSavepoint();
-        try {
-            publish(changeSet, review, userId, key, requestHash, "DIRECT_PUBLISH");
-            releasePublishSavepoint(publishSavepoint);
-            return reviewView(requireReview(review.getRequestId()), requireChangeSet(changeSetId));
-        } catch (BusinessException exception) {
-            rollbackPublishSavepoint(publishSavepoint);
-            rejectAfterPublicationConflict(changeSet, review, userId, key, requestHash, exception.getErrorCode());
-            throw exception;
-        }
+        throw AuditGovernanceErrors.reviewRequired();
     }
 
     @Transactional(noRollbackFor = BusinessException.class, isolation = Isolation.READ_COMMITTED)
     public ReviewRequestView approve(
             Long userId, Collection<String> roles, String requestId, String idempotencyKey, String comment) {
         requireAdmin(roles);
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
+        String reviewComment = requireText(comment, "审核意见不能为空");
         String key = requireIdempotencyKey(idempotencyKey);
         String requestHash = digest("APPROVE|" + requestId + "|" + safe(comment));
         BizQualityUsageReviewRequest review = requireLockedReview(requestId);
@@ -399,12 +363,13 @@ public class QualityUsageGovernanceService {
         }
         requireState(review.getStatus(), ReviewStatus.PENDING.name(), "审核申请当前不可批准");
         requireState(changeSet.getStatus(), ChangeSetStatus.PENDING.name(), "变更集当前不可批准");
-        if (Objects.equals(review.getSubmittedBy(), userId)) {
-            throw QualityUsageErrors.error(403, QualityUsageErrors.FORBIDDEN, "普通审核禁止提交人自审");
-        }
+        dutyService.requireSeparation(review.getSubmittedBy(), userId);
+        boolean selfApproval = Objects.equals(review.getSubmittedBy(), userId);
+        review.setReviewComment(reviewComment);
         Object publishSavepoint = createPublishSavepoint();
         try {
-            publish(changeSet, review, userId, key, requestHash, "APPROVE");
+            publish(changeSet, review, userId, key, requestHash,
+                    selfApproval ? "SELF_APPROVAL_DEV_MODE" : "APPROVE");
             releasePublishSavepoint(publishSavepoint);
             return reviewView(requireReview(requestId), requireChangeSet(review.getChangeSetId()));
         } catch (BusinessException exception) {
@@ -418,6 +383,7 @@ public class QualityUsageGovernanceService {
     public ReviewRequestView reject(
             Long userId, Collection<String> roles, String requestId, String idempotencyKey, String reason) {
         requireAdmin(roles);
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         String key = requireIdempotencyKey(idempotencyKey);
         String requestHash = digest("REJECT|" + requestId + "|" + safe(reason));
         BizQualityUsageReviewRequest review = requireLockedReview(requestId);
@@ -428,9 +394,7 @@ public class QualityUsageGovernanceService {
         }
         requireState(review.getStatus(), ReviewStatus.PENDING.name(), "审核申请当前不可拒绝");
         requireState(changeSet.getStatus(), ChangeSetStatus.PENDING.name(), "变更集当前不可拒绝");
-        if (Objects.equals(review.getSubmittedBy(), userId)) {
-            throw QualityUsageErrors.error(403, QualityUsageErrors.FORBIDDEN, "普通审核禁止提交人自审");
-        }
+        dutyService.requireSeparation(review.getSubmittedBy(), userId);
         LocalDateTime now = now();
         review.setStatus(ReviewStatus.REJECTED.name());
         review.setReviewerId(userId);

@@ -914,6 +914,7 @@ CREATE TABLE biz_quality_usage_review_request (
   request_no INT NOT NULL,
   status VARCHAR(20) NOT NULL,
   review_mode VARCHAR(20) NOT NULL,
+  legacy_direct_publish TINYINT DEFAULT 0 NOT NULL,
   submitted_revision INT NOT NULL,
   snapshot_json TEXT NOT NULL,
   snapshot_sha256 CHAR(64) NOT NULL,
@@ -931,7 +932,9 @@ CREATE TABLE biz_quality_usage_review_request (
   CONSTRAINT uk_quality_usage_review_no UNIQUE (change_set_id, request_no),
   CONSTRAINT uk_quality_usage_review_idempotency UNIQUE (idempotency_key),
   CONSTRAINT chk_quality_usage_review_status CHECK (status IN ('PENDING','APPROVED','REJECTED','WITHDRAWN')),
-  CONSTRAINT chk_quality_usage_review_mode CHECK (review_mode IN ('NORMAL','DIRECT_PUBLISH')),
+  CONSTRAINT chk_quality_usage_review_mode CHECK (
+    review_mode = 'NORMAL' OR (review_mode = 'DIRECT_PUBLISH' AND legacy_direct_publish = 1)
+  ),
   CONSTRAINT fk_quality_usage_review_change_set
     FOREIGN KEY (change_set_id) REFERENCES biz_quality_usage_change_set (change_set_id) ON DELETE RESTRICT
 );
