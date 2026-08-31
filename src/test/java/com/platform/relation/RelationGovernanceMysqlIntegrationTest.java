@@ -90,7 +90,7 @@ class RelationGovernanceMysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("29");
+                """, String.class)).isEqualTo("31");
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
                 WHERE table_schema=DATABASE() AND table_name='sys_audit_export_job'

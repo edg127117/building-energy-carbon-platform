@@ -55,6 +55,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.iot.reliability`、`mqtt` | V2 消息级幂等、24 小时热回执、ACK 失败证据与成功监控、TLS 与连接故障分类 |
 | `com.platform.iot.quality`、`dataquality` | 运行校验和 Q0/Q1/Q2 预处理 |
 | `com.platform.iot.qualityusage` | Q0/Q1/Q2 消费策略治理、运行快照、门禁、纠正与恢复 |
+| `com.platform.iot.energymetadata` | 标准测点能源类型、来源、数据性质、统计周期和专业确认属性；不保存采样周期、单位副本或用能系统副本 |
 | `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
 | `com.platform.iot.onboarding` | 产品模板、未知设备有界发现、绑定和启停 |
@@ -88,6 +89,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 → 字段、单位、时间和身份归一化
 → 统一 MQTT/HTTP
 → 平台接入与归属校验
+→ 标准测点能源专业属性解析
 → V2 消息幂等、不可覆盖原始持久化与平台应用 ACK
 → 数据预处理和 Q0/Q1/Q2 质量标识
 → MySQL/TDengine 持久化
@@ -131,6 +133,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | MQTT 接入 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter) |
 | 资产与设备接入 | [`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding) |
 | 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |
+| 能源采集元数据 | [`com.platform.iot.energymetadata`](src/main/java/com/platform/iot/energymetadata)、[`候选设计`](docs/designs/2026-08-31-energy-collection-metadata-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
 | 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |
