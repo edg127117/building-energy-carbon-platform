@@ -51,6 +51,9 @@ public final class QualityUsageTestFixtures {
                         "POINT_HISTORY_GATE", "ENABLED"),
                 QualityUsageModels.INDICATOR_CALCULATION,
                 new Scenario(QualityUsageModels.INDICATOR_CALCULATION,
-                        "INDICATOR_INPUT_GATE", "ENABLED"));
+                        "INDICATOR_INPUT_GATE", "ENABLED"),
+                QualityUsageModels.ENERGY_ACTIVITY_AGGREGATION,
+                new Scenario(QualityUsageModels.ENERGY_ACTIVITY_AGGREGATION,
+                        "ENERGY_ACTIVITY_INPUT_GATE", "ENABLED"));
     }
 }

@@ -20,7 +20,7 @@ import java.util.Objects;
 import java.util.Set;
 
 @Service
-/** 三个消费入口唯一使用的场景化 Q0/Q1/Q2 解析器。 */
+/** 各消费入口唯一使用的场景化 Q0/Q1/Q2 解析器。 */
 public class QualityUsagePolicyResolver {
     private final QualityUsageRuntimeStateService runtimeState;
     private Timer resolutionTimer;

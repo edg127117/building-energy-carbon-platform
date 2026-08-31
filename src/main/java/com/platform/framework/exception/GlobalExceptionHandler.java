@@ -4,6 +4,7 @@ import com.platform.audit.SecurityAuditService;
 import com.platform.audit.TraceContext;
 import com.platform.security.JwtUserPrincipal;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.ConstraintViolationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -45,7 +46,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler({
             MethodArgumentNotValidException.class,
             BindException.class,
-            MethodArgumentTypeMismatchException.class
+            MethodArgumentTypeMismatchException.class,
+            ConstraintViolationException.class
     })
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, Object> handleValidationException(Exception e, HttpServletRequest request) {
@@ -59,7 +61,8 @@ public class GlobalExceptionHandler {
         addVersionedErrorCode(response, request,
                 "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED",
                 "COLLECTION_CONFIG_VALIDATION_FAILED", "QUALITY_POLICY_VALIDATION_FAILED",
-                "RELATION_VALIDATION_FAILED", "ENERGY_METADATA_VALIDATION_FAILED");
+                "RELATION_VALIDATION_FAILED", "ENERGY_METADATA_VALIDATION_FAILED",
+                "ENERGY_ACTIVITY_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -110,7 +113,8 @@ public class GlobalExceptionHandler {
         addVersionedErrorCode(response, request,
                 "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED",
                 "COLLECTION_CONFIG_UNAUTHORIZED", "QUALITY_POLICY_UNAUTHORIZED",
-                "RELATION_UNAUTHORIZED", "ENERGY_METADATA_UNAUTHORIZED");
+                "RELATION_UNAUTHORIZED", "ENERGY_METADATA_UNAUTHORIZED",
+                "ENERGY_ACTIVITY_UNAUTHORIZED");
         return response;
     }
 
@@ -128,7 +132,8 @@ public class GlobalExceptionHandler {
         addVersionedErrorCode(response, request,
                 "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN",
                 "COLLECTION_CONFIG_FORBIDDEN", "QUALITY_POLICY_FORBIDDEN",
-                "RELATION_FORBIDDEN", "ENERGY_METADATA_FORBIDDEN");
+                "RELATION_FORBIDDEN", "ENERGY_METADATA_FORBIDDEN",
+                "ENERGY_ACTIVITY_FORBIDDEN");
         return response;
     }
 
@@ -137,7 +142,8 @@ public class GlobalExceptionHandler {
             Map<String, Object> response, HttpServletRequest request,
             String onboardingErrorCode, String assetErrorCode,
             String collectionErrorCode, String qualityUsageErrorCode,
-            String relationErrorCode, String energyMetadataErrorCode) {
+            String relationErrorCode, String energyMetadataErrorCode,
+            String energyActivityErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
@@ -153,6 +159,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", relationErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-point-profiles")) {
             response.put("errorCode", energyMetadataErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-activity-data")) {
+            response.put("errorCode", energyActivityErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
             response.put("errorCode", "BACKOFFICE_REQUEST_CONFLICT");
         }

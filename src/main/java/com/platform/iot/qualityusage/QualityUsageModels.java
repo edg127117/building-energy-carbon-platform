@@ -7,13 +7,14 @@ import java.util.Set;
 /**
  * 质量事实消费门禁共用的稳定领域模型。
  *
- * <p>场景编码来自 MySQL 目录而不是封闭枚举；这里的三个常量只标识首版已经接入的
+ * <p>场景编码来自 MySQL 目录而不是封闭枚举；这里的常量只标识已经接入的
  * 消费适配器。允许等级使用显式集合，空集合因此可以与“没有正式策略”清晰区分。</p>
  */
 public final class QualityUsageModels {
     public static final String POINT_REALTIME_VIEW = "POINT_REALTIME_VIEW";
     public static final String POINT_HISTORY_VIEW = "POINT_HISTORY_VIEW";
     public static final String INDICATOR_CALCULATION = "INDICATOR_CALCULATION";
+    public static final String ENERGY_ACTIVITY_AGGREGATION = "ENERGY_ACTIVITY_AGGREGATION";
 
     private QualityUsageModels() {
     }
