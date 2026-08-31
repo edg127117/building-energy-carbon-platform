@@ -2,6 +2,7 @@ package com.platform.relation;
 
 import com.platform.relation.api.RelationContracts.ActivationRequest;
 import com.platform.relation.api.RelationContracts.AssetAssignmentRequest;
+import com.platform.relation.api.RelationContracts.MeterStructureRequest;
 import com.platform.relation.api.RelationContracts.ReviewDecisionRequest;
 import com.platform.relation.api.RelationContracts.RevisionReasonRequest;
 import com.platform.system.service.BuildingScopeService;
@@ -50,6 +51,7 @@ class RelationGovernanceMysqlIntegrationTest {
             "biz_asset_assignment_version_item",
             "biz_semantic_relation_version_item",
             "biz_metering_assignment_version_item",
+            "biz_meter_structure_version_item",
             "biz_relation_review_request",
             "biz_relation_validation_issue",
             "biz_relation_audit_log");
@@ -90,7 +92,7 @@ class RelationGovernanceMysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("31");
+                """, String.class)).isEqualTo("32");
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables
                 WHERE table_schema=DATABASE() AND table_name='sys_audit_export_job'
@@ -129,8 +131,17 @@ class RelationGovernanceMysqlIntegrationTest {
         var updated = service.updateAssignment(101L, ENERGY, draft.versionId(),
                 new AssetAssignmentRequest("EQUIPMENT", "EQUIP_WCR_B1", "SPACE_MYSQL_IT",
                         "GROUP001", null, draft.revision()));
+        String meterPointNode = jdbc.queryForObject("""
+                SELECT node_id FROM biz_relation_node
+                WHERE building_id='BLD001' AND node_type='POINT' AND business_object_id='POINT004'
+                """, String.class);
+        var meterUpdated = service.createMeterStructure(101L, ENERGY, draft.versionId(),
+                "mysql-meter-structure", new MeterStructureRequest(null, meterPointNode,
+                        "MAIN", null, "INBOUND", "CONFIRMED", null, null,
+                        "SYNTHETIC_MYSQL_EVIDENCE", "隔离 MySQL 软件验证", updated.revision()));
+        assertThat(meterUpdated.meterDirection()).isEqualTo("INBOUND");
         var review = service.submit(101L, ENERGY, draft.versionId(), "mysql-submit",
-                new RevisionReasonRequest(updated.revision(), "MySQL提交"));
+                new RevisionReasonRequest(updated.revision() + 1, "MySQL提交"));
         service.approve(202L, ADMIN, review.requestId(), "mysql-approve",
                 new ReviewDecisionRequest("MySQL结构与关系校验通过"));
 

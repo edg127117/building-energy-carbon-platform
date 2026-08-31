@@ -73,6 +73,12 @@ class RelationGovernanceApiContractTest {
         assertThat(paths.path(
                 "/v1/relation-models/versions/{versionId}/metering/assignments/{assignmentId}")
                 .has("delete")).isTrue();
+        assertThat(paths.path(
+                "/v1/relation-models/versions/{versionId}/metering/structures/{structureItemId}")
+                .has("put")).isTrue();
+        assertThat(paths.path(
+                "/v1/relation-models/versions/{versionId}/metering/structures/{structureItemId}")
+                .has("delete")).isTrue();
         assertThat(paths.has("/v1/relation-models/versions/{versionId}/submit")).isTrue();
         assertThat(paths.has("/v1/relation-models/review-requests/{requestId}/approve")).isTrue();
         assertThat(paths.has("/v1/relation-models/versions/{versionId}/activate")).isTrue();
@@ -85,6 +91,14 @@ class RelationGovernanceApiContractTest {
                 .isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-boundaries"))
                 .isTrue();
+        assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-structures"))
+                .isTrue();
+        assertThat(paths.has(
+                "/v1/relation-models/{buildingId}/effective/meters/{meterPointNodeId}/hierarchy"))
+                .isTrue();
+        assertThat(paths.has("/v1/relation-models/metering-import/template")).isTrue();
+        assertThat(paths.has("/v1/relation-models/metering-import/preflight")).isTrue();
+        assertThat(paths.has("/v1/relation-models/metering-import/confirm")).isTrue();
         assertThat(openApi.path("components").path("schemas").has("RelationApiError")).isTrue();
     }
 

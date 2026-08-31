@@ -4,6 +4,7 @@ import com.platform.relation.RelationGovernanceRepository.AssignmentRow;
 import com.platform.relation.RelationGovernanceRepository.AuditRow;
 import com.platform.relation.RelationGovernanceRepository.BoundaryRow;
 import com.platform.relation.RelationGovernanceRepository.MeteringAssignmentRow;
+import com.platform.relation.RelationGovernanceRepository.MeterStructureRow;
 import com.platform.relation.RelationGovernanceRepository.ModelRow;
 import com.platform.relation.RelationGovernanceRepository.NodeRow;
 import com.platform.relation.RelationGovernanceRepository.ReviewRow;
@@ -51,12 +52,11 @@ public class RelationGovernanceService {
             Set.of("SERVES", "MEASURES", "CONNECTED_TO", "SUPPLIES", "RETURNS");
     private static final Set<String> NODE_TYPES =
             Set.of("SPACE", "SYSTEM", "EQUIPMENT", "POINT", "METERING_BOUNDARY");
-    private static final Set<String> ALLOCATION_STATES =
-            Set.of("ASSIGNED", "UNASSIGNED", "PENDING_EXPERT", "INVALID");
 
     private final RelationGovernanceRepository repository;
     private final BuildingScopeService buildingScopeService;
     private final RelationGovernanceProperties properties;
+    private final MeteringDomainValidator meteringValidator;
 
     public ModelView model(Long userId, Collection<String> roles, String buildingId) {
         requireReader(roles);
@@ -86,7 +86,8 @@ public class RelationGovernanceService {
         VersionRow version = requireVersion(versionId, false);
         requireSameBuilding(buildingId, version.buildingId());
         return new VersionDetailView(metadata(model, version, 0, false), toView(version),
-                snapshotCounts(versionId));
+                snapshotCounts(versionId), repository.listMeterStructures(versionId).stream()
+                .map(this::toView).toList());
     }
 
     public VersionDiffView versionDiff(
@@ -105,11 +106,14 @@ public class RelationGovernanceService {
         List<String> added = subtract(toItems, fromItems);
         List<String> removed = subtract(fromItems, toItems);
         int bounded = Math.min(sampleSize, properties.getMaxPageSize());
+        int meterAdded = (int) added.stream().filter(item -> item.startsWith("METER_STRUCTURE:")).count();
+        int meterRemoved = (int) removed.stream().filter(item -> item.startsWith("METER_STRUCTURE:")).count();
         return new VersionDiffView(buildingId, from.versionId(), from.versionNo(),
                 to.versionId(), to.versionNo(), model.configRevision(), snapshotCounts(fromVersionId),
                 snapshotCounts(toVersionId), added.size(), removed.size(),
                 added.size() > bounded || removed.size() > bounded,
-                added.stream().limit(bounded).toList(), removed.stream().limit(bounded).toList());
+                added.stream().limit(bounded).toList(), removed.stream().limit(bounded).toList(),
+                meterAdded, meterRemoved);
     }
 
     @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
@@ -410,7 +414,7 @@ public class RelationGovernanceService {
         AuditRow replay = replay(key, requestHash);
         if (replay != null) return replay.objectId();
         requireState(version.status(), "DRAFT", "只有草稿版本可以编辑");
-        String status = validateMeteringAssignment(version, request);
+        String status = meteringValidator.validateAssignment(version, request);
         String assignmentId = repository.insertMeteringAssignment(version,
                 request.meteringBoundaryId(), request.meterPointNodeId(), request.targetNodeId(),
                 status, trim(request.reasonCode()), trim(request.reasonText()),
@@ -426,7 +430,7 @@ public class RelationGovernanceService {
             Long userId, Collection<String> roles, String versionId,
             String assignmentId, MeteringAssignmentRequest request) {
         VersionRow version = requireEditable(userId, roles, versionId);
-        String status = validateMeteringAssignment(version, request);
+        String status = meteringValidator.validateAssignment(version, request);
         if (repository.updateMeteringAssignment(versionId, assignmentId,
                 request.meteringBoundaryId(), request.meterPointNodeId(), request.targetNodeId(),
                 status, trim(request.reasonCode()), trim(request.reasonText()),
@@ -448,6 +452,83 @@ public class RelationGovernanceService {
         }
         auditMutation(version, requireVersion(versionId, false), userId,
                 "DELETE_METERING_ASSIGNMENT", assignmentId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public MeterStructureView createMeterStructure(
+            Long userId, Collection<String> roles, String versionId,
+            String idempotencyKey, MeterStructureRequest request) {
+        requireEnergyManager(roles);
+        VersionRow version = requireVersion(versionId, true);
+        checkBuilding(userId, roles, version.buildingId());
+        String key = requireKey(idempotencyKey);
+        String requestHash = digest("CREATE_METER_STRUCTURE|" + userId + '|' + versionId + '|' + request);
+        AuditRow replay = replay(key, requestHash);
+        if (replay != null) {
+            return toView(repository.findMeterStructure(versionId, replay.objectId())
+                    .orElseThrow(() -> error(409, REFERENCE_CONFLICT,
+                            "幂等记录对应的表计结构不存在")));
+        }
+        requireState(version.status(), "DRAFT", "只有草稿版本可以编辑");
+        var value = meteringValidator.validateStructure(version, request);
+        String structureId;
+        try {
+            structureId = repository.insertMeterStructure(version, value.boundaryId(),
+                    value.meterPointNodeId(), value.meterRole(), value.parentMeterPointNodeId(),
+                    value.meterDirection(), value.confirmationStatus(), value.reasonCode(),
+                    value.reasonText(), value.evidenceReference(), value.description(), "MANUAL",
+                    request.expectedRevision(), userId);
+        } catch (DataIntegrityViolationException exception) {
+            throw error(409, REFERENCE_CONFLICT, "同一版本的表计结构重复或违反层级约束");
+        }
+        if (structureId == null) throw error(409, VERSION_CONFLICT, "草稿修订已变化");
+        rejectMeterCycle(requireVersion(versionId, false));
+        auditMutation(version, requireVersion(versionId, false), userId,
+                "CREATE_METER_STRUCTURE", structureId, key, requestHash);
+        return toView(repository.findMeterStructure(versionId, structureId).orElseThrow());
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public MeterStructureView updateMeterStructure(
+            Long userId, Collection<String> roles, String versionId,
+            String structureItemId, MeterStructureRequest request) {
+        VersionRow version = requireEditable(userId, roles, versionId);
+        if (repository.findMeterStructure(versionId, structureItemId).isEmpty()) {
+            throw error(404, NOT_FOUND, "表计结构不存在");
+        }
+        var value = meteringValidator.validateStructure(version, request);
+        try {
+            if (repository.updateMeterStructure(versionId, structureItemId, value.boundaryId(),
+                    value.meterPointNodeId(), value.meterRole(), value.parentMeterPointNodeId(),
+                    value.meterDirection(), value.confirmationStatus(), value.reasonCode(),
+                    value.reasonText(), value.evidenceReference(), value.description(), "MANUAL",
+                    request.expectedRevision(), userId) != 1) {
+                throw error(409, VERSION_CONFLICT, "草稿修订已变化");
+            }
+        } catch (DataIntegrityViolationException exception) {
+            throw error(409, REFERENCE_CONFLICT, "同一版本的表计结构重复或违反层级约束");
+        }
+        rejectMeterCycle(requireVersion(versionId, false));
+        auditMutation(version, requireVersion(versionId, false), userId,
+                "UPDATE_METER_STRUCTURE", structureItemId);
+        return toView(repository.findMeterStructure(versionId, structureItemId).orElseThrow());
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteMeterStructure(
+            Long userId, Collection<String> roles, String versionId,
+            String structureItemId, long expectedRevision) {
+        VersionRow version = requireEditable(userId, roles, versionId);
+        MeterStructureRow row = repository.findMeterStructure(versionId, structureItemId)
+                .orElseThrow(() -> error(404, NOT_FOUND, "表计结构不存在"));
+        if (!repository.listMeterChildren(versionId, row.meterPointNodeId()).isEmpty()) {
+            throw error(409, REFERENCE_CONFLICT, "表计结构仍有直接下级，不能删除");
+        }
+        if (repository.deleteMeterStructure(versionId, structureItemId, expectedRevision) != 1) {
+            throw error(409, VERSION_CONFLICT, "草稿修订已变化");
+        }
+        auditMutation(version, requireVersion(versionId, false), userId,
+                "DELETE_METER_STRUCTURE", structureItemId);
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -687,6 +768,68 @@ public class RelationGovernanceService {
                 page * (long) boundedSize < total), page, boundedSize, total, items);
     }
 
+    public MeterStructuresView effectiveMeterStructures(
+            Long userId, Collection<String> roles, String buildingId, int page, int size) {
+        requireReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        ModelRow model = requireModel(buildingId, false);
+        return meterStructures(model, requireEffective(model), page, size);
+    }
+
+    public MeterStructuresView historicalMeterStructures(
+            Long userId, Collection<String> roles, String buildingId,
+            String versionId, int page, int size) {
+        requireHistoryReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        ModelRow model = requireModel(buildingId, false);
+        VersionRow version = requireVersion(versionId, false);
+        requireSameBuilding(buildingId, version.buildingId());
+        return meterStructures(model, version, page, size);
+    }
+
+    public MeterHierarchyView effectiveMeterHierarchy(
+            Long userId, Collection<String> roles, String buildingId, String meterPointNodeId) {
+        requireReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        ModelRow model = requireModel(buildingId, false);
+        return meterHierarchy(model, requireEffective(model), meterPointNodeId);
+    }
+
+    public MeterHierarchyView historicalMeterHierarchy(
+            Long userId, Collection<String> roles, String buildingId,
+            String versionId, String meterPointNodeId) {
+        requireHistoryReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        ModelRow model = requireModel(buildingId, false);
+        VersionRow version = requireVersion(versionId, false);
+        requireSameBuilding(buildingId, version.buildingId());
+        return meterHierarchy(model, version, meterPointNodeId);
+    }
+
+    private MeterStructuresView meterStructures(
+            ModelRow model, VersionRow version, int page, int size) {
+        requirePage(page, size);
+        int boundedSize = Math.min(size, properties.getMaxPageSize());
+        long total = repository.countMeterStructures(version.versionId());
+        List<MeterStructureView> items = repository.listMeterStructures(version.versionId(),
+                boundedSize, (page - 1) * boundedSize).stream().map(this::toView).toList();
+        return new MeterStructuresView(metadata(model, version, 0,
+                page * (long) boundedSize < total), page, boundedSize, total, items);
+    }
+
+    private MeterHierarchyView meterHierarchy(
+            ModelRow model, VersionRow version, String meterPointNodeId) {
+        MeterStructureRow meter = repository.findMeterStructureByPoint(
+                version.versionId(), meterPointNodeId)
+                .orElseThrow(() -> error(404, NOT_FOUND, "指定表计不在当前关系版本中"));
+        MeterStructureView parent = meter.parentMeterPointNodeId() == null ? null
+                : repository.findMeterStructureByPoint(version.versionId(),
+                meter.parentMeterPointNodeId()).map(this::toView).orElse(null);
+        return new MeterHierarchyView(metadata(model, version, 1, false), toView(meter), parent,
+                repository.listMeterChildren(version.versionId(), meter.meterPointNodeId())
+                        .stream().map(this::toView).toList());
+    }
+
     public EffectiveIssuesView effectiveIssues(
             Long userId, Collection<String> roles, String buildingId) {
         requireReader(roles);
@@ -782,6 +925,27 @@ public class RelationGovernanceService {
                         relation.relationItemId(), "语义关系等待能源专家确认");
             }
         }
+        List<MeterStructureRow> structures = repository.listMeterStructures(version.versionId());
+        Map<String, MeterStructureRow> structureByPoint = new HashMap<>();
+        for (MeterStructureRow structure : structures) {
+            structureByPoint.put(structure.meterPointNodeId(), structure);
+            if (!Objects.equals(version.buildingId(), structure.buildingId())) {
+                issue(version, "ERROR", CROSS_BUILDING, "METER_STRUCTURE",
+                        structure.structureItemId(), "表计结构不属于当前建筑");
+            }
+            if ("PENDING_EXPERT".equals(structure.confirmationStatus())) {
+                issue(version, "PENDING_EXPERT", PENDING_EXPERT, "METER_STRUCTURE",
+                        structure.structureItemId(), "表计角色或计量方向等待能源专家确认");
+            }
+        }
+        for (MeterStructureRow structure : structures) {
+            if (structure.parentMeterPointNodeId() != null
+                    && !structureByPoint.containsKey(structure.parentMeterPointNodeId())) {
+                issue(version, "ERROR", REFERENCE_CONFLICT, "METER_STRUCTURE",
+                        structure.structureItemId(), "上级表计未登记在当前关系版本中");
+            }
+        }
+        detectMeterCycles(version, structureByPoint);
         for (MeteringAssignmentRow assignment : repository.listMeteringAssignments(version.versionId())) {
             if ("PENDING_EXPERT".equals(assignment.allocationStatus())) {
                 issue(version, "PENDING_EXPERT", PENDING_EXPERT, "METERING_ASSIGNMENT",
@@ -828,6 +992,35 @@ public class RelationGovernanceService {
         }
     }
 
+    private void detectMeterCycles(
+            VersionRow version, Map<String, MeterStructureRow> structures) {
+        Set<String> complete = new HashSet<>();
+        for (String start : structures.keySet()) {
+            if (complete.contains(start)) continue;
+            Set<String> path = new HashSet<>();
+            String current = start;
+            while (current != null && structures.containsKey(current)) {
+                if (!path.add(current)) {
+                    issue(version, "ERROR", CYCLE_DETECTED, "METER_STRUCTURE",
+                            structures.get(current).structureItemId(), "表计上下级关系形成循环");
+                    break;
+                }
+                if (complete.contains(current)) break;
+                current = structures.get(current).parentMeterPointNodeId();
+            }
+            complete.addAll(path);
+        }
+    }
+
+    private void rejectMeterCycle(VersionRow version) {
+        validateInternal(version);
+        if (repository.listIssues(version.versionId()).stream()
+                .anyMatch(issue -> CYCLE_DETECTED.equals(issue.code())
+                        && "METER_STRUCTURE".equals(issue.objectType()))) {
+            throw error(409, CYCLE_DETECTED, "表计上下级关系形成循环");
+        }
+    }
+
     private String snapshotHash(String versionId) {
         return digest(String.join("\n", snapshotItems(versionId)));
     }
@@ -852,6 +1045,13 @@ public class RelationGovernanceService {
                 + ":status=" + v.allocationStatus() + ":reason=" + safe(v.reasonCode())
                 + ":reasonText=" + safe(v.reasonText())
                 + ":evidence=" + safe(v.evidenceReference())));
+        repository.listMeterStructures(versionId).forEach(v -> items.add("METER_STRUCTURE:point="
+                + v.meterPointNodeId() + ":boundary=" + safe(v.boundaryId())
+                + ":role=" + v.meterRole() + ":parent=" + safe(v.parentMeterPointNodeId())
+                + ":direction=" + v.meterDirection() + ":confirmation=" + v.confirmationStatus()
+                + ":reason=" + safe(v.reasonCode()) + ":reasonText=" + safe(v.reasonText())
+                + ":evidence=" + safe(v.evidenceReference())
+                + ":description=" + safe(v.description()) + ":source=" + v.sourceType()));
         repository.listBoundariesForSnapshot(versionId).forEach(v -> items.add("BOUNDARY:"
                 + v.boundaryId() + ":code=" + v.boundaryCode() + ":name=" + v.boundaryName()
                 + ":energy=" + safe(v.energyType()) + ":confirmation=" + v.confirmationStatus()
@@ -878,6 +1078,7 @@ public class RelationGovernanceService {
                 repository.listAssignments(versionId).size(),
                 repository.listSemanticRelations(versionId).size(),
                 repository.listBoundariesForSnapshot(versionId).size(),
+                repository.listMeterStructures(versionId).size(),
                 repository.listMeteringAssignments(versionId).size(),
                 repository.listIssues(versionId).size());
     }
@@ -939,34 +1140,6 @@ public class RelationGovernanceService {
             throw error(400, VALIDATION_FAILED, "已确认计量边界必须提供能源类型和脱敏专业证据引用");
         }
         return confirmation;
-    }
-
-    private String validateMeteringAssignment(
-            VersionRow version, MeteringAssignmentRequest request) {
-        String status = normalize(request.allocationStatus());
-        if (!ALLOCATION_STATES.contains(status)) {
-            throw error(400, VALIDATION_FAILED, "计量分配状态不合法");
-        }
-        if ("ASSIGNED".equals(status)
-                && (request.meteringBoundaryId() == null || request.meterPointNodeId() == null
-                || request.targetNodeId() == null)) {
-            throw error(400, VALIDATION_FAILED, "已分配项必须同时指定边界、计量点和覆盖对象");
-        }
-        if ("ASSIGNED".equals(status) && trim(request.evidenceReference()) == null) {
-            throw error(400, VALIDATION_FAILED, "已分配计量项必须提供脱敏专业证据引用");
-        }
-        if (!"ASSIGNED".equals(status) && trim(request.reasonCode()) == null) {
-            throw error(400, VALIDATION_FAILED, "未分配、待确认或非法项必须说明原因码");
-        }
-        if (request.meteringBoundaryId() != null) requireBoundary(version, request.meteringBoundaryId());
-        if (request.meterPointNodeId() != null) {
-            NodeRow point = requireNode(version, request.meterPointNodeId());
-            if (!"POINT".equals(point.nodeType())) {
-                throw error(400, VALIDATION_FAILED, "计量点节点必须是 POINT");
-            }
-        }
-        if (request.targetNodeId() != null) requireNode(version, request.targetNodeId());
-        return status;
     }
 
     private VersionRow requireEditable(Long userId, Collection<String> roles, String versionId) {
@@ -1200,6 +1373,14 @@ public class RelationGovernanceService {
     private MeteringBoundaryView toView(BoundaryRow row) {
         return new MeteringBoundaryView(row.boundaryId(), row.boundaryCode(), row.boundaryName(),
                 row.energyType(), row.confirmationStatus(), row.status());
+    }
+
+    private MeterStructureView toView(MeterStructureRow row) {
+        return new MeterStructureView(row.structureItemId(), row.boundaryId(),
+                row.meterPointNodeId(), row.meterPointCode(), row.meterRole(),
+                row.parentMeterPointNodeId(), row.parentMeterPointCode(), row.meterDirection(),
+                row.confirmationStatus(), row.reasonCode(), row.reasonText(),
+                row.evidenceReference(), row.description(), row.sourceType());
     }
 
     private AuditView toView(AuditRow row) {

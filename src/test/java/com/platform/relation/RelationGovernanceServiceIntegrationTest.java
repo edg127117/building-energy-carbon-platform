@@ -243,6 +243,7 @@ class RelationGovernanceServiceIntegrationTest {
         jdbc.update("DELETE FROM biz_relation_validation_issue");
         jdbc.update("DELETE FROM biz_relation_review_request");
         jdbc.update("DELETE FROM biz_relation_audit_log");
+        jdbc.update("DELETE FROM biz_meter_structure_version_item");
         jdbc.update("DELETE FROM biz_metering_assignment_version_item");
         jdbc.update("DELETE FROM biz_semantic_relation_version_item");
         jdbc.update("DELETE FROM biz_asset_assignment_version_item");

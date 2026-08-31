@@ -12,7 +12,7 @@ import javax.sql.DataSource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** 专用一次性 MySQL 8 验证 V01-V31 完整迁移、复合外键和专业枚举约束。 */
+/** 专用一次性 MySQL 8 验证当前完整迁移链、复合外键和专业枚举约束。 */
 @EnabledIfEnvironmentVariable(named = "ENERGY_METADATA_MYSQL_IT_URL", matches = ".+")
 class EnergyPointProfileMysqlIntegrationTest {
 
@@ -36,7 +36,7 @@ class EnergyPointProfileMysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("31");
+                """, String.class)).isEqualTo("32");
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM biz_energy_point_profile", Integer.class)).isZero();
         insert(jdbc, "MYSQL_PROFILE_OK", "POINT004", "BLD001",

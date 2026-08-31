@@ -18,6 +18,9 @@ public final class RelationErrors {
     public static final String SCOPE_UNSUPPORTED = "RELATION_SCOPE_UNSUPPORTED";
     public static final String UNASSIGNED = "RELATION_UNASSIGNED";
     public static final String IDEMPOTENCY_REUSED = "RELATION_IDEMPOTENCY_REUSED";
+    public static final String IMPORT_REJECTED = "RELATION_METERING_IMPORT_REJECTED";
+    public static final String IMPORT_TEMPLATE_UNSUPPORTED = "RELATION_METERING_TEMPLATE_UNSUPPORTED";
+    public static final String IMPORT_HEADER_INVALID = "RELATION_METERING_IMPORT_HEADER_INVALID";
 
     private RelationErrors() {
     }

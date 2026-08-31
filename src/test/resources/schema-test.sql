@@ -1044,6 +1044,7 @@ CREATE INDEX idx_quality_usage_recovery_status
 DROP TABLE IF EXISTS biz_relation_audit_log;
 DROP TABLE IF EXISTS biz_relation_validation_issue;
 DROP TABLE IF EXISTS biz_relation_review_request;
+DROP TABLE IF EXISTS biz_meter_structure_version_item;
 DROP TABLE IF EXISTS biz_metering_assignment_version_item;
 DROP TABLE IF EXISTS biz_semantic_relation_version_item;
 DROP TABLE IF EXISTS biz_asset_assignment_version_item;
@@ -1214,6 +1215,53 @@ CREATE TABLE biz_metering_assignment_version_item (
 
 CREATE INDEX idx_metering_assignment_version_status
   ON biz_metering_assignment_version_item (version_id, allocation_status);
+
+CREATE TABLE biz_meter_structure_version_item (
+  structure_item_id VARCHAR(32) PRIMARY KEY,
+  version_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  metering_boundary_id VARCHAR(32),
+  meter_point_node_id VARCHAR(32) NOT NULL,
+  meter_role VARCHAR(24) NOT NULL,
+  parent_meter_point_node_id VARCHAR(32),
+  meter_direction VARCHAR(24) NOT NULL,
+  confirmation_status VARCHAR(24) NOT NULL,
+  reason_code VARCHAR(64),
+  reason_text VARCHAR(500),
+  evidence_reference VARCHAR(500),
+  description VARCHAR(500),
+  source_type VARCHAR(24) NOT NULL,
+  create_by BIGINT NOT NULL,
+  update_by BIGINT NOT NULL,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_meter_structure_version_point UNIQUE (version_id, meter_point_node_id),
+  CONSTRAINT chk_meter_structure_role CHECK
+    (meter_role IN ('MAIN','SUB','INDEPENDENT','UNKNOWN')),
+  CONSTRAINT chk_meter_structure_direction CHECK
+    (meter_direction IN ('INBOUND','OUTBOUND','BIDIRECTIONAL','UNKNOWN')),
+  CONSTRAINT chk_meter_structure_confirmation CHECK
+    (confirmation_status IN ('CONFIRMED','PENDING_EXPERT')),
+  CONSTRAINT chk_meter_structure_source CHECK
+    (source_type IN ('MANUAL','IMPORT','SYSTEM_MIGRATION')),
+  CONSTRAINT chk_meter_structure_no_self CHECK
+    (parent_meter_point_node_id IS NULL OR meter_point_node_id <> parent_meter_point_node_id),
+  CONSTRAINT chk_meter_structure_parent_role CHECK
+    ((meter_role='SUB' AND parent_meter_point_node_id IS NOT NULL)
+      OR meter_role NOT IN ('SUB','MAIN','INDEPENDENT')
+      OR (meter_role IN ('MAIN','INDEPENDENT') AND parent_meter_point_node_id IS NULL)),
+  CONSTRAINT chk_meter_structure_unknown_pending CHECK
+    ((meter_role <> 'UNKNOWN' AND meter_direction <> 'UNKNOWN')
+      OR confirmation_status='PENDING_EXPERT'),
+  CONSTRAINT chk_meter_structure_pending_reason CHECK
+    (confirmation_status <> 'PENDING_EXPERT'
+      OR reason_code IS NOT NULL OR reason_text IS NOT NULL OR evidence_reference IS NOT NULL)
+);
+
+CREATE INDEX idx_meter_structure_version_parent
+  ON biz_meter_structure_version_item (version_id, parent_meter_point_node_id);
+CREATE INDEX idx_meter_structure_version_boundary
+  ON biz_meter_structure_version_item (version_id, metering_boundary_id);
 
 CREATE TABLE biz_relation_review_request (
   request_id VARCHAR(32) PRIMARY KEY,
