@@ -91,6 +91,8 @@ class RelationGovernanceApiContractTest {
                 .isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-boundaries"))
                 .isTrue();
+        assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-assignments"))
+                .isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-structures"))
                 .isTrue();
         assertThat(paths.has(
