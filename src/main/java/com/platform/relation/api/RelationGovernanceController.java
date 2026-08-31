@@ -215,6 +215,37 @@ public class RelationGovernanceController {
         return Result.success();
     }
 
+    @PostMapping("/v1/relation-models/versions/{versionId}/metering/structures")
+    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    public Result<MeterStructureView> createMeterStructure(
+            Authentication authentication, @PathVariable String versionId,
+            @RequestHeader("Idempotency-Key") String idempotencyKey,
+            @Valid @RequestBody MeterStructureRequest request) {
+        return Result.success(service.createMeterStructure(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, idempotencyKey, request));
+    }
+
+    @PutMapping("/v1/relation-models/versions/{versionId}/metering/structures/{structureItemId}")
+    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    public Result<MeterStructureView> updateMeterStructure(
+            Authentication authentication, @PathVariable String versionId,
+            @PathVariable String structureItemId,
+            @Valid @RequestBody MeterStructureRequest request) {
+        return Result.success(service.updateMeterStructure(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, structureItemId, request));
+    }
+
+    @DeleteMapping("/v1/relation-models/versions/{versionId}/metering/structures/{structureItemId}")
+    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    public Result<Void> deleteMeterStructure(
+            Authentication authentication, @PathVariable String versionId,
+            @PathVariable String structureItemId,
+            @RequestParam @Min(0) long expectedRevision) {
+        service.deleteMeterStructure(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, structureItemId, expectedRevision);
+        return Result.success();
+    }
+
     @PostMapping("/v1/relation-models/versions/{versionId}/validate")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<ValidationView> validate(
@@ -336,6 +367,43 @@ public class RelationGovernanceController {
             @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size) {
         return Result.success(service.effectiveBoundaries(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, page, size));
+    }
+
+    @GetMapping("/v1/relation-models/{buildingId}/effective/metering-structures")
+    public Result<MeterStructuresView> effectiveMeterStructures(
+            Authentication authentication, @PathVariable String buildingId,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
+        return Result.success(service.effectiveMeterStructures(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, page, size));
+    }
+
+    @GetMapping("/v1/relation-models/{buildingId}/versions/{versionId}/query/metering-structures")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<MeterStructuresView> historicalMeterStructures(
+            Authentication authentication, @PathVariable String buildingId,
+            @PathVariable String versionId,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
+        return Result.success(service.historicalMeterStructures(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, versionId, page, size));
+    }
+
+    @GetMapping("/v1/relation-models/{buildingId}/effective/meters/{meterPointNodeId}/hierarchy")
+    public Result<MeterHierarchyView> effectiveMeterHierarchy(
+            Authentication authentication, @PathVariable String buildingId,
+            @PathVariable String meterPointNodeId) {
+        return Result.success(service.effectiveMeterHierarchy(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, meterPointNodeId));
+    }
+
+    @GetMapping("/v1/relation-models/{buildingId}/versions/{versionId}/query/meters/{meterPointNodeId}/hierarchy")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<MeterHierarchyView> historicalMeterHierarchy(
+            Authentication authentication, @PathVariable String buildingId,
+            @PathVariable String versionId, @PathVariable String meterPointNodeId) {
+        return Result.success(service.historicalMeterHierarchy(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, versionId, meterPointNodeId));
     }
 
     @GetMapping("/v1/relation-models/{buildingId}/effective/issues")

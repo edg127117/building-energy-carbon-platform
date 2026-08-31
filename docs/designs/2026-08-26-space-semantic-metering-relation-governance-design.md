@@ -197,7 +197,19 @@
 `UNASSIGNED` 和 `PENDING_EXPERT` 必须保存原因码、说明和来源证据。缺少分配不能被自动解释为零能耗、
 整栋建筑归属或平均分摊。
 
-### 6.6 当前有效与兼容投影
+### 6.6 表计层级与计量方向
+
+表计结构与“表计覆盖对象”分开建模。一块表可以覆盖多个空间、系统或设备，但在同一关系版本中只能
+有一条结构事实，固定记录 `MAIN`、`SUB`、`INDEPENDENT`、`UNKNOWN` 角色、直接上级表计和
+`INBOUND`、`OUTBOUND`、`BIDIRECTIONAL`、`UNKNOWN` 方向。
+
+- `SUB` 必须引用同建筑、同版本中存在的上级表计；其他明确角色禁止填写上级；
+- 自关联、直接或间接循环、同版本重复表计结构和跨建筑引用均拒绝；
+- `UNKNOWN` 角色或方向只能以 `PENDING_EXPERT` 保存草稿，并阻止批准和生效；
+- 软件不根据名称、能源类型或覆盖对象推断角色、方向和上下级关系；
+- 结构事实进入版本复制、差异、校验、审核快照、生效、回滚、审计和当前/历史查询。
+
+### 6.7 当前有效与兼容投影
 
 新模型的当前生效版本是关系事实的权威来源。既有 `biz_space.parent_space_id`、
 `biz_equipment.space_id/system_group_id` 和 `biz_data_point.equip_id/system_group_id` 在建筑进入治理模式后
@@ -211,7 +223,8 @@
   → 能源管理员或研发账号编辑草稿
        ├─ 物理结构关系
        ├─ 显式语义关系
-       └─ 计量边界与未分配项
+       ├─ 计量边界、表计结构与未分配项
+       └─ 平台 V1 Excel → 无写预检 → 确认后单事务写入指定草稿
   → 完整校验和影响摘要
   → 提交审核并冻结修订与校验和
   → 平台管理员批准或研发自审例外
@@ -371,7 +384,13 @@
 首版不提供 `ratio`、`weight`、`formula` 或 `rule_expression` 字段。需要分摊时必须在后续独立设计中
 由能源专家确认语义、精度、总和约束、损耗和历史重算边界。
 
-### 8.9 `biz_relation_review_request`
+### 8.9 `biz_meter_structure_version_item`
+
+保存版本内独立的表计结构事实：关系版本、建筑、计量边界、表计测点、角色、上级表计测点、计量
+方向、确认状态、原因、证据、说明、来源和审计字段。同一版本的同一表计测点只能登记一次；数据库
+外键保证表计、上级表计、计量边界与版本归属，领域校验补充角色、方向、循环和待专家确认规则。
+
+### 8.10 `biz_relation_review_request`
 
 审核申请保存版本 ID、建筑 ID、请求序号、提交修订号、快照校验和、状态、提交人、审核人、审核
 理由和时间。审核状态固定为 `PENDING`、`APPROVED`、`REJECTED`、`WITHDRAWN`。
@@ -379,7 +398,7 @@
 普通生产规则要求创建人和提交人均不能审核自己的版本。研发自审例外仍必须生成独立审核申请，
 记录同一提交人和审核人，并在审计中写入 `SELF_APPROVAL_DEV_MODE`。
 
-### 8.10 `biz_relation_validation_issue`
+### 8.11 `biz_relation_validation_issue`
 
 保存最近一次显式校验发现的问题，至少包含版本、问题级别、问题代码、对象、消息和检测时间。
 
@@ -391,7 +410,7 @@
 
 每次草稿修改后旧校验结果失效；提交时必须重新生成完整校验结果和快照校验和。
 
-### 8.11 `biz_relation_audit_log`
+### 8.12 `biz_relation_audit_log`
 
 追加式记录模型、版本、关系、边界、审核和生效操作。至少保存：审计 ID、建筑 ID、操作人、操作、
 对象类型和 ID、前后状态、版本 ID、关联请求 ID、原因、结果、时间和脱敏摘要。
@@ -567,6 +586,7 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 | 编辑空间父级和结构归属 | `PUT /v1/relation-models/versions/{versionId}/structure/**` |
 | 编辑显式语义关系 | `POST/PUT/DELETE /v1/relation-models/versions/{versionId}/relations/**` |
 | 编辑计量边界和分配状态 | `POST/PUT/DELETE /v1/relation-models/versions/{versionId}/metering/**` |
+| 编辑表计结构 | `POST/PUT/DELETE /v1/relation-models/versions/{versionId}/metering/structures/**` |
 | 执行完整校验 | `POST /v1/relation-models/versions/{versionId}/validate` |
 | 提交或撤回 | `POST /v1/relation-models/versions/{versionId}/submit|withdraw` |
 | 审核 | `POST /v1/relation-models/review-requests/{requestId}/approve|reject` |
@@ -583,6 +603,8 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 | 当前空间树 | `GET /v1/relation-models/{buildingId}/effective/space-tree` |
 | 节点上下文 | `GET /v1/relation-models/{buildingId}/effective/nodes/{nodeType}/{nodeId}/context` |
 | 当前计量边界 | `GET /v1/relation-models/{buildingId}/effective/metering-boundaries` |
+| 当前或历史表计结构 | `GET /v1/relation-models/{buildingId}/effective/metering-structures`、`GET /v1/relation-models/{buildingId}/versions/{versionId}/query/metering-structures` |
+| 表计直接上下级 | `GET /v1/relation-models/{buildingId}/effective/meters/{meterPointNodeId}/hierarchy` 及对应历史版本入口 |
 | 未分配和待确认项 | `GET /v1/relation-models/{buildingId}/effective/issues` |
 | 历史版本空间树或节点上下文 | `GET /v1/relation-models/{buildingId}/versions/{versionId}/query/**` |
 
@@ -598,7 +620,24 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 空间树和语义图分开返回。节点上下文默认深度为 1，允许的最大深度由配置限制；边列表必须分页，
 禁止无界递归和一次返回整栋建筑所有语义关系。
 
-### 13.3 稳定错误码
+### 13.3 平台标准 Excel 导入
+
+首版只接受平台发布的 `templateVersion=V1` 标准模板，按表头名称解析，不按列序号绑定。模板包含
+`填写说明` 和 `计量关系`，模板不预置真实业务数据；任何测试示例均明确标记为合成数据。
+
+| 用途 | 契约 |
+|---|---|
+| 下载模板 | `GET /v1/relation-models/metering-import/template?templateVersion=V1` |
+| 无写预检 | `POST /v1/relation-models/metering-import/preflight`，multipart 携带建筑、目标草稿、预期修订和文件 |
+| 确认导入 | `POST /v1/relation-models/metering-import/confirm`，在预检参数基础上必须携带 `Idempotency-Key` |
+
+解析适配器只处理模板契约和标准化映射；对象归属、表计结构、计量分配、待确认和循环规则复用关系
+领域校验。预检不创建版本、不修改草稿；确认导入重新解析和校验，任一错误整体回滚，只新增或更新
+指定 `DRAFT`，一次批次只递增一次修订，不自动提交、审核或生效。宏、公式、外部链接、重复或缺失
+表头、不支持版本、超限文件/行/文本均明确拒绝。V1 发布后保持兼容，核心字段语义变化通过新的版本
+适配器演进，不静默改变 V1。
+
+### 13.4 稳定错误码
 
 首版至少提供：
 
@@ -696,6 +735,8 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 | 研发自审配置带入生产 | 默认关闭、生产启动拒绝、审计标记和自动化门禁 |
 | 初始化数据已有脏关系 | 生成不可生效草稿和问题清单，不自动纠正或删除 |
 | 园区预留被误报为已实现 | API 首版拒绝 `CAMPUS`，状态和文档明确标记计划中 |
+| Excel 被误作专业事实 | 只发布平台 V1 输入契约，预检不写库，未知项保持 `PENDING_EXPERT` |
+| 恶意或超大工作簿消耗资源 | 限制格式、字节、行数和文本长度，拒绝宏、公式、外部链接和异常单元格 |
 
 ## 18. 验收标准
 
@@ -715,7 +756,11 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 12. 建筑进入 `GOVERNED` 后，新旧资产写入口均不能直接改变关系字段；
 13. 既有 HVAC 查询仍能读取与当前有效版本一致的兼容投影；
 14. `CAMPUS` 请求被稳定拒绝，不能建立跨建筑关系；
-15. OpenAPI、DTO、状态码和错误码契约有自动化测试。
+15. 表计角色、直接上下级和计量方向参与版本差异、审核快照、回滚、审计和分层查询；
+16. 表计自关联、多级循环、跨建筑、重复结构和不合法角色/方向稳定拒绝；
+17. V1 模板可下载且列顺序调整后仍按表头识别，宏、公式、不支持版本、缺失表头和超限输入稳定拒绝；
+18. 预检不写业务数据，确认导入复用相同校验、校验预期修订与幂等键并保持单事务原子性；
+19. OpenAPI、DTO、状态码和错误码契约有自动化测试。
 
 ### 18.2 文档与质量门禁
 

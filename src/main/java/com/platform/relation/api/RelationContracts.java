@@ -67,6 +67,19 @@ public final class RelationContracts {
             @Size(max = 500) String evidenceReference,
             @NotNull @Min(0) Long expectedRevision) {}
 
+    public record MeterStructureRequest(
+            String meteringBoundaryId,
+            @NotBlank String meterPointNodeId,
+            @NotBlank String meterRole,
+            String parentMeterPointNodeId,
+            @NotBlank String meterDirection,
+            @NotBlank String confirmationStatus,
+            @Size(max = 64) String reasonCode,
+            @Size(max = 500) String reasonText,
+            @Size(max = 500) String evidenceReference,
+            @Size(max = 500) String description,
+            @NotNull @Min(0) Long expectedRevision) {}
+
     public record ReviewDecisionRequest(
             @NotBlank @Size(max = 500) String reason) {}
 
@@ -87,17 +100,20 @@ public final class RelationContracts {
 
     public record SnapshotCounts(
             int spaces, int assetAssignments, int semanticRelations,
-            int meteringBoundaries, int meteringAssignments, int validationIssues) {}
+            int meteringBoundaries, int meterStructures,
+            int meteringAssignments, int validationIssues) {}
 
     public record VersionDetailView(
-            QueryMetadata metadata, VersionView version, SnapshotCounts counts) {}
+            QueryMetadata metadata, VersionView version, SnapshotCounts counts,
+            List<MeterStructureView> meterStructures) {}
 
     public record VersionDiffView(
             String buildingId, String fromVersionId, int fromVersionNo,
             String toVersionId, int toVersionNo, long modelRevision,
             SnapshotCounts fromCounts, SnapshotCounts toCounts,
             int addedCount, int removedCount, boolean truncated,
-            List<String> addedSamples, List<String> removedSamples) {}
+            List<String> addedSamples, List<String> removedSamples,
+            int meterStructureAddedCount, int meterStructureRemovedCount) {}
 
     public record ReviewView(
             String requestId, String versionId, String buildingId, int requestNo,
@@ -140,6 +156,46 @@ public final class RelationContracts {
     public record MeteringBoundariesView(
             QueryMetadata metadata, int page, int size, long total,
             List<MeteringBoundaryView> items) {}
+
+    public record MeterStructureView(
+            String structureItemId, String meteringBoundaryId,
+            String meterPointNodeId, String meterPointCode, String meterRole,
+            String parentMeterPointNodeId, String parentMeterPointCode,
+            String meterDirection, String confirmationStatus,
+            String reasonCode, String reasonText, String evidenceReference,
+            String description, String sourceType) {}
+
+    public record MeterStructuresView(
+            QueryMetadata metadata, int page, int size, long total,
+            List<MeterStructureView> items) {}
+
+    public record MeterHierarchyView(
+            QueryMetadata metadata, MeterStructureView meter,
+            MeterStructureView parent, List<MeterStructureView> children) {}
+
+    public record MeteringImportIssue(
+            String level, String sheet, int rowNumber, String field,
+            String code, String message) {}
+
+    public record MeteringImportPreviewRow(
+            int rowNumber, String templateVersion, String boundaryCode,
+            String boundaryName, String energyType, String meterPointCode,
+            String meterRole, String parentMeterCode, String meterDirection,
+            String targetType, String targetCode, String allocationStatus,
+            String reasonCode, String reasonText, String evidenceReference,
+            String description) {}
+
+    public record MeteringImportPreflightView(
+            String templateVersion, String buildingId, String versionId,
+            long expectedRevision, int totalRows, int passedRows,
+            int warningCount, int errorCount,
+            List<MeteringImportIssue> issues,
+            List<MeteringImportPreviewRow> preview) {}
+
+    public record MeteringImportResult(
+            String buildingId, String versionId, long revision,
+            int structureCount, int assignmentCount, int boundaryCreatedCount,
+            boolean idempotentReplay) {}
 
     public record EffectiveIssuesView(QueryMetadata metadata, List<ValidationIssueView> items) {}
 

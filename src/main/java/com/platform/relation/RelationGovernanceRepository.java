@@ -229,6 +229,19 @@ public class RelationGovernanceRepository {
                     row.targetNodeId(), row.allocationStatus(), row.reasonCode(), row.reasonText(),
                     row.evidenceReference(), userId);
         }
+        for (MeterStructureRow row : listMeterStructures(sourceVersionId)) {
+            jdbc.update("""
+                    INSERT INTO biz_meter_structure_version_item
+                    (structure_item_id,version_id,building_id,metering_boundary_id,meter_point_node_id,
+                     meter_role,parent_meter_point_node_id,meter_direction,confirmation_status,
+                     reason_code,reason_text,evidence_reference,description,source_type,
+                     create_by,update_by,create_time,update_time)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                    """, id(), targetVersionId, row.buildingId(), row.boundaryId(),
+                    row.meterPointNodeId(), row.meterRole(), row.parentMeterPointNodeId(),
+                    row.meterDirection(), row.confirmationStatus(), row.reasonCode(), row.reasonText(),
+                    row.evidenceReference(), row.description(), row.sourceType(), userId, userId);
+        }
     }
 
     public int updateSpaceParent(
@@ -350,6 +363,26 @@ public class RelationGovernanceRepository {
         return boundaryId;
     }
 
+    public String insertMeteringBoundaryForImport(
+            VersionRow version, String code, String name, String energyType,
+            String confirmationStatus, String evidence, long userId) {
+        String boundaryId = id();
+        jdbc.update("""
+                INSERT INTO biz_metering_boundary
+                (boundary_id,building_id,boundary_code,boundary_name,energy_type,
+                 confirmation_status,evidence_reference,status,create_by,update_by,create_time,update_time)
+                VALUES (?,?,?,?,?,?,?,'ACTIVE',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                """, boundaryId, version.buildingId(), code, name, energyType,
+                confirmationStatus, evidence, userId, userId);
+        jdbc.update("""
+                INSERT INTO biz_relation_node
+                (node_id,building_id,node_type,business_object_id,status,
+                 create_by,update_by,create_time,update_time)
+                VALUES (?,?,'METERING_BOUNDARY',?,'ACTIVE',?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                """, id(), version.buildingId(), boundaryId, userId, userId);
+        return boundaryId;
+    }
+
     public String insertMeteringAssignment(
             VersionRow version, String boundaryId, String meterPointNodeId, String targetNodeId,
             String status, String reasonCode, String reasonText, String evidence,
@@ -365,6 +398,33 @@ public class RelationGovernanceRepository {
                 meterPointNodeId, targetNodeId, status, reasonCode, reasonText, evidence, userId);
         clearIssues(version.versionId());
         return assignmentId;
+    }
+
+    public String insertMeteringAssignmentForImport(
+            VersionRow version, String boundaryId, String meterPointNodeId, String targetNodeId,
+            String status, String reasonCode, String reasonText, String evidence, long userId) {
+        String assignmentId = id();
+        jdbc.update("""
+                INSERT INTO biz_metering_assignment_version_item
+                (assignment_item_id,version_id,building_id,metering_boundary_id,meter_point_node_id,
+                 target_node_id,allocation_status,reason_code,reason_text,evidence_reference,create_by,create_time)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                """, assignmentId, version.versionId(), version.buildingId(), boundaryId,
+                meterPointNodeId, targetNodeId, status, reasonCode, reasonText, evidence, userId);
+        return assignmentId;
+    }
+
+    public boolean meteringAssignmentExists(
+            String versionId, String boundaryId, String meterPointNodeId, String targetNodeId) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_metering_assignment_version_item
+                WHERE version_id=?
+                  AND ((metering_boundary_id=? ) OR (metering_boundary_id IS NULL AND ? IS NULL))
+                  AND ((meter_point_node_id=? ) OR (meter_point_node_id IS NULL AND ? IS NULL))
+                  AND ((target_node_id=? ) OR (target_node_id IS NULL AND ? IS NULL))
+                """, Integer.class, versionId, boundaryId, boundaryId,
+                meterPointNodeId, meterPointNodeId, targetNodeId, targetNodeId);
+        return count != null && count > 0;
     }
 
     public int updateMeteringAssignment(
@@ -404,21 +464,122 @@ public class RelationGovernanceRepository {
         return changed;
     }
 
+    public String insertMeterStructure(
+            VersionRow version, String boundaryId, String meterPointNodeId,
+            String meterRole, String parentMeterPointNodeId, String meterDirection,
+            String confirmationStatus, String reasonCode, String reasonText,
+            String evidence, String description, String sourceType,
+            long expectedRevision, long userId) {
+        if (bumpDraft(version.versionId(), expectedRevision) != 1) return null;
+        String structureItemId = id();
+        insertMeterStructureItem(structureItemId, version, boundaryId, meterPointNodeId,
+                meterRole, parentMeterPointNodeId, meterDirection, confirmationStatus,
+                reasonCode, reasonText, evidence, description, sourceType, userId);
+        clearIssues(version.versionId());
+        return structureItemId;
+    }
+
+    public int updateMeterStructure(
+            String versionId, String structureItemId, String boundaryId,
+            String meterPointNodeId, String meterRole, String parentMeterPointNodeId,
+            String meterDirection, String confirmationStatus, String reasonCode,
+            String reasonText, String evidence, String description, String sourceType,
+            long expectedRevision, long userId) {
+        int changed = bumpDraft(versionId, expectedRevision);
+        if (changed == 1) {
+            int itemChanged = jdbc.update("""
+                    UPDATE biz_meter_structure_version_item
+                    SET metering_boundary_id=?,meter_point_node_id=?,meter_role=?,
+                        parent_meter_point_node_id=?,meter_direction=?,confirmation_status=?,
+                        reason_code=?,reason_text=?,evidence_reference=?,description=?,source_type=?,
+                        update_by=?,update_time=CURRENT_TIMESTAMP
+                    WHERE structure_item_id=? AND version_id=?
+                    """, boundaryId, meterPointNodeId, meterRole, parentMeterPointNodeId,
+                    meterDirection, confirmationStatus, reasonCode, reasonText, evidence,
+                    description, sourceType, userId, structureItemId, versionId);
+            if (itemChanged != 1) {
+                throw RelationErrors.error(404, RelationErrors.NOT_FOUND, "表计结构不存在");
+            }
+            clearIssues(versionId);
+        }
+        return changed;
+    }
+
+    public int deleteMeterStructure(String versionId, String structureItemId, long expectedRevision) {
+        int changed = bumpDraft(versionId, expectedRevision);
+        if (changed == 1) {
+            int deleted = jdbc.update("""
+                    DELETE FROM biz_meter_structure_version_item
+                    WHERE structure_item_id=? AND version_id=?
+                    """, structureItemId, versionId);
+            if (deleted != 1) {
+                throw RelationErrors.error(404, RelationErrors.NOT_FOUND, "表计结构不存在");
+            }
+            clearIssues(versionId);
+        }
+        return changed;
+    }
+
+    public void insertMeterStructureItem(
+            String structureItemId, VersionRow version, String boundaryId,
+            String meterPointNodeId, String meterRole, String parentMeterPointNodeId,
+            String meterDirection, String confirmationStatus, String reasonCode,
+            String reasonText, String evidence, String description, String sourceType, long userId) {
+        jdbc.update("""
+                INSERT INTO biz_meter_structure_version_item
+                (structure_item_id,version_id,building_id,metering_boundary_id,meter_point_node_id,
+                 meter_role,parent_meter_point_node_id,meter_direction,confirmation_status,
+                 reason_code,reason_text,evidence_reference,description,source_type,
+                 create_by,update_by,create_time,update_time)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)
+                """, structureItemId, version.versionId(), version.buildingId(), boundaryId,
+                meterPointNodeId, meterRole, parentMeterPointNodeId, meterDirection,
+                confirmationStatus, reasonCode, reasonText, evidence, description,
+                sourceType, userId, userId);
+    }
+
+    public void updateMeterStructureItemForImport(
+            String versionId, String meterPointNodeId, String boundaryId, String meterRole,
+            String parentMeterPointNodeId, String meterDirection, String confirmationStatus,
+            String reasonCode, String reasonText, String evidence, String description, long userId) {
+        jdbc.update("""
+                UPDATE biz_meter_structure_version_item
+                SET metering_boundary_id=?,meter_role=?,parent_meter_point_node_id=?,
+                    meter_direction=?,confirmation_status=?,reason_code=?,reason_text=?,
+                    evidence_reference=?,description=?,source_type='IMPORT',update_by=?,
+                    update_time=CURRENT_TIMESTAMP
+                WHERE version_id=? AND meter_point_node_id=?
+                """, boundaryId, meterRole, parentMeterPointNodeId, meterDirection,
+                confirmationStatus, reasonCode, reasonText, evidence, description,
+                userId, versionId, meterPointNodeId);
+    }
+
+    public int bumpDraftForImport(String versionId, long expectedRevision) {
+        int changed = bumpDraft(versionId, expectedRevision);
+        if (changed == 1) clearIssues(versionId);
+        return changed;
+    }
+
     public boolean boundaryReferencedByFrozenVersion(String boundaryId) {
         Integer count = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM biz_metering_assignment_version_item a
-                JOIN biz_relation_version v ON v.version_id=a.version_id
-                WHERE a.metering_boundary_id=?
-                  AND v.status IN ('PENDING_REVIEW','APPROVED','EFFECTIVE','SUPERSEDED')
-                """, Integer.class, boundaryId);
+                SELECT COUNT(*) FROM biz_relation_version v
+                WHERE v.status IN ('PENDING_REVIEW','APPROVED','EFFECTIVE','SUPERSEDED')
+                  AND (EXISTS (SELECT 1 FROM biz_metering_assignment_version_item a
+                               WHERE a.version_id=v.version_id AND a.metering_boundary_id=?)
+                    OR EXISTS (SELECT 1 FROM biz_meter_structure_version_item s
+                               WHERE s.version_id=v.version_id AND s.metering_boundary_id=?))
+                """, Integer.class, boundaryId, boundaryId);
         return count != null && count > 0;
     }
 
     public boolean boundaryReferencedByAnyVersion(String boundaryId) {
         Integer count = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM biz_metering_assignment_version_item
-                WHERE metering_boundary_id=?
-                """, Integer.class, boundaryId);
+                SELECT COUNT(*) FROM biz_relation_version v
+                WHERE EXISTS (SELECT 1 FROM biz_metering_assignment_version_item a
+                              WHERE a.version_id=v.version_id AND a.metering_boundary_id=?)
+                   OR EXISTS (SELECT 1 FROM biz_meter_structure_version_item s
+                              WHERE s.version_id=v.version_id AND s.metering_boundary_id=?)
+                """, Integer.class, boundaryId, boundaryId);
         return count != null && count > 0;
     }
 
@@ -488,6 +649,36 @@ public class RelationGovernanceRepository {
                 rs.getString(4), rs.getString(5)), buildingId, nodeType, objectId).stream().findFirst();
     }
 
+    public Optional<NodeRow> findNodeByCode(String buildingId, String nodeType, String objectCode) {
+        String sql = switch (nodeType) {
+            case "POINT" -> """
+                    SELECT n.node_id,n.building_id,n.node_type,n.business_object_id,n.status
+                    FROM biz_relation_node n JOIN biz_data_point p ON p.point_id=n.business_object_id
+                    WHERE n.building_id=? AND n.node_type='POINT' AND p.point_code=? AND p.del_flag=0
+                    """;
+            case "SPACE" -> """
+                    SELECT n.node_id,n.building_id,n.node_type,n.business_object_id,n.status
+                    FROM biz_relation_node n JOIN biz_space s ON s.space_id=n.business_object_id
+                    WHERE n.building_id=? AND n.node_type='SPACE' AND s.space_code=? AND s.del_flag=0
+                    """;
+            case "SYSTEM" -> """
+                    SELECT n.node_id,n.building_id,n.node_type,n.business_object_id,n.status
+                    FROM biz_relation_node n JOIN biz_system_group g ON g.system_group_id=n.business_object_id
+                    WHERE n.building_id=? AND n.node_type='SYSTEM' AND g.system_group_code=? AND g.del_flag=0
+                    """;
+            case "EQUIPMENT" -> """
+                    SELECT n.node_id,n.building_id,n.node_type,n.business_object_id,n.status
+                    FROM biz_relation_node n JOIN biz_equipment e ON e.equip_id=n.business_object_id
+                    WHERE n.building_id=? AND n.node_type='EQUIPMENT' AND e.equip_code=? AND e.del_flag=0
+                    """;
+            default -> throw RelationErrors.error(400, RelationErrors.VALIDATION_FAILED,
+                    "覆盖对象类型不支持");
+        };
+        return jdbc.query(sql, (rs, row) -> new NodeRow(rs.getString(1), rs.getString(2),
+                rs.getString(3), rs.getString(4), rs.getString(5)), buildingId, objectCode)
+                .stream().findFirst();
+    }
+
     public List<SpaceItem> listSpaceItems(String versionId) {
         return jdbc.query("""
                 SELECT i.space_id,i.parent_space_id,i.sort_order,s.space_name,s.space_type,s.building_id
@@ -529,6 +720,61 @@ public class RelationGovernanceRepository {
                 rs.getString(7), rs.getString(8), rs.getString(9)), versionId);
     }
 
+    public List<MeterStructureRow> listMeterStructures(String versionId) {
+        return jdbc.query("""
+                SELECT s.structure_item_id,s.metering_boundary_id,s.meter_point_node_id,
+                       p.point_code,s.meter_role,s.parent_meter_point_node_id,pp.point_code,
+                       s.meter_direction,s.confirmation_status,s.reason_code,s.reason_text,
+                       s.evidence_reference,s.description,s.source_type,s.building_id
+                FROM biz_meter_structure_version_item s
+                JOIN biz_relation_node n ON n.node_id=s.meter_point_node_id
+                JOIN biz_data_point p ON p.point_id=n.business_object_id
+                LEFT JOIN biz_relation_node pn ON pn.node_id=s.parent_meter_point_node_id
+                LEFT JOIN biz_data_point pp ON pp.point_id=pn.business_object_id
+                WHERE s.version_id=? ORDER BY p.point_code,s.structure_item_id
+                """, METER_STRUCTURE_MAPPER, versionId);
+    }
+
+    public Optional<MeterStructureRow> findMeterStructure(
+            String versionId, String structureItemId) {
+        return listMeterStructures(versionId).stream()
+                .filter(row -> row.structureItemId().equals(structureItemId)).findFirst();
+    }
+
+    public Optional<MeterStructureRow> findMeterStructureByPoint(
+            String versionId, String meterPointNodeId) {
+        return listMeterStructures(versionId).stream()
+                .filter(row -> row.meterPointNodeId().equals(meterPointNodeId)).findFirst();
+    }
+
+    public List<MeterStructureRow> listMeterStructures(
+            String versionId, int limit, int offset) {
+        return jdbc.query("""
+                SELECT s.structure_item_id,s.metering_boundary_id,s.meter_point_node_id,
+                       p.point_code,s.meter_role,s.parent_meter_point_node_id,pp.point_code,
+                       s.meter_direction,s.confirmation_status,s.reason_code,s.reason_text,
+                       s.evidence_reference,s.description,s.source_type,s.building_id
+                FROM biz_meter_structure_version_item s
+                JOIN biz_relation_node n ON n.node_id=s.meter_point_node_id
+                JOIN biz_data_point p ON p.point_id=n.business_object_id
+                LEFT JOIN biz_relation_node pn ON pn.node_id=s.parent_meter_point_node_id
+                LEFT JOIN biz_data_point pp ON pp.point_id=pn.business_object_id
+                WHERE s.version_id=? ORDER BY p.point_code,s.structure_item_id LIMIT ? OFFSET ?
+                """, METER_STRUCTURE_MAPPER, versionId, limit, offset);
+    }
+
+    public long countMeterStructures(String versionId) {
+        Long count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM biz_meter_structure_version_item WHERE version_id=?",
+                Long.class, versionId);
+        return count == null ? 0 : count;
+    }
+
+    public List<MeterStructureRow> listMeterChildren(String versionId, String parentPointNodeId) {
+        return listMeterStructures(versionId).stream()
+                .filter(row -> parentPointNodeId.equals(row.parentMeterPointNodeId())).toList();
+    }
+
     public int activeSpaceCount(String buildingId) {
         Integer value = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM biz_space WHERE building_id=? AND del_flag=0",
@@ -558,6 +804,16 @@ public class RelationGovernanceRepository {
                 """, (rs, row) -> new BoundaryRow(rs.getString(1), rs.getString(2), rs.getString(3),
                 rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), boundaryId)
                 .stream().findFirst();
+    }
+
+    public Optional<BoundaryRow> findBoundaryByCode(String buildingId, String boundaryCode) {
+        return jdbc.query("""
+                SELECT boundary_id,boundary_code,boundary_name,energy_type,
+                       confirmation_status,status,evidence_reference
+                FROM biz_metering_boundary WHERE building_id=? AND boundary_code=?
+                """, (rs, row) -> new BoundaryRow(rs.getString(1), rs.getString(2),
+                rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
+                rs.getString(7)), buildingId, boundaryCode).stream().findFirst();
     }
 
     public boolean objectExistsInBuilding(String nodeType, String objectId, String buildingId) {
@@ -804,21 +1060,27 @@ public class RelationGovernanceRepository {
                 SELECT DISTINCT b.boundary_id,b.boundary_code,b.boundary_name,b.energy_type,
                        b.confirmation_status,b.status,b.evidence_reference
                 FROM biz_metering_boundary b
-                JOIN biz_metering_assignment_version_item a ON a.metering_boundary_id=b.boundary_id
-                WHERE a.version_id=? AND b.building_id=?
+                WHERE b.building_id=? AND (
+                  EXISTS (SELECT 1 FROM biz_metering_assignment_version_item a
+                          WHERE a.metering_boundary_id=b.boundary_id AND a.version_id=?)
+                  OR EXISTS (SELECT 1 FROM biz_meter_structure_version_item s
+                             WHERE s.metering_boundary_id=b.boundary_id AND s.version_id=?))
                 ORDER BY b.boundary_code LIMIT ? OFFSET ?
                 """, (rs, row) -> new BoundaryRow(rs.getString(1), rs.getString(2), rs.getString(3),
                 rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)),
-                versionId, buildingId, limit, offset);
+                buildingId, versionId, versionId, limit, offset);
     }
 
     public long countBoundaries(String versionId, String buildingId) {
         Long value = jdbc.queryForObject(
                 """
                 SELECT COUNT(DISTINCT b.boundary_id) FROM biz_metering_boundary b
-                JOIN biz_metering_assignment_version_item a ON a.metering_boundary_id=b.boundary_id
-                WHERE a.version_id=? AND b.building_id=?
-                """, Long.class, versionId, buildingId);
+                WHERE b.building_id=? AND (
+                  EXISTS (SELECT 1 FROM biz_metering_assignment_version_item a
+                          WHERE a.metering_boundary_id=b.boundary_id AND a.version_id=?)
+                  OR EXISTS (SELECT 1 FROM biz_meter_structure_version_item s
+                             WHERE s.metering_boundary_id=b.boundary_id AND s.version_id=?))
+                """, Long.class, buildingId, versionId, versionId);
         return value == null ? 0 : value;
     }
 
@@ -827,10 +1089,13 @@ public class RelationGovernanceRepository {
                 SELECT DISTINCT b.boundary_id,b.boundary_code,b.boundary_name,b.energy_type,
                        b.confirmation_status,b.status,b.evidence_reference
                 FROM biz_metering_boundary b
-                JOIN biz_metering_assignment_version_item a ON a.metering_boundary_id=b.boundary_id
-                WHERE a.version_id=? ORDER BY b.boundary_code,b.boundary_id
+                WHERE EXISTS (SELECT 1 FROM biz_metering_assignment_version_item a
+                              WHERE a.metering_boundary_id=b.boundary_id AND a.version_id=?)
+                   OR EXISTS (SELECT 1 FROM biz_meter_structure_version_item s
+                              WHERE s.metering_boundary_id=b.boundary_id AND s.version_id=?)
+                ORDER BY b.boundary_code,b.boundary_id
                 """, (rs, row) -> new BoundaryRow(rs.getString(1), rs.getString(2), rs.getString(3),
-                rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), versionId);
+                rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), versionId, versionId);
     }
 
     private static String id() {
@@ -902,6 +1167,13 @@ public class RelationGovernanceRepository {
                     rs.getString("idempotency_key"), rs.getString("request_sha256"),
                     time(rs.getTimestamp("operation_time")));
 
+    private static final org.springframework.jdbc.core.RowMapper<MeterStructureRow> METER_STRUCTURE_MAPPER =
+            (rs, row) -> new MeterStructureRow(rs.getString(1), rs.getString(2),
+                    rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
+                    rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10),
+                    rs.getString(11), rs.getString(12), rs.getString(13), rs.getString(14),
+                    rs.getString(15));
+
     public record ModelRow(
             String modelId, String scopeType, String scopeId, String buildingId,
             String governanceMode, String activeVersionId, String draftVersionId,
@@ -941,6 +1213,13 @@ public class RelationGovernanceRepository {
             String assignmentItemId, String boundaryId, String meterPointNodeId,
             String targetNodeId, String allocationStatus, String reasonCode,
             String reasonText, String evidenceReference, String buildingId) {}
+
+    public record MeterStructureRow(
+            String structureItemId, String boundaryId, String meterPointNodeId,
+            String meterPointCode, String meterRole, String parentMeterPointNodeId,
+            String parentMeterPointCode, String meterDirection, String confirmationStatus,
+            String reasonCode, String reasonText, String evidenceReference,
+            String description, String sourceType, String buildingId) {}
 
     public record IssueRow(
             String issueId, String level, String code, String objectType,
