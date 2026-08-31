@@ -157,6 +157,21 @@ public final class RelationContracts {
             QueryMetadata metadata, int page, int size, long total,
             List<MeteringBoundaryView> items) {}
 
+    public record MeteringAssignmentView(
+            String assignmentItemId, String allocationStatus,
+            String reasonCode, String reasonText, String evidenceReference,
+            String meteringBoundaryId, String meteringBoundaryCode,
+            String meteringBoundaryName, String energyType,
+            String boundaryConfirmationStatus, String boundaryStatus,
+            String meterPointNodeId, String pointId, String pointCode, String pointName,
+            String meterRole, String meterDirection, String meterConfirmationStatus,
+            String targetNodeId, String targetNodeType, String targetObjectId,
+            String targetObjectCode, String targetObjectName) {}
+
+    public record MeteringAssignmentsView(
+            QueryMetadata metadata, int page, int size, long total,
+            List<MeteringAssignmentView> items) {}
+
     public record MeterStructureView(
             String structureItemId, String meteringBoundaryId,
             String meterPointNodeId, String meterPointCode, String meterRole,

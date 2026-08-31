@@ -3,6 +3,7 @@ package com.platform.relation;
 import com.platform.relation.RelationGovernanceRepository.AssignmentRow;
 import com.platform.relation.RelationGovernanceRepository.AuditRow;
 import com.platform.relation.RelationGovernanceRepository.BoundaryRow;
+import com.platform.relation.RelationGovernanceRepository.EffectiveMeteringAssignmentRow;
 import com.platform.relation.RelationGovernanceRepository.MeteringAssignmentRow;
 import com.platform.relation.RelationGovernanceRepository.MeterStructureRow;
 import com.platform.relation.RelationGovernanceRepository.ModelRow;
@@ -768,6 +769,22 @@ public class RelationGovernanceService {
                 page * (long) boundedSize < total), page, boundedSize, total, items);
     }
 
+    public MeteringAssignmentsView effectiveMeteringAssignments(
+            Long userId, Collection<String> roles, String buildingId, int page, int size) {
+        requireReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        requirePage(page, size);
+        ModelRow model = requireModel(buildingId, false);
+        VersionRow version = requireEffective(model);
+        int boundedSize = Math.min(size, properties.getMaxPageSize());
+        long total = repository.countEffectiveMeteringAssignments(version.versionId(), buildingId);
+        List<MeteringAssignmentView> items = repository.listEffectiveMeteringAssignments(
+                        version.versionId(), buildingId, boundedSize, (page - 1) * boundedSize)
+                .stream().map(this::toView).toList();
+        return new MeteringAssignmentsView(metadata(model, version, 0,
+                page * (long) boundedSize < total), page, boundedSize, total, items);
+    }
+
     public MeterStructuresView effectiveMeterStructures(
             Long userId, Collection<String> roles, String buildingId, int page, int size) {
         requireReader(roles);
@@ -1373,6 +1390,17 @@ public class RelationGovernanceService {
     private MeteringBoundaryView toView(BoundaryRow row) {
         return new MeteringBoundaryView(row.boundaryId(), row.boundaryCode(), row.boundaryName(),
                 row.energyType(), row.confirmationStatus(), row.status());
+    }
+
+    private MeteringAssignmentView toView(EffectiveMeteringAssignmentRow row) {
+        return new MeteringAssignmentView(row.assignmentItemId(), row.allocationStatus(),
+                row.reasonCode(), row.reasonText(), row.evidenceReference(), row.boundaryId(),
+                row.boundaryCode(), row.boundaryName(), row.energyType(),
+                row.boundaryConfirmationStatus(), row.boundaryStatus(), row.meterPointNodeId(),
+                row.pointId(), row.pointCode(), row.pointName(), row.meterRole(),
+                row.meterDirection(), row.meterConfirmationStatus(), row.targetNodeId(),
+                row.targetNodeType(), row.targetObjectId(), row.targetObjectCode(),
+                row.targetObjectName());
     }
 
     private MeterStructureView toView(MeterStructureRow row) {

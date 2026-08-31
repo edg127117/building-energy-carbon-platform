@@ -369,6 +369,16 @@ public class RelationGovernanceController {
                 SecurityUser.roles(authentication), buildingId, page, size));
     }
 
+    @GetMapping("/v1/relation-models/{buildingId}/effective/metering-assignments")
+    public Result<MeteringAssignmentsView> effectiveMeteringAssignments(
+            Authentication authentication, @PathVariable String buildingId,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
+        return Result.success(service.effectiveMeteringAssignments(
+                SecurityUser.userId(authentication), SecurityUser.roles(authentication),
+                buildingId, page, size));
+    }
+
     @GetMapping("/v1/relation-models/{buildingId}/effective/metering-structures")
     public Result<MeterStructuresView> effectiveMeterStructures(
             Authentication authentication, @PathVariable String buildingId,

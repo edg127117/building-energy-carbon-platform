@@ -603,6 +603,7 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 | 当前空间树 | `GET /v1/relation-models/{buildingId}/effective/space-tree` |
 | 节点上下文 | `GET /v1/relation-models/{buildingId}/effective/nodes/{nodeType}/{nodeId}/context` |
 | 当前计量边界 | `GET /v1/relation-models/{buildingId}/effective/metering-boundaries` |
+| 当前有效计量分配 | `GET /v1/relation-models/{buildingId}/effective/metering-assignments` |
 | 当前或历史表计结构 | `GET /v1/relation-models/{buildingId}/effective/metering-structures`、`GET /v1/relation-models/{buildingId}/versions/{versionId}/query/metering-structures` |
 | 表计直接上下级 | `GET /v1/relation-models/{buildingId}/effective/meters/{meterPointNodeId}/hierarchy` 及对应历史版本入口 |
 | 未分配和待确认项 | `GET /v1/relation-models/{buildingId}/effective/issues` |
@@ -616,6 +617,9 @@ Flyway 只创建结构，不在数据库迁移中自动猜测或发布业务关�
 - `modelRevision`；
 - 查询层级和截断信息；
 - 未分配、待确认、错误和警告摘要。
+
+当前有效计量分配查询组合生效版本中的分配事实、计量边界、表计结构和目标对象身份；
+`UNASSIGNED` 项必须原样返回，缺失的测点、边界或目标不得在查询层补成整栋建筑归属。
 
 空间树和语义图分开返回。节点上下文默认深度为 1，允许的最大深度由配置限制；边列表必须分页，
 禁止无界递归和一次返回整栋建筑所有语义关系。

@@ -1,8 +1,11 @@
 package com.platform.relation;
 
 import com.platform.framework.exception.BusinessException;
+import com.platform.relation.api.RelationContracts.ActivationRequest;
 import com.platform.relation.api.RelationContracts.MeterStructureRequest;
+import com.platform.relation.api.RelationContracts.MeteringAssignmentRequest;
 import com.platform.relation.api.RelationContracts.MeteringBoundaryRequest;
+import com.platform.relation.api.RelationContracts.ReviewDecisionRequest;
 import com.platform.relation.api.RelationContracts.RevisionReasonRequest;
 import com.platform.system.service.BuildingScopeService;
 import org.junit.jupiter.api.AfterEach;
@@ -27,6 +30,7 @@ import static org.mockito.Mockito.when;
 @ActiveProfiles("test")
 class MeterStructureGovernanceIntegrationTest {
     private static final Set<String> ENERGY = Set.of("ENERGY_MANAGER");
+    private static final Set<String> ADMIN = Set.of("PLATFORM_ADMIN");
 
     @Autowired private RelationGovernanceService service;
     @Autowired private JdbcTemplate jdbc;
@@ -125,6 +129,66 @@ class MeterStructureGovernanceIntegrationTest {
                 new RevisionReasonRequest(1L, "尝试提交")), RelationErrors.PENDING_EXPERT);
     }
 
+    @Test
+    void exposesVersionedEffectiveAssignmentsWithoutHidingUnassignedItems() {
+        var draft = service.initialize(101L, ENERGY, "BLD001", "assignment-query-init",
+                "有效计量分配查询测试");
+        var boundary = service.createBoundary(101L, ENERGY, draft.versionId(),
+                "assignment-query-boundary", new MeteringBoundaryRequest(
+                        "SIM_POWER_IN", "研发模拟购电边界", "ELECTRICITY",
+                        "CONFIRMED", "SYNTHETIC_BOUNDARY_EVIDENCE", draft.revision()));
+        String point = pointNode("BLD001", "POINT004");
+        String target = nodeId("BLD001", "SPACE", "SPACE001");
+        service.createMeterStructure(101L, ENERGY, draft.versionId(),
+                "assignment-query-structure", request(boundary.boundaryId(), point,
+                        "INDEPENDENT", null, "INBOUND", "CONFIRMED", null, 1L));
+        String assignedId = service.createMeteringAssignment(101L, ENERGY, draft.versionId(),
+                "assignment-query-assigned", new MeteringAssignmentRequest(
+                        boundary.boundaryId(), point, target, "ASSIGNED", null, null,
+                        "SYNTHETIC_ASSIGNMENT_EVIDENCE", 2L));
+        service.createMeteringAssignment(101L, ENERGY, draft.versionId(),
+                "assignment-query-unassigned", new MeteringAssignmentRequest(
+                        null, null, null, "UNASSIGNED", "SYNTHETIC_NOT_MAPPED",
+                        "研发模拟未分配项", null, 3L));
+
+        var review = service.submit(101L, ENERGY, draft.versionId(),
+                "assignment-query-submit", new RevisionReasonRequest(4L, "提交模拟关系"));
+        service.approve(202L, ADMIN, review.requestId(), "assignment-query-approve",
+                new ReviewDecisionRequest("批准软件模拟关系"));
+        long modelRevision = service.model(202L, ADMIN, "BLD001").modelRevision();
+        var effective = service.activate(202L, ADMIN, draft.versionId(),
+                "assignment-query-activate", new ActivationRequest(modelRevision, "生效模拟关系"));
+
+        var result = service.effectiveMeteringAssignments(
+                101L, ENERGY, "BLD001", 1, 20);
+
+        assertThat(result.metadata().versionId()).isEqualTo(effective.versionId());
+        assertThat(result.metadata().effectiveAt()).isNotNull();
+        assertThat(result.metadata().unassignedCount()).isEqualTo(1);
+        assertThat(result.total()).isEqualTo(2);
+        var assigned = result.items().stream()
+                .filter(item -> assignedId.equals(item.assignmentItemId()))
+                .findFirst().orElseThrow();
+        assertThat(assigned.allocationStatus()).isEqualTo("ASSIGNED");
+        assertThat(assigned.pointId()).isEqualTo("POINT004");
+        assertThat(assigned.pointCode()).isNotBlank();
+        assertThat(assigned.meteringBoundaryCode()).isEqualTo("SIM_POWER_IN");
+        assertThat(assigned.energyType()).isEqualTo("ELECTRICITY");
+        assertThat(assigned.meterRole()).isEqualTo("INDEPENDENT");
+        assertThat(assigned.meterDirection()).isEqualTo("INBOUND");
+        assertThat(assigned.targetNodeType()).isEqualTo("SPACE");
+        assertThat(assigned.targetObjectId()).isEqualTo("SPACE001");
+        assertThat(assigned.targetObjectCode()).isEqualTo("MR01");
+        assertThat(result.items()).anySatisfy(item -> {
+            assertThat(item.allocationStatus()).isEqualTo("UNASSIGNED");
+            assertThat(item.meteringBoundaryId()).isNull();
+            assertThat(item.pointId()).isNull();
+            assertThat(item.targetObjectId()).isNull();
+        });
+        assertThat(service.effectiveMeteringAssignments(101L, ENERGY, "BLD001", 1, 1)
+                .metadata().truncated()).isTrue();
+    }
+
     private MeterStructureRequest request(
             String boundaryId, String point, String role, String parent, String direction,
             String confirmation, String reasonCode, long revision) {
@@ -139,6 +203,13 @@ class MeterStructureGovernanceIntegrationTest {
                 SELECT node_id FROM biz_relation_node
                 WHERE building_id=? AND node_type='POINT' AND business_object_id=?
                 """, String.class, buildingId, pointId);
+    }
+
+    private String nodeId(String buildingId, String nodeType, String objectId) {
+        return jdbc.queryForObject("""
+                SELECT node_id FROM biz_relation_node
+                WHERE building_id=? AND node_type=? AND business_object_id=?
+                """, String.class, buildingId, nodeType, objectId);
     }
 
     private void assertCode(org.assertj.core.api.ThrowableAssert.ThrowingCallable callable, String code) {

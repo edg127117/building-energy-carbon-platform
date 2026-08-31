@@ -720,6 +720,71 @@ public class RelationGovernanceRepository {
                 rs.getString(7), rs.getString(8), rs.getString(9)), versionId);
     }
 
+    /**
+     * 组合当前版本的分配、边界、表计结构和目标身份，供下游只读消费。
+     * 未分配项使用左连接保留，避免查询层把未知关系静默解释为整栋建筑归属。
+     */
+    public List<EffectiveMeteringAssignmentRow> listEffectiveMeteringAssignments(
+            String versionId, String buildingId, int limit, int offset) {
+        return jdbc.query("""
+                SELECT a.assignment_item_id,a.allocation_status,a.reason_code,a.reason_text,
+                       a.evidence_reference,
+                       b.boundary_id,b.boundary_code,b.boundary_name,b.energy_type,
+                       b.confirmation_status,b.status,
+                       meter_node.node_id,meter_node.business_object_id,p.point_code,p.point_name,
+                       structure.meter_role,structure.meter_direction,structure.confirmation_status,
+                       target_node.node_id,target_node.node_type,target_node.business_object_id,
+                       CASE target_node.node_type
+                         WHEN 'SPACE' THEN target_space.space_code
+                         WHEN 'SYSTEM' THEN target_system.system_group_code
+                         WHEN 'EQUIPMENT' THEN target_equipment.equip_code
+                       END AS target_object_code,
+                       CASE target_node.node_type
+                         WHEN 'SPACE' THEN target_space.space_name
+                         WHEN 'SYSTEM' THEN target_system.system_group_name
+                         WHEN 'EQUIPMENT' THEN target_equipment.equip_name
+                       END AS target_object_name,
+                       a.building_id
+                FROM biz_metering_assignment_version_item a
+                LEFT JOIN biz_metering_boundary b
+                  ON b.boundary_id=a.metering_boundary_id AND b.building_id=a.building_id
+                LEFT JOIN biz_relation_node meter_node
+                  ON meter_node.node_id=a.meter_point_node_id AND meter_node.building_id=a.building_id
+                LEFT JOIN biz_data_point p
+                  ON p.point_id=meter_node.business_object_id AND p.building_id=a.building_id
+                LEFT JOIN biz_meter_structure_version_item structure
+                  ON structure.version_id=a.version_id
+                 AND structure.meter_point_node_id=a.meter_point_node_id
+                LEFT JOIN biz_relation_node target_node
+                  ON target_node.node_id=a.target_node_id AND target_node.building_id=a.building_id
+                LEFT JOIN biz_space target_space
+                  ON target_node.node_type='SPACE'
+                 AND target_space.space_id=target_node.business_object_id
+                 AND target_space.building_id=a.building_id
+                LEFT JOIN biz_system_group target_system
+                  ON target_node.node_type='SYSTEM'
+                 AND target_system.system_group_id=target_node.business_object_id
+                 AND target_system.building_id=a.building_id
+                LEFT JOIN biz_equipment target_equipment
+                  ON target_node.node_type='EQUIPMENT'
+                 AND target_equipment.equip_id=target_node.business_object_id
+                 AND target_equipment.building_id=a.building_id
+                WHERE a.version_id=? AND a.building_id=?
+                ORDER BY CASE WHEN p.point_code IS NULL THEN 1 ELSE 0 END,
+                         p.point_code,a.assignment_item_id
+                LIMIT ? OFFSET ?
+                """, EFFECTIVE_METERING_ASSIGNMENT_MAPPER,
+                versionId, buildingId, limit, offset);
+    }
+
+    public long countEffectiveMeteringAssignments(String versionId, String buildingId) {
+        Long count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_metering_assignment_version_item
+                WHERE version_id=? AND building_id=?
+                """, Long.class, versionId, buildingId);
+        return count == null ? 0 : count;
+    }
+
     public List<MeterStructureRow> listMeterStructures(String versionId) {
         return jdbc.query("""
                 SELECT s.structure_item_id,s.metering_boundary_id,s.meter_point_node_id,
@@ -1174,6 +1239,16 @@ public class RelationGovernanceRepository {
                     rs.getString(11), rs.getString(12), rs.getString(13), rs.getString(14),
                     rs.getString(15));
 
+    private static final org.springframework.jdbc.core.RowMapper<EffectiveMeteringAssignmentRow>
+            EFFECTIVE_METERING_ASSIGNMENT_MAPPER = (rs, row) ->
+            new EffectiveMeteringAssignmentRow(rs.getString(1), rs.getString(2),
+                    rs.getString(3), rs.getString(4), rs.getString(5), rs.getString(6),
+                    rs.getString(7), rs.getString(8), rs.getString(9), rs.getString(10),
+                    rs.getString(11), rs.getString(12), rs.getString(13), rs.getString(14),
+                    rs.getString(15), rs.getString(16), rs.getString(17), rs.getString(18),
+                    rs.getString(19), rs.getString(20), rs.getString(21), rs.getString(22),
+                    rs.getString(23), rs.getString(24));
+
     public record ModelRow(
             String modelId, String scopeType, String scopeId, String buildingId,
             String governanceMode, String activeVersionId, String draftVersionId,
@@ -1213,6 +1288,16 @@ public class RelationGovernanceRepository {
             String assignmentItemId, String boundaryId, String meterPointNodeId,
             String targetNodeId, String allocationStatus, String reasonCode,
             String reasonText, String evidenceReference, String buildingId) {}
+
+    public record EffectiveMeteringAssignmentRow(
+            String assignmentItemId, String allocationStatus,
+            String reasonCode, String reasonText, String evidenceReference,
+            String boundaryId, String boundaryCode, String boundaryName,
+            String energyType, String boundaryConfirmationStatus, String boundaryStatus,
+            String meterPointNodeId, String pointId, String pointCode, String pointName,
+            String meterRole, String meterDirection, String meterConfirmationStatus,
+            String targetNodeId, String targetNodeType, String targetObjectId,
+            String targetObjectCode, String targetObjectName, String buildingId) {}
 
     public record MeterStructureRow(
             String structureItemId, String boundaryId, String meterPointNodeId,
