@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static com.platform.iot.qualityusage.QualityUsageModels.POINT_HISTORY_VIEW;
+import static com.platform.iot.qualityusage.QualityUsageModels.ENERGY_ACTIVITY_AGGREGATION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -28,6 +29,21 @@ class QualityUsagePolicyResolverTest {
         assertThat(blocked.decision()).isEqualTo(Decision.BLOCK);
         assertThat(blocked.policySource()).isEqualTo(PolicySource.SYSTEM_DEFAULT_Q0_ONLY);
         assertThat(blocked.policyVersion()).isNull();
+    }
+
+    @Test
+    void energyActivityScenarioDefaultsToQ0Only() {
+        QualityUsagePolicyResolver resolver = QualityUsageTestFixtures.systemDefaultResolver();
+
+        assertThat(resolver.resolve(
+                "ENERGY_POINT", ENERGY_ACTIVITY_AGGREGATION, 60_000, 0).decision())
+                .isEqualTo(Decision.ALLOW);
+        assertThat(resolver.resolve(
+                "ENERGY_POINT", ENERGY_ACTIVITY_AGGREGATION, 60_000, 1).decision())
+                .isEqualTo(Decision.BLOCK);
+        assertThat(resolver.resolve(
+                "ENERGY_POINT", ENERGY_ACTIVITY_AGGREGATION, 60_000, 2).decision())
+                .isEqualTo(Decision.BLOCK);
     }
 
     @Test
