@@ -21,6 +21,7 @@ DROP TABLE IF EXISTS sys_user;
 DROP TABLE IF EXISTS biz_indicator;
 DROP TABLE IF EXISTS biz_point_alias;
 DROP TABLE IF EXISTS biz_data_source;
+DROP TABLE IF EXISTS biz_energy_point_profile;
 DROP TABLE IF EXISTS biz_data_point;
 DROP TABLE IF EXISTS biz_telemetry_receipt_failure;
 DROP TABLE IF EXISTS biz_telemetry_receipt;
@@ -384,6 +385,43 @@ CREATE TABLE biz_data_point (
   UNIQUE (building_id, point_code),
   UNIQUE (point_id, building_id)
 );
+
+CREATE TABLE biz_energy_point_profile (
+  profile_id VARCHAR(32) PRIMARY KEY,
+  point_id VARCHAR(32) NOT NULL,
+  building_id VARCHAR(32) NOT NULL,
+  energy_type VARCHAR(32) NOT NULL,
+  energy_subtype VARCHAR(32),
+  value_semantics VARCHAR(32) NOT NULL,
+  reporting_period VARCHAR(20) NOT NULL,
+  annual_summary BOOLEAN NOT NULL,
+  confirmation_status VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL,
+  config_revision INT NOT NULL DEFAULT 0,
+  create_by BIGINT NOT NULL,
+  update_by BIGINT NOT NULL,
+  create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  UNIQUE (point_id),
+  CHECK (energy_type IN ('ELECTRICITY','NATURAL_GAS','HEAT','COLD','FUEL')),
+  CHECK ((energy_type = 'ELECTRICITY' AND (energy_subtype IS NULL OR
+      energy_subtype IN ('GRID_PURCHASED','TRADED_PURCHASED','DIRECT_RENEWABLE','SELF_GENERATED')))
+      OR (energy_type <> 'ELECTRICITY' AND energy_subtype IS NULL)),
+  CHECK (value_semantics IN ('INSTANTANEOUS','CUMULATIVE','PERIOD_TOTAL')),
+  CHECK (reporting_period = 'MONTH'),
+  CHECK (confirmation_status IN ('PENDING_EXPERT','CONFIRMED')),
+  CHECK (confirmation_status <> 'CONFIRMED' OR energy_type <> 'ELECTRICITY'
+      OR energy_subtype IS NOT NULL),
+  CHECK (config_revision >= 0),
+  FOREIGN KEY (point_id, building_id)
+    REFERENCES biz_data_point (point_id, building_id) ON DELETE RESTRICT,
+  FOREIGN KEY (building_id) REFERENCES building (building_id) ON DELETE RESTRICT
+);
+
+CREATE INDEX idx_energy_point_profile_building_status
+  ON biz_energy_point_profile (building_id, confirmation_status, profile_id);
+CREATE INDEX idx_energy_point_profile_type
+  ON biz_energy_point_profile (energy_type, energy_subtype);
 
 -- H2 镜像保留治理表的关系、状态与保留期约束；运行状态仍只在单体内存中保存。
 CREATE TABLE biz_data_source (

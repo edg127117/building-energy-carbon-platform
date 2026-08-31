@@ -50,7 +50,8 @@ class FlywayMigrationConfigurationTest {
                 "V27__close_collection_direct_publication.sql",
                 "V28__close_quality_usage_direct_publication.sql",
                 "V29__mysql_audit_query_redacted_export.sql",
-                "V30__mysql_audit_retention_hold_cleanup.sql");
+                "V30__mysql_audit_retention_hold_cleanup.sql",
+                "V31__mysql_energy_point_profile.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

@@ -59,7 +59,7 @@ public class GlobalExceptionHandler {
         addVersionedErrorCode(response, request,
                 "ONBOARDING_VALIDATION_FAILED", "ASSET_VALIDATION_FAILED",
                 "COLLECTION_CONFIG_VALIDATION_FAILED", "QUALITY_POLICY_VALIDATION_FAILED",
-                "RELATION_VALIDATION_FAILED");
+                "RELATION_VALIDATION_FAILED", "ENERGY_METADATA_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -110,7 +110,7 @@ public class GlobalExceptionHandler {
         addVersionedErrorCode(response, request,
                 "ONBOARDING_UNAUTHORIZED", "ASSET_UNAUTHORIZED",
                 "COLLECTION_CONFIG_UNAUTHORIZED", "QUALITY_POLICY_UNAUTHORIZED",
-                "RELATION_UNAUTHORIZED");
+                "RELATION_UNAUTHORIZED", "ENERGY_METADATA_UNAUTHORIZED");
         return response;
     }
 
@@ -128,7 +128,7 @@ public class GlobalExceptionHandler {
         addVersionedErrorCode(response, request,
                 "ONBOARDING_FORBIDDEN", "ASSET_FORBIDDEN",
                 "COLLECTION_CONFIG_FORBIDDEN", "QUALITY_POLICY_FORBIDDEN",
-                "RELATION_FORBIDDEN");
+                "RELATION_FORBIDDEN", "ENERGY_METADATA_FORBIDDEN");
         return response;
     }
 
@@ -137,7 +137,7 @@ public class GlobalExceptionHandler {
             Map<String, Object> response, HttpServletRequest request,
             String onboardingErrorCode, String assetErrorCode,
             String collectionErrorCode, String qualityUsageErrorCode,
-            String relationErrorCode) {
+            String relationErrorCode, String energyMetadataErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
@@ -151,6 +151,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", qualityUsageErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/relation-models")) {
             response.put("errorCode", relationErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-point-profiles")) {
+            response.put("errorCode", energyMetadataErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
             response.put("errorCode", "BACKOFFICE_REQUEST_CONFLICT");
         }
