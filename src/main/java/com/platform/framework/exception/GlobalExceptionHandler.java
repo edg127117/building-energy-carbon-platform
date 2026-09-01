@@ -63,7 +63,8 @@ public class GlobalExceptionHandler {
                 "COLLECTION_CONFIG_VALIDATION_FAILED", "QUALITY_POLICY_VALIDATION_FAILED",
                 "RELATION_VALIDATION_FAILED", "ENERGY_METADATA_VALIDATION_FAILED",
                 "ENERGY_CATALOG_VALIDATION_FAILED", "ENERGY_CONVERSION_VALIDATION_FAILED",
-                "ENERGY_ACTIVITY_VALIDATION_FAILED", "ENERGY_AGGREGATION_VALIDATION_FAILED");
+                "ENERGY_ACTIVITY_VALIDATION_FAILED", "ENERGY_AGGREGATION_VALIDATION_FAILED",
+                "ENERGY_PERIOD_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -116,7 +117,8 @@ public class GlobalExceptionHandler {
                 "COLLECTION_CONFIG_UNAUTHORIZED", "QUALITY_POLICY_UNAUTHORIZED",
                 "RELATION_UNAUTHORIZED", "ENERGY_METADATA_UNAUTHORIZED",
                 "ENERGY_CATALOG_UNAUTHORIZED", "ENERGY_CONVERSION_UNAUTHORIZED",
-                "ENERGY_ACTIVITY_UNAUTHORIZED", "ENERGY_AGGREGATION_UNAUTHORIZED");
+                "ENERGY_ACTIVITY_UNAUTHORIZED", "ENERGY_AGGREGATION_UNAUTHORIZED",
+                "ENERGY_PERIOD_UNAUTHORIZED");
         return response;
     }
 
@@ -136,7 +138,8 @@ public class GlobalExceptionHandler {
                 "COLLECTION_CONFIG_FORBIDDEN", "QUALITY_POLICY_FORBIDDEN",
                 "RELATION_FORBIDDEN", "ENERGY_METADATA_FORBIDDEN",
                 "ENERGY_CATALOG_FORBIDDEN", "ENERGY_CONVERSION_FORBIDDEN",
-                "ENERGY_ACTIVITY_FORBIDDEN", "ENERGY_AGGREGATION_FORBIDDEN");
+                "ENERGY_ACTIVITY_FORBIDDEN", "ENERGY_AGGREGATION_FORBIDDEN",
+                "ENERGY_PERIOD_FORBIDDEN");
         return response;
     }
 
@@ -147,7 +150,8 @@ public class GlobalExceptionHandler {
             String collectionErrorCode, String qualityUsageErrorCode,
             String relationErrorCode, String energyMetadataErrorCode,
             String energyCatalogErrorCode, String energyConversionErrorCode,
-            String energyActivityErrorCode, String energyAggregationErrorCode) {
+            String energyActivityErrorCode, String energyAggregationErrorCode,
+            String energyPeriodErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
@@ -171,6 +175,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", energyActivityErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-aggregation")) {
             response.put("errorCode", energyAggregationErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-periods")) {
+            response.put("errorCode", energyPeriodErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
             response.put("errorCode", "BACKOFFICE_REQUEST_CONFLICT");
         }

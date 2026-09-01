@@ -1769,3 +1769,115 @@ CREATE TABLE biz_relation_audit_log (
 
 CREATE INDEX idx_relation_audit_building_time
   ON biz_relation_audit_log (building_id, operation_time);
+
+-- 第七闭环第四后端切片的 H2 隔离镜像。普通测试通过 Mock 数值端口验证跨库发布顺序，
+-- 不连接 TDengine；MySQL 8 约束和索引以 V37 增量迁移为准。
+DROP TABLE IF EXISTS biz_energy_dirty_period;
+DROP TABLE IF EXISTS biz_energy_recalculation_batch_item;
+DROP TABLE IF EXISTS biz_energy_recalculation_batch;
+DROP TABLE IF EXISTS biz_energy_period_result_snapshot;
+DROP TABLE IF EXISTS biz_energy_period_lock_request;
+DROP TABLE IF EXISTS biz_energy_period_result_current;
+DROP TABLE IF EXISTS biz_energy_lock_exception_policy_version;
+DROP TABLE IF EXISTS biz_energy_lock_exception_policy;
+DROP TABLE IF EXISTS biz_energy_period_policy_version;
+DROP TABLE IF EXISTS biz_energy_period_policy;
+
+CREATE TABLE biz_energy_period_policy (
+  policy_id VARCHAR(32) PRIMARY KEY, building_id VARCHAR(32) NOT NULL UNIQUE,
+  created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL
+);
+CREATE TABLE biz_energy_period_policy_version (
+  version_id VARCHAR(32) PRIMARY KEY, policy_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL, timezone_id VARCHAR(64) NOT NULL,
+  closing_delay_hours INT NOT NULL, lock_mode VARCHAR(24) NOT NULL,
+  status VARCHAR(20) NOT NULL, source_type VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL, effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3), config_revision INT NOT NULL,
+  created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL,
+  approved_by BIGINT, approved_at TIMESTAMP(3), review_comment VARCHAR(500),
+  UNIQUE (policy_id,version_no)
+);
+CREATE TABLE biz_energy_lock_exception_policy (
+  policy_id VARCHAR(32) PRIMARY KEY, building_id VARCHAR(32) NOT NULL,
+  issue_code VARCHAR(64) NOT NULL, applicable_scope VARCHAR(64) NOT NULL,
+  created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL,
+  UNIQUE (building_id,issue_code,applicable_scope)
+);
+CREATE TABLE biz_energy_lock_exception_policy_version (
+  version_id VARCHAR(32) PRIMARY KEY, policy_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL, severity VARCHAR(16) NOT NULL, lock_action VARCHAR(40) NOT NULL,
+  maximum_affected_count INT, maximum_affected_ratio DECIMAL(8,6),
+  minimum_coverage_ratio DECIMAL(8,6), requires_approval TINYINT NOT NULL,
+  required_evidence VARCHAR(500) NOT NULL, status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL, evidence_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL, effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL, created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL,
+  approved_by BIGINT, approved_at TIMESTAMP(3), review_comment VARCHAR(500),
+  UNIQUE (policy_id,version_no)
+);
+CREATE TABLE biz_energy_period_result_current (
+  projection_id VARCHAR(32) PRIMARY KEY, result_key CHAR(64) NOT NULL UNIQUE,
+  building_id VARCHAR(32) NOT NULL, point_id VARCHAR(32) NOT NULL,
+  period_type VARCHAR(12) NOT NULL, period_start TIMESTAMP(3) NOT NULL,
+  period_end TIMESTAMP(3) NOT NULL, timezone_id VARCHAR(64) NOT NULL,
+  period_policy_version_id VARCHAR(32) NOT NULL, status VARCHAR(20) NOT NULL,
+  revision BIGINT NOT NULL, result_nature VARCHAR(32) NOT NULL,
+  energy_item_code VARCHAR(64) NOT NULL, native_quantity DECIMAL(30,12) NOT NULL,
+  native_unit_code VARCHAR(64) NOT NULL, tce_value DECIMAL(30,12),
+  tce_unit_code VARCHAR(64), coverage_ratio DECIMAL(8,6) NOT NULL,
+  issue_codes VARCHAR(1000) NOT NULL, evidence_json CLOB NOT NULL,
+  evidence_hash CHAR(64) NOT NULL, conversion_selection_json VARCHAR(1000),
+  activity_watermark TIMESTAMP(3) NOT NULL, calculated_at TIMESTAMP(3) NOT NULL,
+  updated_at TIMESTAMP(3) NOT NULL,
+  UNIQUE (building_id,point_id,period_type,period_start,period_end)
+);
+CREATE TABLE biz_energy_period_lock_request (
+  request_id VARCHAR(32) PRIMARY KEY, projection_id VARCHAR(32) NOT NULL,
+  projection_revision BIGINT NOT NULL, building_id VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL, issue_policy_versions VARCHAR(1000) NOT NULL,
+  reason VARCHAR(500) NOT NULL, evidence_reference VARCHAR(500) NOT NULL,
+  submitted_by BIGINT NOT NULL, submitted_at TIMESTAMP(3) NOT NULL,
+  reviewed_by BIGINT, reviewed_at TIMESTAMP(3), review_comment VARCHAR(500)
+);
+CREATE TABLE biz_energy_period_result_snapshot (
+  snapshot_id VARCHAR(32) PRIMARY KEY, result_key CHAR(64) NOT NULL UNIQUE,
+  projection_id VARCHAR(32) NOT NULL, building_id VARCHAR(32) NOT NULL,
+  point_id VARCHAR(32) NOT NULL, period_type VARCHAR(12) NOT NULL,
+  period_start TIMESTAMP(3) NOT NULL, period_end TIMESTAMP(3) NOT NULL,
+  timezone_id VARCHAR(64) NOT NULL, period_policy_version_id VARCHAR(32) NOT NULL,
+  snapshot_version INT NOT NULL, status VARCHAR(32) NOT NULL,
+  result_nature VARCHAR(32) NOT NULL, energy_item_code VARCHAR(64) NOT NULL,
+  native_quantity DECIMAL(30,12) NOT NULL, native_unit_code VARCHAR(64) NOT NULL,
+  tce_value DECIMAL(30,12), tce_unit_code VARCHAR(64),
+  coverage_ratio DECIMAL(8,6) NOT NULL, issue_codes VARCHAR(1000) NOT NULL,
+  exception_policy_versions VARCHAR(1000) NOT NULL, evidence_json CLOB NOT NULL,
+  evidence_hash CHAR(64) NOT NULL, conversion_selection_json VARCHAR(1000),
+  activity_watermark TIMESTAMP(3) NOT NULL, supersedes_snapshot_id VARCHAR(32),
+  source_batch_id VARCHAR(32), locked_by BIGINT NOT NULL, locked_at TIMESTAMP(3) NOT NULL,
+  UNIQUE (projection_id,snapshot_version)
+);
+CREATE TABLE biz_energy_recalculation_batch (
+  batch_id VARCHAR(32) PRIMARY KEY, building_id VARCHAR(32) NOT NULL,
+  idempotency_key VARCHAR(160) NOT NULL UNIQUE, request_hash CHAR(64) NOT NULL,
+  mode VARCHAR(32) NOT NULL, status VARCHAR(24) NOT NULL, reason VARCHAR(500) NOT NULL,
+  total_items INT NOT NULL, processed_items INT NOT NULL, changed_items INT NOT NULL,
+  unchanged_items INT NOT NULL, failed_items INT NOT NULL, submitted_by BIGINT NOT NULL,
+  submitted_at TIMESTAMP(3) NOT NULL, approved_by BIGINT, approved_at TIMESTAMP(3),
+  review_comment VARCHAR(500), safe_error VARCHAR(160), completed_at TIMESTAMP(3)
+);
+CREATE TABLE biz_energy_recalculation_batch_item (
+  item_id VARCHAR(32) PRIMARY KEY, batch_id VARCHAR(32) NOT NULL,
+  source_snapshot_id VARCHAR(32) NOT NULL, item_order INT NOT NULL,
+  status VARCHAR(20) NOT NULL, new_snapshot_id VARCHAR(32), safe_error VARCHAR(160),
+  UNIQUE (batch_id,source_snapshot_id), UNIQUE (batch_id,item_order)
+);
+CREATE TABLE biz_energy_dirty_period (
+  dirty_id VARCHAR(32) PRIMARY KEY, building_id VARCHAR(32) NOT NULL,
+  point_id VARCHAR(32) NOT NULL, period_type VARCHAR(12) NOT NULL,
+  period_start TIMESTAMP(3) NOT NULL, period_end TIMESTAMP(3) NOT NULL,
+  reason_codes VARCHAR(1000) NOT NULL, event_count INT NOT NULL,
+  status VARCHAR(20) NOT NULL, first_detected_at TIMESTAMP(3) NOT NULL,
+  last_detected_at TIMESTAMP(3) NOT NULL,
+  UNIQUE (building_id,point_id,period_type,period_start,period_end)
+);
