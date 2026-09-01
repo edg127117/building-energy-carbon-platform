@@ -18,7 +18,7 @@ import java.util.List;
 
 @Repository
 /** 保存低频工作流与结果索引；未完成重算批次关联的快照对业务查询不可见。 */
-public class EnergyPeriodResultRepository {
+public class EnergyPeriodResultRepository implements EnergyPeriodSnapshotReader {
     private final JdbcTemplate jdbc;
 
     public EnergyPeriodResultRepository(
@@ -153,6 +153,32 @@ public class EnergyPeriodResultRepository {
                       AND (newer.source_batch_id IS NULL OR newer_batch.status='COMPLETED'))
                 ORDER BY s.period_start
                 """, this::snapshot, buildingId, pointId, timestamp(yearStart), timestamp(yearEnd));
+    }
+
+    @Override
+    public List<PeriodSnapshot> listVisibleSnapshots(
+            String buildingId, String periodType, Instant startInclusive,
+            Instant endExclusive, int limit) {
+        return jdbc.query("""
+                SELECT s.* FROM biz_energy_period_result_snapshot s
+                LEFT JOIN biz_energy_recalculation_batch b ON b.batch_id=s.source_batch_id
+                WHERE s.building_id=? AND s.period_type=?
+                  AND s.period_start>=? AND s.period_end<=?
+                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                  AND (s.source_batch_id IS NULL OR b.status='COMPLETED')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_energy_period_result_snapshot newer
+                    LEFT JOIN biz_energy_recalculation_batch newer_batch
+                      ON newer_batch.batch_id=newer.source_batch_id
+                    WHERE newer.projection_id=s.projection_id
+                      AND newer.snapshot_version>s.snapshot_version
+                      AND newer.status IN
+                        ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                      AND (newer.source_batch_id IS NULL OR newer_batch.status='COMPLETED'))
+                ORDER BY s.period_start,s.point_id
+                LIMIT ?
+                """, this::snapshot, buildingId, periodType, timestamp(startInclusive),
+                timestamp(endExclusive), limit);
     }
 
     public RecalculationBatch findBatch(String batchId) {

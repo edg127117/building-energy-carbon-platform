@@ -64,7 +64,7 @@ public class GlobalExceptionHandler {
                 "RELATION_VALIDATION_FAILED", "ENERGY_METADATA_VALIDATION_FAILED",
                 "ENERGY_CATALOG_VALIDATION_FAILED", "ENERGY_CONVERSION_VALIDATION_FAILED",
                 "ENERGY_ACTIVITY_VALIDATION_FAILED", "ENERGY_AGGREGATION_VALIDATION_FAILED",
-                "ENERGY_PERIOD_VALIDATION_FAILED");
+                "ENERGY_PERIOD_VALIDATION_FAILED", "ENERGY_SUMMARY_VALIDATION_FAILED");
         return response;
     }
     /**
@@ -118,7 +118,7 @@ public class GlobalExceptionHandler {
                 "RELATION_UNAUTHORIZED", "ENERGY_METADATA_UNAUTHORIZED",
                 "ENERGY_CATALOG_UNAUTHORIZED", "ENERGY_CONVERSION_UNAUTHORIZED",
                 "ENERGY_ACTIVITY_UNAUTHORIZED", "ENERGY_AGGREGATION_UNAUTHORIZED",
-                "ENERGY_PERIOD_UNAUTHORIZED");
+                "ENERGY_PERIOD_UNAUTHORIZED", "ENERGY_SUMMARY_UNAUTHORIZED");
         return response;
     }
 
@@ -139,7 +139,7 @@ public class GlobalExceptionHandler {
                 "RELATION_FORBIDDEN", "ENERGY_METADATA_FORBIDDEN",
                 "ENERGY_CATALOG_FORBIDDEN", "ENERGY_CONVERSION_FORBIDDEN",
                 "ENERGY_ACTIVITY_FORBIDDEN", "ENERGY_AGGREGATION_FORBIDDEN",
-                "ENERGY_PERIOD_FORBIDDEN");
+                "ENERGY_PERIOD_FORBIDDEN", "ENERGY_SUMMARY_FORBIDDEN");
         return response;
     }
 
@@ -151,7 +151,7 @@ public class GlobalExceptionHandler {
             String relationErrorCode, String energyMetadataErrorCode,
             String energyCatalogErrorCode, String energyConversionErrorCode,
             String energyActivityErrorCode, String energyAggregationErrorCode,
-            String energyPeriodErrorCode) {
+            String energyPeriodErrorCode, String energySummaryErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
@@ -177,6 +177,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", energyAggregationErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-periods")) {
             response.put("errorCode", energyPeriodErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-boundary-summaries")) {
+            response.put("errorCode", energySummaryErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
             response.put("errorCode", "BACKOFFICE_REQUEST_CONFLICT");
         }

@@ -785,6 +785,24 @@ public class RelationGovernanceService {
                 page * (long) boundedSize < total), page, boundedSize, total, items);
     }
 
+    public MeteringAssignmentsView historicalMeteringAssignments(
+            Long userId, Collection<String> roles, String buildingId,
+            String versionId, int page, int size) {
+        requireReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        requirePage(page, size);
+        ModelRow model = requireModel(buildingId, false);
+        VersionRow version = requireVersion(versionId, false);
+        requireSameBuilding(buildingId, version.buildingId());
+        int boundedSize = Math.min(size, properties.getMaxPageSize());
+        long total = repository.countEffectiveMeteringAssignments(version.versionId(), buildingId);
+        List<MeteringAssignmentView> items = repository.listEffectiveMeteringAssignments(
+                        version.versionId(), buildingId, boundedSize, (page - 1) * boundedSize)
+                .stream().map(this::toView).toList();
+        return new MeteringAssignmentsView(metadata(model, version, 0,
+                page * (long) boundedSize < total), page, boundedSize, total, items);
+    }
+
     public MeterStructuresView effectiveMeterStructures(
             Long userId, Collection<String> roles, String buildingId, int page, int size) {
         requireReader(roles);
