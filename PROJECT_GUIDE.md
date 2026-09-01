@@ -58,6 +58,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.iot.energymetadata` | 标准测点能源类型、来源、数据性质、统计周期和专业确认属性；不保存采样周期、单位副本或用能系统副本 |
 | `com.platform.energy.activity` | 按建筑、测点、半开时间区间和 seek 游标读取多能源原始活动数据，并执行已确认能源属性及场景化质量门禁 |
 | `com.platform.energy.catalog`、`energy.conversion` | 治理能源品种、单位量纲、折标公式和参数版本，并提供带完整版本证据的研发模拟 `tce` 计算；不输出正式结算结果 |
+| `com.platform.energy.aggregation` | 通过稳定输入端口聚合累计量、显式周期量和瞬时量，固定关系、绑定、质量、事件、修正和积分策略版本；当前仅有研发模拟算法核心 |
 | `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
 | `com.platform.relation` | 建筑级关系版本、表计层级和方向、计量边界、分层查询，以及平台 V1 Excel 的模板、预检和草稿导入 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
@@ -146,6 +147,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 多能源活动数据读取 | [`com.platform.energy.activity`](src/main/java/com/platform/energy/activity) |
 | 能源字典与测点品种绑定 | [`com.platform.energy.catalog`](src/main/java/com/platform/energy/catalog)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 折标参数与确定性 tce 核心 | [`com.platform.energy.conversion`](src/main/java/com/platform/energy/conversion)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
+| 三类活动量聚合核心 | [`com.platform.energy.aggregation`](src/main/java/com/platform/energy/aggregation)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
 | 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |
