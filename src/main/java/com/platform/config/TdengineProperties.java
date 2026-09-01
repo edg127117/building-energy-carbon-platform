@@ -5,7 +5,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
 /**
- * TDengine 连接、数据库生命周期和 HVAC 超级表名称配置。
+ * TDengine 连接、数据库生命周期和时序超级表名称配置。
  *
  * <p>{@link TdengineConfig} 用连接字段装配专用数据源并创建 Schema，各时序 Repository
  * 只读取数据库名和对应超级表名。表名会在进入 SQL 前执行标识符白名单校验，不能把
@@ -40,4 +40,7 @@ public class TdengineProperties {
 
     /** 指标分钟当前有效状态投影。 */
     private String stIndicatorMinuteState = "st_indicator_minute_state";
+
+    /** 能源周期当前投影和封账快照的数值副本。 */
+    private String stEnergyPeriodResult = "st_energy_period_result";
 }

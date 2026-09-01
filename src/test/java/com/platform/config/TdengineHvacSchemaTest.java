@@ -14,7 +14,7 @@ import static org.mockito.Mockito.*;
 class TdengineHvacSchemaTest {
 
     @Test
-    void fullInitializationContainsOnlyHvacStables() throws Exception {
+    void fullInitializationContainsHvacAndEnergyPeriodStables() throws Exception {
         TdengineProperties properties = new TdengineProperties();
         properties.setDatabase("iot_telemetry");
         JdbcTemplate template = mock(JdbcTemplate.class);
@@ -38,7 +38,8 @@ class TdengineHvacSchemaTest {
                 "st_indicator_minute",
                 "st_formula_calc_exception",
                 "st_formula_calc_attempt_v2",
-                "st_indicator_minute_state");
+                "st_indicator_minute_state",
+                "st_energy_period_result");
         assertThat(allSql).doesNotContain(
                 "st_" + "electric" + "_data",
                 "voltage" + "_a",
@@ -110,5 +111,21 @@ class TdengineHvacSchemaTest {
                 "add column formula_version nchar(32)",
                 "add column calculated_at timestamp");
         assertThat(allSql).doesNotContain("not null");
+    }
+
+    @Test
+    void createsEnergyPeriodValueSchemaWithExactDecimalEvidence() {
+        TdengineProperties properties = new TdengineProperties();
+        properties.setDatabase("iot_telemetry");
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        TdengineConfig config = new TdengineConfig(properties);
+
+        config.initializeEnergyPeriodSchema(template);
+
+        ArgumentCaptor<String> sqlCaptor = ArgumentCaptor.forClass(String.class);
+        verify(template).execute(sqlCaptor.capture());
+        assertThat(sqlCaptor.getValue().toLowerCase()).contains(
+                "st_energy_period_result", "native_quantity_decimal binary(48)", "tce_value_decimal",
+                "coverage_ratio_decimal", "revision bigint", "evidence_hash binary(64)");
     }
 }

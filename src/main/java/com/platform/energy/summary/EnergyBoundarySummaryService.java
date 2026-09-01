@@ -218,7 +218,7 @@ public class EnergyBoundarySummaryService {
 
     private SnapshotMeasure measure(PeriodSnapshot value, RelationSnapshot relation) {
         if (relation == null) relationUnconfirmed("周期结果引用的关系版本不存在");
-        JsonNode evidence = json(value.evidenceJson());
+        JsonNode evidence = calculationEvidence(json(value.evidenceJson()));
         JsonNode selection = value.conversionSelectionJson() == null
                 ? objectMapper.createObjectNode() : json(value.conversionSelectionJson());
         String formula = textOrNull(evidence.path("formulaVersionId"));
@@ -274,15 +274,21 @@ public class EnergyBoundarySummaryService {
     }
 
     private String relationVersion(PeriodSnapshot value) {
+        JsonNode root;
         try {
-            JsonNode root = objectMapper.readTree(value.evidenceJson());
-            String version = textOrNull(root.path("relationVersionId"));
-            if (version == null) relationUnconfirmed("周期结果缺少关系版本证据");
-            return version;
+            root = objectMapper.readTree(value.evidenceJson());
         } catch (Exception exception) {
             relationUnconfirmed("周期结果关系版本证据无效");
             return null;
         }
+        String version = textOrNull(calculationEvidence(root).path("relationVersionId"));
+        if (version == null) relationUnconfirmed("周期结果缺少关系版本证据");
+        return version;
+    }
+
+    private static JsonNode calculationEvidence(JsonNode root) {
+        JsonNode nested = root.path("calculationEvidence");
+        return nested.isObject() ? nested : root;
     }
 
     private JsonNode json(String value) {

@@ -47,8 +47,10 @@ class TdengineEnergyActivityDataReaderTest {
                 .contains("FROM iot_telemetry.st_raw_event")
                 .contains("building_id='BLD001'")
                 .contains("point_id IN ('POINT001','POINT002')")
-                .contains("ts >= '")
-                .contains("ts < '")
+                .contains("ts >= 60000")
+                .contains("ts < 240000")
+                .contains("ts > 60000")
+                .contains("ts = 60000")
                 .contains("point_id > 'POINT001'")
                 .contains("ORDER BY ts,point_id")
                 .contains("LIMIT 3");
@@ -72,7 +74,7 @@ class TdengineEnergyActivityDataReaderTest {
         verify(template).queryForList(sql.capture());
         assertThat(sql.getValue()).contains("building_id='BLD001'")
                 .contains("point_id='POINT001'")
-                .contains("ts <= '")
+                .contains("ts <= 60000")
                 .contains("ORDER BY ts DESC")
                 .contains("LIMIT 1");
     }

@@ -106,6 +106,7 @@ tdengine:
   url: jdbc:TAOS-RS://${TDENGINE_HOST:127.0.0.1}:${TDENGINE_PORT:6041}?httpConnectTimeout=${TDENGINE_HTTP_CONNECT_TIMEOUT_MS:5000}&httpSocketTimeout=${TDENGINE_HTTP_SOCKET_TIMEOUT_MS:30000}
   username: ${TDENGINE_USER:root}
   password: ${TDENGINE_PASSWORD:taosdata}
+  st-energy-period-result: ${TDENGINE_ST_ENERGY_PERIOD_RESULT:st_energy_period_result}
   database: iot_telemetry
   st-raw-event: st_raw_event
 
