@@ -97,6 +97,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 → MySQL/TDengine 持久化
 → 场景化质量使用策略门禁
 → 多能源活动数据有界读取与证据封装
+→ 能源品种、单位量纲、兼容矩阵与测点品种绑定解析
 → 标准设备参数版本解析与公式版本证据
 → 物理空间树与语义关系模型
 → 表计层级、计量方向与计量边界草稿治理
@@ -141,6 +142,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |
 | 能源采集元数据 | [`com.platform.iot.energymetadata`](src/main/java/com/platform/iot/energymetadata)、[`候选设计`](docs/designs/2026-08-31-energy-collection-metadata-design.md) |
 | 多能源活动数据读取 | [`com.platform.energy.activity`](src/main/java/com/platform/energy/activity) |
+| 能源字典与测点品种绑定 | [`com.platform.energy.catalog`](src/main/java/com/platform/energy/catalog)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
 | 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |

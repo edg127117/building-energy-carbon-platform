@@ -21,6 +21,15 @@ DROP TABLE IF EXISTS sys_user;
 DROP TABLE IF EXISTS biz_indicator;
 DROP TABLE IF EXISTS biz_point_alias;
 DROP TABLE IF EXISTS biz_data_source;
+DROP TABLE IF EXISTS biz_energy_point_item_binding_version;
+DROP TABLE IF EXISTS biz_energy_point_item_binding;
+DROP TABLE IF EXISTS biz_energy_item_unit_compatibility_version;
+DROP TABLE IF EXISTS biz_energy_item_unit_compatibility;
+DROP TABLE IF EXISTS biz_measurement_unit_version;
+DROP TABLE IF EXISTS biz_measurement_unit;
+DROP TABLE IF EXISTS biz_energy_item_version_scope;
+DROP TABLE IF EXISTS biz_energy_item_version;
+DROP TABLE IF EXISTS biz_energy_item;
 DROP TABLE IF EXISTS biz_energy_point_profile;
 DROP TABLE IF EXISTS biz_data_point;
 DROP TABLE IF EXISTS biz_telemetry_receipt_failure;
@@ -422,6 +431,175 @@ CREATE INDEX idx_energy_point_profile_building_status
   ON biz_energy_point_profile (building_id, confirmation_status, profile_id);
 CREATE INDEX idx_energy_point_profile_type
   ON biz_energy_point_profile (energy_type, energy_subtype);
+
+CREATE TABLE biz_energy_item (
+  item_id VARCHAR(32) PRIMARY KEY,
+  item_code VARCHAR(64) NOT NULL UNIQUE,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE biz_energy_item_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  item_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  item_name VARCHAR(100) NOT NULL,
+  compatible_category VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (item_id,version_no),
+  FOREIGN KEY (item_id) REFERENCES biz_energy_item(item_id),
+  CHECK (compatible_category IN ('ELECTRICITY','NATURAL_GAS','HEAT','COLD','FUEL')),
+  CHECK (status IN ('DRAFT','PENDING_EXPERT','APPROVED','DISABLED')),
+  CHECK (source_type IN ('STANDARD','EXCEL','MANUAL')),
+  CHECK (version_no > 0 AND config_revision >= 0),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_energy_item_version_effective
+  ON biz_energy_item_version(item_id,status,effective_from,effective_to);
+
+CREATE TABLE biz_energy_item_version_scope (
+  version_id VARCHAR(32) NOT NULL,
+  usage_scope VARCHAR(40) NOT NULL,
+  PRIMARY KEY (version_id,usage_scope),
+  FOREIGN KEY (version_id) REFERENCES biz_energy_item_version(version_id) ON DELETE CASCADE,
+  CHECK (usage_scope IN ('STATIONARY_COMBUSTION','MOBILE_COMBUSTION',
+      'PURCHASED_ELECTRICITY','PURCHASED_HEAT'))
+);
+
+CREATE TABLE biz_measurement_unit (
+  unit_id VARCHAR(32) PRIMARY KEY,
+  unit_code VARCHAR(64) NOT NULL UNIQUE,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE biz_measurement_unit_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  unit_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  symbol VARCHAR(32) NOT NULL,
+  unit_name VARCHAR(100) NOT NULL,
+  dimension_code VARCHAR(40) NOT NULL,
+  canonical_unit_code VARCHAR(64) NOT NULL,
+  scale_factor DECIMAL(24,12) NOT NULL,
+  conversion_type VARCHAR(32) NOT NULL,
+  standard_condition_code VARCHAR(100),
+  decimal_precision INT NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (unit_id,version_no),
+  FOREIGN KEY (unit_id) REFERENCES biz_measurement_unit(unit_id),
+  CHECK (dimension_code IN ('POWER','ENERGY','ACTUAL_VOLUME','NORMAL_VOLUME','MASS',
+      'STANDARD_COAL_EQUIVALENT')),
+  CHECK (conversion_type IN ('IDENTITY','FIXED_SCALE','REQUIRES_BUSINESS_RULE')),
+  CHECK (status IN ('DRAFT','PENDING_EXPERT','APPROVED','DISABLED')),
+  CHECK (source_type IN ('STANDARD','EXCEL','MANUAL')),
+  CHECK (version_no > 0 AND scale_factor > 0 AND decimal_precision BETWEEN 0 AND 12
+      AND config_revision >= 0),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_measurement_unit_symbol_effective
+  ON biz_measurement_unit_version(symbol,status,effective_from,effective_to);
+
+CREATE TABLE biz_energy_item_unit_compatibility (
+  compatibility_id VARCHAR(32) PRIMARY KEY,
+  item_id VARCHAR(32) NOT NULL,
+  unit_id VARCHAR(32) NOT NULL,
+  value_semantics VARCHAR(32) NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  UNIQUE (item_id,unit_id,value_semantics),
+  FOREIGN KEY (item_id) REFERENCES biz_energy_item(item_id),
+  FOREIGN KEY (unit_id) REFERENCES biz_measurement_unit(unit_id),
+  CHECK (value_semantics IN ('INSTANTANEOUS','CUMULATIVE','PERIOD_TOTAL'))
+);
+
+CREATE TABLE biz_energy_item_unit_compatibility_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  compatibility_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  allowed BOOLEAN NOT NULL,
+  conversion_requirement VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (compatibility_id,version_no),
+  FOREIGN KEY (compatibility_id) REFERENCES biz_energy_item_unit_compatibility(compatibility_id),
+  CHECK (conversion_requirement IN ('NONE','TIME_INTEGRATION','STANDARD_CONDITION','BUSINESS_RULE')),
+  CHECK (status IN ('DRAFT','PENDING_EXPERT','APPROVED','DISABLED')),
+  CHECK (source_type IN ('STANDARD','EXCEL','MANUAL')),
+  CHECK (version_no > 0 AND config_revision >= 0),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_energy_compatibility_effective
+  ON biz_energy_item_unit_compatibility_version(compatibility_id,status,effective_from,effective_to);
+
+CREATE TABLE biz_energy_point_item_binding (
+  binding_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  point_id VARCHAR(32) NOT NULL UNIQUE,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  FOREIGN KEY (point_id,building_id) REFERENCES biz_data_point(point_id,building_id),
+  FOREIGN KEY (building_id) REFERENCES building(building_id)
+);
+
+CREATE TABLE biz_energy_point_item_binding_version (
+  binding_version_id VARCHAR(32) PRIMARY KEY,
+  binding_id VARCHAR(32) NOT NULL,
+  binding_version INT NOT NULL,
+  energy_item_version_id VARCHAR(32) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  confirmation_status VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL,
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (binding_id,binding_version),
+  FOREIGN KEY (binding_id) REFERENCES biz_energy_point_item_binding(binding_id),
+  FOREIGN KEY (energy_item_version_id) REFERENCES biz_energy_item_version(version_id),
+  CHECK (confirmation_status IN ('PENDING_EXPERT','CONFIRMED','DISABLED')),
+  CHECK (binding_version > 0 AND config_revision >= 0),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (confirmation_status <> 'CONFIRMED'
+      OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_energy_point_binding_effective
+  ON biz_energy_point_item_binding_version(binding_id,confirmation_status,effective_from,effective_to);
 
 -- H2 镜像保留治理表的关系、状态与保留期约束；运行状态仍只在单体内存中保存。
 CREATE TABLE biz_data_source (
