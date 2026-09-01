@@ -1,0 +1,102 @@
+package com.platform.energy.conversion.api;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.MvcResult;
+import org.springframework.transaction.annotation.Transactional;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+@SpringBootTest
+@AutoConfigureMockMvc
+@ActiveProfiles("test")
+@Transactional
+class EnergyConversionApiContractTest {
+    @Autowired private MockMvc mockMvc;
+    @Autowired private ObjectMapper objectMapper;
+    @Autowired private JdbcTemplate jdbc;
+
+    @Test
+    void exposesVersionedDtosOpenApiAndStableSecurityErrors() throws Exception {
+        mockMvc.perform(get("/v1/energy-conversion/options"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.errorCode").value("ENERGY_CONVERSION_UNAUTHORIZED"));
+
+        String token = login("admin", "123456");
+        mockMvc.perform(post("/v1/energy-conversion/standard-coal-lhv-versions")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(standardJson()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode").value("ENERGY_CONVERSION_FORBIDDEN"));
+
+        jdbc.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by)
+                VALUES ('API_RULE_MAINTAIN',1,'ENERGY_RULE_MAINTAIN','ACTIVE',CURRENT_TIMESTAMP,1)
+                """);
+        jdbc.update("""
+                UPDATE biz_measurement_unit_version
+                SET status='APPROVED',approved_by=1,approved_at=CURRENT_TIMESTAMP,config_revision=1
+                WHERE version_id IN ('EUV_GJ_1','EUV_TCE_1')
+                """);
+        mockMvc.perform(post("/v1/energy-conversion/standard-coal-lhv-versions")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(standardJson()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.lhvCode").value("STANDARD_COAL_LHV"))
+                .andExpect(jsonPath("$.data.status").value("PENDING_EXPERT"));
+
+        JsonNode openApi = json(mockMvc.perform(get("/v3/api-docs")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(openApi.path("paths").has("/v1/energy-conversion/simulations")).isTrue();
+        assertThat(openApi.path("components").path("schemas").has("EnergyConversionApiError")).isTrue();
+    }
+
+    @Test
+    void returnsConversionValidationCodeForInvalidDto() throws Exception {
+        String token = login("admin", "123456");
+        mockMvc.perform(post("/v1/energy-conversion/formula-versions")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("ENERGY_CONVERSION_VALIDATION_FAILED"));
+    }
+
+    private String standardJson() {
+        return """
+                {"lhvCode":"STANDARD_COAL_LHV","value":29.3076,"parameterUnit":"GJ_PER_TCE",
+                 "sourceType":"MANUAL","sourceReference":"API研发模拟依据",
+                 "effectiveFrom":"2026-01-01T00:00:00"}
+                """;
+    }
+
+    private String login(String username, String password) throws Exception {
+        MvcResult result = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"username":"%s","password":"%s"}
+                                """.formatted(username, password)))
+                .andExpect(status().isOk()).andReturn();
+        return json(result).path("data").path("token").asText();
+    }
+
+    private JsonNode json(MvcResult result) throws Exception {
+        return objectMapper.readTree(result.getResponse().getContentAsString());
+    }
+}

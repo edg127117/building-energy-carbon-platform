@@ -23,6 +23,12 @@ DROP TABLE IF EXISTS biz_point_alias;
 DROP TABLE IF EXISTS biz_data_source;
 DROP TABLE IF EXISTS biz_energy_point_item_binding_version;
 DROP TABLE IF EXISTS biz_energy_point_item_binding;
+DROP TABLE IF EXISTS biz_energy_conversion_parameter_version;
+DROP TABLE IF EXISTS biz_energy_conversion_parameter;
+DROP TABLE IF EXISTS biz_energy_conversion_formula_version;
+DROP TABLE IF EXISTS biz_energy_conversion_formula;
+DROP TABLE IF EXISTS biz_standard_coal_lhv_version;
+DROP TABLE IF EXISTS biz_standard_coal_lhv;
 DROP TABLE IF EXISTS biz_energy_item_unit_compatibility_version;
 DROP TABLE IF EXISTS biz_energy_item_unit_compatibility;
 DROP TABLE IF EXISTS biz_measurement_unit_version;
@@ -600,6 +606,141 @@ CREATE TABLE biz_energy_point_item_binding_version (
 
 CREATE INDEX idx_energy_point_binding_effective
   ON biz_energy_point_item_binding_version(binding_id,confirmation_status,effective_from,effective_to);
+
+CREATE TABLE biz_standard_coal_lhv (
+  lhv_id VARCHAR(32) PRIMARY KEY,
+  lhv_code VARCHAR(64) NOT NULL UNIQUE,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE biz_standard_coal_lhv_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  lhv_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  lhv_value DECIMAL(30,12) NOT NULL,
+  energy_unit_version_id VARCHAR(32) NOT NULL,
+  coal_unit_version_id VARCHAR(32) NOT NULL,
+  parameter_unit VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (lhv_id,version_no),
+  FOREIGN KEY (lhv_id) REFERENCES biz_standard_coal_lhv(lhv_id),
+  FOREIGN KEY (energy_unit_version_id) REFERENCES biz_measurement_unit_version(version_id),
+  FOREIGN KEY (coal_unit_version_id) REFERENCES biz_measurement_unit_version(version_id),
+  CHECK (version_no > 0 AND lhv_value > 0 AND config_revision >= 0),
+  CHECK (parameter_unit='GJ_PER_TCE'),
+  CHECK (status IN ('PENDING_EXPERT','APPROVED','DISABLED')),
+  CHECK (source_type IN ('STANDARD','EXCEL','MANUAL')),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_standard_coal_lhv_effective
+  ON biz_standard_coal_lhv_version(lhv_id,status,effective_from,effective_to);
+
+CREATE TABLE biz_energy_conversion_formula (
+  formula_id VARCHAR(32) PRIMARY KEY,
+  formula_code VARCHAR(64) NOT NULL UNIQUE,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+
+CREATE TABLE biz_energy_conversion_formula_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  formula_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  method VARCHAR(32) NOT NULL,
+  perspective VARCHAR(32) NOT NULL,
+  algorithm_code VARCHAR(64) NOT NULL,
+  applicable_input_unit_version_id VARCHAR(32) NOT NULL,
+  result_unit_version_id VARCHAR(32) NOT NULL,
+  parameter_unit VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (formula_id,version_no),
+  FOREIGN KEY (formula_id) REFERENCES biz_energy_conversion_formula(formula_id),
+  FOREIGN KEY (applicable_input_unit_version_id) REFERENCES biz_measurement_unit_version(version_id),
+  FOREIGN KEY (result_unit_version_id) REFERENCES biz_measurement_unit_version(version_id),
+  CHECK (method IN ('DIRECT_TCE_FACTOR','LOWER_HEATING_VALUE','ENERGY_EQUIVALENT')),
+  CHECK (perspective IN ('CALORIFIC_EQUIVALENT','PRIMARY_EQUIVALENT')),
+  CHECK (algorithm_code IN ('DIRECT_TCE_FACTOR_V1','LOWER_HEATING_VALUE_V1','ENERGY_EQUIVALENT_V1')),
+  CHECK (parameter_unit IN ('TCE_PER_INPUT_UNIT','GJ_PER_INPUT_UNIT','MJ_PER_INPUT_UNIT')),
+  CHECK (version_no > 0 AND config_revision >= 0),
+  CHECK (status IN ('PENDING_EXPERT','APPROVED','DISABLED')),
+  CHECK (source_type IN ('STANDARD','EXCEL','MANUAL')),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_energy_conversion_formula_effective
+  ON biz_energy_conversion_formula_version(formula_id,status,effective_from,effective_to);
+
+CREATE TABLE biz_energy_conversion_parameter (
+  parameter_id VARCHAR(32) PRIMARY KEY,
+  parameter_code VARCHAR(64) NOT NULL UNIQUE,
+  energy_item_id VARCHAR(32) NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  FOREIGN KEY (energy_item_id) REFERENCES biz_energy_item(item_id)
+);
+
+CREATE TABLE biz_energy_conversion_parameter_version (
+  version_id VARCHAR(32) PRIMARY KEY,
+  parameter_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  energy_item_version_id VARCHAR(32) NOT NULL,
+  formula_version_id VARCHAR(32) NOT NULL,
+  parameter_value DECIMAL(30,12) NOT NULL,
+  parameter_unit VARCHAR(32) NOT NULL,
+  standard_coal_lhv_version_id VARCHAR(32),
+  consumption_scope VARCHAR(32) NOT NULL,
+  region_code VARCHAR(32) NOT NULL,
+  usage_scope VARCHAR(32) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  source_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT NOT NULL DEFAULT 0,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  UNIQUE (parameter_id,version_no),
+  FOREIGN KEY (parameter_id) REFERENCES biz_energy_conversion_parameter(parameter_id),
+  FOREIGN KEY (energy_item_version_id) REFERENCES biz_energy_item_version(version_id),
+  FOREIGN KEY (formula_version_id) REFERENCES biz_energy_conversion_formula_version(version_id),
+  FOREIGN KEY (standard_coal_lhv_version_id) REFERENCES biz_standard_coal_lhv_version(version_id),
+  CHECK (version_no > 0 AND parameter_value > 0 AND config_revision >= 0),
+  CHECK (parameter_unit IN ('TCE_PER_INPUT_UNIT','GJ_PER_INPUT_UNIT','MJ_PER_INPUT_UNIT')),
+  CHECK (consumption_scope IN ('STATIONARY_COMBUSTION','PURCHASED_ELECTRICITY','PURCHASED_HEAT')),
+  CHECK (usage_scope IN ('DEVELOPMENT_SIMULATION','PRODUCTION')),
+  CHECK (status IN ('PENDING_EXPERT','APPROVED','DISABLED')),
+  CHECK (source_type IN ('STANDARD','EXCEL','MANUAL')),
+  CHECK (effective_to IS NULL OR effective_to > effective_from),
+  CHECK (status <> 'APPROVED' OR (approved_by IS NOT NULL AND approved_at IS NOT NULL))
+);
+
+CREATE INDEX idx_energy_conversion_parameter_match
+  ON biz_energy_conversion_parameter_version
+    (status,consumption_scope,region_code,usage_scope,effective_from,effective_to);
 
 -- H2 镜像保留治理表的关系、状态与保留期约束；运行状态仍只在单体内存中保存。
 CREATE TABLE biz_data_source (
