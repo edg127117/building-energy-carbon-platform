@@ -218,3 +218,60 @@ VALUES
  'EQUIP_PUMP_B1','EQUIP_PUMP_B1','GROUP001',1),
 ('INDICATOR_AHU_EFF_B1','BLD001','AHU_POW_EFF','EQUIPMENT',
  'EQUIP_AHU_B1','EQUIP_AHU_B1','GROUP001',1);
+
+-- 能源字典研发基线全部保持待专业确认；测试必须显式审核后才能建立正式绑定。
+INSERT INTO biz_energy_item (item_id,item_code,created_by) VALUES
+('EI_BITUMINOUS_COAL','BITUMINOUS_COAL',0),('EI_ANTHRACITE','ANTHRACITE',0),
+('EI_LIGNITE','LIGNITE',0),('EI_DIESEL','DIESEL',0),('EI_GASOLINE','GASOLINE',0),
+('EI_FUEL_OIL','FUEL_OIL',0),('EI_KEROSENE','KEROSENE',0),('EI_LPG','LPG',0),
+('EI_LNG','LNG',0),('EI_NATURAL_GAS','NATURAL_GAS',0),
+('EI_COKE_OVEN_GAS','COKE_OVEN_GAS',0),('EI_ELECTRICITY','ELECTRICITY',0),
+('EI_HEAT','HEAT',0);
+
+INSERT INTO biz_energy_item_version
+(version_id,item_id,version_no,item_name,compatible_category,status,source_type,
+ source_reference,effective_from,config_revision,created_by) VALUES
+('EIV_BITUMINOUS_COAL_1','EI_BITUMINOUS_COAL',1,'烟煤','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_ANTHRACITE_1','EI_ANTHRACITE',1,'无烟煤','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_LIGNITE_1','EI_LIGNITE',1,'褐煤','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_DIESEL_1','EI_DIESEL',1,'柴油','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_GASOLINE_1','EI_GASOLINE',1,'汽油','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_FUEL_OIL_1','EI_FUEL_OIL',1,'燃料油','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_KEROSENE_1','EI_KEROSENE',1,'一般煤油','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_LPG_1','EI_LPG',1,'液化石油气','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_LNG_1','EI_LNG',1,'液化天然气','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_NATURAL_GAS_1','EI_NATURAL_GAS',1,'天然气','NATURAL_GAS','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_COKE_OVEN_GAS_1','EI_COKE_OVEN_GAS',1,'焦炉煤气','FUEL','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_ELECTRICITY_1','EI_ELECTRICITY',1,'电力','ELECTRICITY','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0),
+('EIV_HEAT_1','EI_HEAT',1,'外购热力','HEAT','PENDING_EXPERT','EXCEL','历史Excel样例，仅研发模拟，生产不可用','2000-01-01',0,0);
+
+INSERT INTO biz_energy_item_version_scope (version_id,usage_scope) VALUES
+('EIV_BITUMINOUS_COAL_1','STATIONARY_COMBUSTION'),('EIV_ANTHRACITE_1','STATIONARY_COMBUSTION'),
+('EIV_LIGNITE_1','STATIONARY_COMBUSTION'),('EIV_DIESEL_1','STATIONARY_COMBUSTION'),
+('EIV_GASOLINE_1','STATIONARY_COMBUSTION'),('EIV_FUEL_OIL_1','STATIONARY_COMBUSTION'),
+('EIV_KEROSENE_1','STATIONARY_COMBUSTION'),('EIV_LPG_1','STATIONARY_COMBUSTION'),
+('EIV_LNG_1','STATIONARY_COMBUSTION'),('EIV_NATURAL_GAS_1','STATIONARY_COMBUSTION'),
+('EIV_COKE_OVEN_GAS_1','STATIONARY_COMBUSTION'),
+('EIV_ELECTRICITY_1','PURCHASED_ELECTRICITY'),('EIV_HEAT_1','PURCHASED_HEAT');
+
+INSERT INTO biz_measurement_unit (unit_id,unit_code,created_by) VALUES
+('EU_KW','KW',0),('EU_KWH','KWH',0),('EU_MWH','MWH',0),('EU_MJ','MJ',0),('EU_GJ','GJ',0),
+('EU_M3','M3',0),('EU_NM3','NM3',0),('EU_TEN_THOUSAND_NM3','TEN_THOUSAND_NM3',0),
+('EU_KG','KG',0),('EU_T','T',0),('EU_KGCE','KGCE',0),('EU_TCE','TCE',0);
+
+INSERT INTO biz_measurement_unit_version
+(version_id,unit_id,version_no,symbol,unit_name,dimension_code,canonical_unit_code,scale_factor,
+ conversion_type,standard_condition_code,decimal_precision,status,source_type,source_reference,
+ effective_from,config_revision,created_by) VALUES
+('EUV_KW_1','EU_KW',1,'kW','千瓦','POWER','KW',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_KWH_1','EU_KWH',1,'kWh','千瓦时','ENERGY','KWH',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_MWH_1','EU_MWH',1,'MWh','兆瓦时','ENERGY','KWH',1000,'FIXED_SCALE',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_MJ_1','EU_MJ',1,'MJ','兆焦','ENERGY','MJ',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_GJ_1','EU_GJ',1,'GJ','吉焦','ENERGY','MJ',1000,'FIXED_SCALE',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_M3_1','EU_M3',1,'m³','立方米','ACTUAL_VOLUME','M3',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_NM3_1','EU_NM3',1,'Nm³','标准立方米','NORMAL_VOLUME','NM3',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，标准状态仍待确认','2000-01-01',0,0),
+('EUV_TEN_THOUSAND_NM3_1','EU_TEN_THOUSAND_NM3',1,'万Nm³','万标准立方米','NORMAL_VOLUME','NM3',10000,'FIXED_SCALE',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，标准状态仍待确认','2000-01-01',0,0),
+('EUV_KG_1','EU_KG',1,'kg','千克','MASS','KG',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_T_1','EU_T',1,'t','吨','MASS','KG',1000,'FIXED_SCALE',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，待专业确认','2000-01-01',0,0),
+('EUV_KGCE_1','EU_KGCE',1,'kgce','千克标准煤','STANDARD_COAL_EQUIVALENT','KGCE',1,'IDENTITY',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，仅计算输出','2000-01-01',0,0),
+('EUV_TCE_1','EU_TCE',1,'tce','吨标准煤','STANDARD_COAL_EQUIVALENT','KGCE',1000,'FIXED_SCALE',NULL,6,'PENDING_EXPERT','STANDARD','第七闭环设计§5，仅计算输出','2000-01-01',0,0);
