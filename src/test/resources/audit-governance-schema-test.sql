@@ -236,4 +236,7 @@ VALUES
   ('AUDIT_RETENTION_MANAGER','审计保留管理','维护保留策略草稿','ENABLED','CRITICAL',1),
   ('AUDIT_EVIDENCE_HOLD_MANAGER','审计证据保全','设置与解除证据保全','ENABLED','CRITICAL',1),
   ('ENERGY_CATALOG_MAINTAIN','能源字典维护','创建待专业确认的能源字典与绑定版本','ENABLED','HIGH',1),
-  ('ENERGY_CATALOG_REVIEW','能源字典审核','审核能源字典与绑定版本','ENABLED','CRITICAL',1);
+  ('ENERGY_CATALOG_REVIEW','能源字典审核','审核能源字典与绑定版本','ENABLED','CRITICAL',1),
+  ('ENERGY_RULE_MAINTAIN','折标规则维护','创建待专业确认的标准煤、公式和折标参数版本','ENABLED','HIGH',1),
+  ('ENERGY_RULE_REVIEW','折标规则审核','审核标准煤、公式和折标参数版本','ENABLED','CRITICAL',1),
+  ('ENERGY_CALCULATION_RUN','能源折标计算','执行受建筑范围保护的折标计算','ENABLED','HIGH',1);
