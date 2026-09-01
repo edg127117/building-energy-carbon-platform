@@ -11,7 +11,9 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -44,11 +46,14 @@ class EnergyLoop7TdengineIntegrationTest {
             jdbc.execute("CREATE DATABASE " + database + " KEEP 30 DURATION 1d WAL_LEVEL 1");
             config.initializeHvacSchema(jdbc);
             config.initializeEnergyPeriodSchema(jdbc);
-            insertRawEvents(jdbc, database);
+            Instant periodStart = Instant.now()
+                    .minus(Duration.ofMinutes(5))
+                    .truncatedTo(ChronoUnit.MINUTES);
+            insertRawEvents(jdbc, database, periodStart);
 
             var reader = new TdengineEnergyActivityDataReader(jdbc, properties);
-            long from = Instant.parse("2026-01-01T00:00:00Z").toEpochMilli();
-            long to = Instant.parse("2026-01-01T00:02:00Z").toEpochMilli();
+            long from = periodStart.toEpochMilli();
+            long to = periodStart.plus(Duration.ofMinutes(2)).toEpochMilli();
             var first = reader.readRawEvents(
                     "BLD_LOOP7", Set.of("POINT_A", "POINT_B"), from, to, null, 1);
             assertThat(first.items()).extracting(value -> value.pointId())
@@ -64,7 +69,6 @@ class EnergyLoop7TdengineIntegrationTest {
                     .isEqualTo(20.5d);
 
             var store = new TdengineEnergyPeriodValueStore(jdbc, properties);
-            Instant periodStart = Instant.parse("2026-01-01T00:00:00Z");
             String resultKey = "a".repeat(64);
             store.write(result(resultKey, periodStart, "1000.125", "0.122925", 1));
             store.write(result(resultKey, periodStart, "1100.250", "0.135165", 2));
@@ -88,8 +92,9 @@ class EnergyLoop7TdengineIntegrationTest {
         }
     }
 
-    private static void insertRawEvents(JdbcTemplate jdbc, String database) {
-        long eventTime = Instant.parse("2026-01-01T00:01:00Z").toEpochMilli();
+    private static void insertRawEvents(
+            JdbcTemplate jdbc, String database, Instant periodStart) {
+        long eventTime = periodStart.plus(Duration.ofMinutes(1)).toEpochMilli();
         jdbc.execute(rawInsert(database, "raw_loop7_a", "POINT_A", "POINT_A_CODE",
                 eventTime, 10.5));
         jdbc.execute(rawInsert(database, "raw_loop7_b", "POINT_B", "POINT_B_CODE",
