@@ -45,6 +45,8 @@ class EnergyPeriodResultRepositoryIntegrationTest {
         PeriodSnapshot snapshot = snapshot();
         repository.insertSnapshot(snapshot);
         assertThat(repository.findVisibleSnapshot("PROJ001").snapshotId()).isEqualTo("SNAP001");
+        assertThat(repository.listVisibleSnapshots("BLD001", "MONTH", START, END, 10))
+                .extracting(PeriodSnapshot::snapshotId).containsExactly("SNAP001");
 
         RecalculationBatch batch = batch();
         repository.insertBatch(batch);

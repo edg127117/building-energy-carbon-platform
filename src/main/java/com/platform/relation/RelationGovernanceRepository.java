@@ -721,7 +721,7 @@ public class RelationGovernanceRepository {
     }
 
     /**
-     * 组合当前版本的分配、边界、表计结构和目标身份，供下游只读消费。
+     * 组合指定版本的分配、边界、表计结构和目标身份，供下游只读消费。
      * 未分配项使用左连接保留，避免查询层把未知关系静默解释为整栋建筑归属。
      */
     public List<EffectiveMeteringAssignmentRow> listEffectiveMeteringAssignments(

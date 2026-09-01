@@ -187,6 +187,12 @@ class MeterStructureGovernanceIntegrationTest {
         });
         assertThat(service.effectiveMeteringAssignments(101L, ENERGY, "BLD001", 1, 1)
                 .metadata().truncated()).isTrue();
+        assertThat(service.historicalMeteringAssignments(
+                101L, ENERGY, "BLD001", effective.versionId(), 1, 20))
+                .satisfies(historical -> {
+                    assertThat(historical.metadata().versionId()).isEqualTo(effective.versionId());
+                    assertThat(historical.items()).hasSize(2);
+                });
     }
 
     private MeterStructureRequest request(

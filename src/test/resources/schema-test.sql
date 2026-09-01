@@ -1881,3 +1881,24 @@ CREATE TABLE biz_energy_dirty_period (
   last_detected_at TIMESTAMP(3) NOT NULL,
   UNIQUE (building_id,point_id,period_type,period_start,period_end)
 );
+
+-- 第七闭环第五后端切片的 H2 隔离镜像。汇总数值按查询从不可覆盖周期快照派生，
+-- 本表只保存显式、版本化的总分表口径，不固化未经审核的分摊规则。
+DROP TABLE IF EXISTS biz_energy_boundary_summary_policy_version;
+DROP TABLE IF EXISTS biz_energy_boundary_summary_policy;
+CREATE TABLE biz_energy_boundary_summary_policy (
+  policy_id VARCHAR(32) PRIMARY KEY, building_id VARCHAR(32) NOT NULL,
+  metering_boundary_id VARCHAR(32) NOT NULL, energy_item_code VARCHAR(64) NOT NULL,
+  created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL,
+  UNIQUE (building_id,metering_boundary_id,energy_item_code)
+);
+CREATE TABLE biz_energy_boundary_summary_policy_version (
+  version_id VARCHAR(32) PRIMARY KEY, policy_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL, aggregation_mode VARCHAR(40) NOT NULL,
+  status VARCHAR(20) NOT NULL, source_type VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL, effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3), config_revision INT NOT NULL,
+  created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL,
+  approved_by BIGINT, approved_at TIMESTAMP(3), review_comment VARCHAR(500),
+  UNIQUE (policy_id,version_no)
+);
