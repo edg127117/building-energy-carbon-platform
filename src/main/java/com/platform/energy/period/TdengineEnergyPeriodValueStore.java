@@ -26,12 +26,14 @@ public class TdengineEnergyPeriodValueStore implements EnergyPeriodValueStore {
 
     private final JdbcTemplate jdbc;
     private final String database;
+    private final String stableName;
 
     public TdengineEnergyPeriodValueStore(
             @Qualifier("taosJdbcTemplate") JdbcTemplate jdbc,
             TdengineProperties properties) {
         this.jdbc = jdbc;
         this.database = identifier(properties.getDatabase());
+        this.stableName = identifier(properties.getStEnergyPeriodResult());
     }
 
     @Override
@@ -40,7 +42,7 @@ public class TdengineEnergyPeriodValueStore implements EnergyPeriodValueStore {
                 || result.nativeQuantity() == null || result.coverageRatio() == null) {
             throw error(409, VALUE_STORE_UNAVAILABLE, "周期数值写入内容不完整");
         }
-        String stable = "`" + database + "`.`st_energy_period_result`";
+        String stable = "`" + database + "`.`" + stableName + "`";
         String child = "`" + database + "`.`ep_" + digest(result.resultKey()).substring(0, 24) + "`";
         String sql = "INSERT INTO " + child + " USING " + stable
                 + " (result_key,building_id,point_id,native_unit_code,tce_unit_code,result_nature)"

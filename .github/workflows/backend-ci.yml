@@ -44,3 +44,57 @@ jobs:
 
       - name: Test and package cloud telemetry adapter
         run: ./mvnw --batch-mode --no-transfer-progress -f telemetry-adapter/pom.xml verify
+
+  energy-loop7-target-engines:
+    name: Energy loop 7 target engines
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: loop7-root
+          MYSQL_DATABASE: iot_platform
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ploop7-root"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      tdengine:
+        image: tdengine/tdengine:3.2.3.0
+        ports:
+          - 6041:6041
+        options: >-
+          --health-cmd="curl --fail http://127.0.0.1:6041/rest/login/root/taosdata"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+          cache: maven
+
+      - name: Verify energy loop on MySQL 8 and TDengine 3.2.3
+        env:
+          ENERGY_LOOP7_MYSQL_IT_URL: jdbc:mysql://127.0.0.1:3306/iot_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
+          ENERGY_LOOP7_MYSQL_IT_USER: root
+          ENERGY_LOOP7_MYSQL_IT_PASSWORD: loop7-root
+          ENERGY_LOOP7_MYSQL_IT_ISOLATED: "true"
+          ENERGY_LOOP7_TDENGINE_IT_URL: jdbc:TAOS-RS://127.0.0.1:6041?httpConnectTimeout=5000&httpSocketTimeout=30000
+          ENERGY_LOOP7_TDENGINE_IT_USER: root
+          ENERGY_LOOP7_TDENGINE_IT_PASSWORD: taosdata
+          ENERGY_LOOP7_TDENGINE_IT_DATABASE: energy_loop7_it
+          ENERGY_LOOP7_TDENGINE_IT_ISOLATED: "true"
+        run: >-
+          ./mvnw --batch-mode --no-transfer-progress
+          -Dtest=EnergyLoop7MysqlIntegrationTest,EnergyLoop7TdengineIntegrationTest test

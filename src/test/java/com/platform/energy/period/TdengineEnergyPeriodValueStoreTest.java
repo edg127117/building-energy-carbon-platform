@@ -19,6 +19,7 @@ class TdengineEnergyPeriodValueStoreTest {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         TdengineProperties properties = new TdengineProperties();
         properties.setDatabase("iot_telemetry");
+        properties.setStEnergyPeriodResult("st_energy_period_result_acceptance");
         var store = new TdengineEnergyPeriodValueStore(jdbc, properties);
 
         store.write(new NumericResult("a".repeat(64), "BLD001", "POINT001",
@@ -29,7 +30,7 @@ class TdengineEnergyPeriodValueStoreTest {
         ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
         verify(jdbc).execute(sql.capture());
         assertThat(sql.getValue())
-                .contains("st_energy_period_result", "native_quantity", "NULL", "revision")
+                .contains("st_energy_period_result_acceptance", "native_quantity", "NULL", "revision")
                 .doesNotContain("POINT001`", "BLD001`");
     }
 }

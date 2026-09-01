@@ -18,7 +18,7 @@ import javax.sql.DataSource;
 import java.util.*;
 
 /**
- * HVAC 时序数据源与六张超级表的启动装配。
+ * HVAC 与能源周期时序数据源的启动装配。
  *
  * <p>该数据源通过明确 Bean 名称与 MySQL 物理隔离，避免把两类 SQL 发往错误
  * 数据库。生产默认在启动期创建 HVAC Schema；普通自动化测试通过
@@ -103,8 +103,8 @@ public class TdengineConfig {
     }
 
     /**
-     * 创建时序数据库及原始事件、正式分钟、指标成功、公式异常、追加尝试和当前状态表，并执行
-     * 非破坏式字段补齐与存在性验证。
+     * 创建时序数据库及 HVAC、公式和能源周期结果结构，并执行非破坏式
+     * 字段补齐与存在性验证。
      */
     private void doInitialize(JdbcTemplate template) {
         String database = properties.getDatabase();
@@ -126,15 +126,19 @@ public class TdengineConfig {
         // 3. 自动创建公式成功结果和异常审计结构，并迁移旧指标表。
         initializeFormulaSchema(template);
 
-        log.info("✅ TDengine HVAC 初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}/{}/{}]",
+        // 4. 自动创建周期投影和封账快照的数值副本结构。
+        initializeEnergyPeriodSchema(template);
+
+        log.info("✅ TDengine 时序初始化完成: 数据库[{}], 超级表[{}/{}/{}/{}/{}/{}/{}/{}]",
                 database, properties.getStRawEvent(),
                 properties.getStRawMinute(), properties.getStIndicatorMinute(),
                 properties.getStFormulaCalcException(),
                 properties.getStFormulaCalcAttemptV2(),
                 properties.getStFormulaResultRevision(),
-                properties.getStIndicatorMinuteState());
+                properties.getStIndicatorMinuteState(),
+                properties.getStEnergyPeriodResult());
 
-        // 启动验证只覆盖当前运行需要的四张 HVAC 超级表。
+        // 启动验证覆盖当前运行会读写的全部超级表。
         List.of(
                 properties.getStRawEvent(),
                 properties.getStRawMinute(),
@@ -142,7 +146,8 @@ public class TdengineConfig {
                 properties.getStFormulaCalcException(),
                 properties.getStFormulaCalcAttemptV2(),
                 properties.getStFormulaResultRevision(),
-                properties.getStIndicatorMinuteState()
+                properties.getStIndicatorMinuteState(),
+                properties.getStEnergyPeriodResult()
         ).forEach(stable -> verifyInitialization(template, database, stable));
     }
 
@@ -298,6 +303,28 @@ public class TdengineConfig {
         initStFormulaCalcAttemptV2(template);
         initStFormulaResultRevision(template);
         initStIndicatorMinuteState(template);
+    }
+
+    /**
+     * 初始化能源周期数值副本。
+     *
+     * <p>MySQL 保存封账、重算和可见性状态；TDengine 只保存可按周期定位的数值副本与
+     * 精确十进制证据。启动自动建表避免新环境依赖人工执行 TDengine 脚本。</p>
+     */
+    void initializeEnergyPeriodSchema(JdbcTemplate template) {
+        String db = properties.getDatabase();
+        String stable = properties.getStEnergyPeriodResult();
+        template.execute(String.format(
+                "CREATE STABLE IF NOT EXISTS %s.%s ("
+                        + "ts TIMESTAMP, native_quantity DOUBLE, tce_value DOUBLE, "
+                        + "coverage_ratio DOUBLE, native_quantity_decimal BINARY(48), "
+                        + "tce_value_decimal BINARY(48), coverage_ratio_decimal BINARY(24), "
+                        + "revision BIGINT, evidence_hash BINARY(64)"
+                        + ") TAGS (result_key BINARY(64), building_id BINARY(32), "
+                        + "point_id BINARY(32), native_unit_code BINARY(64), "
+                        + "tce_unit_code BINARY(64), result_nature BINARY(32));",
+                db, stable));
+        log.info("超级表 [{}] 已创建/已存在", stable);
     }
 
     private void initStIndicatorMinute(JdbcTemplate template) {
