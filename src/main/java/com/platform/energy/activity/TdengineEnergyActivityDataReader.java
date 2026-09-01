@@ -19,6 +19,7 @@ import java.util.stream.Collectors;
  * 从 TDengine 原始事件超级表实现多能源活动数据的有界读取。
  *
  * <p>查询同时约束建筑、测点、事件时间和 seek 游标，避免跨建筑泄漏及 offset 深分页。
+ * 时间边界直接使用 TDengine 毫秒时间戳，避免应用与数据库容器时区不同导致查询窗口偏移。
  * 原始表以“测点 + 事件时间”保存当前行，没有重复次数和冲突修正历史；这些限制由上层
  * 响应元数据显式公开，适配器不会推断不存在的证据。</p>
  */
@@ -50,8 +51,8 @@ public class TdengineEnergyActivityDataReader implements EnergyActivityDataReade
             throw new IllegalArgumentException("活动数据读取 limit 必须在 1 到 500 之间");
         }
         String seek = after == null ? "" : " AND (ts > "
-                + quote(new Timestamp(after.eventTime()).toString())
-                + " OR (ts = " + quote(new Timestamp(after.eventTime()).toString())
+                + after.eventTime()
+                + " OR (ts = " + after.eventTime()
                 + " AND point_id > " + quote(after.pointId()) + "))";
         String sql = """
                 SELECT ts,received_time,val,data_quality,late_flag,
@@ -60,8 +61,8 @@ public class TdengineEnergyActivityDataReader implements EnergyActivityDataReade
                 FROM %s
                 WHERE building_id=%s
                   AND point_id IN (%s)
-                  AND ts >= %s
-                  AND ts < %s%s
+                  AND ts >= %d
+                  AND ts < %d%s
                 ORDER BY ts,point_id
                 LIMIT %d
                 """.formatted(
@@ -69,8 +70,8 @@ public class TdengineEnergyActivityDataReader implements EnergyActivityDataReade
                 quote(buildingId),
                 pointIds.stream().sorted().map(TdengineEnergyActivityDataReader::quote)
                         .collect(Collectors.joining(",")),
-                quote(new Timestamp(fromInclusive).toString()),
-                quote(new Timestamp(toExclusive).toString()),
+                fromInclusive,
+                toExclusive,
                 seek,
                 limit + 1);
         List<RawEvent> loaded = template.queryForList(sql).stream()
@@ -90,11 +91,10 @@ public class TdengineEnergyActivityDataReader implements EnergyActivityDataReade
                        source_system,source_point_code,source_device_id,
                        point_id,point_code,building_id
                 FROM %s
-                WHERE building_id=%s AND point_id=%s AND ts <= %s
+                WHERE building_id=%s AND point_id=%s AND ts <= %d
                 ORDER BY ts DESC
                 LIMIT 1
-                """.formatted(stable(), quote(buildingId), quote(pointId),
-                quote(new Timestamp(atInclusive).toString()));
+                """.formatted(stable(), quote(buildingId), quote(pointId), atInclusive);
         List<RawEvent> rows = template.queryForList(sql).stream().map(this::map).toList();
         return rows.isEmpty() ? null : rows.getFirst();
     }
