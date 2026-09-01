@@ -3,6 +3,7 @@ package com.platform.energy.activity;
 import com.platform.energy.activity.EnergyActivityDataReader.Cursor;
 import com.platform.energy.activity.EnergyActivityDataReader.RawEvent;
 import com.platform.energy.activity.EnergyActivityDataReader.RawEventPage;
+import com.platform.energy.activity.EnergyActivityDataContracts.RawActivityDataView;
 import com.platform.energy.activity.EnergyActivityPointCatalog.PointProfile;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
@@ -135,6 +136,37 @@ class EnergyActivityDataServiceTest {
                 });
         verify(qualityResolver, never()).resolve(
                 any(), any(), any(), anyLong(), anyInt());
+    }
+
+    @Test
+    void aggregationSnapshotIncludesStartAnchorAndExactEndBoundaryAtFixedWatermark() {
+        Set<String> pointIds = Set.of("POINT001");
+        PointProfile profile = new PointProfile("POINT001", "POINT001_CODE", "kWh",
+                "PROFILE_POINT001", "ELECTRICITY", "GRID_PURCHASED", "CUMULATIVE",
+                "CONFIRMED", 3);
+        when(pointCatalog.find("BLD001", pointIds)).thenReturn(List.of(profile));
+        RawEvent anchor = event("POINT001", "BLD001", 50L, 0);
+        RawEvent start = event("POINT001", "BLD001", 100L, 0);
+        RawEvent end = event("POINT001", "BLD001", 200L, 0);
+        RawEvent arrivedAfterWatermark = new RawEvent("POINT001", "POINT001_CODE", "BLD001",
+                "SIMULATION_V1", "POINT001_SOURCE", "SIM_DEVICE", 15.0,
+                150L, 301L, 0, true);
+        when(dataReader.readLatestAtOrBefore("BLD001", "POINT001", 100L)).thenReturn(anchor);
+        when(dataReader.readRawEvents("BLD001", pointIds, 100L, 201L, null, 500))
+                .thenReturn(new RawEventPage(List.of(start, arrivedAfterWatermark, end), false, null));
+        when(qualityResolver.historyContext(pointIds, ENERGY_ACTIVITY_AGGREGATION, 50L, 201L))
+                .thenReturn(context);
+        when(qualityResolver.resolve(eq(context), eq("POINT001"),
+                eq(ENERGY_ACTIVITY_AGGREGATION), anyLong(), eq(0)))
+                .thenReturn(resolution(Decision.ALLOW, 0));
+
+        var snapshot = service.aggregationSnapshot(7L, Set.of("ENERGY_MANAGER"),
+                "BLD001", "POINT001", 100L, 200L, 300L);
+
+        assertThat(snapshot.activityWatermark()).isEqualTo(300L);
+        assertThat(snapshot.valueSemantics()).isEqualTo("CUMULATIVE");
+        assertThat(snapshot.items()).extracting(RawActivityDataView::eventTime)
+                .containsExactly(50L, 100L, 200L);
     }
 
     private static PointProfile profile(

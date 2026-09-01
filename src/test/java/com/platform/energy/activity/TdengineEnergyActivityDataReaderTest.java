@@ -54,6 +54,29 @@ class TdengineEnergyActivityDataReaderTest {
                 .contains("LIMIT 3");
     }
 
+    @Test
+    void readsLatestStartAnchorWithinBuildingAndPointScope() {
+        JdbcTemplate template = mock(JdbcTemplate.class);
+        TdengineProperties properties = new TdengineProperties();
+        properties.setDatabase("iot_telemetry");
+        properties.setStRawEvent("st_raw_event");
+        when(template.queryForList(anyString())).thenReturn(List.of(
+                row("POINT001", 59_000L, 59_100L, 0)));
+        TdengineEnergyActivityDataReader reader =
+                new TdengineEnergyActivityDataReader(template, properties);
+
+        var anchor = reader.readLatestAtOrBefore("BLD001", "POINT001", 60_000L);
+
+        assertThat(anchor.eventTime()).isEqualTo(59_000L);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(template).queryForList(sql.capture());
+        assertThat(sql.getValue()).contains("building_id='BLD001'")
+                .contains("point_id='POINT001'")
+                .contains("ts <= '")
+                .contains("ORDER BY ts DESC")
+                .contains("LIMIT 1");
+    }
+
     private static Map<String, Object> row(
             String pointId, long eventTime, long receivedTime, int quality) {
         Map<String, Object> row = new HashMap<>();

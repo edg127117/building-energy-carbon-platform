@@ -19,6 +19,9 @@ public interface EnergyActivityDataReader {
             Cursor after,
             int limit);
 
+    /** 读取指定时刻及之前最近一条当前事实，作为累计量开始锚点。 */
+    RawEvent readLatestAtOrBefore(String buildingId, String pointId, long atInclusive);
+
     record Cursor(long eventTime, String pointId) {
         public Cursor {
             if (pointId == null || pointId.isBlank()) {

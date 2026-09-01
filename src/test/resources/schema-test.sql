@@ -23,6 +23,12 @@ DROP TABLE IF EXISTS biz_point_alias;
 DROP TABLE IF EXISTS biz_data_source;
 DROP TABLE IF EXISTS biz_energy_point_item_binding_version;
 DROP TABLE IF EXISTS biz_energy_point_item_binding;
+DROP TABLE IF EXISTS biz_energy_integration_policy_version;
+DROP TABLE IF EXISTS biz_energy_integration_policy;
+DROP TABLE IF EXISTS biz_energy_activity_correction_version;
+DROP TABLE IF EXISTS biz_energy_activity_correction;
+DROP TABLE IF EXISTS biz_energy_meter_event_version;
+DROP TABLE IF EXISTS biz_energy_meter_event;
 DROP TABLE IF EXISTS biz_energy_conversion_parameter_version;
 DROP TABLE IF EXISTS biz_energy_conversion_parameter;
 DROP TABLE IF EXISTS biz_energy_conversion_formula_version;
@@ -740,7 +746,121 @@ CREATE TABLE biz_energy_conversion_parameter_version (
 
 CREATE INDEX idx_energy_conversion_parameter_match
   ON biz_energy_conversion_parameter_version
-    (status,consumption_scope,region_code,usage_scope,effective_from,effective_to);
+  (status,consumption_scope,region_code,usage_scope,effective_from,effective_to);
+
+CREATE TABLE biz_energy_meter_event (
+  event_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  meter_point_id VARCHAR(32) NOT NULL,
+  event_type VARCHAR(20) NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  FOREIGN KEY (meter_point_id,building_id) REFERENCES biz_data_point(point_id,building_id),
+  CONSTRAINT chk_energy_meter_event_type CHECK
+    (event_type IN ('RESET','ROLLOVER','REPLACEMENT','DATA_ERROR'))
+);
+
+CREATE INDEX idx_energy_meter_event_point
+  ON biz_energy_meter_event(building_id,meter_point_id,event_type);
+
+CREATE TABLE biz_energy_meter_event_version (
+  event_version_id VARCHAR(32) PRIMARY KEY,
+  event_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  occurred_at TIMESTAMP(3) NOT NULL,
+  pre_event_reading DECIMAL(30,12),
+  post_event_reading DECIMAL(30,12),
+  rollover_modulus DECIMAL(30,12),
+  old_meter_id VARCHAR(64),
+  new_meter_id VARCHAR(64),
+  relation_version_before VARCHAR(32),
+  relation_version_after VARCHAR(32),
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL,
+  simulation_flag TINYINT NOT NULL,
+  config_revision INT DEFAULT 0 NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  review_comment VARCHAR(500),
+  CONSTRAINT uk_energy_meter_event_version UNIQUE(event_id,version_no),
+  FOREIGN KEY (event_id) REFERENCES biz_energy_meter_event(event_id),
+  CONSTRAINT chk_energy_meter_event_version_status CHECK
+    (status IN ('PENDING_REVIEW','APPROVED','DISABLED'))
+);
+
+CREATE TABLE biz_energy_activity_correction (
+  correction_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  meter_point_id VARCHAR(32) NOT NULL,
+  original_fact_identity VARCHAR(160) NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_energy_activity_correction_fact UNIQUE
+    (building_id,meter_point_id,original_fact_identity),
+  FOREIGN KEY (meter_point_id,building_id) REFERENCES biz_data_point(point_id,building_id)
+);
+
+CREATE TABLE biz_energy_activity_correction_version (
+  correction_version_id VARCHAR(32) PRIMARY KEY,
+  correction_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  original_value DECIMAL(30,12) NOT NULL,
+  corrected_value DECIMAL(30,12) NOT NULL,
+  correction_reason VARCHAR(500) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL,
+  quality_gate_passed TINYINT NOT NULL,
+  quality_policy_version VARCHAR(160) NOT NULL,
+  config_revision INT DEFAULT 0 NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  review_comment VARCHAR(500),
+  CONSTRAINT uk_energy_activity_correction_version UNIQUE(correction_id,version_no),
+  FOREIGN KEY (correction_id) REFERENCES biz_energy_activity_correction(correction_id),
+  CONSTRAINT chk_energy_activity_correction_version_status CHECK
+    (status IN ('PENDING_REVIEW','APPROVED','DISABLED'))
+);
+
+CREATE TABLE biz_energy_integration_policy (
+  policy_id VARCHAR(32) PRIMARY KEY,
+  building_id VARCHAR(32) NOT NULL,
+  meter_point_id VARCHAR(32) NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  CONSTRAINT uk_energy_integration_policy_point UNIQUE(building_id,meter_point_id),
+  FOREIGN KEY (meter_point_id,building_id) REFERENCES biz_data_point(point_id,building_id)
+);
+
+CREATE TABLE biz_energy_integration_policy_version (
+  policy_version_id VARCHAR(32) PRIMARY KEY,
+  policy_id VARCHAR(32) NOT NULL,
+  version_no INT NOT NULL,
+  integration_method VARCHAR(24) NOT NULL,
+  maximum_gap_seconds BIGINT NOT NULL,
+  minimum_coverage_ratio DECIMAL(8,6) NOT NULL,
+  boundary_handling VARCHAR(40) NOT NULL,
+  status VARCHAR(20) NOT NULL,
+  source_type VARCHAR(20) NOT NULL,
+  evidence_reference VARCHAR(500) NOT NULL,
+  effective_from TIMESTAMP(3) NOT NULL,
+  effective_to TIMESTAMP(3),
+  config_revision INT DEFAULT 0 NOT NULL,
+  created_by BIGINT NOT NULL,
+  created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  approved_by BIGINT,
+  approved_at TIMESTAMP(3),
+  review_comment VARCHAR(500),
+  CONSTRAINT uk_energy_integration_policy_version UNIQUE(policy_id,version_no),
+  FOREIGN KEY (policy_id) REFERENCES biz_energy_integration_policy(policy_id),
+  CONSTRAINT chk_energy_integration_policy_version_status CHECK
+    (status IN ('PENDING_REVIEW','APPROVED','DISABLED'))
+);
 
 -- H2 镜像保留治理表的关系、状态与保留期约束；运行状态仍只在单体内存中保存。
 CREATE TABLE biz_data_source (

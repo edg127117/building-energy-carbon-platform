@@ -55,7 +55,8 @@ class FlywayMigrationConfigurationTest {
                 "V32__mysql_meter_structure_import.sql",
                 "V33__mysql_energy_activity_quality_scenario.sql",
                 "V34__mysql_energy_catalog_unit_binding.sql",
-                "V35__mysql_energy_tce_conversion_rules.sql");
+                "V35__mysql_energy_tce_conversion_rules.sql",
+                "V36__mysql_energy_aggregation_input_governance.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

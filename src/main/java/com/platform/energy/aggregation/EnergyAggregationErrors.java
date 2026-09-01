@@ -15,11 +15,18 @@ public final class EnergyAggregationErrors {
     public static final String PERIOD_COVERAGE_INVALID = "ENERGY_AGGREGATION_PERIOD_COVERAGE_INVALID";
     public static final String INTEGRATION_POLICY_REQUIRED = "ENERGY_AGGREGATION_INTEGRATION_POLICY_REQUIRED";
     public static final String COVERAGE_INSUFFICIENT = "ENERGY_AGGREGATION_COVERAGE_INSUFFICIENT";
+    public static final String NOT_FOUND = "ENERGY_AGGREGATION_NOT_FOUND";
+    public static final String STATUS_CONFLICT = "ENERGY_AGGREGATION_STATUS_CONFLICT";
+    public static final String VERSION_CONFLICT = "ENERGY_AGGREGATION_VERSION_CONFLICT";
 
     private EnergyAggregationErrors() {
     }
 
     public static BusinessException error(String code, String message) {
         return new BusinessException(409, code, message);
+    }
+
+    public static BusinessException error(int status, String code, String message) {
+        return new BusinessException(status, code, message);
     }
 }

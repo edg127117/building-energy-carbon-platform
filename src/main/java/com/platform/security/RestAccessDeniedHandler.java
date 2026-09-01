@@ -79,6 +79,8 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
             body.put("errorCode", "ENERGY_CONVERSION_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-activity-data")) {
             body.put("errorCode", "ENERGY_ACTIVITY_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-aggregation")) {
+            body.put("errorCode", "ENERGY_AGGREGATION_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
             body.put("errorCode", "BACKOFFICE_OPERATION_FORBIDDEN");
         }
