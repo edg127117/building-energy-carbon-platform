@@ -64,6 +64,31 @@ public final class EnergyActivityDataContracts {
         }
     }
 
+    /**
+     * 聚合专用快照包含起点锚点、结束边界和本次质量策略证据。
+     *
+     * <p>{@code activityWatermark} 是本次读取允许纳入的最晚入库时间；读取方必须排除
+     * 在该水位之后才入库的事实，避免同一计算请求在翻页期间看到不同数据集。</p>
+     */
+    public record AggregationActivitySnapshot(
+            String buildingId,
+            String pointId,
+            String sourceUnit,
+            String valueSemantics,
+            String confirmationStatus,
+            int profileRevision,
+            long startInclusive,
+            long endExclusive,
+            long calculationAsOf,
+            long activityWatermark,
+            String identityRule,
+            String correctionEvidence,
+            List<RawActivityDataView> items) {
+        public AggregationActivitySnapshot {
+            items = List.copyOf(items);
+        }
+    }
+
     @Schema(description = "活动数据读取错误响应")
     public record EnergyActivityApiError(
             int code,

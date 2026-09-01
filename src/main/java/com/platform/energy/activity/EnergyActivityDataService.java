@@ -1,6 +1,7 @@
 package com.platform.energy.activity;
 
 import com.platform.energy.activity.EnergyActivityDataContracts.ActivityCursor;
+import com.platform.energy.activity.EnergyActivityDataContracts.AggregationActivitySnapshot;
 import com.platform.energy.activity.EnergyActivityDataContracts.RawActivityDataPage;
 import com.platform.energy.activity.EnergyActivityDataContracts.RawActivityDataView;
 import com.platform.energy.activity.EnergyActivityDataReader.Cursor;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -42,6 +44,7 @@ public class EnergyActivityDataService {
     static final int MAX_POINTS = 100;
     static final int MAX_LIMIT = 500;
     static final long MAX_RANGE_MILLIS = 31L * 24 * 60 * 60 * 1_000;
+    static final int MAX_AGGREGATION_FACTS = 10_000;
 
     private final BuildingScopeService buildingScopeService;
     private final EnergyActivityPointCatalog pointCatalog;
@@ -129,6 +132,81 @@ public class EnergyActivityDataService {
                 rawPage.truncated(),
                 next,
                 allowed);
+    }
+
+    /**
+     * 读取单测点聚合快照，并固定入库水位、起点锚点和结束边界。
+     *
+     * <p>该入口仍复用能源属性、建筑范围和 Q0/Q1/Q2 门禁；它不会读取计量事件、修正或
+     * 关系内部表。原始值仍来自现有 double 契约，十进制精度边界由下游显式保留。</p>
+     */
+    public AggregationActivitySnapshot aggregationSnapshot(
+            Long userId, Collection<String> roles, String buildingId, String pointId,
+            long startInclusive, long endExclusive, long calculationAsOf) {
+        requireReader(roles);
+        String building = required(buildingId, "建筑不能为空");
+        String point = required(pointId, "测点不能为空");
+        validateRange(startInclusive, endExclusive);
+        if (calculationAsOf < endExclusive) {
+            throw error(400, VALIDATION_FAILED, "计算时点不能早于聚合结束边界");
+        }
+        buildingScopeService.checkAccess(userId, roles, building);
+        Map<String, PointProfile> profiles = requireProfiles(building, Set.of(point));
+
+        RawEvent anchor;
+        try {
+            anchor = dataReader.readLatestAtOrBefore(building, point, startInclusive);
+        } catch (DataAccessException | IllegalStateException exception) {
+            throw error(503, DEPENDENCY_UNAVAILABLE, "活动数据源暂不可用");
+        }
+        long contextFrom = anchor == null ? startInclusive : anchor.eventTime();
+        ResolutionContext context;
+        try {
+            context = qualityResolver.historyContext(Set.of(point), ENERGY_ACTIVITY_AGGREGATION,
+                    contextFrom, Math.addExact(endExclusive, 1));
+        } catch (QualityUsageSnapshotUnavailableException | ArithmeticException exception) {
+            throw error(503, DEPENDENCY_UNAVAILABLE, "活动数据质量策略暂不可用");
+        }
+
+        LinkedHashMap<String, RawActivityDataView> accepted = new LinkedHashMap<>();
+        PointProfile profile = profiles.get(point);
+        addAggregationFact(accepted, anchor, profile, context, building, calculationAsOf);
+        Cursor cursor = null;
+        do {
+            EnergyActivityDataReader.RawEventPage page;
+            try {
+                page = dataReader.readRawEvents(building, Set.of(point), startInclusive,
+                        Math.addExact(endExclusive, 1), cursor, MAX_LIMIT);
+            } catch (DataAccessException | IllegalStateException | ArithmeticException exception) {
+                throw error(503, DEPENDENCY_UNAVAILABLE, "活动数据源暂不可用");
+            }
+            for (RawEvent event : page.items()) {
+                addAggregationFact(accepted, event, profile, context, building, calculationAsOf);
+            }
+            if (accepted.size() > MAX_AGGREGATION_FACTS) {
+                throw error(400, VALIDATION_FAILED, "聚合活动事实超过单次安全上限");
+            }
+            cursor = page.nextCursor();
+        } while (cursor != null);
+
+        return new AggregationActivitySnapshot(building, point, profile.unit(), profile.valueSemantics(),
+                profile.confirmationStatus(), profile.profileRevision(), startInclusive, endExclusive,
+                calculationAsOf, calculationAsOf, "POINT_ID_EVENT_TIME", "EXTERNAL_APPEND_ONLY",
+                List.copyOf(accepted.values()));
+    }
+
+    private void addAggregationFact(
+            Map<String, RawActivityDataView> accepted, RawEvent event, PointProfile profile,
+            ResolutionContext context, String buildingId, long calculationAsOf) {
+        if (event == null || event.receivedTime() > calculationAsOf) return;
+        if (!Objects.equals(buildingId, event.buildingId())
+                || !Objects.equals(profile.pointId(), event.pointId())) {
+            throw error(500, DATA_SCOPE_MISMATCH, "活动数据范围校验失败");
+        }
+        Resolution resolution = resolveQuality(context, event);
+        if (resolution.decision() == Decision.BLOCK) return;
+        accepted.putIfAbsent(event.pointId() + ":" + event.eventTime(),
+                toView(event, profile, resolution));
     }
 
     private Map<String, PointProfile> requireProfiles(

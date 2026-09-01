@@ -83,6 +83,22 @@ public class TdengineEnergyActivityDataReader implements EnergyActivityDataReade
         return new RawEventPage(page, truncated, next);
     }
 
+    @Override
+    public RawEvent readLatestAtOrBefore(String buildingId, String pointId, long atInclusive) {
+        String sql = """
+                SELECT ts,received_time,val,data_quality,late_flag,
+                       source_system,source_point_code,source_device_id,
+                       point_id,point_code,building_id
+                FROM %s
+                WHERE building_id=%s AND point_id=%s AND ts <= %s
+                ORDER BY ts DESC
+                LIMIT 1
+                """.formatted(stable(), quote(buildingId), quote(pointId),
+                quote(new Timestamp(atInclusive).toString()));
+        List<RawEvent> rows = template.queryForList(sql).stream().map(this::map).toList();
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
     private RawEvent map(Map<String, Object> row) {
         return new RawEvent(
                 text(row, "point_id"),
