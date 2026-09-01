@@ -239,4 +239,9 @@ VALUES
   ('ENERGY_CATALOG_REVIEW','能源字典审核','审核能源字典与绑定版本','ENABLED','CRITICAL',1),
   ('ENERGY_RULE_MAINTAIN','折标规则维护','创建待专业确认的标准煤、公式和折标参数版本','ENABLED','HIGH',1),
   ('ENERGY_RULE_REVIEW','折标规则审核','审核标准煤、公式和折标参数版本','ENABLED','CRITICAL',1),
-  ('ENERGY_CALCULATION_RUN','能源折标计算','执行受建筑范围保护的折标计算','ENABLED','HIGH',1);
+  ('ENERGY_CALCULATION_RUN','能源折标计算','执行受建筑范围保护的折标计算','ENABLED','HIGH',1),
+  ('ENERGY_LOCK_SUBMIT','能源封账提交','提交月度能源结果封账申请','ENABLED','HIGH',1),
+  ('ENERGY_LOCK_APPROVE','能源封账审核','审核并形成不可覆盖月度封账快照','ENABLED','CRITICAL',1),
+  ('ENERGY_EXCEPTION_APPROVE','能源封账例外审核','审核版本化封账例外白名单','ENABLED','CRITICAL',1),
+  ('ENERGY_RECALC_SUBMIT','能源重算提交','提交有界周期结果重算批次','ENABLED','HIGH',1),
+  ('ENERGY_RECALC_APPROVE','能源重算审核','审核并执行有界周期结果重算批次','ENABLED','CRITICAL',1);
