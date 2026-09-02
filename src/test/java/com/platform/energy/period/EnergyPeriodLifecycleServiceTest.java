@@ -40,6 +40,7 @@ class EnergyPeriodLifecycleServiceTest {
     @Mock private EnergyPeriodResultRepository repository;
     @Mock private EnergyPeriodCalculationService calculation;
     @Mock private EnergyPeriodValueStore valueStore;
+    @Mock private EnergyPeriodSnapshotChangePublisher snapshotChangePublisher;
     @Mock private AuditEvidenceWriter auditWriter;
 
     private EnergyPeriodLifecycleService service;
@@ -47,7 +48,7 @@ class EnergyPeriodLifecycleServiceTest {
     @BeforeEach
     void setUp() {
         service = new EnergyPeriodLifecycleService(authorization, governance, repository,
-                calculation, valueStore, new ObjectMapper(), auditWriter,
+                calculation, valueStore, snapshotChangePublisher, new ObjectMapper(), auditWriter,
                 new AuditGovernanceProperties());
     }
 
@@ -167,6 +168,41 @@ class EnergyPeriodLifecycleServiceTest {
         verify(repository).updateBatchItem("ITEM1", "UNCHANGED", null, null);
         verify(repository, never()).insertSnapshot(any());
         verify(valueStore, never()).write(any());
+        verify(snapshotChangePublisher, never()).published(any(), any());
+    }
+
+    @Test
+    void publishesOneCarbonDependencyChangeOnlyAfterChangedBatchCompletes() {
+        PeriodSnapshot source = snapshot("S1", "P1");
+        PeriodSnapshot replacement = snapshot("S2", "P1");
+        RecalculationItem pending = new RecalculationItem(
+                "ITEM1", "BATCH1", "S1", 0, "PENDING", null, null);
+        RecalculationItem changed = new RecalculationItem(
+                "ITEM1", "BATCH1", "S1", 0, "CHANGED", "S2", null);
+        when(repository.findBatch("BATCH1")).thenReturn(
+                batch("VALIDATING", 0, 0), batch("CALCULATING", 0, 0),
+                batch("COMPLETED", 1, 0));
+        when(repository.listBatchItems("BATCH1")).thenReturn(List.of(pending), List.of(changed));
+        when(repository.findSnapshot("S1")).thenReturn(source);
+        when(repository.findSnapshot("S2")).thenReturn(replacement);
+        when(repository.findVisibleSnapshot("P1")).thenReturn(source);
+        when(governance.periodPolicyVersion("PPV1")).thenReturn(policy());
+        ProjectionCalculation changedCalculation = new ProjectionCalculation(
+                "DEVELOPMENT_SIMULATION", "BLD001", "POINTS1",
+                new PeriodWindow(PeriodType.MONTH, START, END, "Asia/Shanghai"), "PPV1",
+                "GRID_ELECTRICITY", new BigDecimal("101"), "kWh", BigDecimal.ONE, "TCE",
+                BigDecimal.ONE, List.of(), "{\"periodPolicyVersionId\":\"PPV1\"}",
+                "CHANGED_HASH", null, END, LocalDateTime.now());
+        when(calculation.calculate(eq(USER), eq(ROLES), eq("BLD001"), eq("POINTS1"),
+                any(), any(), isNull(), any())).thenReturn(changedCalculation);
+        when(repository.nextSnapshotVersion("P1")).thenReturn(2);
+        when(repository.advanceBatch(anyString(), anyString(), anyString())).thenReturn(1);
+        when(repository.completeBatch(eq("BATCH1"), any())).thenReturn(1);
+
+        var result = service.executeRecalculation(USER, ROLES, "BATCH1");
+
+        assertThat(result.status()).isEqualTo("COMPLETED");
+        verify(snapshotChangePublisher).published(source, replacement);
     }
 
     private PeriodPolicyVersion policy() {

@@ -1882,6 +1882,22 @@ CREATE TABLE biz_energy_dirty_period (
   UNIQUE (building_id,point_id,period_type,period_start,period_end)
 );
 
+-- 碳模块只通过持久化变化事实订阅上游快照替代。该 H2 镜像验证能源重算与
+-- 变化记录处于同一事务，不在普通自动化测试中模拟后续碳任务执行。
+DROP TABLE IF EXISTS biz_carbon_dependency_change;
+CREATE TABLE biz_carbon_dependency_change (
+  change_id VARCHAR(32) PRIMARY KEY, change_type VARCHAR(40) NOT NULL,
+  source_object_type VARCHAR(64) NOT NULL, source_object_id VARCHAR(64) NOT NULL,
+  change_detail VARCHAR(500) NOT NULL, old_version_id VARCHAR(64),
+  new_version_id VARCHAR(64) NOT NULL, change_fingerprint VARCHAR(64) NOT NULL UNIQUE,
+  building_id VARCHAR(32), organization_boundary VARCHAR(100),
+  effective_from TIMESTAMP(3) NOT NULL, effective_to TIMESTAMP(3),
+  triggered_by BIGINT, status VARCHAR(20) NOT NULL,
+  created_at TIMESTAMP(3) NOT NULL, processed_at TIMESTAMP(3)
+);
+CREATE INDEX idx_carbon_dependency_change_pending
+  ON biz_carbon_dependency_change(status,created_at);
+
 -- 第七闭环第五后端切片的 H2 隔离镜像。汇总数值按查询从不可覆盖周期快照派生，
 -- 本表只保存显式、版本化的总分表口径，不固化未经审核的分摊规则。
 DROP TABLE IF EXISTS biz_energy_boundary_summary_policy_version;

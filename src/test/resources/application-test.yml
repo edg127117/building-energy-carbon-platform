@@ -67,3 +67,7 @@ relation-governance:
   self-approval-enabled: false
   max-context-depth: 3
   max-page-size: 100
+
+# 普通自动化测试不领取碳重算持久化任务；专项测试直接调用服务方法。
+carbon-management:
+  recalculation-enabled: false
