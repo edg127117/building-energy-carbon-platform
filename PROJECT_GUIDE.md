@@ -103,6 +103,10 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 → 能源品种、单位量纲、兼容矩阵与测点品种绑定解析
 → 已审核折标公式、参数和标准煤低位热值版本解析及确定性 tce 计算
 → 活动事实起止锚点、有效计量分配、计量事件与审核修正证据装配
+→ 周期封账快照、历史关系和计量边界权威汇总
+→ 版本化排放因子、公式、GWP 与面积/人数分母匹配
+→ 范围一/范围二 CO2e、占比及年度总量强度确定性计算
+→ 依赖变化影响分析、候选重算与正式结果批次审批替代
 → 标准设备参数版本解析与公式版本证据
 → 物理空间树与语义关系模型
 → 表计层级、计量方向与计量边界草稿治理
@@ -111,7 +115,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 → 看板、趋势、下钻、能流和碳排展示
 ```
 
-当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、标准设备参数平台侧治理、建筑级关系版本治理、平台标准 V1 表计 Excel 模板/预检/草稿导入、部分 HVAC 指标、查询和展示。其中设备参数和建筑关系治理只提供配置框架、安全拒绝路径和软件版本证据；平台模板不是能源专家真实表格，也不代表已取得专业参数、现场映射、现场报文或现场关系验收。Modbus、BACnet、NB-IoT 等南向驱动，以及完整能源/碳模型和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
+当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、标准设备参数平台侧治理、建筑级关系版本治理、平台标准 V1 表计 Excel 模板/预检/草稿导入、碳管理基础后端候选、部分 HVAC 指标、查询和展示。其中设备参数、建筑关系和碳管理只具有各自已验证的候选软件边界；平台模板不是能源专家真实表格，碳迁移也不预置业务排放因子或建筑分母，均不代表已取得专业参数、现场映射、正式核算或现场验收。Modbus、BACnet、NB-IoT 等南向驱动，以及范围三、完整温室气体盘查和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
 
 V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认语义不同；平台不逐条持久化成功 ACK，成功量进入监控，失败保留异常明细。成功回执默认只作为 24 小时热证据，聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
 
@@ -152,6 +156,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 三类活动量聚合、真实输入适配与计量事件/修正治理 | [`com.platform.energy.aggregation`](src/main/java/com/platform/energy/aggregation)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 周期当前投影、月度封账与有界重算 | [`com.platform.energy.period`](src/main/java/com/platform/energy/period)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 计量边界汇总与多维查询 | [`com.platform.energy.summary`](src/main/java/com/platform/energy/summary)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
+| 碳因子、计算、追溯与自动重算 | [`com.platform.carbon`](src/main/java/com/platform/carbon)、[`碳管理基础闭环设计`](docs/designs/2026-09-02-carbon-management-foundation-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
 | 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |

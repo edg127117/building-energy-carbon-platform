@@ -55,6 +55,7 @@ public class EnergyPeriodLifecycleService {
     private final EnergyPeriodResultRepository repository;
     private final EnergyPeriodCalculationService calculationService;
     private final EnergyPeriodValueStore valueStore;
+    private final EnergyPeriodSnapshotChangePublisher snapshotChangePublisher;
     private final ObjectMapper objectMapper;
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties auditProperties;
@@ -268,6 +269,13 @@ public class EnergyPeriodLifecycleService {
         }
         advance(batch.batchId(), BatchStatus.CALCULATING, BatchStatus.WRITING_RESULTS);
         if (repository.completeBatch(batch.batchId(), LocalDateTime.now()) != 1) versionConflict();
+        // 只有整个上游批次完成并使新快照可见后，才持久化碳影响事件，避免候选快照触发任务风暴。
+        for (RecalculationItem item : repository.listBatchItems(batch.batchId())) {
+            if (BatchItemStatus.CHANGED.name().equals(item.status())) {
+                snapshotChangePublisher.published(requireSnapshot(item.sourceSnapshotId()),
+                        requireSnapshot(item.newSnapshotId()));
+            }
+        }
         RecalculationBatch completed = requireBatch(batch.batchId());
         audit(userId, batch.buildingId(), "COMPLETE_ENERGY_RECALCULATION",
                 "ENERGY_RECALCULATION_BATCH", batch.batchId(), null,

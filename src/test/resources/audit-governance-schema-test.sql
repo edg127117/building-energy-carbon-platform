@@ -244,4 +244,10 @@ VALUES
   ('ENERGY_LOCK_APPROVE','能源封账审核','审核并形成不可覆盖月度封账快照','ENABLED','CRITICAL',1),
   ('ENERGY_EXCEPTION_APPROVE','能源封账例外审核','审核版本化封账例外白名单','ENABLED','CRITICAL',1),
   ('ENERGY_RECALC_SUBMIT','能源重算提交','提交有界周期结果重算批次','ENABLED','HIGH',1),
-  ('ENERGY_RECALC_APPROVE','能源重算审核','审核并执行有界周期结果重算批次','ENABLED','CRITICAL',1);
+  ('ENERGY_RECALC_APPROVE','能源重算审核','审核并执行有界周期结果重算批次','ENABLED','CRITICAL',1),
+  ('CARBON_RULE_MAINTAIN','碳规则维护','创建排放因子来源、因子组合和建筑分母版本','ENABLED','HIGH',1),
+  ('CARBON_RULE_REVIEW','碳规则审核','审核排放因子组合和建筑分母版本','ENABLED','CRITICAL',1),
+  ('CARBON_RULE_ACTIVATE','碳规则激活','激活或停用已审核碳规则版本','ENABLED','CRITICAL',1),
+  ('CARBON_CALCULATION_RUN','碳核算执行','运行单建筑单周期有界碳核算','ENABLED','HIGH',1),
+  ('CARBON_RECALCULATION_TRIGGER','碳重算发起','人工创建受权限约束的历史碳重算触发','ENABLED','HIGH',1),
+  ('CARBON_RECALCULATION_APPROVE','碳重算审批','审批并发布完整权限范围内的正式候选结果批次','ENABLED','CRITICAL',1);
