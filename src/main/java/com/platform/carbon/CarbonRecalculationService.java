@@ -15,6 +15,7 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -22,6 +23,9 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static com.platform.carbon.CarbonErrors.*;
 
@@ -37,8 +41,10 @@ public class CarbonRecalculationService {
     private final CarbonProperties properties;
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties auditProperties;
+    private final ScheduledExecutorService leaseHeartbeat = Executors.newSingleThreadScheduledExecutor(
+            runnable -> Thread.ofPlatform().daemon().name("carbon-lease-heartbeat").unstarted(runnable));
 
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public ManualRecalculationAcceptedView submitManual(
             long userId, Collection<String> roles, ManualRecalculationRequest request) {
         String buildingId = text(request.buildingId(), 32, "建筑编码无效");
@@ -69,14 +75,15 @@ public class CarbonRecalculationService {
         } catch (DuplicateKeyException exception) {
             DependencyChange raced = ruleRepository.findDependencyChangeByFingerprint(fingerprint);
             if (raced == null) throw exception;
-            changeId = raced.changeId();
+            return new ManualRecalculationAcceptedView(raced.changeId(), raced.status(), buildingId, year);
         }
+        repository.setRequestedNature(changeId, nature);
         audit(userId, buildingId, "CREATE_CARBON_RECALCULATION_TRIGGER", changeId,
                 "year=" + year + ";nature=" + nature + ";reason=" + reason, false);
         return new ManualRecalculationAcceptedView(changeId, "PENDING", buildingId, year);
     }
 
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public ManualRecalculationAcceptedView recoverDead(
             long userId, Collection<String> roles, String itemId,
             RecoverDeadItemRequest request) {
@@ -149,52 +156,73 @@ public class CarbonRecalculationService {
             fixedDelayString = "#{@carbonProperties.recalculationScanDelay.toMillis()}")
     public void scheduledWork() {
         if (!properties.isRecalculationEnabled()) return;
-        analyzeOne();
+        // 每轮有界清理已持久化的触发，批次另等归并窗口到期；设备消息不直接进入此入口。
+        for (int i = 0; i < properties.getMaximumBatchItems(); i++) {
+            if (!analyzeOne()) break;
+        }
         executeOne();
     }
 
-    void analyzeOne() {
-        DependencyChange change = persistence.claimChange();
-        if (change == null) return;
+    boolean analyzeOne() {
+        CarbonRecalculationPersistence.ChangeLease lease = persistence.claimChange();
+        if (lease == null) return false;
+        DependencyChange change = lease.change();
         try {
-            List<String> batches = persistence.materialize(change);
+            List<String> batches = persistence.materialize(lease);
             auditSystem(change.buildingId(), "ANALYZE_CARBON_RECALCULATION_IMPACT",
                     change.changeId(), "batches=" + batches.size() + ";detail="
                             + change.changeDetail());
         } catch (RuntimeException exception) {
-            persistence.failChange(change.changeId());
+            persistence.failChange(lease);
             auditSystem(change.buildingId(), "FAIL_CARBON_RECALCULATION_IMPACT",
                     change.changeId(), "error=" + safeCode(exception));
         }
+        return true;
     }
 
     void executeOne() {
         RecalculationBatch batch = persistence.claimBatch();
         if (batch == null) return;
-        for (RecalculationItem item : repository.listItems(batch.batchId())) {
-            if (!List.of("PENDING", "FAILED_RETRYABLE").contains(item.status())
-                    || (item.nextAttemptAt() != null
-                    && item.nextAttemptAt().isAfter(LocalDateTime.now()))) continue;
-            if (!persistence.startItem(item.itemId(), batch.batchId())) continue;
-            try {
-                String idempotency = "recalc:" + item.itemId() + ':' + item.retryCount();
-                CalculationDetail candidate = calculationService.runCandidate(
-                        item.buildingId(), item.accountingYear(), batch.resultNature(),
-                        item.oldCalculationBatchId(), idempotency);
-                if (!List.of("COMPLETED_COMPLETE", "COMPLETED_INCOMPLETE")
-                        .contains(candidate.batch().status())) {
-                    throw error(409, RECALCULATION_CONFLICT, "候选计算未形成完整终态");
-                }
-                persistence.succeedItem(item, candidate.batch().batchId());
-            } catch (RuntimeException exception) {
-                persistence.failItem(item, safeCode(exception), safeMessage(exception));
+        long heartbeatMillis = Math.max(1, properties.getRecalculationLease().toMillis() / 3);
+        var heartbeat = leaseHeartbeat.scheduleWithFixedDelay(() -> {
+            try { persistence.renewLease(batch.batchId(), batch.leaseToken()); }
+            catch (RuntimeException ignored) {
+                // 续租失败不授予本地所有权；后续写入仍须通过数据库 token 和有效期校验。
             }
+        }, heartbeatMillis, heartbeatMillis, TimeUnit.MILLISECONDS);
+        try {
+            for (RecalculationItem item : repository.listItems(batch.batchId())) {
+                if (!List.of("PENDING", "FAILED_RETRYABLE").contains(item.status())
+                        || (item.nextAttemptAt() != null
+                        && item.nextAttemptAt().isAfter(LocalDateTime.now()))) continue;
+                if (!persistence.startItem(item.itemId(), batch.batchId(), batch.leaseToken())) continue;
+                try {
+                    String idempotency = "recalc:" + item.itemId() + ':' + item.retryCount();
+                    CalculationDetail candidate = calculationService.runCandidate(
+                            item.buildingId(), item.accountingYear(), batch.resultNature(),
+                            item.oldCalculationBatchId(), idempotency);
+                    if (!List.of("COMPLETED_COMPLETE", "COMPLETED_INCOMPLETE")
+                            .contains(candidate.batch().status())) {
+                        throw error(409, RECALCULATION_CONFLICT, "候选计算未形成完整终态");
+                    }
+                    persistence.succeedItem(item, candidate.batch().batchId(), batch.leaseToken());
+                } catch (RuntimeException exception) {
+                    persistence.failItem(item, safeCode(exception), safeMessage(exception), batch.leaseToken());
+                }
+            }
+            persistence.finishCalculationPhase(batch.batchId(), batch.resultNature(), batch.leaseToken());
+        } finally {
+            heartbeat.cancel(false);
         }
-        persistence.finishCalculationPhase(batch.batchId(), batch.resultNature());
         RecalculationBatch completed = requireBatch(batch.batchId());
         auditSystem(null, "FINISH_CARBON_RECALCULATION_CALCULATION", batch.batchId(),
                 "status=" + completed.status() + ";eligible="
                         + completed.eligibleItemCount());
+    }
+
+    @jakarta.annotation.PreDestroy
+    void close() {
+        leaseHeartbeat.shutdownNow();
     }
 
     private RecalculationBatch requireBatch(String batchId) {

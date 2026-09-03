@@ -12,7 +12,7 @@ import javax.sql.DataSource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** 在调用方确认的一次性 MySQL 8 空库验证 V39 结构、种子边界和关键检查约束。 */
+/** 在调用方确认的一次性 MySQL 8 空库验证碳结构、种子边界和关键检查约束。 */
 @EnabledIfEnvironmentVariable(named = "CARBON_MYSQL_IT_URL", matches = ".+")
 class CarbonManagementMysqlIntegrationTest {
 
@@ -36,7 +36,7 @@ class CarbonManagementMysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("39");
+                """, String.class)).isEqualTo("40");
         assertThat(jdbc.queryForList("""
                 SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE()
                   AND table_name LIKE 'biz_carbon_%'
