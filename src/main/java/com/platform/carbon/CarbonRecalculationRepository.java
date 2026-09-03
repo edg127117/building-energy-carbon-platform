@@ -21,25 +21,65 @@ class CarbonRecalculationRepository {
         this.jdbc = jdbc;
     }
 
-    DependencyChange findPendingChangeForUpdate() {
+    void setRequestedNature(String changeId, ResultNature nature) {
+        jdbc.update("UPDATE biz_carbon_dependency_change SET requested_result_nature=? WHERE change_id=?",
+                nature.name(), changeId);
+    }
+
+    DependencyChange findPendingChangeForUpdate(LocalDateTime now) {
         return one("""
                 SELECT * FROM biz_carbon_dependency_change
-                WHERE status='PENDING' ORDER BY created_at LIMIT 1 FOR UPDATE
-                """, CarbonRecalculationRepository::change);
+                WHERE status='PENDING' AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+                ORDER BY created_at,change_id LIMIT 1 FOR UPDATE SKIP LOCKED
+                """, CarbonRecalculationRepository::change, timestamp(now));
     }
 
-    int claimChange(String changeId) {
+    int claimChange(String changeId, String token, LocalDateTime until) {
         return jdbc.update("""
-                UPDATE biz_carbon_dependency_change SET status='ANALYZING'
+                UPDATE biz_carbon_dependency_change SET status='ANALYZING',lease_token=?,lease_until=?
                 WHERE change_id=? AND status='PENDING'
-                """, changeId);
+                """, token, timestamp(until), changeId);
     }
 
-    void completeChange(String changeId, boolean success, LocalDateTime now) {
+    boolean lockChange(String changeId, String token, LocalDateTime now) {
+        return one("""
+                SELECT change_id FROM biz_carbon_dependency_change
+                WHERE change_id=? AND status='ANALYZING' AND lease_token=? AND lease_until>?
+                FOR UPDATE
+                """, (rs, row) -> rs.getString(1), changeId, token, timestamp(now)) != null;
+    }
+
+    void recoverExpiredChanges(LocalDateTime now, int retries) {
         jdbc.update("""
-                UPDATE biz_carbon_dependency_change SET status=?,processed_at=?
-                WHERE change_id=? AND status='ANALYZING'
-                """, success ? "PROCESSED" : "FAILED", timestamp(now), changeId);
+                UPDATE biz_carbon_dependency_change SET
+                  status=CASE WHEN attempt_count>=? THEN 'FAILED' ELSE 'PENDING' END,
+                  attempt_count=attempt_count+1,lease_token=NULL,lease_until=NULL
+                WHERE status='ANALYZING' AND (lease_until IS NULL OR lease_until<=?)
+                """, retries, timestamp(now));
+    }
+
+    void deferChange(String changeId, String token, LocalDateTime next) {
+        jdbc.update("""
+                UPDATE biz_carbon_dependency_change SET status='PENDING',lease_token=NULL,
+                    lease_until=NULL,next_attempt_at=? WHERE change_id=? AND lease_token=?
+                """, timestamp(next), changeId, token);
+    }
+
+    void failChange(String changeId, String token, int retries, LocalDateTime next) {
+        jdbc.update("""
+                UPDATE biz_carbon_dependency_change SET
+                  status=CASE WHEN attempt_count>=? THEN 'FAILED' ELSE 'PENDING' END,
+                  attempt_count=attempt_count+1,lease_token=NULL,lease_until=NULL,next_attempt_at=?
+                WHERE change_id=? AND status='ANALYZING' AND lease_token=?
+                """, retries, timestamp(next), changeId, token);
+    }
+
+    void completeChange(String changeId, String token, LocalDateTime now) {
+        jdbc.update("""
+                UPDATE biz_carbon_dependency_change SET status='PROCESSED',processed_at=?,
+                    lease_token=NULL,lease_until=NULL,next_attempt_at=NULL
+                WHERE change_id=? AND status='ANALYZING' AND lease_token=?
+                """, timestamp(now), changeId, token);
     }
 
     void insertTrigger(String triggerId, DependencyChange change, String fingerprint,
@@ -60,6 +100,9 @@ class CarbonRecalculationRepository {
                 WHERE b.period_type='YEAR'
                   AND b.status IN ('COMPLETED_COMPLETE','COMPLETED_INCOMPLETE')
                   AND b.publication_status IN ('DIRECT','PUBLISHED')
+                  AND ((SELECT requested_result_nature FROM biz_carbon_dependency_change
+                        WHERE change_id=?) IS NULL OR b.result_nature=(
+                        SELECT requested_result_nature FROM biz_carbon_dependency_change WHERE change_id=?))
                   AND (? IS NULL OR b.building_id=?)
                   AND b.period_end>? AND (? IS NULL OR b.period_start<?)
                   AND NOT EXISTS (
@@ -68,7 +111,9 @@ class CarbonRecalculationRepository {
                       AND newer.period_start=b.period_start AND newer.period_end=b.period_end
                       AND newer.result_nature=b.result_nature
                       AND newer.status IN ('COMPLETED_COMPLETE','COMPLETED_INCOMPLETE')
-                      AND newer.completed_at>b.completed_at
+                      AND newer.publication_status IN ('DIRECT','PUBLISHED')
+                      AND (newer.completed_at>b.completed_at
+                           OR newer.supersedes_calculation_batch_id=b.calculation_batch_id)
                       AND NOT EXISTS (
                         SELECT 1 FROM biz_carbon_result_relation candidate
                         WHERE candidate.new_calculation_batch_id=newer.calculation_batch_id
@@ -78,7 +123,7 @@ class CarbonRecalculationRepository {
                     WHERE r.old_calculation_batch_id=b.calculation_batch_id
                       AND r.relation_status='SUPERSEDED')
                 ORDER BY b.building_id,b.period_start,b.result_nature LIMIT ?
-                """, CarbonRecalculationRepository::calculationBatch, change.buildingId(),
+                """, CarbonRecalculationRepository::calculationBatch, change.changeId(), change.changeId(), change.buildingId(),
                 change.buildingId(), timestamp(change.effectiveFrom()),
                 timestamp(change.effectiveTo()), timestamp(change.effectiveTo()), limit);
     }
@@ -94,15 +139,36 @@ class CarbonRecalculationRepository {
         return count != null && count > 0;
     }
 
-    RecalculationBatch findMergeableBatch(String reason, String boundary,
-                                          ResultNature nature, int maximumItems) {
+    boolean lockCurrentResult(String batchId) {
+        return one("""
+                SELECT calculation_batch_id FROM biz_carbon_calculation_batch
+                WHERE calculation_batch_id=? AND publication_status IN ('DIRECT','PUBLISHED')
+                  AND status IN ('COMPLETED_COMPLETE','COMPLETED_INCOMPLETE') FOR UPDATE
+                """, (rs, row) -> rs.getString(1), batchId) != null;
+    }
+
+    RecalculationBatch findMergeableBatch(String mergeKey, int maximumItems) {
         return one("""
                 SELECT * FROM biz_carbon_recalculation_batch
-                WHERE trigger_reason=? AND organization_boundary=? AND result_nature=?
+                WHERE merge_key=?
                   AND status='PENDING_CALCULATION' AND scope_frozen=0 AND item_count<?
                 ORDER BY created_at LIMIT 1 FOR UPDATE
-                """, CarbonRecalculationRepository::batch, reason, boundary,
-                nature.name(), maximumItems);
+                """, CarbonRecalculationRepository::batch, mergeKey, maximumItems);
+    }
+
+    void setMergeWindow(String batchId, String mergeKey, LocalDateTime readyAt) {
+        jdbc.update("""
+                UPDATE biz_carbon_recalculation_batch SET merge_key=?,merge_ready_at=?
+                WHERE recalculation_batch_id=? AND status='PENDING_CALCULATION' AND scope_frozen=0
+                """, mergeKey, timestamp(readyAt), batchId);
+    }
+
+    boolean canMerge(String batchId, String mergeKey) {
+        return one("""
+                SELECT recalculation_batch_id FROM biz_carbon_recalculation_batch
+                WHERE recalculation_batch_id=? AND merge_key=?
+                  AND status='PENDING_CALCULATION' AND scope_frozen=0 FOR UPDATE
+                """, (rs, row) -> rs.getString(1), batchId, mergeKey) != null;
     }
 
     void insertBatch(RecalculationBatch value) {
@@ -127,7 +193,7 @@ class CarbonRecalculationRepository {
         String activeLock = oldResult.buildingId() + '|' + accountingYear + '|'
                 + oldResult.resultNature();
         return jdbc.update("""
-                INSERT IGNORE INTO biz_carbon_recalculation_item
+                INSERT INTO biz_carbon_recalculation_item
                 (recalculation_item_id,recalculation_batch_id,building_id,accounting_year,
                  old_calculation_batch_id,status,approval_eligible,retry_count,active_lock_key,
                  created_at)
@@ -143,7 +209,7 @@ class CarbonRecalculationRepository {
                   ON b.recalculation_batch_id=i.recalculation_batch_id
                 WHERE i.building_id=? AND i.accounting_year=? AND b.result_nature=?
                   AND i.active_lock_key IS NOT NULL
-                LIMIT 1 FOR UPDATE
+                LIMIT 1
                 """, (rs, row) -> rs.getString(1), buildingId, accountingYear, nature.name());
     }
 
@@ -161,40 +227,43 @@ class CarbonRecalculationRepository {
                 SELECT * FROM biz_carbon_recalculation_batch
                 WHERE status IN ('PENDING_CALCULATION','FAILED_RETRYABLE')
                   AND (lease_until IS NULL OR lease_until<?)
+                  AND (merge_ready_at IS NULL OR merge_ready_at<=?)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_carbon_dependency_change c
+                    WHERE c.status IN ('PENDING','ANALYZING') AND c.next_attempt_at IS NULL
+                      AND c.change_type=biz_carbon_recalculation_batch.trigger_reason
+                      AND (c.organization_boundary IS NULL OR c.organization_boundary=
+                           biz_carbon_recalculation_batch.organization_boundary))
                   AND EXISTS (
                     SELECT 1 FROM biz_carbon_recalculation_item i
                     WHERE i.recalculation_batch_id=biz_carbon_recalculation_batch.recalculation_batch_id
                       AND i.status IN ('PENDING','FAILED_RETRYABLE')
                       AND (i.next_attempt_at IS NULL OR i.next_attempt_at<=?))
-                ORDER BY created_at LIMIT 1 FOR UPDATE
-                """, CarbonRecalculationRepository::batch, timestamp(now), timestamp(now));
+                ORDER BY created_at,recalculation_batch_id LIMIT 1 FOR UPDATE SKIP LOCKED
+                """, CarbonRecalculationRepository::batch, timestamp(now), timestamp(now), timestamp(now));
     }
 
-    void recoverExpiredBatches(LocalDateTime now, int maximumRetries) {
+    RecalculationBatch findExpiredBatchForUpdate(LocalDateTime now) {
+        return one("""
+                SELECT * FROM biz_carbon_recalculation_batch
+                WHERE status='CALCULATING' AND lease_until<=?
+                ORDER BY lease_until LIMIT 1 FOR UPDATE SKIP LOCKED
+                """, CarbonRecalculationRepository::batch, timestamp(now));
+    }
+
+    void recoverExpiredItems(String batchId, LocalDateTime now, int maximumRetries) {
+        // 始终先锁批次再写计算项，避免领取与回收的反向锁顺序；只回收确实开始的项。
         jdbc.update("""
                 UPDATE biz_carbon_recalculation_item i
-                JOIN biz_carbon_recalculation_batch b
-                  ON b.recalculation_batch_id=i.recalculation_batch_id
                 SET i.status=CASE WHEN i.retry_count+1>? THEN 'DEAD' ELSE 'FAILED_RETRYABLE' END,
                     i.next_attempt_at=CASE WHEN i.retry_count+1>? THEN NULL ELSE ? END,
                     i.safe_error_code='CARBON_RECALCULATION_LEASE_EXPIRED',
                     i.safe_error_message='工作线程租约过期，任务已恢复',
                     i.active_lock_key=CASE WHEN i.retry_count+1>? THEN NULL ELSE i.active_lock_key END,
                     i.retry_count=i.retry_count+1
-                WHERE b.status='CALCULATING' AND b.lease_until<? AND i.status='CALCULATING'
+                WHERE i.recalculation_batch_id=? AND i.status='CALCULATING'
                 """, maximumRetries, maximumRetries, timestamp(now), maximumRetries,
-                timestamp(now));
-        jdbc.update("""
-                UPDATE biz_carbon_recalculation_batch b
-                SET b.status=CASE WHEN EXISTS (
-                      SELECT 1 FROM biz_carbon_recalculation_item i
-                      WHERE i.recalculation_batch_id=b.recalculation_batch_id
-                        AND i.status='FAILED_RETRYABLE')
-                    THEN 'FAILED_RETRYABLE' ELSE 'DEAD' END,
-                    b.lease_token=NULL,b.lease_until=NULL,
-                    b.safe_error_code='CARBON_RECALCULATION_LEASE_EXPIRED'
-                WHERE b.status='CALCULATING' AND b.lease_until<?
-                """, timestamp(now));
+                batchId);
     }
 
     int claimBatch(String batchId, String leaseToken, LocalDateTime leaseUntil,
@@ -211,6 +280,23 @@ class CarbonRecalculationRepository {
     RecalculationBatch findBatch(String batchId) {
         return one("SELECT * FROM biz_carbon_recalculation_batch WHERE recalculation_batch_id=?",
                 CarbonRecalculationRepository::batch, batchId);
+    }
+
+    /** 调用方须在同一短事务内保持批次行锁至写项/结果结束，禁止验完 token 后另开事务写入。 */
+    boolean lockLease(String batchId, String token, LocalDateTime now) {
+        if (token == null) return false;
+        return one("""
+                SELECT recalculation_batch_id FROM biz_carbon_recalculation_batch
+                WHERE recalculation_batch_id=? AND status='CALCULATING'
+                  AND lease_token=? AND lease_until>? FOR UPDATE
+                """, (rs, row) -> rs.getString(1), batchId, token, timestamp(now)) != null;
+    }
+
+    void renewLease(String batchId, String token, LocalDateTime until) {
+        jdbc.update("""
+                UPDATE biz_carbon_recalculation_batch SET lease_until=?
+                WHERE recalculation_batch_id=? AND status='CALCULATING' AND lease_token=?
+                """, timestamp(until), batchId, token);
     }
 
     List<RecalculationItem> listItems(String batchId) {
@@ -283,11 +369,18 @@ class CarbonRecalculationRepository {
     }
 
     void finishCalculationPhase(String batchId, ResultNature nature, LocalDateTime now) {
-        refreshBatchCounters(batchId);
         int retryable = countItems(batchId, "FAILED_RETRYABLE");
+        int pending = countItems(batchId, "PENDING");
         int succeeded = countItems(batchId, "SUCCEEDED");
+        if (succeeded > 0 && (retryable > 0 || pending > 0 || countItems(batchId, "DEAD") > 0)) {
+            isolateFailedItems(batchId, now);
+            retryable = 0;
+            pending = 0;
+        }
+        refreshBatchCounters(batchId);
         String status;
-        if (retryable > 0) status = "FAILED_RETRYABLE";
+        if (pending > 0) status = "PENDING_CALCULATION";
+        else if (retryable > 0) status = "FAILED_RETRYABLE";
         else if (succeeded > 0 && nature == ResultNature.FORMAL) status = "PENDING_APPROVAL";
         else if (succeeded > 0) status = "COMPLETED";
         else status = "DEAD";
@@ -298,10 +391,45 @@ class CarbonRecalculationRepository {
                 WHERE recalculation_batch_id=? AND status='CALCULATING'
                 """, status, status, timestamp(now), batchId);
         if (nature == ResultNature.DEVELOPMENT_SIMULATION && "COMPLETED".equals(status)) {
+            // 模拟结果不发布为正式，但成为后续模拟变化的可追溯基线。
+            jdbc.update("""
+                    UPDATE biz_carbon_calculation_batch c
+                    JOIN biz_carbon_recalculation_item i ON i.candidate_calculation_batch_id=c.calculation_batch_id
+                    SET c.publication_status='DIRECT'
+                    WHERE i.recalculation_batch_id=? AND i.status='SUCCEEDED'
+                      AND c.result_nature='DEVELOPMENT_SIMULATION' AND c.publication_status='CANDIDATE'
+                    """, batchId);
             jdbc.update("""
                     UPDATE biz_carbon_recalculation_item SET active_lock_key=NULL
                     WHERE recalculation_batch_id=? AND status='SUCCEEDED'
                     """, batchId);
+        }
+    }
+
+    /** 冻结审批前迁走非合格项；保留项身份、重试次数、父批次及全部责任主体，不能借拆批绕过自审限制。 */
+    private void isolateFailedItems(String batchId, LocalDateTime now) {
+        String recoveryId = id();
+        jdbc.update("""
+                INSERT INTO biz_carbon_recalculation_batch
+                (recalculation_batch_id,batch_key,trigger_reason,organization_boundary,result_nature,
+                 status,scope_frozen,item_count,eligible_item_count,initiated_by,created_at,
+                 parent_recalculation_batch_id)
+                SELECT ?,?,trigger_reason,organization_boundary,result_nature,
+                  'FAILED_RETRYABLE',1,0,0,initiated_by,?,recalculation_batch_id
+                FROM biz_carbon_recalculation_batch WHERE recalculation_batch_id=?
+                """, recoveryId, CarbonCalculationCore.sha256("RECOVERY|" + recoveryId), timestamp(now), batchId);
+        jdbc.update("""
+                INSERT INTO biz_carbon_recalculation_batch_trigger (recalculation_batch_id,trigger_id)
+                SELECT ?,trigger_id FROM biz_carbon_recalculation_batch_trigger WHERE recalculation_batch_id=?
+                """, recoveryId, batchId);
+        jdbc.update("""
+                UPDATE biz_carbon_recalculation_item SET recalculation_batch_id=?
+                WHERE recalculation_batch_id=? AND status IN ('FAILED_RETRYABLE','PENDING','DEAD')
+                """, recoveryId, batchId);
+        refreshBatchCounters(recoveryId);
+        if (countItems(recoveryId, "FAILED_RETRYABLE") + countItems(recoveryId, "PENDING") == 0) {
+            jdbc.update("UPDATE biz_carbon_recalculation_batch SET status='DEAD',completed_at=? WHERE recalculation_batch_id=?",
+                    timestamp(now), recoveryId);
         }
     }
 

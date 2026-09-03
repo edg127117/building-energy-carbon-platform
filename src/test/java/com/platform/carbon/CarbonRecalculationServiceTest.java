@@ -81,7 +81,7 @@ class CarbonRecalculationServiceTest {
                 null, null, "LOCK", LocalDateTime.now(), null);
         when(persistence.claimBatch()).thenReturn(calculating);
         when(repository.listItems("RB001")).thenReturn(List.of(item));
-        when(persistence.startItem("RI001", "RB001")).thenReturn(true);
+        when(persistence.startItem("RI001", "RB001", null)).thenReturn(true);
         doThrow(CarbonErrors.error(409, CarbonErrors.FACTOR_MISSING, "缺少因子"))
                 .when(calculationService).runCandidate(
                         "BLD001", 2026, ResultNature.FORMAL, "OLD001", "recalc:RI001:0");
@@ -90,8 +90,8 @@ class CarbonRecalculationServiceTest {
 
         service.executeOne();
 
-        verify(persistence).failItem(item, CarbonErrors.FACTOR_MISSING, "缺少因子");
-        verify(persistence).finishCalculationPhase("RB001", ResultNature.FORMAL);
+        verify(persistence).failItem(item, CarbonErrors.FACTOR_MISSING, "缺少因子", null);
+        verify(persistence).finishCalculationPhase("RB001", ResultNature.FORMAL, null);
     }
 
     private static RecalculationBatch batch(String status, ResultNature nature,

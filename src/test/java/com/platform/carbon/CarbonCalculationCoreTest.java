@@ -91,6 +91,25 @@ class CarbonCalculationCoreTest {
     }
 
     @Test
+    void denominatorConflictLeavesOnlyThatIntensityUnavailable() {
+        List<SummaryMetric> summaries = core.summarizeWithDenominatorSelections(List.of(
+                        calculated("DIESEL", ScopeType.SCOPE_1, "300"),
+                        calculated("ELECTRICITY", ScopeType.SCOPE_2, "700")),
+                PeriodType.YEAR,
+                CarbonCalculationCore.DenominatorSelection.unavailable("建筑面积版本冲突"),
+                CarbonCalculationCore.DenominatorSelection.available(
+                        denominator(DenominatorType.RESIDENT_POPULATION, "10", "PERSON")));
+
+        assertThat(metric(summaries, "TOTAL_EMISSION").finalValue())
+                .isEqualByComparingTo("1.000000");
+        assertThat(metric(summaries, "AREA_INTENSITY").finalValue()).isNull();
+        assertThat(metric(summaries, "AREA_INTENSITY").unavailableReason())
+                .isEqualTo("建筑面积版本冲突");
+        assertThat(metric(summaries, "POPULATION_INTENSITY").finalValue())
+                .isEqualByComparingTo("100.000000");
+    }
+
+    @Test
     void rejectsDensityOrStandardConditionConversions() {
         assertThatThrownBy(() -> CarbonCalculationCore.convert(
                 BigDecimal.ONE, "M3", "KG"))

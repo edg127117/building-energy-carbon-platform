@@ -71,14 +71,46 @@ class CarbonCalculationRepository {
                 value.createdBy(), timestamp(value.createdAt()));
     }
 
-    int timeoutBatch(String batchId, LocalDateTime now) {
+    int timeoutBatch(String batchId, LocalDateTime now, long slowThresholdMs) {
         return jdbc.update("""
                 UPDATE biz_carbon_calculation_batch
                 SET status='FAILED_TIMEOUT',active_lock_key=NULL,completed_at=?,
+                    duration_ms=GREATEST(0,TIMESTAMPDIFF(MICROSECOND,started_at,?) DIV 1000),
+                    slow_calculation=(TIMESTAMPDIFF(MICROSECOND,started_at,?) DIV 1000>=?),
                     safe_error_code='CARBON_CALCULATION_TIMEOUT',
                     safe_error_message='计算超过截止时间'
                 WHERE calculation_batch_id=? AND status='CALCULATING' AND deadline_at<?
-                """, timestamp(now), batchId, timestamp(now));
+                """, timestamp(now), timestamp(now), timestamp(now), slowThresholdMs, batchId, timestamp(now));
+    }
+
+    /** 已收到数据库超时异常的工作线程已经终止，可以立即释放对应批次的运行锁。 */
+    int timeoutAbortedBatch(String batchId, LocalDateTime now, long slowThresholdMs) {
+        return jdbc.update("""
+                UPDATE biz_carbon_calculation_batch
+                SET status='FAILED_TIMEOUT',active_lock_key=NULL,completed_at=?,
+                    duration_ms=GREATEST(0,TIMESTAMPDIFF(MICROSECOND,started_at,?) DIV 1000),
+                    slow_calculation=(TIMESTAMPDIFF(MICROSECOND,started_at,?) DIV 1000>=?),
+                    safe_error_code='CARBON_CALCULATION_TIMEOUT',
+                    safe_error_message='计算查询超过截止时间'
+                WHERE calculation_batch_id=? AND status='CALCULATING'
+                """, timestamp(now), timestamp(now), timestamp(now), slowThresholdMs, batchId);
+    }
+
+    int timeoutExpiredScope(String buildingId, PeriodType periodType,
+                            Instant periodStart, Instant periodEnd,
+                            ResultNature resultNature, LocalDateTime now, long slowThresholdMs) {
+        return jdbc.update("""
+                UPDATE biz_carbon_calculation_batch
+                SET status='FAILED_TIMEOUT',active_lock_key=NULL,completed_at=?,
+                    duration_ms=GREATEST(0,TIMESTAMPDIFF(MICROSECOND,started_at,?) DIV 1000),
+                    slow_calculation=(TIMESTAMPDIFF(MICROSECOND,started_at,?) DIV 1000>=?),
+                    safe_error_code='CARBON_CALCULATION_TIMEOUT',
+                    safe_error_message='计算超过截止时间'
+                WHERE building_id=? AND period_type=? AND period_start=? AND period_end=?
+                  AND result_nature=? AND status='CALCULATING' AND deadline_at<?
+                """, timestamp(now), timestamp(now), timestamp(now), slowThresholdMs,
+                buildingId, periodType.name(), timestamp(periodStart),
+                timestamp(periodEnd), resultNature.name(), timestamp(now));
     }
 
     void insertItems(String batchId, List<CalculatedItem> values) {
@@ -159,6 +191,7 @@ class CarbonCalculationRepository {
                 SET status=?,active_lock_key=NULL,snapshot_count=?,detail_count=?,
                     slow_calculation=?,duration_ms=?,completed_at=?
                 WHERE calculation_batch_id=? AND status='CALCULATING'
+                  AND deadline_at>CURRENT_TIMESTAMP(3)
                 """, status, snapshots, details, slow, durationMs,
                 timestamp(completedAt), batchId);
     }

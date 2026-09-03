@@ -37,6 +37,7 @@ final class CarbonAcceptanceProcess implements AutoCloseable {
                 "--server.tomcat.threads.min-spare=2", "--server.tomcat.max-connections=64",
                 "--server.tomcat.accept-count=32", "--carbon-management.recalculation-enabled=false",
                 "--carbon-management.recalculation-scan-delay=200ms",
+                "--carbon-management.recalculation-merge-window=20ms",
                 "--carbon-management.recalculation-lease=3s", "--carbon-management.retry-backoff=500ms",
                 "--carbon-management.maximum-batch-items=10", "--carbon-management.maximum-retries=2",
                 "--logging.level.org.springframework.web=ERROR"));
@@ -73,7 +74,11 @@ final class CarbonAcceptanceProcess implements AutoCloseable {
                 .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body))));
     }
     Reply get(String path) throws Exception { return request(HttpRequest.newBuilder(uri(path)).GET()); }
-    Reply step(String action) throws Exception { return post("/__acceptance/step/" + action, Map.of()); }
+    Reply step(String action) throws Exception {
+        // 单步故障注入也遵守配置的归并等待；正常定时调度由生产领取逻辑判断到期。
+        if (action.equals("execute") || action.equals("claim-batch")) Thread.sleep(30);
+        return post("/__acceptance/step/" + action, Map.of());
+    }
     Reply run(String building, int year, String nature, String key) throws Exception {
         return post("/v1/carbon-management/calculations",
                 CarbonAcceptanceFixture.calculation(building, year, nature, key));

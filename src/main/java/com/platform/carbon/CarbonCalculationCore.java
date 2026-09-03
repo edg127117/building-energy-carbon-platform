@@ -100,6 +100,14 @@ public class CarbonCalculationCore {
     public List<SummaryMetric> summarize(List<CalculatedItem> items, PeriodType periodType,
                                          DenominatorVersion area,
                                          DenominatorVersion population) {
+        return summarizeWithDenominatorSelections(items, periodType,
+                DenominatorSelection.available(area), DenominatorSelection.available(population));
+    }
+
+    public List<SummaryMetric> summarizeWithDenominatorSelections(List<CalculatedItem> items,
+                                                                   PeriodType periodType,
+                                                                   DenominatorSelection area,
+                                                                   DenominatorSelection population) {
         BigDecimal scope1 = sum(items.stream().filter(value ->
                 value.factor().scopeType() == ScopeType.SCOPE_1).toList());
         BigDecimal scope2 = sum(items.stream().filter(value ->
@@ -143,14 +151,34 @@ public class CarbonCalculationCore {
     }
 
     private static SummaryMetric intensity(String metric, String dimension, BigDecimal kg,
-                                           DenominatorVersion denominator, String unit,
+                                           DenominatorSelection selection, String unit,
                                            String unavailable) {
+        DenominatorVersion denominator = selection == null ? null : selection.value();
         if (denominator == null) {
-            return metric(metric, dimension, null, null, unit, null, unavailable);
+            String reason = selection == null || selection.unavailableReason() == null
+                    ? unavailable : selection.unavailableReason();
+            return metric(metric, dimension, null, null, unit, null, reason);
         }
         BigDecimal raw = kg.divide(denominator.value(), MC);
         return metric(metric, dimension, raw, raw.setScale(6, RoundingMode.HALF_UP),
                 unit, denominator.denominatorVersionId(), null);
+    }
+
+    /** 年度强度的分母选择；冲突只使对应强度不可用，不能影响已完成的排放量汇总。 */
+    public record DenominatorSelection(DenominatorVersion value, String unavailableReason) {
+        public DenominatorSelection {
+            if (value != null && unavailableReason != null) {
+                throw new IllegalArgumentException("已选分母不能同时保存不可用原因");
+            }
+        }
+
+        public static DenominatorSelection available(DenominatorVersion value) {
+            return new DenominatorSelection(value, null);
+        }
+
+        public static DenominatorSelection unavailable(String reason) {
+            return new DenominatorSelection(null, reason);
+        }
     }
 
     private static SummaryMetric metric(String metric, String dimension, BigDecimal raw,

@@ -153,6 +153,8 @@ class CarbonSoftwareAcceptanceTest {
         evidence("database-timeout", Map.of("response", reply, "metrics", metrics, "configuredTimeoutMs", 2000));
         assertThat(metrics.path("dbActiveNow").asInt()).isZero();
         assertThat(metrics.path("dbPendingNow").asInt()).isZero();
+        assertThat(reply.status()).isEqualTo(504);
+        assertThat(reply.body().path("errorCode").asText()).isEqualTo(CarbonErrors.CALCULATION_TIMEOUT);
         assertThat(reply.elapsedMs()).as("2s deadline with 500ms observation allowance").isLessThan(2500);
     }
 
@@ -160,7 +162,8 @@ class CarbonSoftwareAcceptanceTest {
     void slowInputDoesNotHoldTransactionAndIsInterruptedByDeadline() throws Exception {
         fixture.building("AC_SLOW", 2025, "FORMAL", 12);
         fixture.jdbc.update("UPDATE acceptance_activity_control SET delay_ms=4000");
-        app = new CarbonAcceptanceProcess("slow-input", "--carbon-management.calculation-timeout=2s");
+        app = new CarbonAcceptanceProcess("slow-input", "--carbon-management.calculation-timeout=2s",
+                "--carbon-management.slow-calculation-threshold=1s");
         var result = app.run("AC_SLOW", 2025, "FORMAL", "slow");
         var rows = fixture.jdbc.queryForList("SELECT status,duration_ms,slow_calculation,active_lock_key FROM biz_carbon_calculation_batch");
         evidence("slow-input", Map.of("response", result, "batches", rows,
@@ -169,6 +172,11 @@ class CarbonSoftwareAcceptanceTest {
                 Integer.class)).isZero();
         assertThat(result.status()).isEqualTo(504);
         assertThat(result.elapsedMs()).isLessThan(2500);
+        assertThat(fixture.jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_carbon_calculation_batch
+                WHERE status='FAILED_TIMEOUT' AND duration_ms>=1000
+                  AND slow_calculation=1 AND active_lock_key IS NULL
+                """, Integer.class)).isEqualTo(1);
     }
 
     @Test @Order(7)
@@ -301,7 +309,8 @@ class CarbonSoftwareAcceptanceTest {
         for (int i = 0; i < 50; i++) fixture.change("AC_STORM", "TEST_ORG", 2025, 2025, "ACTIVITY_SNAPSHOT");
         long started = System.nanoTime();
         app.post("/__acceptance/scheduler/true", Map.of());
-        until(() -> countWhere("biz_carbon_dependency_change", "status IN ('PENDING','ANALYZING')") == 0,
+        until(() -> countWhere("biz_carbon_dependency_change", "status IN ('PENDING','ANALYZING')") == 0
+                        && countWhere("biz_carbon_recalculation_batch", "status='COMPLETED'") == 1,
                 Duration.ofSeconds(30));
         app.post("/__acceptance/scheduler/false", Map.of());
         var first = state();
@@ -590,6 +599,95 @@ class CarbonSoftwareAcceptanceTest {
             assertThat(claims).hasSize(4).doesNotHaveDuplicates();
             assertThat(countWhere("biz_carbon_recalculation_batch", "status='CALCULATING'")).isEqualTo(4);
         }
+    }
+
+    @Test @Order(25)
+    void configuredMergeWindowDelaysClaimAndExtendsForCompatibleChanges() throws Exception {
+        app = new CarbonAcceptanceProcess("merge-window", "--carbon-management.recalculation-merge-window=500ms");
+        baseline("AC_WINDOW", 2025, "FORMAL");
+        fixture.change("AC_WINDOW", "TEST_ORG", 2025, 2025, "ACTIVITY_SNAPSHOT");
+        app.step("analyze");
+        app.post("/__acceptance/step/claim-batch", Map.of());
+        assertThat(countWhere("biz_carbon_recalculation_batch", "status='CALCULATING'")).isZero();
+        Thread.sleep(250);
+        fixture.change("AC_WINDOW", "TEST_ORG", 2025, 2025, "ACTIVITY_SNAPSHOT");
+        app.step("analyze");
+        Thread.sleep(300);
+        app.post("/__acceptance/step/claim-batch", Map.of());
+        assertThat(countWhere("biz_carbon_recalculation_batch", "status='CALCULATING'")).isZero();
+        assertThat(count("biz_carbon_recalculation_trigger")).isEqualTo(2);
+        assertThat(count("biz_carbon_recalculation_item")).isEqualTo(1);
+        Thread.sleep(300);
+        app.step("execute");
+        assertThat(countWhere("biz_carbon_recalculation_batch", "status='PENDING_APPROVAL'")).isEqualTo(1);
+        evidence("merge-window", state());
+    }
+
+    @Test @Order(26)
+    void deferredFrozenChangeRecalculatesPublishedSuccessorAfterApproval() throws Exception {
+        app = new CarbonAcceptanceProcess("deferred-successor");
+        baseline("AC_NEXT", 2025, "FORMAL");
+        fixture.change("AC_NEXT", "TEST_ORG", 2025, 2025, "ACTIVITY_SNAPSHOT");
+        app.step("analyze"); app.step("execute");
+        String original = batchId();
+        fixture.jdbc.update("UPDATE acceptance_activity SET quantity=222,snapshot_id=REPLACE(UUID(),'-','')");
+        String change = fixture.change("AC_NEXT", "TEST_ORG", 2025, 2025, "ACTIVITY_SNAPSHOT");
+        app.step("analyze");
+        assertThat(fixture.jdbc.queryForObject("SELECT status FROM biz_carbon_dependency_change WHERE change_id=?",
+                String.class, change)).isEqualTo("PENDING");
+        assertThat(app.post("/v1/carbon-management/recalculations/" + original + "/approve",
+                Map.of("reviewComment", "approve fixed scope"), 9002).status()).isEqualTo(200);
+        String published = text("SELECT calculation_batch_id FROM biz_carbon_calculation_batch WHERE publication_status='PUBLISHED'");
+        app.post("/__acceptance/scheduler/true", Map.of());
+        until(() -> countWhere("biz_carbon_recalculation_batch", "status='PENDING_APPROVAL'") == 1,
+                Duration.ofSeconds(10));
+        app.post("/__acceptance/scheduler/false", Map.of());
+        assertThat(count("biz_carbon_recalculation_batch")).isEqualTo(2);
+        assertThat(fixture.jdbc.queryForObject("""
+                SELECT old_calculation_batch_id FROM biz_carbon_recalculation_item
+                WHERE status='SUCCEEDED'
+                """, String.class)).isEqualTo(published);
+        evidence("deferred-successor", state());
+    }
+
+    @Test @Order(27)
+    void failedItemsRecoverSeparatelyWithoutChangingApprovedScope() throws Exception {
+        app = new CarbonAcceptanceProcess("isolated-recovery");
+        baseline("AC_SPLIT1", 2025, "FORMAL"); baseline("AC_SPLIT2", 2025, "FORMAL");
+        fixture.jdbc.update("UPDATE acceptance_activity_control SET fail_read=1 WHERE building_id='AC_SPLIT2'");
+        fixture.change(null, "TEST_ORG", 2025, 2025, "ACTIVITY_SNAPSHOT");
+        app.step("analyze"); app.step("execute");
+        String original = text("SELECT recalculation_batch_id FROM biz_carbon_recalculation_batch WHERE status='PENDING_APPROVAL'");
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_recalculation_item WHERE recalculation_batch_id=?",
+                Integer.class, original)).isEqualTo(1);
+        assertThat(app.post("/v1/carbon-management/recalculations/" + original + "/approve",
+                Map.of("reviewComment", "approve eligible building only"), 9002).status()).isEqualTo(200);
+        fixture.jdbc.update("UPDATE acceptance_activity_control SET fail_read=0");
+        app.post("/__acceptance/scheduler/true", Map.of());
+        until(() -> countWhere("biz_carbon_recalculation_batch", "status='PENDING_APPROVAL'") == 1,
+                Duration.ofSeconds(10));
+        app.post("/__acceptance/scheduler/false", Map.of());
+        assertThat(fixture.jdbc.queryForObject("""
+                SELECT parent_recalculation_batch_id FROM biz_carbon_recalculation_batch
+                WHERE status='PENDING_APPROVAL'
+                """, String.class)).isEqualTo(original);
+        assertThat(fixture.jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_recalculation_item WHERE recalculation_batch_id=?",
+                Integer.class, original)).isEqualTo(1);
+        evidence("isolated-recovery", state());
+    }
+
+    @Test @Order(28)
+    void manualTriggerKeepsRequestedResultNatureBoundary() throws Exception {
+        app = new CarbonAcceptanceProcess("manual-nature");
+        baseline("AC_NATURE", 2025, "FORMAL");
+        assertThat(app.run("AC_NATURE", 2025, "DEVELOPMENT_SIMULATION", "simulation").status()).isEqualTo(200);
+        assertThat(app.post("/v1/carbon-management/recalculations/manual", Map.of(
+                "buildingId", "AC_NATURE", "accountingYear", 2025, "resultNature", "FORMAL",
+                "reason", "verify explicit nature boundary", "organizationBoundary", "TEST_ORG")).status()).isEqualTo(200);
+        app.step("analyze"); app.step("execute");
+        assertThat(count("biz_carbon_recalculation_item")).isEqualTo(1);
+        assertThat(text("SELECT result_nature FROM biz_carbon_recalculation_batch")).isEqualTo("FORMAL");
+        evidence("manual-nature", state());
     }
 
     private void baseline(String building, int year, String nature) throws Exception {

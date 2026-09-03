@@ -12,6 +12,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CarbonManagementMigrationContractTest {
 
     @Test
+    void recoveryMigrationOnlyAddsLeasesMergeBoundaryAndRecoveryRelationship() throws IOException {
+        String migration = Files.readString(Path.of("src", "env", "init",
+                "V40__mysql_carbon_recalculation_recovery.sql"));
+        assertThat(migration).contains("lease_token", "lease_until", "next_attempt_at",
+                "attempt_count", "merge_key", "merge_ready_at", "parent_recalculation_batch_id");
+        assertThat(migration).doesNotContain("INSERT INTO", "DELETE FROM", "DROP TABLE");
+    }
+
+    @Test
     void definesVersionedRulesResultsAndPersistentRecalculationWithoutBusinessSeeds()
             throws IOException {
         String migration = Files.readString(Path.of("src", "env", "init",

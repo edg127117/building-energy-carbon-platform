@@ -194,6 +194,7 @@ class Control {
     private final CarbonAcceptanceDataSource source;
     private final CarbonCalculationService calculation;
     private final Map<String, RecalculationItem> capturedItems = new ConcurrentHashMap<>();
+    private final Map<String, String> capturedTokens = new ConcurrentHashMap<>();
     private final ScheduledExecutorService sampler = Executors.newSingleThreadScheduledExecutor();
     private final AtomicInteger maxHttpBusy = new AtomicInteger();
     private final AtomicInteger maxDbActive = new AtomicInteger();
@@ -267,22 +268,25 @@ class Control {
     boolean start(@PathVariable String itemId) {
         RecalculationItem item = repository.findItem(itemId);
         capturedItems.put(itemId, item);
-        return persistence.startItem(itemId, item.batchId());
+        String token = repository.findBatch(item.batchId()).leaseToken();
+        capturedTokens.put(itemId, token);
+        return persistence.startItem(itemId, item.batchId(), token);
     }
 
     @PostMapping("/item/{itemId}/fail")
     void fail(@PathVariable String itemId) {
-        persistence.failItem(capturedItems.get(itemId), "ACCEPTANCE_STALE_WORKER", "stale worker probe");
+        persistence.failItem(capturedItems.get(itemId), "ACCEPTANCE_STALE_WORKER", "stale worker probe",
+                capturedTokens.get(itemId));
     }
 
     @PostMapping("/item/{itemId}/compute")
     Map<String, String> compute(@PathVariable String itemId) {
         RecalculationItem item = repository.findItem(itemId);
-        persistence.startItem(itemId, item.batchId());
         var batch = repository.findBatch(item.batchId());
+        persistence.startItem(itemId, item.batchId(), batch.leaseToken());
         var candidate = calculation.runCandidate(item.buildingId(), item.accountingYear(),
                 batch.resultNature(), item.oldCalculationBatchId(), "recalc:" + itemId + ':' + item.retryCount());
-        persistence.succeedItem(item, candidate.batch().batchId());
+        persistence.succeedItem(item, candidate.batch().batchId(), batch.leaseToken());
         return Map.of("candidateId", candidate.batch().batchId());
     }
 

@@ -53,12 +53,14 @@ final class CarbonAcceptanceFixture implements AutoCloseable {
         }
         assertThat(jdbc.queryForObject("SELECT purpose FROM acceptance_schema_marker", String.class))
                 .isEqualTo("DISPOSABLE_CARBON_ACCEPTANCE_ONLY");
+        Flyway.configure().dataSource(source).locations("filesystem:src/env/init").load().migrate();
         assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history",
-                Integer.class)).isEqualTo(39);
+                Integer.class)).isEqualTo(40);
     }
 
     void reset() {
         // 仅清理上方空库初始化并带专用标记的测试库，按外键顺序列举表，不禁用约束。
+        jdbc.update("UPDATE biz_carbon_recalculation_batch SET parent_recalculation_batch_id=NULL");
         for (String table : List.of("biz_carbon_recalculation_batch_trigger", "biz_carbon_result_relation",
                 "biz_carbon_recalculation_item", "biz_carbon_recalculation_batch",
                 "biz_carbon_recalculation_trigger", "biz_carbon_dependency_change",
