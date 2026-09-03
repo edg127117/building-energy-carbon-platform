@@ -1,0 +1,2 @@
+.bec-flow { display: grid; gap: var(--bec-space-group); min-width: 0; min-height: 0; }
+.bec-actions { display: flex; align-items: center; gap: var(--bec-space-tight); }

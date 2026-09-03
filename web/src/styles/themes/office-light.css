@@ -1,0 +1,30 @@
+[data-theme='office-light'] {
+  color-scheme: light;
+  --bec-color-page: var(--bec-ref-bg);
+  --bec-color-surface: var(--bec-ref-white);
+  --bec-color-surface-secondary: var(--bec-ref-subtle);
+  --bec-color-text-primary: var(--bec-ref-ink);
+  --bec-color-text-secondary: var(--bec-ref-muted);
+  --bec-color-text-disabled: var(--bec-ref-disabled);
+  --bec-color-border: var(--bec-ref-border);
+  --bec-color-divider: var(--bec-ref-divider);
+  --bec-color-brand-primary: var(--bec-ref-blue);
+  --bec-color-action-primary: var(--bec-ref-blue);
+  --bec-color-action-hover: var(--bec-ref-blue-hover);
+  --bec-color-action-active: var(--bec-ref-blue-active);
+  --bec-color-action-soft: var(--bec-ref-blue-soft);
+  --bec-color-on-action: var(--bec-ref-white);
+  --bec-color-success: var(--bec-ref-green);
+  --bec-color-warning: var(--bec-ref-amber);
+  --bec-color-error: var(--bec-ref-red);
+  --bec-color-mask: var(--bec-ref-mask);
+  --bec-chart-series-1: var(--bec-ref-blue);
+  --bec-chart-series-2: var(--bec-ref-muted);
+  --bec-chart-series-3: var(--bec-ref-blue-hover);
+  --bec-chart-series-4: var(--bec-ref-disabled);
+  --bec-shadow-none: var(--bec-ref-shadow-none);
+  --bec-shadow-card: var(--bec-ref-shadow-card);
+  --bec-shadow-raised: var(--bec-ref-shadow-raised);
+  --bec-shadow-overlay: var(--bec-ref-shadow-overlay);
+  --bec-shadow-focus: var(--bec-ref-shadow-focus);
+}
