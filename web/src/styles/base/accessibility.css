@@ -1,0 +1,4 @@
+:focus-visible { outline: var(--bec-focus-width) solid var(--bec-color-action-primary); outline-offset: var(--bec-focus-offset); }
+::selection { background: var(--bec-color-action-soft); color: var(--bec-color-text-primary); }
+input, textarea { caret-color: var(--bec-color-action-primary); }
+* { scrollbar-color: var(--bec-color-border) var(--bec-color-surface-secondary); }

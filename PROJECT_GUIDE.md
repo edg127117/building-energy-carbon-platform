@@ -85,6 +85,26 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务。多数据源必须使用明确 Bean 和 `Qualifier`，不得跨数据源执行 SQL。
 
+### 新前端入口与目录边界
+
+新前端与继承页面保留在同一 `web` 工程，使用独立入口隔离旧全局样式；`index.html` 继续承载旧页面，`platform.html` 承载新前端。进入 `web` 后运行 `npm ci`、`npm run dev:platform` 可预览新骨架；办公端为 `platform.html#/office`，监控端为 `platform.html#/monitor/monitoring`。这是无业务数据、未接入鉴权的骨架预览入口，不是受保护业务入口。
+
+`npm run build` 同时构建旧入口到 `web/dist`、新入口到 `web/dist/platform`；部署整个 `dist` 时新地址为 `/platform/platform.html#/office`，单独托管新产物时为 `/platform.html#/office`。哈希路由刷新不需要服务端业务路由回退；现有生产部署默认入口不变。
+
+| 目录 | 职责与边界 |
+|---|---|
+| `web/src/app` | 应用装配、路由、办公/监控两套外壳和全局服务；不实现业务规则 |
+| `web/src/modules/<模块>` | 页面放 `pages`、模块组件放 `components`；接入时请求放 `api`，编排放 `composables/stores`，模型放 `models`，文案放 `locales`；模块之间只通过 `public.ts` |
+| `web/src/shared` | 无业务归属的组件、图表、组合函数、模型与工具；基础控件优先从 `shared/ui` 复用 Element Plus |
+| `web/src/infrastructure`、`generated` | 通用传输能力与生成契约边界；不存放页面或领域计算 |
+| `web/src/locales`、`styles` | 中文公共文案、设计变量、主题和组件库映射；模块文案由公共入口汇入 |
+
+监控端使用统一 1920×1080 逻辑画布，等比居中缩放；弹窗留在画布坐标系，图表提示由图表内部绘制。五类大屏通过 `modules/large-screen/registry/screens.ts` 同时生成路由与切换导航，分组和顺序未定时保持未配置，不实现自动轮播。图表统一从 `shared/charts` 获取主题、尺寸监听和释放行为；页面只提供展示数据与配置。
+
+目录依赖、统一文案和样式变量规则由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束；`npm run lint` 包含此检查。相似 UI 第三次出现时优先抽象复用，不复制控件；自动检查不能替代语义和复用审查。设计来源见[已确认实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，交付状态与候选尺寸见 `PROJECT_STATUS.md`。
+
+浏览器骨架检查入口为 `node web/scripts/verify-platform.mjs`：先在仓库根目录安装已有 Playwright 依赖、完成前端构建，再运行脚本；Windows 可在当前终端设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装 Edge，其他环境使用已安装的 Playwright Chromium。脚本只启动本机临时静态服务，截图和结果写入忽略目录 `.codex-backups/frontend-foundation`，不连接业务后端。
+
 ## 5. 目标数据链路
 
 ```text
