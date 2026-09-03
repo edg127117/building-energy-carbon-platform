@@ -1,0 +1,37 @@
+:root {
+  --bec-font-family-body: var(--bec-ref-family-body);
+  --bec-font-family-number: var(--bec-ref-family-number);
+  --bec-font-size-body: var(--bec-ref-font-14);
+  --bec-font-size-small: var(--bec-ref-font-14);
+  --bec-font-size-title: var(--bec-ref-font-16);
+  --bec-font-size-system: var(--bec-ref-font-24);
+  --bec-font-size-navigation: var(--bec-ref-font-20);
+  --bec-line-height: var(--bec-ref-line-height);
+  --bec-font-weight-normal: var(--bec-ref-weight-normal);
+  --bec-font-weight-heading: var(--bec-ref-weight-heading);
+  --bec-text-measure: var(--bec-ref-measure);
+  --bec-icon-small: var(--bec-ref-icon-16);
+  --bec-icon-medium: var(--bec-ref-icon-24);
+  --bec-icon-large: var(--bec-ref-icon-48);
+  --bec-space-tight: var(--bec-ref-space-8);
+  --bec-space-group: var(--bec-ref-space-16);
+  --bec-space-section: var(--bec-ref-space-24);
+  --bec-space-page: var(--bec-ref-space-24);
+  --bec-radius-control: var(--bec-ref-radius-2);
+  --bec-radius-card: var(--bec-ref-radius-4);
+  --bec-radius-dialog: var(--bec-ref-radius-8);
+  --bec-radius-tag: var(--bec-ref-radius-pill);
+  --bec-border-width: var(--bec-ref-border-width);
+  --bec-focus-width: var(--bec-ref-focus-width);
+  --bec-focus-offset: var(--bec-ref-space-4);
+  /* 监控端候选映射：18/20/44 为项目适配，需真实显示设备和观看距离复核后冻结。 */
+  --bec-monitor-font-title: var(--bec-ref-font-40);
+  --bec-monitor-font-panel: var(--bec-ref-font-28);
+  --bec-monitor-font-number: var(--bec-ref-font-44);
+  --bec-monitor-font-body: var(--bec-ref-font-20);
+  --bec-monitor-font-small: var(--bec-ref-font-18);
+  --bec-monitor-header-inline: var(--bec-ref-space-32);
+  --bec-monitor-padding: var(--bec-ref-space-16);
+  --bec-monitor-gap: var(--bec-ref-space-16);
+  --bec-chart-font-size: var(--bec-font-size-body);
+}

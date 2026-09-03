@@ -1,0 +1,61 @@
+:root, [data-page-mode='monitor'] {
+  --el-font-family: var(--bec-font-family-body);
+  --el-font-size-base: var(--bec-font-size-body);
+  --el-font-size-small: var(--bec-font-size-small);
+  --el-font-size-extra-small: var(--bec-ref-font-12);
+  --el-font-size-medium: var(--bec-ref-font-16);
+  --el-font-size-large: var(--bec-ref-font-20);
+  --el-font-size-extra-large: var(--bec-ref-font-24);
+  --el-color-primary: var(--bec-color-action-primary);
+  --el-color-primary-dark-2: var(--bec-color-action-active);
+  --el-color-primary-light-3: var(--bec-color-action-hover);
+  --el-color-primary-light-5: var(--bec-color-action-soft);
+  --el-color-primary-light-7: var(--bec-color-action-soft);
+  --el-color-primary-light-8: var(--bec-color-action-soft);
+  --el-color-primary-light-9: var(--bec-color-action-soft);
+  --el-color-white: var(--bec-color-surface);
+  --el-color-black: var(--bec-color-text-primary);
+  --el-color-success: var(--bec-color-success);
+  --el-color-warning: var(--bec-color-warning);
+  --el-color-danger: var(--bec-color-error);
+  --el-color-error: var(--bec-color-error);
+  --el-color-info: var(--bec-color-text-secondary);
+  --el-text-color-primary: var(--bec-color-text-primary);
+  --el-text-color-regular: var(--bec-color-text-secondary);
+  --el-text-color-secondary: var(--bec-color-text-secondary);
+  --el-text-color-placeholder: var(--bec-color-text-secondary);
+  --el-text-color-disabled: var(--bec-color-text-disabled);
+  --el-bg-color: var(--bec-color-surface);
+  --el-bg-color-page: var(--bec-color-page);
+  --el-bg-color-overlay: var(--bec-color-surface);
+  --el-fill-color-blank: var(--bec-color-surface);
+  --el-fill-color-light: var(--bec-color-surface-secondary);
+  --el-fill-color: var(--bec-color-surface-secondary);
+  --el-fill-color-lighter: var(--bec-color-surface-secondary);
+  --el-fill-color-extra-light: var(--bec-color-surface-secondary);
+  --el-fill-color-dark: var(--bec-color-divider);
+  --el-fill-color-darker: var(--bec-color-border);
+  --el-border-color: var(--bec-color-border);
+  --el-border-color-light: var(--bec-color-divider);
+  --el-border-color-lighter: var(--bec-color-divider);
+  --el-border-color-extra-light: var(--bec-color-divider);
+  --el-border-color-dark: var(--bec-color-border);
+  --el-border-color-darker: var(--bec-color-border);
+  --el-border-width: var(--bec-border-width);
+  --el-border-radius-base: var(--bec-radius-control);
+  --el-border-radius-small: var(--bec-radius-control);
+  --el-border-radius-round: var(--bec-radius-tag);
+  --el-box-shadow: var(--bec-shadow-raised);
+  --el-box-shadow-light: var(--bec-shadow-card);
+  --el-box-shadow-lighter: var(--bec-shadow-card);
+  --el-box-shadow-dark: var(--bec-shadow-overlay);
+  --el-mask-color: var(--bec-color-mask);
+  --el-component-size: var(--bec-control-height);
+  --el-component-size-small: var(--bec-ref-space-24);
+  --el-component-size-large: var(--bec-ref-space-40);
+}
+.el-dialog { --el-dialog-border-radius: var(--bec-radius-dialog); --el-dialog-padding-primary: var(--bec-panel-padding); --el-dialog-title-font-size: var(--bec-font-size-title); --el-dialog-content-font-size: var(--bec-font-size-body); }
+.el-card { --el-card-border-radius: var(--bec-radius-card); --el-card-padding: var(--bec-panel-padding); }
+.el-tag { --el-tag-border-radius: var(--bec-radius-tag); --el-tag-font-size: var(--bec-font-size-body); }
+.el-alert { --el-alert-title-font-size: var(--bec-font-size-body); --el-alert-title-with-description-font-size: var(--bec-font-size-title); --el-alert-description-font-size: var(--bec-font-size-small); --el-alert-padding: var(--bec-space-tight) var(--bec-panel-padding); }
+[data-page-mode='monitor'] .el-alert { --el-alert-title-with-description-font-size: var(--bec-monitor-font-body); }
