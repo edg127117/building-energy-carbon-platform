@@ -142,7 +142,7 @@ class CarbonUpstreamIntegrationAcceptanceTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("42");
+                """, String.class)).isEqualTo("43");
         assertThat(jdbc.queryForObject(
                 "SELECT COUNT(*) FROM building WHERE building_id=?", Integer.class, BUILDING))
                 .as("本用例要求新建一次性 MySQL，不能复用旧验收数据")

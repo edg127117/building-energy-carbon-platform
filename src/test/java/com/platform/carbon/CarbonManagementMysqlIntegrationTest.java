@@ -43,7 +43,7 @@ class CarbonManagementMysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("42");
+                """, String.class)).isEqualTo("43");
         assertThat(jdbc.queryForObject("""
                 SELECT IS_NULLABLE FROM information_schema.columns
                 WHERE table_schema=DATABASE() AND table_name='biz_carbon_calculation_batch'
