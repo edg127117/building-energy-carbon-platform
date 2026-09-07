@@ -55,7 +55,7 @@ final class CarbonAcceptanceFixture implements AutoCloseable {
                 .isEqualTo("DISPOSABLE_CARBON_ACCEPTANCE_ONLY");
         Flyway.configure().dataSource(source).locations("filesystem:src/env/init").load().migrate();
         assertThat(jdbc.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history",
-                Integer.class)).isEqualTo(41);
+                Integer.class)).isEqualTo(42);
     }
 
     void reset() {

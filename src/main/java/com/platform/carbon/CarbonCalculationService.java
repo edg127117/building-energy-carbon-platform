@@ -7,6 +7,8 @@ import com.platform.audit.TraceContext;
 import com.platform.carbon.CarbonModels.*;
 import com.platform.carbon.CarbonCalculationCore.DenominatorSelection;
 import com.platform.carbon.api.CarbonContracts.RunCalculationRequest;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platform.framework.exception.BusinessException;
 import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
@@ -22,6 +24,9 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Supplier;
@@ -47,6 +52,7 @@ public class CarbonCalculationService {
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties auditProperties;
     private final Semaphore inFlightCalculations;
+    private final Semaphore resultWriter = new Semaphore(2, true);
 
     public CarbonCalculationService(CarbonAuthorization authorization,
                                     CarbonActivityInputPort activityInputPort,
@@ -108,6 +114,16 @@ public class CarbonCalculationService {
         return repository.findCurrentFormal(buildingId, PeriodType.YEAR,
                 LocalDate.of(year, 1, 1).atStartOfDay(zone).toInstant(),
                 LocalDate.of(year + 1, 1, 1).atStartOfDay(zone).toInstant());
+    }
+
+    /** 列表不装载整批证据；按所属建筑授权后读取单条固定证据，不查询当前专业规则。 */
+    public JsonNode evidence(long userId, Collection<String> roles, String batchId, String itemId) {
+        CalculationBatch batch = repository.findBatch(text(batchId, 32, "计算批次标识无效"));
+        if (batch == null) throw error(404, NOT_FOUND, "碳计算批次不存在");
+        authorization.requireReader(userId, roles, batch.buildingId());
+        String[] stored = repository.itemEvidence(batch.batchId(), text(itemId, 32, "计算明细标识无效"));
+        if (stored == null) throw error(404, NOT_FOUND, "碳计算明细不存在");
+        return CarbonEvidence.stored(stored[0], stored[1], stored.length > 2 ? stored[2] : null);
     }
 
     private CalculationDetail execute(long actorId, String buildingId, PeriodType periodType,
@@ -197,8 +213,8 @@ public class CarbonCalculationService {
             boolean slow = duration >= properties.getSlowCalculationThreshold().toMillis();
             bounded(deadline, () -> {
                 try (CarbonCalculationDeadline.Scope ignored = deadline.bind()) {
-                    persistence.complete(batchId, result,
-                            result.items().size() + result.failures().size(), slow, duration, completed);
+                    persistResult(deadline, () -> persistence.complete(batchId, result,
+                            result.items().size() + result.failures().size(), slow, duration, completed));
                     return null;
                 }
             });
@@ -261,6 +277,10 @@ public class CarbonCalculationService {
         List<CalculatedItem> items = new ArrayList<>();
         List<CalculationFailure> failures = new ArrayList<>();
         List<String> incomplete = new ArrayList<>();
+        // 仅在本次计算内复用完全相同的规则查询，避免同周期多测点反复占用数据库连接。
+        record RuleWindow(String code, LocalDateTime start, LocalDateTime end) { }
+        Map<RuleWindow, List<FactorVersion>> candidates = new HashMap<>();
+        Map<RuleWindow, GwpVersion> gwpValues = new HashMap<>();
         for (ActivitySegment activity : activities) {
             deadline.requireRemaining();
             validateActivity(batch, activity);
@@ -280,10 +300,13 @@ public class CarbonCalculationService {
                 boolean locked = lockedReport != null && "ELECTRICITY".equals(activity.energyItemCode());
                 FactorMatch match = locked ? core.matchLockedElectricity(activity, lockedElectricity)
                         : core.match(activity, buildingRegion, batch.resultNature(),
-                            read(deadline, () -> ruleRepository.findCandidateFactors(
-                                    activity.energyItemCode(), start, end)));
-                GwpVersion gwp = locked ? lockedGwp(lockedReport, match.factor(), deadline)
-                        : gwp(match.factor(), batch.resultNature(), start, end, deadline);
+                            candidates.computeIfAbsent(new RuleWindow(activity.energyItemCode(), start, end),
+                                    key -> read(deadline, () -> ruleRepository.findCandidateFactors(
+                                            key.code(), key.start(), key.end()))));
+                GwpVersion gwp = gwpValues.computeIfAbsent(
+                        new RuleWindow(match.factor().factorVersionId(), start, end),
+                        key -> locked ? lockedGwp(lockedReport, match.factor(), deadline)
+                                : gwp(match.factor(), batch.resultNature(), start, end, deadline));
                 items.add(core.calculate(activity, match, gwp));
             } catch (BusinessException exception) {
                 if (batch.resultNature() == ResultNature.FORMAL) throw exception;
@@ -308,8 +331,70 @@ public class CarbonCalculationService {
         }
         List<SummaryMetric> summaries = core.summarizeWithDenominatorSelections(
                 items, batch.periodType(), area, population);
-        return new CalculationResult(items, failures, summaries,
-                incomplete.isEmpty(), incomplete);
+        ObjectNode shared = CarbonEvidence.object();
+        List<CalculatedItem> traced = captureEvidence(items, batch, area, population, deadline, shared);
+        return new CalculationResult(traced, failures, summaries,
+                incomplete.isEmpty(), incomplete, CarbonEvidence.canonical(shared));
+    }
+
+    /** 大结果写入在借连接前有界排队，避免并发整批写入占满连接池，阻塞查询和失败恢复。 */
+    private void persistResult(CarbonCalculationDeadline deadline, Runnable operation) {
+        boolean acquired = false;
+        try {
+            acquired = resultWriter.tryAcquire(deadline.remaining().toNanos(), TimeUnit.NANOSECONDS);
+            if (!acquired) throw CarbonCalculationDeadline.timeout();
+            deadline.requireRemaining();
+            operation.run();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw CarbonCalculationDeadline.timeout();
+        } finally {
+            if (acquired) resultWriter.release();
+        }
+    }
+
+    /** 在结果落库前固定全部解释依据；按版本缓存，避免同一年度逐段重复查规则。 */
+    private List<CalculatedItem> captureEvidence(List<CalculatedItem> items, CalculationBatch batch,
+                                                DenominatorSelection area, DenominatorSelection population,
+                                                CarbonCalculationDeadline deadline, ObjectNode shared) {
+        Map<String, JsonNode> sources = new HashMap<>();
+        Map<String, JsonNode> formulas = new HashMap<>();
+        JsonNode rounding = CarbonEvidence.tree(read(deadline,
+                () -> ruleRepository.roundingEvidence(batch.roundingPolicyVersionId())));
+        List<CalculatedItem> result = new ArrayList<>();
+        for (CalculatedItem item : items) {
+            deadline.requireRemaining();
+            ObjectNode trace = (ObjectNode) CarbonEvidence.parse(item.evidenceJson());
+            var ids = new LinkedHashSet<String>();
+            ids.add(item.factor().sourceVersionId());
+            item.factor().components().forEach(component -> ids.add(component.sourceVersionId()));
+            var sourceValues = trace.putArray("factorSources");
+            ids.stream().sorted().forEach(id -> sourceValues.add(sources.computeIfAbsent(id,
+                    key -> CarbonEvidence.tree(read(deadline, () -> ruleRepository.findSourceVersion(key))))));
+            trace.set("formula", formulas.computeIfAbsent(item.formulaVersionId(), id ->
+                    CarbonEvidence.tree(read(deadline, () -> ruleRepository.formulaEvidence(id)))));
+            trace.set("roundingPolicy", rounding);
+            trace.set("areaDenominator", CarbonEvidence.tree(area));
+            trace.set("populationDenominator", CarbonEvidence.tree(population));
+            ObjectNode context = trace.putObject("calculation");
+            context.put("batchId", batch.batchId());
+            context.put("requestHash", batch.requestHash());
+            context.put("idempotencyKey", batch.idempotencyKey());
+            context.put("createdBy", batch.createdBy());
+            context.put("createdAt", batch.createdAt().toString());
+            context.put("startedAt", batch.startedAt().toString());
+            context.put("resultNature", batch.resultNature().name());
+            context.put("periodType", batch.periodType().name());
+            context.put("timezoneId", batch.timezoneId());
+            context.put("supersedesBatchId", batch.supersedesBatchId());
+            context.put("roundingPolicyVersionId", batch.roundingPolicyVersionId());
+            String json = CarbonEvidence.canonical(trace);
+            result.add(new CalculatedItem(item.activity(), item.factor(), item.convertedActivity(),
+                    item.formulaVersionId(), item.gwpVersionId(), item.exactEmissionKgCo2e(),
+                    item.persistedEmissionKgCo2e(), item.matchReason(), CarbonEvidence.compact(trace, shared),
+                    CarbonCalculationCore.sha256(json)));
+        }
+        return List.copyOf(result);
     }
 
     private DenominatorSelection denominator(String buildingId, DenominatorType type,
@@ -519,7 +604,9 @@ public class CarbonCalculationService {
         if (!batch.buildingId().equals(value.buildingId())
                 || value.startInclusive().isBefore(batch.periodStart())
                 || value.endExclusive().isAfter(batch.periodEnd())
-                || value.periodType() != batch.periodType()
+                || value.periodType() == null
+                || (batch.periodType() == PeriodType.MONTH && value.periodType() != PeriodType.MONTH)
+                || (batch.periodType() == PeriodType.QUARTER && value.periodType() == PeriodType.YEAR)
                 || !value.timezoneId().equals(batch.timezoneId())
                 || !value.endExclusive().isAfter(value.startInclusive())
                 || value.quantity() == null || value.quantity().signum() < 0) {

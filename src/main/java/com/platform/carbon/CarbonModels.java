@@ -1,5 +1,6 @@
 package com.platform.carbon;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -33,7 +34,25 @@ public final class CarbonModels {
             Instant startInclusive, Instant endExclusive, String timezoneId,
             String energyItemCode, BigDecimal quantity, String unitCode,
             String lockStatus, String completeness, ResultNature resultNature,
-            String evidenceHash) {
+            String evidenceHash, JsonNode traceEvidence) {
+        public ActivitySegment {
+            traceEvidence = traceEvidence == null ? null : traceEvidence.deepCopy();
+        }
+
+        /** 兼容不提供结构化追溯的既有输入；结果会显式标记为部分证据。 */
+        public ActivitySegment(String snapshotId, String buildingId, PeriodType periodType,
+                               Instant startInclusive, Instant endExclusive, String timezoneId,
+                               String energyItemCode, BigDecimal quantity, String unitCode,
+                               String lockStatus, String completeness, ResultNature resultNature,
+                               String evidenceHash) {
+            this(snapshotId, buildingId, periodType, startInclusive, endExclusive, timezoneId,
+                    energyItemCode, quantity, unitCode, lockStatus, completeness, resultNature,
+                    evidenceHash, null);
+        }
+
+        @Override public JsonNode traceEvidence() {
+            return traceEvidence == null ? null : traceEvidence.deepCopy();
+        }
     }
 
     public record FactorSourceVersion(
@@ -78,7 +97,7 @@ public final class CarbonModels {
     }
 
     public record FactorMatch(FactorVersion factor, BigDecimal convertedActivity,
-                              String matchReason) {
+                              String matchReason, JsonNode selectionEvidence) {
     }
 
     public record GwpVersion(
@@ -107,7 +126,7 @@ public final class CarbonModels {
     public record CalculationResult(
             List<CalculatedItem> items, List<CalculationFailure> failures,
             List<SummaryMetric> summaries, boolean complete,
-            List<String> incompleteReasons) {
+            List<String> incompleteReasons, String sharedEvidenceJson) {
         public CalculationResult {
             items = List.copyOf(items);
             failures = List.copyOf(failures);
