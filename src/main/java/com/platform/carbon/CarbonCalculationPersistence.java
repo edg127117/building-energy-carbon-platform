@@ -28,6 +28,7 @@ class CarbonCalculationPersistence {
     void complete(String batchId, CalculationResult result, int snapshotCount,
                   boolean slow, long durationMs, LocalDateTime completedAt) {
         write(() -> {
+            repository.saveSharedEvidence(batchId, result.sharedEvidenceJson());
             repository.insertItems(batchId, result.items());
             repository.insertFailures(batchId, result.failures());
             repository.insertSummaries(batchId, result.summaries());

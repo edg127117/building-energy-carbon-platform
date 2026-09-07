@@ -185,6 +185,16 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md) |
 | 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) |
 
+### 碳结果追溯入口
+
+碳结果明细的 `evidenceUrl` 指向 `GET /v1/carbon-management/calculations/{batchId}/items/{itemId}/evidence`（相对 API 路由）。该入口先校验批次所属建筑权限，再按批次与明细共同定位保存的证据；普通列表不装载整批证据 JSON。
+
+新证据使用 `schemaVersion=1`：`upstream.sources` 固定原封账快照及其活动水位、质量、例外和原始计算证据，`upstream.summary` 固定计量边界汇总，另保存关系/汇总策略版本、因子组合及全部参数来源、匹配优先级、单位换算、公式、GWP、舍入和分母依据。小数以十进制字符串保存；查询校验规范化 JSON 摘要，不重新匹配当前规则。历史未保存完整证据的记录返回 `LEGACY_PARTIAL` 和 `originalEvidence`；未提供结构化上游证据的输入标记为 `UPSTREAM_PARTIAL`，不补造历史事实。
+
+当前能源服务仅发布月度封账，适配器据此向月/季/年碳计算提供原始月度段，逐段匹配因子并汇总，不使用年度当前投影或按比例拆分活动量。
+
+V42 在计算批次保存按内容摘要归并的共享证据，明细保留活动事实和共享引用；两者在同一短事务提交。追溯接口重建完整明细后校验原始摘要，缺失引用或内容被改动均拒绝返回。历史批次不回填；相同规则查询仅在单次计算、条件完全相同时复用。本进程结果写入最多两路并发，借连接前的等待消耗原请求截止预算。
+
 ## 9. 更新规则
 
 - 稳定定位、模块边界、数据源职责或核心链路变化时更新本文件。

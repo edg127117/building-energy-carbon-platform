@@ -9,6 +9,7 @@ import java.math.BigDecimal;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 在显式隔离的 MySQL 与真实 HTTP 链验证录入、审核、计算及报告因子锁定。 */
 @EnabledIfEnvironmentVariable(named = "CARBON_ACCEPTANCE_URL", matches = ".+")
@@ -101,6 +102,16 @@ class ElectricityFactorMysqlAcceptanceTest {
         JsonNode report = ok(app.run("AC_ELECTRICITY", 2023, "FORMAL", "initial"));
         String oldBatch = report.path("calculationBatchId").asText();
         String oldFactor = national.path("factorVersionId").asText();
+        String evidenceUrl = report.path("items").get(0).path("evidenceUrl").asText();
+        JsonNode originalTrace = ok(app.get(evidenceUrl)).deepCopy();
+        assertThat(originalTrace.at("/factor/factorVersionId").asText()).isEqualTo(oldFactor);
+        assertThat(originalTrace.at("/factor/components/0/value").asText()).isEqualTo("0.5568");
+        assertThat(originalTrace.at("/factorSources/0/sourceVersionId").asText())
+                .isEqualTo(national.path("sourceVersionId").asText());
+        assertThat(originalTrace.at("/gwp/value").asText()).isEqualTo("1");
+        assertThat(originalTrace.path("rawKgCO2e").asText()).startsWith("55.68");
+        assertThat(originalTrace.at("/calculation/requestHash").asText())
+                .isEqualTo(report.path("requestHash").asText()).hasSize(64);
         assertThat(fixture.jdbc.queryForObject("""
                 SELECT raw_emission_kg_co2e FROM biz_carbon_calculation_item WHERE calculation_batch_id=?
                 """, BigDecimal.class, oldBatch)).isEqualByComparingTo("55.68");
@@ -143,11 +154,54 @@ class ElectricityFactorMysqlAcceptanceTest {
         assertThat(fixture.jdbc.queryForObject("""
                 SELECT publication_status FROM biz_carbon_calculation_batch WHERE calculation_batch_id=?
                 """, String.class, candidate)).isEqualTo("PUBLISHED");
+        assertThat(ok(app.get(evidenceUrl))).isEqualTo(originalTrace);
     }
 
     private JsonNode imported(String code, String nature) throws Exception {
         return ok(app.post(API + "/electricity-factor-catalog/" + code + "/import",
                 Map.of("usageNature", nature)));
+    }
+
+    @Test
+    void evidenceInsertRollsBackEarlierChunksWhenALaterRowViolatesItsForeignKey() throws Exception {
+        fixture.building("AC_TRACE_TX", 2025, "FORMAL", 1);
+        JsonNode report = ok(app.run("AC_TRACE_TX", 2025, "FORMAL", "trace-write-baseline"));
+        String batchId = report.path("calculationBatchId").asText();
+        var factor = new CarbonRuleRepository(fixture.jdbc).findFactorVersion(
+                report.path("items").get(0).path("factorVersionId").asText());
+        var core = new CarbonCalculationCore();
+        var items = new java.util.ArrayList<CarbonModels.CalculatedItem>();
+        for (int index = 0; index < 80; index++) {
+            var activity = new CarbonModels.ActivitySegment(
+                    java.util.UUID.randomUUID().toString().replace("-", ""), "AC_TRACE_TX",
+                    CarbonModels.PeriodType.YEAR, java.time.Instant.parse("2024-12-31T16:00:00Z"),
+                    java.time.Instant.parse("2025-12-31T16:00:00Z"), "Asia/Shanghai", "ELECTRICITY",
+                    BigDecimal.ONE, "KWH", "LOCKED_COMPLETE", "COMPLETE", CarbonModels.ResultNature.FORMAL,
+                    "test-evidence");
+            var calculated = core.calculate(activity, core.match(activity, "330000",
+                    CarbonModels.ResultNature.FORMAL, java.util.List.of(factor)), null);
+            items.add(index == 79 ? new CarbonModels.CalculatedItem(activity, factor,
+                    calculated.convertedActivity(), "MISSING_FORMULA", null,
+                    calculated.exactEmissionKgCo2e(), calculated.persistedEmissionKgCo2e(),
+                    calculated.matchReason(), calculated.evidenceJson(), calculated.evidenceHash()) : calculated);
+        }
+        int before = count("biz_carbon_calculation_item");
+        String sharedBefore = fixture.jdbc.queryForObject("""
+                SELECT shared_evidence_json FROM biz_carbon_calculation_batch WHERE calculation_batch_id=?
+                """, String.class, batchId);
+        fixture.jdbc.update("UPDATE biz_carbon_calculation_batch SET status='CALCULATING' WHERE calculation_batch_id=?", batchId);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(fixture.jdbc.getDataSource()));
+        assertThatThrownBy(() -> transaction.executeWithoutResult(status -> {
+            var repository = new CarbonCalculationRepository(fixture.jdbc);
+            repository.saveSharedEvidence(batchId, "{}");
+            repository.insertItems(batchId, items);
+        }))
+                .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
+        assertThat(count("biz_carbon_calculation_item")).isEqualTo(before);
+        assertThat(fixture.jdbc.queryForObject("""
+                SELECT shared_evidence_json FROM biz_carbon_calculation_batch WHERE calculation_batch_id=?
+                """, String.class, batchId)).isEqualTo(sharedBefore);
     }
     private void activate(JsonNode factor) throws Exception {
         String path = API + "/factors/" + factor.path("factorVersionId").asText();

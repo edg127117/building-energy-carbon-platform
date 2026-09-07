@@ -1,6 +1,7 @@
 package com.platform.carbon;
 
 import com.platform.carbon.CarbonModels.*;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -68,11 +69,23 @@ public class CarbonCalculationCore {
         BigDecimal converted = convert(activity.quantity(), activity.unitCode(),
                 factor.inputUnitCode());
         validateBundle(factor);
+        ObjectNode selection = CarbonEvidence.object();
+        selection.put("algorithmVersion", "CARBON_FACTOR_MATCH_V2");
+        selection.put("buildingRegionCode", buildingRegionCode);
+        selection.put("provinceCode", provinceCode);
+        selection.put("gridRegionCode", gridRegionCode);
+        selection.put("selection", locked ? "LOCKED_REPORT" : "ACTIVE_RULE");
+        selection.put("selectedPriority", best);
+        selection.set("eligibleCandidates", CarbonEvidence.tree(filtered.stream()
+                .sorted(java.util.Comparator.comparing(FactorVersion::factorVersionId))
+                .map(value -> Map.of("factorVersionId", value.factorVersionId(),
+                        "applicabilityLevel", value.applicabilityLevel().name(),
+                        "priority", priority(category, value.applicabilityLevel()))).toList()));
         return new FactorMatch(factor, converted,
                 "level=" + factor.applicabilityLevel() + ";factor=" + factor.factorVersionId()
                         + ";algorithm=CARBON_FACTOR_MATCH_V2;grid=" + gridRegionCode
                         + ";dataYear=" + factor.dataYear() + ";accountingYear=" + factor.accountingYear()
-                        + ";selection=" + (locked ? "LOCKED_REPORT" : "ACTIVE_RULE"));
+                        + ";selection=" + (locked ? "LOCKED_REPORT" : "ACTIVE_RULE"), selection);
     }
 
     public CalculatedItem calculate(ActivitySegment activity, FactorMatch match, GwpVersion gwp) {
@@ -109,23 +122,42 @@ public class CarbonCalculationCore {
                 gwpVersionId = gwp.gwpVersionId();
             }
         }
-        String evidence = "{\"snapshotId\":\"" + activity.snapshotId()
-                + "\",\"activityEvidenceHash\":\"" + activity.evidenceHash()
-                + "\",\"factorVersionId\":\"" + factor.factorVersionId()
-                + "\",\"formulaVersionId\":\"" + factor.formulaVersionId()
-                + "\",\"activityQuantity\":\"" + activity.quantity().toPlainString()
-                + "\",\"activityUnit\":\"" + activity.unitCode()
-                + "\",\"convertedQuantity\":\"" + match.convertedActivity().toPlainString()
-                + "\",\"factorInputUnit\":\"" + factor.inputUnitCode()
-                + "\",\"sourceVersionId\":\"" + factor.sourceVersionId()
-                + "\",\"dataYear\":\"" + factor.dataYear()
-                + "\",\"accountingYear\":\"" + factor.accountingYear()
-                + "\",\"resultBasis\":\"" + factor.resultBasis()
-                + "\",\"factorUnit\":\"" + (factor.category() == FactorCategory.STATIONARY_COMBUSTION
-                        ? "" : component(factor, ComponentType.DIRECT_EMISSION_FACTOR).unit())
-                + "\",\"gwpVersionId\":\"" + (gwp == null ? "" : gwp.gwpVersionId())
-                + "\",\"gwpValue\":\"" + (gwp == null ? "" : gwp.value().toPlainString())
-                + "\",\"rawKgCO2e\":\"" + exact.toPlainString() + "\"}";
+        ObjectNode trace = CarbonEvidence.object();
+        trace.put("schemaVersion", 1);
+        trace.put("traceStatus", activity.traceEvidence() == null ? "UPSTREAM_PARTIAL" : "CAPTURED");
+        trace.put("snapshotId", activity.snapshotId());
+        trace.put("activityEvidenceHash", activity.evidenceHash());
+        ObjectNode activityValue = (ObjectNode) CarbonEvidence.tree(activity);
+        activityValue.remove("traceEvidence");
+        trace.set("activity", activityValue);
+        trace.set("upstream", activity.traceEvidence());
+        trace.set("factor", CarbonEvidence.tree(factor));
+        trace.set("matching", match.selectionEvidence());
+        trace.put("matchReason", match.matchReason());
+        trace.put("factorVersionId", factor.factorVersionId());
+        trace.put("formulaVersionId", factor.formulaVersionId());
+        trace.put("sourceVersionId", factor.sourceVersionId());
+        trace.put("dataYear", factor.dataYear());
+        trace.put("accountingYear", factor.accountingYear());
+        trace.put("resultBasis", factor.resultBasis());
+        trace.put("activityQuantity", activity.quantity().toPlainString());
+        trace.put("activityUnit", activity.unitCode());
+        trace.put("convertedQuantity", match.convertedActivity().toPlainString());
+        trace.put("factorInputUnit", factor.inputUnitCode());
+        trace.put("unitConversionVersion", "CARBON_FIXED_UNIT_CONVERSION_V1");
+        trace.put("unitConversionMultiplier", convert(BigDecimal.ONE, activity.unitCode(),
+                factor.inputUnitCode()).toPlainString());
+        trace.put("factorUnit", factor.category() == FactorCategory.STATIONARY_COMBUSTION
+                ? "" : component(factor, ComponentType.DIRECT_EMISSION_FACTOR).unit());
+        trace.put("gwpVersionId", gwp == null ? "" : gwp.gwpVersionId());
+        trace.put("gwpValue", gwp == null ? "" : gwp.value().toPlainString());
+        trace.set("gwp", CarbonEvidence.tree(gwp));
+        trace.put("rawKgCO2e", exact.toPlainString());
+        trace.put("finalKgCO2e", exact.setScale(18, RoundingMode.HALF_UP).toPlainString());
+        trace.put("calculationContext", "DECIMAL128");
+        trace.put("detailScale", 18);
+        trace.put("roundingMode", "HALF_UP");
+        String evidence = CarbonEvidence.canonical(trace);
         return new CalculatedItem(activity, factor, match.convertedActivity(),
                 factor.formulaVersionId(), gwpVersionId, exact,
                 exact.setScale(18, RoundingMode.HALF_UP),

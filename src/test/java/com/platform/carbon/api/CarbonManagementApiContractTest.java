@@ -65,6 +65,12 @@ class CarbonManagementApiContractTest {
                 "/v1/carbon-management/electricity-factor-catalog/{entryCode}/import")).isTrue();
         assertThat(openApi.path("components").path("schemas").path("FactorVersionView")
                 .path("properties").has("dataYear")).isTrue();
+        assertThat(openApi.path("components").path("schemas").path("CalculationItemView")
+                .path("properties").has("evidenceUrl")).isTrue();
+        assertThat(openApi.path("paths").has(
+                "/v1/carbon-management/calculations/{batchId}/items/{itemId}/evidence")).isTrue();
+        mockMvc.perform(get("/v1/carbon-management/calculations/unknown/items/unknown/evidence"))
+                .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/v1/carbon-management/electricity-factor-catalog"))
                 .andExpect(status().isUnauthorized());
         mockMvc.perform(get("/v1/carbon-management/electricity-factor-catalog")

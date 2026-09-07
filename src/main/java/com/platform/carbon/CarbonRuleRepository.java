@@ -349,6 +349,15 @@ class CarbonRuleRepository {
                 """);
     }
 
+    /** 按固定版本读取证据，停用不影响历史计算的解释。 */
+    java.util.Map<String, Object> formulaEvidence(String versionId) {
+        return jdbc.queryForMap("SELECT * FROM biz_carbon_formula_version WHERE formula_version_id=?", versionId);
+    }
+
+    java.util.Map<String, Object> roundingEvidence(String versionId) {
+        return jdbc.queryForMap("SELECT * FROM biz_carbon_rounding_policy_version WHERE rounding_policy_version_id=?", versionId);
+    }
+
     boolean activeFormulaMatches(String formulaVersionId, FactorCategory category,
                                  UsageNature nature, String resultBasis) {
         String expected = switch (category) {

@@ -66,8 +66,10 @@ class CarbonCalculationServiceTest {
     void developmentCalculationKeepsTotalAndPersistsFailedSegmentWhenFactorIsMissing() {
         when(ruleRepository.activeRoundingPolicyId()).thenReturn("CRP_DECIMAL128_V1");
         when(input.read("BLD001", PeriodType.YEAR, START, END, 500))
-                .thenReturn(List.of(activity(ResultNature.DEVELOPMENT_SIMULATION,
-                        "LOCKED_COMPLETE", "COMPLETE")));
+                .thenReturn(List.of(new ActivitySegment("MONTH-SNAPSHOT", "BLD001", PeriodType.MONTH,
+                        START, Instant.parse("2026-01-31T16:00:00Z"), "Asia/Shanghai",
+                        "ELECTRICITY", BigDecimal.TEN, "KWH", "LOCKED_COMPLETE", "COMPLETE",
+                        ResultNature.DEVELOPMENT_SIMULATION, "month-evidence")));
         when(ruleRepository.findBuildingRegion("BLD001")).thenReturn("310100");
         when(ruleRepository.findCandidateFactors(eq("ELECTRICITY"), any(), any()))
                 .thenReturn(List.of());
@@ -89,6 +91,31 @@ class CarbonCalculationServiceTest {
                 .filteredOn(value -> "TOTAL_EMISSION".equals(value.metricCode()))
                 .singleElement().satisfies(value -> assertThat(value.finalValue())
                         .isEqualByComparingTo("0.000000"));
+    }
+
+    @Test
+    void ruleReuseIsLimitedToIdenticalWindowsWithinOneCalculation() {
+        Instant february = Instant.parse("2026-01-31T16:00:00Z");
+        Instant march = Instant.parse("2026-02-28T16:00:00Z");
+        when(ruleRepository.activeRoundingPolicyId()).thenReturn("CRP_DECIMAL128_V1");
+        when(input.read("BLD001", PeriodType.YEAR, START, END, 500)).thenReturn(List.of(
+                new ActivitySegment("JAN-A", "BLD001", PeriodType.MONTH, START, february,
+                        "Asia/Shanghai", "ELECTRICITY", BigDecimal.ONE, "KWH", "LOCKED_COMPLETE",
+                        "COMPLETE", ResultNature.DEVELOPMENT_SIMULATION, "a"),
+                new ActivitySegment("JAN-B", "BLD001", PeriodType.MONTH, START, february,
+                        "Asia/Shanghai", "ELECTRICITY", BigDecimal.TEN, "KWH", "LOCKED_COMPLETE",
+                        "COMPLETE", ResultNature.DEVELOPMENT_SIMULATION, "b"),
+                new ActivitySegment("FEB", "BLD001", PeriodType.MONTH, february, march,
+                        "Asia/Shanghai", "ELECTRICITY", BigDecimal.ONE, "KWH", "LOCKED_COMPLETE",
+                        "COMPLETE", ResultNature.DEVELOPMENT_SIMULATION, "c")));
+        when(repository.detail(anyString())).thenAnswer(invocation -> detail(
+                invocation.getArgument(0), "COMPLETED_INCOMPLETE"));
+        service.run(11L, Set.of("PLATFORM_ADMIN"), request(ResultNature.DEVELOPMENT_SIMULATION));
+        service.run(11L, Set.of("PLATFORM_ADMIN"), request(ResultNature.DEVELOPMENT_SIMULATION));
+        verify(ruleRepository, org.mockito.Mockito.times(2)).findCandidateFactors("ELECTRICITY",
+                LocalDateTime.of(2026, 1, 1, 0, 0), LocalDateTime.of(2026, 2, 1, 0, 0));
+        verify(ruleRepository, org.mockito.Mockito.times(2)).findCandidateFactors("ELECTRICITY",
+                LocalDateTime.of(2026, 2, 1, 0, 0), LocalDateTime.of(2026, 3, 1, 0, 0));
     }
 
     @Test
@@ -127,6 +154,38 @@ class CarbonCalculationServiceTest {
         verify(persistence).timeout(eq("EXPIRED"), any(LocalDateTime.class));
         verify(persistence, never()).create(any());
         verify(input, never()).read(anyString(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void readsPinnedEvidenceOnlyAfterBuildingAuthorizationAndKeepsLegacyExplicit() {
+        when(repository.findBatch("BATCH")).thenReturn(detail("BATCH", "COMPLETED_COMPLETE").batch());
+        when(repository.itemEvidence("BATCH", "ITEM"))
+                .thenReturn(new String[]{"{\"snapshotId\":\"legacy\"}", "old-hash"});
+        var trace = service.evidence(11L, Set.of("PLATFORM_ADMIN"), "BATCH", "ITEM");
+        assertThat(trace.path("traceStatus").asText()).isEqualTo("LEGACY_PARTIAL");
+        var order = org.mockito.Mockito.inOrder(authorization, repository);
+        order.verify(repository).findBatch("BATCH");
+        order.verify(authorization).requireReader(11L, Set.of("PLATFORM_ADMIN"), "BLD001");
+        order.verify(repository).itemEvidence("BATCH", "ITEM");
+        verify(ruleRepository, never()).findFactorVersion(anyString());
+    }
+
+    @Test
+    void rejectsEvidenceReadOutsideTheAuthorizedBuildingBeforeLoadingJson() {
+        when(repository.findBatch("BATCH")).thenReturn(detail("BATCH", "COMPLETED_COMPLETE").batch());
+        org.mockito.Mockito.doThrow(CarbonErrors.error(403, "CARBON_FORBIDDEN", "无建筑权限"))
+                .when(authorization).requireReader(11L, Set.of("PLATFORM_ADMIN"), "BLD001");
+        assertThatThrownBy(() -> service.evidence(11L, Set.of("PLATFORM_ADMIN"), "BATCH", "ITEM"))
+                .hasMessageContaining("无建筑权限");
+        verify(repository, never()).itemEvidence(anyString(), anyString());
+    }
+
+    @Test
+    void rejectsItemIdsThatDoNotBelongToTheRequestedBatch() {
+        when(repository.findBatch("BATCH")).thenReturn(detail("BATCH", "COMPLETED_COMPLETE").batch());
+        assertThatThrownBy(() -> service.evidence(11L, Set.of("PLATFORM_ADMIN"), "BATCH", "FOREIGN-ITEM"))
+                .hasMessageContaining("碳计算明细不存在");
+        verify(repository).itemEvidence("BATCH", "FOREIGN-ITEM");
     }
 
     @Test

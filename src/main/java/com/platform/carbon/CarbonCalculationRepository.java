@@ -114,35 +114,65 @@ class CarbonCalculationRepository {
     }
 
     void insertItems(String batchId, List<CalculatedItem> values) {
-        jdbc.batchUpdate("""
+        String insert = """
                 INSERT INTO biz_carbon_calculation_item
                 (calculation_item_id,calculation_batch_id,activity_snapshot_id,
                  activity_evidence_hash,activity_period_start,activity_period_end,energy_item_code,
                  scope_type,activity_quantity,activity_unit_code,factor_version_id,
                  formula_version_id,gwp_version_id,raw_emission_kg_co2e,
                  final_emission_kg_co2e,match_reason,evidence_json,evidence_hash)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """, values, values.size(), (statement, value) -> {
-                    statement.setString(1, id());
-                    statement.setString(2, batchId);
-                    statement.setString(3, value.activity().snapshotId());
-                    statement.setString(4, value.activity().evidenceHash());
-                    statement.setTimestamp(5, timestamp(value.activity().startInclusive()));
-                    statement.setTimestamp(6, timestamp(value.activity().endExclusive()));
-                    statement.setString(7, value.activity().energyItemCode());
-                    statement.setString(8, value.factor().scopeType().name());
-                    statement.setBigDecimal(9, value.activity().quantity());
-                    statement.setString(10, value.activity().unitCode());
-                    statement.setString(11, value.factor().factorVersionId());
-                    statement.setString(12, value.formulaVersionId());
-                    statement.setString(13, value.gwpVersionId());
-                    statement.setBigDecimal(14, value.exactEmissionKgCo2e().setScale(18,
+                VALUES
+                """;
+        // 限制单条 SQL 的行数与估算 UTF-8 载荷；所有分段仍属于调用方同一个短事务。
+        for (int start = 0; start < values.size();) {
+            int end = start;
+            long bytes = 0;
+            while (end < values.size() && end - start < 50) {
+                long rowBytes = values.get(end).evidenceJson()
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8).length + 1024L;
+                if (end > start && bytes + rowBytes > 256 * 1024) break;
+                bytes += rowBytes;
+                end++;
+            }
+            List<CalculatedItem> chunk = values.subList(start, end);
+            String sql = insert + String.join(",", java.util.Collections.nCopies(chunk.size(),
+                    "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"));
+            jdbc.update(sql, statement -> {
+                for (int row = 0; row < chunk.size(); row++) {
+                    CalculatedItem value = chunk.get(row);
+                    int base = row * 18;
+                    statement.setString(base + 1, id());
+                    statement.setString(base + 2, batchId);
+                    statement.setString(base + 3, value.activity().snapshotId());
+                    statement.setString(base + 4, value.activity().evidenceHash());
+                    statement.setTimestamp(base + 5, timestamp(value.activity().startInclusive()));
+                    statement.setTimestamp(base + 6, timestamp(value.activity().endExclusive()));
+                    statement.setString(base + 7, value.activity().energyItemCode());
+                    statement.setString(base + 8, value.factor().scopeType().name());
+                    statement.setBigDecimal(base + 9, value.activity().quantity());
+                    statement.setString(base + 10, value.activity().unitCode());
+                    statement.setString(base + 11, value.factor().factorVersionId());
+                    statement.setString(base + 12, value.formulaVersionId());
+                    statement.setString(base + 13, value.gwpVersionId());
+                    statement.setBigDecimal(base + 14, value.exactEmissionKgCo2e().setScale(18,
                             java.math.RoundingMode.HALF_UP));
-                    statement.setBigDecimal(15, value.persistedEmissionKgCo2e());
-                    statement.setString(16, value.matchReason());
-                    statement.setString(17, value.evidenceJson());
-                    statement.setString(18, value.evidenceHash());
-                });
+                    statement.setBigDecimal(base + 15, value.persistedEmissionKgCo2e());
+                    statement.setString(base + 16, value.matchReason());
+                    statement.setString(base + 17, value.evidenceJson());
+                    statement.setString(base + 18, value.evidenceHash());
+                }
+            });
+            start = end;
+        }
+    }
+
+    void saveSharedEvidence(String batchId, String json) {
+        if (jdbc.update("""
+                UPDATE biz_carbon_calculation_batch SET shared_evidence_json=?
+                WHERE calculation_batch_id=? AND status='CALCULATING'
+                """, json, batchId) != 1) {
+            throw CarbonErrors.error(409, CarbonErrors.STATUS_CONFLICT, "批次状态已变化，拒绝保存共享证据");
+        }
     }
 
     void insertFailures(String batchId, List<CalculationFailure> values) {
@@ -208,9 +238,23 @@ class CarbonCalculationRepository {
 
     List<StoredCalculationItem> listItems(String batchId) {
         return jdbc.query("""
-                SELECT * FROM biz_carbon_calculation_item
+                SELECT calculation_item_id,calculation_batch_id,activity_snapshot_id,
+                       energy_item_code,scope_type,activity_quantity,activity_unit_code,
+                       factor_version_id,formula_version_id,gwp_version_id,
+                       final_emission_kg_co2e,match_reason,evidence_hash
+                FROM biz_carbon_calculation_item
                 WHERE calculation_batch_id=? ORDER BY activity_period_start,energy_item_code
                 """, CarbonCalculationRepository::item, batchId);
+    }
+
+    /** 单条追溯按批次和明细共同定位，JSON 解析与摘要校验留到释放连接之后。 */
+    String[] itemEvidence(String batchId, String itemId) {
+        return one("""
+                SELECT i.evidence_json,i.evidence_hash,b.shared_evidence_json
+                FROM biz_carbon_calculation_item i
+                JOIN biz_carbon_calculation_batch b ON b.calculation_batch_id=i.calculation_batch_id
+                WHERE i.calculation_batch_id=? AND i.calculation_item_id=?
+                """, (rs, row) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3)}, batchId, itemId);
     }
 
     List<SummaryMetric> listSummaries(String batchId) {

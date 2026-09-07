@@ -1,5 +1,6 @@
 package com.platform.carbon.api;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.platform.carbon.CarbonCalculationService;
 import com.platform.carbon.CarbonModels.*;
 import com.platform.carbon.CarbonRecalculationService;
@@ -155,6 +156,7 @@ public class CarbonManagementController {
     }
 
     @PostMapping("/calculations")
+    @ApiResponse(responseCode = "200", description = "计算结果", useReturnTypeSchema = true)
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<CalculationBatchView> runCalculation(Authentication authentication,
                                                        @Valid @RequestBody RunCalculationRequest request) {
@@ -163,10 +165,19 @@ public class CarbonManagementController {
     }
 
     @GetMapping("/calculations/{batchId}")
+    @ApiResponse(responseCode = "200", description = "固定批次结果", useReturnTypeSchema = true)
     public Result<CalculationBatchView> calculation(Authentication authentication,
                                                      @PathVariable String batchId) {
         return Result.success(calculation(calculationService.detail(
                 SecurityUser.userId(authentication), SecurityUser.roles(authentication), batchId)));
+    }
+
+    @GetMapping("/calculations/{batchId}/items/{itemId}/evidence")
+    @ApiResponse(responseCode = "200", description = "已校验的固定追溯证据", useReturnTypeSchema = true)
+    public Result<JsonNode> evidence(Authentication authentication, @PathVariable String batchId,
+                                     @PathVariable String itemId) {
+        return Result.success(calculationService.evidence(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), batchId, itemId));
     }
 
     @PostMapping("/recalculations/manual")
@@ -271,11 +282,14 @@ public class CarbonManagementController {
                         value.calculationItemId(), value.snapshotId(), value.energyItemCode(),
                         value.scopeType().name(), value.activityQuantity(), value.activityUnitCode(),
                         value.factorVersionId(), value.formulaVersionId(), value.gwpVersionId(),
-                        value.emissionKgCo2e(), value.matchReason(), value.evidenceHash())).toList(),
+                        value.emissionKgCo2e(), value.matchReason(), value.evidenceHash(),
+                        "/v1/carbon-management/calculations/" + batch.batchId() + "/items/"
+                                + value.calculationItemId() + "/evidence")).toList(),
                 failures, detail.summaries().stream().map(value -> new SummaryView(
                         value.metricCode(), value.dimensionCode(), value.rawValue(),
                         value.finalValue(), value.unitCode(), value.denominatorVersionId(),
-                        value.unavailableReason(), value.evidenceHash())).toList());
+                        value.unavailableReason(), value.evidenceHash())).toList(),
+                batch.requestHash(), batch.createdBy(), batch.roundingPolicyVersionId());
     }
 
     private static RecalculationBatchView recalculation(
