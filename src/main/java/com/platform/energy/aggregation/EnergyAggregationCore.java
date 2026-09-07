@@ -14,6 +14,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 import static com.platform.energy.aggregation.EnergyAggregationErrors.*;
 
@@ -32,6 +33,128 @@ public class EnergyAggregationCore {
             case INSTANTANEOUS -> instantaneous(input.query(), facts, input.integrationPolicy());
         };
         return result(input, computation);
+    }
+
+    /**
+     * 聚合不具备能源分类或折标属性的原生累计量。
+     *
+     * <p>该入口只接收已经按 {@code buildingId + pointId} 固定范围读取的活动事实，因而不
+     * 伪造 {@code MeasurementContext}、能源分类或模拟数据性质来复用旧链路。起止边界必须
+     * 各有一条精确读数，避免把区间前的正增量计入本次结果。计量事件归属读数转换半开区间
+     * {@code (previous, current]}，故读取范围为 {@code (fromInclusive, toExclusive]}。</p>
+     */
+    NativeCumulativeComputation aggregateNativeCumulative(
+            String buildingId, String pointId, Instant fromInclusive, Instant toExclusive,
+            Instant calculationAsOf, Instant activityWatermark, List<ActivityFact> facts,
+            List<MeterEventEvidence> meterEvents, List<CorrectionEvidence> corrections) {
+        validateNativeCumulativeInput(buildingId, pointId, fromInclusive, toExclusive,
+                calculationAsOf, activityWatermark, facts, meterEvents, corrections);
+        List<ActivityFact> windowFacts = facts.stream()
+                .filter(fact -> !fact.eventTime().isBefore(fromInclusive))
+                .filter(fact -> !fact.eventTime().isAfter(toExclusive))
+                .toList();
+        Set<String> windowFactIds = windowFacts.stream().map(ActivityFact::factIdentity)
+                .collect(java.util.stream.Collectors.toSet());
+        List<CorrectionEvidence> relevantCorrections = corrections.stream()
+                .filter(correction -> windowFactIds.contains(correction.originalFactIdentity()))
+                .toList();
+        List<ActivityFact> readings = correctedFacts(windowFacts, relevantCorrections);
+        if (readings.isEmpty() || !readings.getFirst().eventTime().equals(fromInclusive)
+                || !readings.getLast().eventTime().equals(toExclusive)) {
+            throw error(ANCHOR_MISSING, "原生累计量必须提供精确起止边界读数");
+        }
+        BigDecimal total = BigDecimal.ZERO;
+        long maximumGapMillis = 0;
+        LinkedHashSet<String> usedEventVersions = new LinkedHashSet<>();
+        for (int index = 1; index < readings.size(); index++) {
+            ActivityFact previous = readings.get(index - 1);
+            ActivityFact current = readings.get(index);
+            if (previous.rawValue().signum() < 0 || current.rawValue().signum() < 0) {
+                throw error(INPUT_INCOMPLETE, "原生累计量读数不能为负值");
+            }
+            long gapMillis = millis(previous.eventTime(), current.eventTime());
+            maximumGapMillis = Math.max(maximumGapMillis, gapMillis);
+            List<MeterEventEvidence> matched = meterEvents.stream()
+                    .filter(event -> event.occurredAt().isAfter(previous.eventTime())
+                            && !event.occurredAt().isAfter(current.eventTime()))
+                    .toList();
+            if (matched.size() > 1) {
+                throw error(EVENT_EVIDENCE_CONFLICT, "累计读数区间匹配到多个已审核计量事件");
+            }
+            if (matched.size() == 1) {
+                MeterEventEvidence event = matched.getFirst();
+                total = total.add(classifiedMeterTransition(previous, current, event, false), MC);
+                usedEventVersions.add(event.eventVersionId());
+                continue;
+            }
+            BigDecimal delta = current.rawValue().subtract(previous.rawValue(), MC);
+            if (delta.signum() < 0) {
+                throw error(NEGATIVE_DELTA_UNCLASSIFIED, "累计表负增量尚未分类");
+            }
+            total = total.add(delta, MC);
+        }
+        List<String> correctionVersions = relevantCorrections.stream()
+                .map(CorrectionEvidence::correctionVersionId)
+                .distinct().toList();
+        return new NativeCumulativeComputation(total, maximumGapMillis,
+                readings.stream().map(ActivityFact::factIdentity).toList(),
+                List.copyOf(usedEventVersions), correctionVersions);
+    }
+
+    /**
+     * 对已经按前值阶梯法形成的原生功率区间积分。
+     *
+     * <p>区间缺口不会由两端功率连线补齐，结果保留部分数量和缺口代码，供上层把“可计算”与
+     * “完整”分开保存。</p>
+     */
+    NativePowerIntegration integrateNativePower(
+            Instant fromInclusive, Instant toExclusive, List<NativePowerSegment> segments) {
+        if (fromInclusive == null || toExclusive == null || !fromInclusive.isBefore(toExclusive)
+                || !millisecondPrecision(fromInclusive) || !millisecondPrecision(toExclusive)
+                || segments == null) {
+            throw error(INPUT_INCOMPLETE, "原生功率积分范围或输入无效");
+        }
+        if (segments.stream().anyMatch(Objects::isNull)) {
+            throw error(INPUT_INCOMPLETE, "原生功率区间不能为空");
+        }
+        LinkedHashSet<String> identities = new LinkedHashSet<>();
+        for (NativePowerSegment segment : segments) {
+            validateNativePowerSegment(segment, fromInclusive, toExclusive, identities);
+        }
+        List<NativePowerSegment> ordered = new ArrayList<>(segments);
+        ordered.sort(Comparator.comparing(NativePowerSegment::startInclusive)
+                .thenComparing(NativePowerSegment::intervalId));
+        Instant cursor = fromInclusive;
+        BigDecimal total = BigDecimal.ZERO;
+        long integratedMillis = 0;
+        long maximumGapMillis = 0;
+        List<String> issues = new ArrayList<>();
+        LinkedHashSet<String> inputFactIds = new LinkedHashSet<>();
+        for (NativePowerSegment segment : ordered) {
+            if (segment.startInclusive().isBefore(cursor)) {
+                throw error(PERIOD_COVERAGE_INVALID, "原生功率区间重叠或顺序冲突");
+            }
+            if (segment.startInclusive().isAfter(cursor)) {
+                maximumGapMillis = Math.max(maximumGapMillis, millis(cursor, segment.startInclusive()));
+                issues.add("POWER_INTERVAL_GAP");
+            }
+            long durationMillis = millis(segment.startInclusive(), segment.endExclusive());
+            total = total.add(segment.powerKw().multiply(BigDecimal.valueOf(durationMillis), MC)
+                    .divide(new BigDecimal("3600000"), MC), MC);
+            integratedMillis = Math.addExact(integratedMillis, durationMillis);
+            inputFactIds.addAll(segment.inputFactIds());
+            cursor = segment.endExclusive();
+        }
+        if (cursor.isBefore(toExclusive)) {
+            maximumGapMillis = Math.max(maximumGapMillis, millis(cursor, toExclusive));
+            issues.add("POWER_INTERVAL_GAP");
+        }
+        long targetMillis = millis(fromInclusive, toExclusive);
+        // 有重叠已失败；覆盖率按实际有效区间重算，避免把缺口误记为完整。
+        BigDecimal coverage = BigDecimal.valueOf(integratedMillis)
+                .divide(BigDecimal.valueOf(targetMillis), MC);
+        return new NativePowerIntegration(total, coverage, maximumGapMillis, List.copyOf(inputFactIds),
+                List.copyOf(new LinkedHashSet<>(issues)), integratedMillis == targetMillis && issues.isEmpty());
     }
 
     private static void validateCommon(AggregationInput input) {
@@ -76,6 +199,39 @@ public class EnergyAggregationCore {
                     && (!query.buildingId().equals(event.buildingId())
                     || !query.pointId().equals(event.meterPointId()))) {
                 throw error(EVENT_EVIDENCE_CONFLICT, "计量事件不属于本次建筑和测点");
+            }
+        }
+    }
+
+    private static void validateNativeCumulativeInput(
+            String buildingId, String pointId, Instant fromInclusive, Instant toExclusive,
+            Instant calculationAsOf, Instant activityWatermark, List<ActivityFact> facts,
+            List<MeterEventEvidence> meterEvents, List<CorrectionEvidence> corrections) {
+        if (blank(buildingId) || blank(pointId) || fromInclusive == null || toExclusive == null
+                || calculationAsOf == null || activityWatermark == null || facts == null
+                || meterEvents == null || corrections == null || !fromInclusive.isBefore(toExclusive)
+                || calculationAsOf.isBefore(toExclusive) || activityWatermark.isAfter(calculationAsOf)
+                || !millisecondPrecision(fromInclusive) || !millisecondPrecision(toExclusive)) {
+            throw error(INPUT_INCOMPLETE, "原生累计量范围、水位或输入不完整");
+        }
+        for (ActivityFact fact : facts) {
+            if (fact == null || fact.eventTime() == null || fact.receivedTime() == null
+                    || fact.receivedTime().isAfter(activityWatermark)
+                    || !millisecondPrecision(fact.eventTime())) {
+                throw error(INPUT_INCOMPLETE, "原生活动事实超出固定水位或时间精度不足");
+            }
+        }
+        for (MeterEventEvidence event : meterEvents) {
+            if (event == null || event.status() != EvidenceStatus.APPROVED
+                    || event.eventType() == null || event.occurredAt() == null || event.occurredAt().isAfter(toExclusive)
+                    || !event.occurredAt().isAfter(fromInclusive)
+                    || !buildingId.equals(event.buildingId()) || !pointId.equals(event.meterPointId())) {
+                throw error(EVENT_EVIDENCE_CONFLICT, "原生累计量计量事件不属于固定范围或未经审核");
+            }
+        }
+        for (CorrectionEvidence correction : corrections) {
+            if (correction == null || correction.status() != EvidenceStatus.APPROVED) {
+                throw error(CORRECTION_CONFLICT, "原生累计量修正证据必须已审核");
             }
         }
     }
@@ -171,11 +327,19 @@ public class EnergyAggregationCore {
         if (matched.size() != 1) {
             throw error(EVENT_EVIDENCE_CONFLICT, "负增量匹配到多个已审核计量事件");
         }
-        MeterEventEvidence event = matched.getFirst();
+        return classifiedMeterTransition(previous, current, matched.getFirst(), true);
+    }
+
+    private static BigDecimal classifiedMeterTransition(
+            ActivityFact previous, ActivityFact current, MeterEventEvidence event,
+            boolean requireSimulationEvidence) {
         if (blank(event.eventVersionId()) || blank(event.evidenceReference())
-                || event.approvedBy() == null || !event.simulationFlag()
+                || event.approvedBy() == null || requireSimulationEvidence && !event.simulationFlag()
                 || blank(event.buildingId()) || blank(event.meterPointId())) {
-            throw error(INPUT_INCOMPLETE, "已审核计量事件缺少版本、审核或模拟证据");
+            throw error(INPUT_INCOMPLETE, "已审核计量事件缺少版本或审核证据");
+        }
+        if (!requireSimulationEvidence && event.eventType() == MeterEventType.ROLLOVER) {
+            validateNativeRolloverReadings(previous.rawValue(), current.rawValue(), event.rolloverModulus());
         }
         return switch (event.eventType()) {
             case RESET -> segmented(previous.rawValue(), current.rawValue(), event, "复位");
@@ -213,6 +377,14 @@ public class EnergyAggregationCore {
             throw error(EVENT_EVIDENCE_CONFLICT, "回绕计数周期小于事件前读数");
         }
         return delta;
+    }
+
+    private static void validateNativeRolloverReadings(
+            BigDecimal previous, BigDecimal current, BigDecimal modulus) {
+        if (modulus == null || modulus.signum() <= 0) return;
+        if (previous.compareTo(modulus) >= 0 || current.compareTo(modulus) >= 0) {
+            throw error(EVENT_EVIDENCE_CONFLICT, "原生累计量回绕前后读数必须小于回绕模数");
+        }
     }
 
     private static Computation periodTotal(AggregationQuery query, List<ActivityFact> facts) {
@@ -315,6 +487,37 @@ public class EnergyAggregationCore {
         return seconds;
     }
 
+    private static long millis(Instant from, Instant to) {
+        if (!millisecondPrecision(from) || !millisecondPrecision(to)) {
+            throw error(INPUT_INCOMPLETE, "原生量时间必须精确到毫秒");
+        }
+        long millis = Math.subtractExact(to.toEpochMilli(), from.toEpochMilli());
+        if (millis <= 0) throw error(INPUT_INCOMPLETE, "原生量时间必须严格递增");
+        return millis;
+    }
+
+    private static boolean millisecondPrecision(Instant value) {
+        return value != null && value.getNano() % 1_000_000 == 0;
+    }
+
+    private static void validateNativePowerSegment(
+            NativePowerSegment segment, Instant fromInclusive, Instant toExclusive,
+            Set<String> identities) {
+        if (segment == null || blank(segment.intervalId()) || segment.startInclusive() == null
+                || segment.endExclusive() == null || segment.powerKw() == null
+                || segment.powerKw().signum() < 0 || blank(segment.qualityEvidence())
+                || segment.inputFactIds().isEmpty() || !millisecondPrecision(segment.startInclusive())
+                || !millisecondPrecision(segment.endExclusive())
+                || segment.startInclusive().isBefore(fromInclusive)
+                || segment.endExclusive().isAfter(toExclusive)) {
+            throw error(INPUT_INCOMPLETE, "原生功率区间或证据不完整");
+        }
+        if (!identities.add(segment.intervalId())) {
+            throw error(INPUT_INCOMPLETE, "原生功率区间身份重复");
+        }
+        millis(segment.startInclusive(), segment.endExclusive());
+    }
+
     private static boolean same(BigDecimal left, BigDecimal right) {
         return left != null && right != null && left.compareTo(right) == 0;
     }
@@ -325,5 +528,32 @@ public class EnergyAggregationCore {
 
     private record Computation(
             BigDecimal quantity, BigDecimal coverage, long maxGap, String policyVersion) {
+    }
+
+    record NativeCumulativeComputation(
+            BigDecimal quantity, long maximumObservedGapMillis, List<String> inputFactIds,
+            List<String> meterEventVersionIds, List<String> correctionVersionIds) {
+        NativeCumulativeComputation {
+            inputFactIds = List.copyOf(inputFactIds);
+            meterEventVersionIds = List.copyOf(meterEventVersionIds);
+            correctionVersionIds = List.copyOf(correctionVersionIds);
+        }
+    }
+
+    record NativePowerSegment(
+            String intervalId, Instant startInclusive, Instant endExclusive, BigDecimal powerKw,
+            List<String> inputFactIds, String qualityEvidence) {
+        NativePowerSegment {
+            inputFactIds = inputFactIds == null ? List.of() : List.copyOf(inputFactIds);
+        }
+    }
+
+    record NativePowerIntegration(
+            BigDecimal quantity, BigDecimal coverageRatio, long maximumObservedGapMillis,
+            List<String> inputFactIds, List<String> issueCodes, boolean complete) {
+        NativePowerIntegration {
+            inputFactIds = List.copyOf(inputFactIds);
+            issueCodes = List.copyOf(issueCodes);
+        }
     }
 }

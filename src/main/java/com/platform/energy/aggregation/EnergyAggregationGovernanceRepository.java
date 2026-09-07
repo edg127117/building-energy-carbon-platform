@@ -80,6 +80,17 @@ public class EnergyAggregationGovernanceRepository {
                 timestamp(from), timestamp(to));
     }
 
+    /** 原生累计差值的事件归属为(前读数,后读数]；限制在SQL层执行，不先全表载入。 */
+    public List<EventVersionRow> listApprovedEvents(
+            String buildingId, String pointId, LocalDateTime from, LocalDateTime to, int limit) {
+        return jdbc.query(eventSelect() + """
+                 WHERE e.building_id=? AND e.meter_point_id=? AND v.status='APPROVED'
+                   AND v.occurred_at>? AND v.occurred_at<=?
+                 ORDER BY v.occurred_at,v.version_no LIMIT ?
+                """, EnergyAggregationGovernanceRepository::eventVersion, buildingId, pointId,
+                timestamp(from), timestamp(to), limit);
+    }
+
     public int approveEvent(String versionId, int revision, long reviewerId,
                             LocalDateTime approvedAt, String reviewComment) {
         return jdbc.update("""
@@ -154,6 +165,14 @@ public class EnergyAggregationGovernanceRepository {
                  WHERE c.building_id=? AND c.meter_point_id=? AND v.status='APPROVED'
                  ORDER BY c.original_fact_identity,v.version_no
                 """, EnergyAggregationGovernanceRepository::correctionVersion, buildingId, pointId);
+    }
+
+    /** 计算契约请求上限加一条，以明确区分完整结果与容量溢出。 */
+    public List<CorrectionVersionRow> listApprovedCorrections(String buildingId, String pointId, int limit) {
+        return jdbc.query(correctionSelect() + """
+                 WHERE c.building_id=? AND c.meter_point_id=? AND v.status='APPROVED'
+                 ORDER BY c.original_fact_identity,v.version_no LIMIT ?
+                """, EnergyAggregationGovernanceRepository::correctionVersion, buildingId, pointId, limit);
     }
 
     public CorrectionVersionRow findLatestApprovedCorrection(String correctionId) {

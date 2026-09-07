@@ -281,20 +281,38 @@ public class EnergyAggregationGovernanceService {
 
     List<MeterEventEvidence> approvedEvents(String buildingId, String pointId, Instant from, Instant to) {
         return repository.listApprovedEvents(buildingId, pointId, local(from), local(to)).stream()
-                .map(row -> new MeterEventEvidence(row.eventId(), row.eventVersionId(), row.buildingId(),
+                .map(EnergyAggregationGovernanceService::eventEvidence).toList();
+    }
+
+    List<MeterEventEvidence> approvedEvents(String buildingId, String pointId, Instant from, Instant to, int limit) {
+        return repository.listApprovedEvents(buildingId, pointId, local(from), local(to), limit).stream()
+                .map(EnergyAggregationGovernanceService::eventEvidence).toList();
+    }
+
+    private static MeterEventEvidence eventEvidence(EventVersionRow row) {
+        return new MeterEventEvidence(row.eventId(), row.eventVersionId(), row.buildingId(),
                         row.meterPointId(), MeterEventType.valueOf(row.eventType()), instant(row.occurredAt()),
                         EvidenceStatus.APPROVED, row.preEventReading(), row.postEventReading(),
                         row.rolloverModulus(), row.oldMeterId(), row.newMeterId(),
                         row.relationVersionBefore(), row.relationVersionAfter(), row.evidenceReference(),
-                        row.createdBy(), row.approvedBy(), row.simulationFlag())).toList();
+                        row.createdBy(), row.approvedBy(), row.simulationFlag());
     }
 
     List<CorrectionEvidence> approvedCorrections(String buildingId, String pointId) {
         return repository.listApprovedCorrections(buildingId, pointId).stream()
-                .map(row -> new CorrectionEvidence(row.correctionId(), row.correctionVersionId(),
+                .map(EnergyAggregationGovernanceService::correctionEvidence).toList();
+    }
+
+    List<CorrectionEvidence> approvedCorrections(String buildingId, String pointId, int limit) {
+        return repository.listApprovedCorrections(buildingId, pointId, limit).stream()
+                .map(EnergyAggregationGovernanceService::correctionEvidence).toList();
+    }
+
+    private static CorrectionEvidence correctionEvidence(CorrectionVersionRow row) {
+        return new CorrectionEvidence(row.correctionId(), row.correctionVersionId(),
                         row.originalFactIdentity(), row.originalValue(), row.correctedValue(),
                         row.correctionReason(), EvidenceStatus.APPROVED, row.evidenceReference(),
-                        row.createdBy(), row.approvedBy(), row.qualityGatePassed())).toList();
+                        row.createdBy(), row.approvedBy(), row.qualityGatePassed());
     }
 
     IntegrationPolicy effectivePolicy(String buildingId, String pointId, Instant at) {

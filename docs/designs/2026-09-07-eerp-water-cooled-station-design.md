@@ -2,9 +2,9 @@
 
 ## 1. 状态与使用方式
 
-状态：业务范围与主要处理规则已由用户确认；本文为编码前设计审阅稿，尚未开始实现。本文中的接口、模型和执行安排为拟实施设计，不代表已有能力。当前产品状态以 [PROJECT_STATUS.md](../../PROJECT_STATUS.md) 为准。
+状态：用户已批准本文并授权编码；后端已形成研发活动候选。第 2–12 节保留已确认设计边界，第 13 节记录实际契约、实现及验证限制。当前产品状态以 [PROJECT_STATUS.md](../../PROJECT_STATUS.md) 为准，未将本候选提升为正式版本。
 
-先审阅本文的范围、必要依赖、专业输入和验收边界，再进入编码。实现时发现无法满足本文的上游契约，必须先定位差异并补充设计；不得通过绕过质量门禁、读取其他模块内部表或扩大产品范围来完成表面闭环。软件验收、专业确认、正式版本批准与现场验收分别记录。
+设计已按本文的范围、必要依赖、专业输入和验收边界确认。实现不得通过绕过质量门禁、读取其他模块内部表或扩大产品范围来完成表面闭环。软件验收、专业确认、正式版本批准与现场验收分别记录。
 
 ## 2. 已确认范围与非目标
 
@@ -220,7 +220,7 @@ MySQL 保存配置、版本、审核、计算任务、结果索引和证据清�
 
 ## 11. 验收矩阵
 
-以下均为待执行计划，不是本次已通过的测试记录。
+以下是已确认的验收矩阵；实际自动化入口和仍未完成的验证层级见第 13 节。
 
 | 编号 | 场景 | 期望证据 |
 | --- | --- | --- |
@@ -254,4 +254,52 @@ MySQL 保存配置、版本、审核、计算任务、结果索引和证据清�
 
 软件完成条件为A01–A17对应证据及仓库必需检查齐备，且结果仍按证据保持研发候选性质。专业与现场待确认项集中保留，不将计划、模拟测试或设计文档合并描述为指标已经实现。业务页面及后续指标由单独范围确认驱动。
 
-本设计文档交付只检查链接、术语、规则一致性和差异，不运行无关业务测试。编码前执行任务预检；涉及生产代码时使用 code-comment-quality，文件变更与交付分别遵守 iot-change-verification 和 safe-pr-delivery。无需另建重复任务计划或通用架构文档。
+初始设计文档交付只检查链接、术语、规则一致性和差异；编码交付按生产代码验证矩阵执行。编码前执行任务预检；涉及生产代码时使用 code-comment-quality，文件变更与交付分别遵守 iot-change-verification 和 safe-pr-delivery。无需另建重复任务计划或通用架构文档。
+
+## 13. 实际后端契约与验证边界
+
+### 13.1 模块及持久化
+
+- `iot.calculation.CalculationPointReadService` 提供计算场景公共读取。读取包含结束时刻锚点，实际积分区间仍为 `[from,to)`；累计表计事件按读数转换 `(previous,current]` 归属，原生入口的事件查询为 `(from,to]`，不改变旧聚合入口。
+- 当前资产档案的 `ANALOG/ACCUMULATE` 是采样形态。冷量、电量累计表要求 `ACCUMULATE+kWh`；流量要求 `ANALOG+m³/h` 或 `m3/h`，温度要求 `ANALOG+℃` 或 `degC`。等价符号规范化固定为 `EERP_CANONICAL_ALIASES_V1`，未实现任意单位转换。
+- 配置创建、审核和生效核对当前冷站台账、历史 `MEASURES` 边及电表分配/层级，并固定引用证据。冷站台账中的冷机、泵、塔须完整覆盖，空调末端不进入分母。专业审核负责确认实际水路、安装侧及制备端位置；软件的配置校验不能替代现场测量位置核实。
+- 冷量组装调用 `NativeQuantityAggregationService`，累计表复用既有修正及事件算法，功率段复用原生阶梯积分。保持到期和每路 `maxGap` 到期均为断点，任一路新样本不能延长其他两路有效期。
+- `NativePeriodSnapshotService` 提供独立原生量发布/读取，不读取 tce 规则。V42 新增冷站配置、任务、并发互斥及原生量索引表；TDengine 复用既有周期数值存储。兼容数值表中的 `point_id` 以 `NATIVE:` 前缀表示派生序列身份，实际物理点依赖保存在不可变输入证据中。
+- MySQL 先固定任务 `stage_json`、实际输入、规则和数字摘要，再幂等写 TDengine，全部写入成功后任务才为 `SUCCEEDED`。恢复已有 stage 时不重新读取原始点。原生量数值的 `tce` 列为空；覆盖率的 TDengine 显示副本使用 18 位小数以符合既有列宽，完整精度和完整性判断仍在 MySQL 固定证据中。
+- 没有任何有效冷量/电量时对应总量为 `null`，有效零值为 `0`。不完整周期可保存和封账，但年度不会把它当作完整输入。年度只从显式 `SEALED` 周期集合读取，不扫描全年原始点；跨配置切换须提交精确分段，不能跨生效边界计算或比例拆量。
+
+### 13.2 API 与动作
+
+部署默认上下文为 `/api`，以下列出 Controller 的 `/v1/energy-efficiency` 路径。请求与响应以 `EerpContracts` 及生成的 `/v3/api-docs` 为准。
+
+| 方法和子路径 | 行为 |
+| --- | --- |
+| `POST /configurations` | 创建不可覆盖的配置版本草稿；映射、物性、时间规则和研发评价引用同版审核 |
+| `GET /configurations`、`GET /configurations/{id}` | 按建筑/冷站有限列表或明确版本读取 |
+| `POST /configurations/{id}/actions/{action}` | `SUBMIT`、`APPROVE`、`REJECT`、`ACTIVATE`，携带 `expectedRevision` 和理由 |
+| `POST /period-tasks` | `idempotencyKey/configVersionId/fromInclusive/toExclusive/asOf/predecessorTaskId`，计算一个有界原生量周期 |
+| `POST /annual-tasks` | 建筑、冷站、年份、时区版本和显式 `periodTaskIds`，汇总完整自然年度并作研发评价 |
+| `POST /tasks/{id}/actions/{action}` | `APPROVE_RECALC`、`SUBMIT_SEAL`、`APPROVE_SEAL`，动态职责和职责分离在后端执行 |
+| `POST /tasks/{id}/resume` | 恢复失败或租约过期的任务；已完成任务返回原结果 |
+| `GET /tasks`、`GET /tasks/{id}`、`GET /tasks/{id}/trace` | 有限任务列表、结果及实际输入证据；只读操作不触发重算 |
+
+配置状态为 `DRAFT → SUBMITTED → APPROVED → ACTIVE`，驳回进入 `REJECTED`。已生效区间不可原地改写；来源/参数切换以不重叠的明确生效段建版本。任务一般为 `READY → RUNNING → SUCCEEDED → PENDING_SEAL → SEALED`；失败进入 `FAILED`，恢复可重新领取租约。带前序任务的重算先进入 `PENDING_RECALC`，经另一审核动作批准后为 `READY`，原结果继续保留。结果中的任务执行状态、周期完整性和年度可评价状态分别表达。
+
+### 13.3 有限资源与使用限制
+
+`energy.eerp` 配置提供：周期跨度默认/硬上限 86,400 秒、测点数默认/硬上限 32、年度周期数默认 1,024/硬上限 5,000、并发默认 2/硬上限 4、执行预算默认 45 秒/硬上限 60 秒、单任务证据默认 8 MiB/硬上限 16 MiB。单路保持、时差和最大积分间隔最多一天；每次原始读取固定 500 条一页、20,000 条事实硬上限。每测点计量事件和修正各限 1,000 条，在 SQL 读取阶段取上限加一以拒绝溢出。配置引用的建筑资产/关系读取各限 5,000 行，节点关系单页上限 100，超限拒绝。
+
+执行预算在依赖调用前后和分段之间检查，不强制杀死正在执行的数据库调用；数据库互斥、执行租约和本机槽位同时限制运行，旧租约不能完成新执行。依赖调用长期阻塞时不会继续无限增加本机执行线程。尚需隔离目标引擎及部署容量验证，不能由合成测试推定生产长期吞吐。
+
+### 13.4 本候选的验收证据
+
+本次最终 `./mvnw.cmd --batch-mode --no-transfer-progress verify` 已通过：922 项测试，0 失败、0 错误，其中 40 项条件集成测试跳过（包含本模块尚未启用的目标引擎测试）。该命令同时完成后端编译、普通回归与打包；不把跳过项计为通过。
+
+- `CalculationPointReadServiceTest`：实际公共读取服务的端点锚点、水位、排序、质量阻断、来源性质未知、32 点和 20,000 事实边界。
+- `CoolingComputationCoreTest`、`NativeQuantityAggregationServiceTest`：水物性/对齐/积分、逐路失效、有效零值与非法值、毫秒精度、严格累计锚点、末端复位、回绕/换表/修正及治理证据预算。
+- `EerpServiceTest`：实际公共读取与算法、H2 配置/任务/快照索引、两条冷量来源、365 个封账周期的年度组合、来源切换、配置覆盖、动态职责调用、审核、幂等冲突、写失败恢复、旧租约拒绝及审计回滚。TDengine 在本层使用明确的数值存储替身，实际输入是确定性合成原始点。
+- `EerpAnnualCoreTest`：完整年度 5,000,000/1,000,000=5、闰年、纽约 DST、缺口/重叠、不完整输入、零分母、4/5 严格边界及显示舍入跨阈值。
+- `EerpApiContractTest`：真实 Spring HTTP 鉴权、动态职责、非法 JSON、错误码和生成 OpenAPI；普通测试隔离外部资源。
+- `EerpMysqlTdengineIntegrationTest`：已提供显式启用入口，**尚未执行目标引擎验证**。需 `EERP_IT_ENABLED=true`、`EERP_IT_ISOLATED=true`，并由隔离环境提供 `EERP_IT_MYSQL_URL/USER/PASSWORD` 与 `EERP_IT_TDENGINE_URL/USER/PASSWORD`。MySQL 必须是一次性空库，数据库名按现有迁移链为 `iot_platform`；测试随机创建并回收专用 TDengine 库，不接受现场或生产资源。
+
+目标引擎测试命令为 `./mvnw.cmd -Dtest=EerpMysqlTdengineIntegrationTest test`。已提供的自动化入口不等于该层已通过；本候选仍缺目标引擎联合证据、干净任务独立模块验收、专业规则和现场验收，不声明正式标准符合或软件验收全部完成。

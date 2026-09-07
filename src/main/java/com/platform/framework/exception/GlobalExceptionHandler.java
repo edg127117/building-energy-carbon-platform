@@ -180,6 +180,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", energyActivityErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-aggregation")) {
             response.put("errorCode", energyAggregationErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-efficiency")) {
+            response.put("errorCode", energyPeriodErrorCode.replace("ENERGY_PERIOD_", "EERP_"));
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-periods")) {
             response.put("errorCode", energyPeriodErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-boundary-summaries")) {

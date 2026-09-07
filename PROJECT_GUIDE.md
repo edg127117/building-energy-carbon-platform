@@ -60,6 +60,8 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.energy.catalog`、`energy.conversion` | 治理能源品种、单位量纲、折标公式和参数版本，并提供带完整版本证据的研发模拟 `tce` 计算；不输出正式结算结果 |
 | `com.platform.energy.aggregation` | 通过稳定输入端口聚合累计量、显式周期量和瞬时量，固定关系、绑定、质量、事件、修正和积分策略版本；当前仅有研发模拟算法核心 |
 | `com.platform.energy.period` | 按版本化时区生成自然日/月/年边界，维护开放期唯一当前投影，经审核形成月度不可覆盖快照，并以最多 100 项批次执行有界重算；当前仅输出研发模拟结果 |
+| `com.platform.iot.calculation` | 为指标场景读取有界原始测点快照，保留质量阻断行、末端锚点和读取水位；温度、流量无需伪造能源属性 |
+| `com.platform.energy.efficiency` | 电驱动水冷冷站的版本配置、两种冷量来源、原生周期、封账、年度 EERp 和附件阈值研发评价；经 `energy.aggregation` 与 `energy.period` 公共原生量端口计算和发布，不调用折标服务 |
 | `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
 | `com.platform.relation` | 建筑级关系版本、表计层级和方向、计量边界、分层查询，以及平台 V1 Excel 的模板、预检和草稿导入 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
@@ -177,7 +179,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 三类活动量聚合、真实输入适配与计量事件/修正治理 | [`com.platform.energy.aggregation`](src/main/java/com/platform/energy/aggregation)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 周期当前投影、月度封账与有界重算 | [`com.platform.energy.period`](src/main/java/com/platform/energy/period)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 计量边界汇总与多维查询 | [`com.platform.energy.summary`](src/main/java/com/platform/energy/summary)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 冷站 EERp 计算与研发评价（设计审阅稿，未实现） | [首批范围、输入契约与验收边界](docs/designs/2026-09-07-eerp-water-cooled-station-design.md) |
+| 冷站 EERp 计算与研发评价（后端活动候选） | [范围、公共契约、接口与验收边界](docs/designs/2026-09-07-eerp-water-cooled-station-design.md) |
 | 碳因子、计算、追溯与自动重算 | [`com.platform.carbon`](src/main/java/com/platform/carbon)、[`碳管理基础闭环设计`](docs/designs/2026-09-02-carbon-management-foundation-design.md)、[`电力平均因子与年度选用规则`](docs/designs/2026-09-07-electricity-factor-selection-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
