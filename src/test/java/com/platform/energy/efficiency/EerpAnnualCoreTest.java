@@ -26,6 +26,44 @@ class EerpAnnualCoreTest {
     private final EerpAnnualCore core = new EerpAnnualCore();
 
     @Test
+    void fixesDisplayRuleWithoutChangingStrictBands() {
+        ZoneId zone = ZoneId.of("UTC");
+        String[][] cases = {{"3.999", "4.00", "BELOW_GUIDANCE"}, {"4", "4.00", "AT_GUIDANCE"},
+                {"4.001", "4.00", "GUIDANCE_ONLY"}, {"5", "5.00", "GUIDANCE_ONLY"},
+                {"5.001", "5.00", "ADVANCED"}, {"5.005", "5.01", "ADVANCED"}};
+        for (String[] value : cases) {
+            var input = calendarDaySegments(2025, zone, new BigDecimal(value[0]), BigDecimal.ONE, true);
+            var result = core.calculate(request(2025, zone, input), input, afterYear(2025, zone));
+            assertThat(result.eerp()).isEqualByComparingTo(value[0]);
+            assertThat(result.displayEerp().toPlainString()).isEqualTo(value[1]);
+            assertThat(result.evaluationBand()).isEqualTo(value[2]);
+            assertThat(result.roundingVersion()).isEqualTo("EERP_DISPLAY_2DP_HALF_UP_V1");
+            assertThat(result.displayScale()).isEqualTo(2);
+            assertThat(result.roundingMode()).isEqualTo("HALF_UP");
+        }
+        var precise = calendarDaySegments(2025, zone, new BigDecimal("5.0049999999999999999999999999999999999"), BigDecimal.ONE, true);
+        assertThat(core.calculate(request(2025, zone, precise), precise, afterYear(2025, zone)).displayEerp().toPlainString())
+                .as("展示不经过DECIMAL128二次舍入").isEqualTo("5.00");
+    }
+
+    @Test
+    void rejectsUnfinishedYearAndMismatchedAnnualScope() {
+        var zone = ZoneId.of("UTC");
+        var input = calendarDaySegments(2025, zone, new BigDecimal("5000"), new BigDecimal("1000"), true);
+        var request = request(2025, zone, input);
+        var unfinished = core.calculate(request, input, Instant.parse("2025-12-31T23:59:59.999Z"));
+        assertThat(unfinished.eerp()).isNull(); assertThat(unfinished.displayEerp()).isNull();
+        assertThat(unfinished.issues()).extracting(Issue::code).contains("YEAR_NOT_FINISHED");
+        for (var wrong : List.of(
+                new AnnualRequest("wrong-zone", BUILDING_ID, STATION_ID, 2025, "Asia/Shanghai", TIMEZONE_VERSION, request.periodTaskIds(), null),
+                new AnnualRequest("wrong-version", BUILDING_ID, STATION_ID, 2025, "UTC", "other", request.periodTaskIds(), null),
+                new AnnualRequest("wrong-building", "other", STATION_ID, 2025, "UTC", TIMEZONE_VERSION, request.periodTaskIds(), null))) {
+            assertThatThrownBy(() -> core.calculate(wrong, input, afterYear(2025, zone)))
+                    .isInstanceOfSatisfying(BusinessException.class, error -> assertThat(error.getErrorCode()).isEqualTo("EERP_PERIOD_MISMATCH"));
+        }
+    }
+
+    @Test
     void calculatesCompleteNaturalYearAtExactFive() {
         int year = 2025;
         ZoneId zone = ZoneId.of("Asia/Shanghai");
@@ -124,6 +162,7 @@ class EerpAnnualCoreTest {
         assertThat(annual.eerp()).isNull();
         assertThat(annual.calculationStatus()).isEqualTo("NOT_CALCULABLE");
         assertThat(annual.evaluationStatus()).isEqualTo("NOT_EVALUATED");
+        assertThat(annual.displayEerp()).isNull();
         assertThat(annual.evaluationBand()).isNull();
         assertThat(annual.issues()).extracting(Issue::code).contains("ZERO_DENOMINATOR");
     }

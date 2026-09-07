@@ -16,6 +16,9 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -31,6 +34,20 @@ class EerpIndependentTargetEngineTest {
     @Test
     void twoSourcesReachSealedNaturalYearAndReplayFrozenInputsOnTargetEngines() {
         assertThat(System.getenv("EERP_IT_ISOLATED")).isEqualTo("true");
+        int year=Integer.parseInt(System.getenv().getOrDefault("EERP_ACCEPTANCE_YEAR","2025"));
+        ZoneId zone=ZoneId.of(System.getenv().getOrDefault("EERP_ACCEPTANCE_TIMEZONE","UTC"));
+        assertThat(year).isIn(2024,2025);
+        Instant start=LocalDate.of(year,1,1).atStartOfDay(zone).toInstant();
+        Instant end=LocalDate.of(year+1,1,1).atStartOfDay(zone).toInstant();
+        Instant cut=LocalDate.of(year,7,1).atStartOfDay(zone).toInstant();
+        List<Instant> boundaries=new ArrayList<>(); boundaries.add(start);
+        for(LocalDate date=LocalDate.of(year,1,1);date.getYear()==year;date=date.plusDays(1)) {
+            Instant dayEnd=date.plusDays(1).atStartOfDay(zone).toInstant();
+            // 25小时的DST自然日按24小时任务硬上限精确拆分，不按比例拆累计读数。
+            Instant cursor=boundaries.getLast();
+            while(cursor.plusSeconds(86400).isBefore(dayEnd)) {cursor=cursor.plusSeconds(86400);boundaries.add(cursor);}
+            boundaries.add(dayEnd);
+        }
         var mysql = new JdbcTemplate(new DriverManagerDataSource(System.getenv("EERP_IT_MYSQL_URL"),
                 System.getenv("EERP_IT_MYSQL_USER"), System.getenv("EERP_IT_MYSQL_PASSWORD")));
         assertThat(mysql.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()", Integer.class))
@@ -55,9 +72,11 @@ class EerpIndependentTargetEngineTest {
                 f.service = f.newService();
                 var original = f.configuration(flow);
                 // 两条来源分别覆盖半年，以精确切换边界组成同一个完整自然年。
-                Instant cut = Instant.parse("2025-07-01T00:00:00Z");
                 var configuration = flow ? dailyFlowRules(original) : original;
-                var config = f.activate(interval(configuration, flow ? cut : START, flow ? END : cut));
+                configuration=new Configuration(configuration.buildingId(),configuration.stationId(),configuration.boundaryId(),configuration.relationVersionId(),
+                        zone.getId(),configuration.timezoneVersion(),start,end,configuration.equipment(),configuration.coolingSources(),configuration.electricitySources(),
+                        configuration.professionalEvidence(),configuration.evaluationRuleVersion(),configuration.evaluationReference());
+                var config = f.activate(interval(configuration, flow ? cut : start, flow ? end : cut));
                 var quality = mock(QualityUsagePolicyResolver.class);
                 var context = mock(ResolutionContext.class);
                 when(context.configRevision()).thenReturn(1L);
@@ -74,40 +93,46 @@ class EerpIndependentTargetEngineTest {
                     realStore.write(value);
                 }, new EnergyPeriodAuthorization(f.duties, f.scope), f.mapper);
                 f.service = f.newService();
-                int first = flow ? 181 : 0, last = flow ? 365 : 181;
+                int first = flow ? boundaries.indexOf(cut) : 0, last = flow ? boundaries.size()-1 : boundaries.indexOf(cut);
                 for (String point : flow ? List.of("flow", "supply", "return", "electric") : List.of("cold", "electric")) {
                     taos.execute("CREATE TABLE IF NOT EXISTS " + db + ".raw_" + point + " USING " + db
                             + ".st_raw_event TAGS ('" + point + "','" + point + "','b','station','chiller','chiller','test','test','test',1)");
                     StringBuilder rows = new StringBuilder();
                     for (int day = first; day <= last; day++) {
-                        long at = START.plusSeconds(day * 86400L).toEpochMilli();
+                        long at = boundaries.get(day).toEpochMilli();
+                        int elapsedHours=Math.toIntExact(Duration.between(start,boundaries.get(day)).toHours());
                         // 1000*3.6*100*5/3600=500 kW，全天12000 kWh；累计表同量。
-                        int value = switch (point) { case "cold" -> day * 12000; case "electric" -> day * 2400;
+                        int value = switch (point) { case "cold" -> elapsedHours * 500; case "electric" -> elapsedHours * 100;
                             case "flow" -> 100; case "supply" -> 7; default -> 12; };
-                        rows.append('(').append(at).append(',').append(END.toEpochMilli()).append(',').append(value)
+                        rows.append('(').append(at).append(',').append(end.toEpochMilli()).append(',').append(value)
                                 .append(",0,0,'SYNTHETIC','").append(point).append("','fixture') ");
                     }
                     taos.execute("INSERT INTO " + db + ".raw_" + point + " VALUES " + rows);
                 }
                 for (int day = first; day < last; day++) {
-                    var task = f.period(config, START.plusSeconds(day * 86400L), START.plusSeconds((day + 1) * 86400L), "accept-day-" + day);
+                    var task = f.period(config, boundaries.get(day), boundaries.get(day+1), "accept-day-" + day);
                     assertThat(task.status()).as("day %s failure %s", day, task.failureCode()).isEqualTo("SUCCEEDED");
                     var result = (PeriodResult) task.result();
                     assertThat(result.complete()).isTrue();
-                    assertThat(result.coolingKwh()).isEqualByComparingTo("12000");
-                    assertThat(result.electricityKwh()).isEqualByComparingTo("2400");
+                    long hours=Duration.between(boundaries.get(day),boundaries.get(day+1)).toHours();
+                    assertThat(result.coolingKwh()).isEqualByComparingTo(BigDecimal.valueOf(hours*500));
+                    assertThat(result.electricityKwh()).isEqualByComparingTo(BigDecimal.valueOf(hours*100));
                     f.seal(task);
                 }
                 if (flow) {
                     List<String> ids = mysql.queryForList("SELECT task_id FROM energy_eerp_task WHERE status='SEALED' ORDER BY idempotency_key", String.class);
                     clearInvocations(f.reader);
-                    var annual = f.service.createAnnual(1, ROLES, new AnnualRequest("accept-year", B, S, 2025, "UTC", "tz1", ids, null));
+                    var annual = f.service.createAnnual(1, ROLES, new AnnualRequest("accept-year", B, S, year, zone.getId(), "tz1", ids, null));
                     assertThat(annual.status()).as("annual failure %s", annual.failureCode()).isEqualTo("SUCCEEDED");
                     var result = (AnnualResult) annual.result();
-                    assertThat(result.inputTaskIds()).hasSize(365);
-                    assertThat(result.coolingKwh()).isEqualByComparingTo("4380000");
-                    assertThat(result.electricityKwh()).isEqualByComparingTo("876000");
+                    assertThat(result.inputTaskIds()).hasSize(boundaries.size()-1);
+                    long yearHours=Duration.between(start,end).toHours();
+                    assertThat(result.coolingKwh()).isEqualByComparingTo(BigDecimal.valueOf(yearHours*500));
+                    assertThat(result.electricityKwh()).isEqualByComparingTo(BigDecimal.valueOf(yearHours*100));
                     assertThat(result.eerp()).isEqualByComparingTo("5");
+                    assertThat(result.displayEerp().toPlainString()).isEqualTo("5.00");
+                    assertThat(result.roundingVersion()).isEqualTo("EERP_DISPLAY_2DP_HALF_UP_V1");
+                    assertThat(f.service.task(1,ROLES,annual.taskId()).result()).isEqualTo(result);
                     assertThat(result.evaluationBand()).isEqualTo("GUIDANCE_ONLY");
                     verifyNoInteractions(f.reader);
                     // 原始事实删除后，从已固定失败stage恢复；再按保存的三路输入重算功率段。
@@ -144,7 +169,7 @@ class EerpIndependentTargetEngineTest {
                     }
                     assertThat(replay).isEqualByComparingTo("12000");
                     assertThat(taos.queryForObject("SELECT COUNT(*) FROM " + db + ".st_energy_period_result WHERE tce_value IS NOT NULL", Long.class)).isZero();
-                    System.out.println("EERP_ACCEPTANCE_YEAR periods=365 coolingKwh=4380000 electricityKwh=876000 eerp=5 band=GUIDANCE_ONLY sources=METER_CUMULATIVE,FLOW_TEMPERATURE recovery=FROZEN_STAGE");
+                    System.out.println("EERP_ACCEPTANCE_YEAR year="+year+" timezone="+zone+" periods="+ids.size()+" coolingKwh="+result.coolingKwh()+" electricityKwh="+result.electricityKwh()+" eerp=5 displayEerp=5.00 band=GUIDANCE_ONLY sources=METER_CUMULATIVE,FLOW_TEMPERATURE recovery=FROZEN_STAGE");
                 }
             }
         } catch (java.io.IOException failure) {
