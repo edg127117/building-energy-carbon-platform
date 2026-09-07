@@ -7,6 +7,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 承载部署方显式提供的设备身份、Modbus 点表和 MQTT/TLS 参数，不推断厂家私有语义。
+ */
 @ConfigurationProperties(prefix = "modbus-edge")
 public class ModbusEdgeProperties {
 

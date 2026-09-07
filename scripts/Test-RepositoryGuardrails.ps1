@@ -79,7 +79,7 @@ function Test-ForbiddenPath {
 function Test-JavaClassJavadoc {
     param([string]$Content)
     if ([string]::IsNullOrWhiteSpace($Content)) { return $false }
-    return $Content -match '(?s)/\*\*.+?\*/\s*(?:(?:public|protected|private|abstract|final|static)\s+)*(?:class|interface|enum|record)\s+[A-Za-z_$]'
+    return $Content -match '(?s)/\*\*.+?\*/\s*(?:@[A-Za-z_$][A-Za-z0-9_.$]*(?:\s*\([^)]*\))?\s*)*(?:(?:public|protected|private|abstract|final|static)\s+)*(?:class|interface|enum|record)\s+[A-Za-z_$]'
 }
 
 function Test-FrontendBusinessComment {
@@ -93,9 +93,14 @@ function Test-FrontendBusinessComment {
     return $false
 }
 
+function Test-IsJavaProductionPath {
+    param([string]$Path)
+    return $Path -match '^(?:[^/]+/)?src/main/java/.+\.java$'
+}
+
 function Test-IsProductionPath {
     param([string]$Path)
-    if ($Path -match '^src/main/java/.+\.java$') { return $true }
+    if (Test-IsJavaProductionPath $Path) { return $true }
     return $Path -match '^web/src/.+\.(?:vue|ts)$' -and
         $Path -notmatch '(^|/)(?:__tests__|tests?)/' -and
         $Path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$'
@@ -293,7 +298,7 @@ foreach ($file in $changedFiles) {
     if (Test-ForbiddenPath $file.path) {
         Add-GuardrailError 'FORBIDDEN_PATH' $file.path
     }
-    if ($file.status -like 'A*' -and $file.path -match '^src/main/java/.+\.java$') {
+    if ($file.status -like 'A*' -and (Test-IsJavaProductionPath $file.path)) {
         $content = Get-FileContent $repositoryRoot $file.path $Mode
         if (-not (Test-JavaClassJavadoc $content)) {
             Add-GuardrailError 'JAVA_CLASS_JAVADOC_MISSING' $file.path

@@ -1,5 +1,6 @@
 package com.platform.modbus.protocol;
 
+/** 将连接、超时和协议错误归为稳定类别，供有限重试与失败指标使用。 */
 public class ModbusTransportException extends RuntimeException {
 
     private final FailureType failureType;

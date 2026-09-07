@@ -7,6 +7,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.time.Clock;
 
+/** 装配边缘采集使用的 UTC 时钟、有限重试等待器和隔离任务调度器。 */
 @Configuration
 public class ModbusEdgeConfiguration {
 

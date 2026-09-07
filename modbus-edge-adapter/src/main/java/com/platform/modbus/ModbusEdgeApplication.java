@@ -6,6 +6,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.scheduling.annotation.EnableScheduling;
 
+/** 启动独立的只读 Modbus 边缘采集进程，不承载云端平台业务。 */
 @EnableScheduling
 @EnableConfigurationProperties(ModbusEdgeProperties.class)
 @SpringBootApplication
