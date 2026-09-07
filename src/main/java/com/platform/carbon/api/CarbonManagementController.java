@@ -227,7 +227,7 @@ public class CarbonManagementController {
                 value.createdAt());
     }
 
-    private static FactorVersionView factor(FactorVersion value) {
+    static FactorVersionView factor(FactorVersion value) {
         return new FactorVersionView(value.factorId(), value.factorCode(),
                 value.factorVersionId(), value.versionNo(), value.scopeType().name(),
                 value.energyItemCode(), value.category().name(), value.resultBasis(),
@@ -241,7 +241,7 @@ public class CarbonManagementController {
                 value.components().stream().map(component -> new FactorComponentView(
                         component.componentId(), component.type().name(), component.value(),
                         component.unit(), component.sourceVersionId(),
-                        component.evidenceReference())).toList());
+                        component.evidenceReference())).toList(), value.dataYear(), value.accountingYear());
     }
 
     private static DenominatorVersionView denominator(DenominatorVersion value) {

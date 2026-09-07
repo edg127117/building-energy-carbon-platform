@@ -17,6 +17,23 @@ class CarbonRecalculationPersistenceTest {
             repository, mock(CarbonRuleRepository.class), properties);
 
     @Test
+    void queuedElectricityUpgradeStopsFormalItemButAllowsSimulation() {
+        when(repository.lockLease(eq("BATCH"), eq("OWNER"), any())).thenReturn(true);
+        when(repository.electricityFactorChangeBatch("BATCH")).thenReturn(true);
+        var batch = mock(CarbonModels.RecalculationBatch.class);
+        when(repository.findBatch("BATCH")).thenReturn(batch);
+        when(batch.resultNature()).thenReturn(ResultNature.FORMAL);
+        assertThat(persistence.startItem("ITEM", "BATCH", "OWNER")).isFalse();
+        verify(repository).stopLockedReportItem(eq("ITEM"), any());
+        verify(repository, never()).startItem(anyString(), anyString());
+
+        when(batch.resultNature()).thenReturn(ResultNature.DEVELOPMENT_SIMULATION);
+        when(repository.startItem("SIMULATION_ITEM", "BATCH")).thenReturn(1);
+        assertThat(persistence.startItem("SIMULATION_ITEM", "BATCH", "OWNER")).isTrue();
+        verify(repository, never()).stopLockedReportItem(eq("SIMULATION_ITEM"), any());
+    }
+
+    @Test
     void staleLeaseCannotStartSucceedFailFinishOrRenew() {
         var item = item();
         assertThat(persistence.startItem(item.itemId(), item.batchId(), "STALE")).isFalse();

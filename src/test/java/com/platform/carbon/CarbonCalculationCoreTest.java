@@ -156,7 +156,7 @@ class CarbonCalculationCoreTest {
                 category == FactorCategory.STATIONARY_COMBUSTION
                         ? "CFV_STATIONARY_CO2_V1" : "CFV_ELECTRICITY_CO2E_V1",
                 "CRP_DECIMAL128_V1", 1, 1L, LocalDateTime.now(), 2L,
-                LocalDateTime.now(), "审核通过", 3L, LocalDateTime.now(), components);
+                LocalDateTime.now(), "审核通过", 3L, LocalDateTime.now(), components, null, null);
     }
 
     private static FactorComponent component(ComponentType type, String value, String unit) {

@@ -176,7 +176,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 三类活动量聚合、真实输入适配与计量事件/修正治理 | [`com.platform.energy.aggregation`](src/main/java/com/platform/energy/aggregation)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 周期当前投影、月度封账与有界重算 | [`com.platform.energy.period`](src/main/java/com/platform/energy/period)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
 | 计量边界汇总与多维查询 | [`com.platform.energy.summary`](src/main/java/com/platform/energy/summary)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 碳因子、计算、追溯与自动重算 | [`com.platform.carbon`](src/main/java/com/platform/carbon)、[`碳管理基础闭环设计`](docs/designs/2026-09-02-carbon-management-foundation-design.md) |
+| 碳因子、计算、追溯与自动重算 | [`com.platform.carbon`](src/main/java/com/platform/carbon)、[`碳管理基础闭环设计`](docs/designs/2026-09-02-carbon-management-foundation-design.md)、[`电力平均因子与年度选用规则`](docs/designs/2026-09-07-electricity-factor-selection-design.md) |
 | 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
 | 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
 | 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |

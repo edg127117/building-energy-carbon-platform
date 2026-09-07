@@ -24,13 +24,25 @@ public class CarbonCalculationCore {
     private static final BigDecimal CO2_CARBON_MASS_RATIO = new BigDecimal("44")
             .divide(new BigDecimal("12"), MC);
 
-    public FactorMatch match(ActivitySegment activity, String provinceCode,
+    public FactorMatch match(ActivitySegment activity, String buildingRegionCode,
                              ResultNature nature, List<FactorVersion> candidates) {
+        return match(activity, buildingRegionCode, nature, candidates, false);
+    }
+
+    /** 正式报告后续纠正复用原报告已用组合；停用只影响新匹配，不抹除锁定证据。 */
+    public FactorMatch matchLockedElectricity(ActivitySegment activity, List<FactorVersion> locked) {
+        return match(activity, null, ResultNature.FORMAL, locked, true);
+    }
+
+    private FactorMatch match(ActivitySegment activity, String buildingRegionCode,
+                              ResultNature nature, List<FactorVersion> candidates, boolean locked) {
         FactorCategory category = category(activity.energyItemCode());
+        String provinceCode = ElectricityGridRegions.provinceCode(buildingRegionCode);
+        String gridRegionCode = ElectricityGridRegions.gridRegionCode(buildingRegionCode);
         List<FactorVersion> filtered = candidates.stream()
                 .filter(value -> value.category() == category)
                 .filter(value -> value.energyItemCode().equals(activity.energyItemCode()))
-                .filter(value -> value.status() == LifecycleStatus.ACTIVE)
+                .filter(value -> locked || value.status() == LifecycleStatus.ACTIVE)
                 .filter(value -> value.usageNature() == usageNature(nature))
                 .filter(value -> priority(category, value.applicabilityLevel()) < 100)
                 .filter(value -> !value.effectiveFrom().isAfter(local(
@@ -38,7 +50,9 @@ public class CarbonCalculationCore {
                 .filter(value -> value.effectiveTo() == null
                         || !value.effectiveTo().isBefore(local(
                         activity.endExclusive(), activity.timezoneId())))
-                .filter(value -> applicable(value, activity.buildingId(), provinceCode))
+                .filter(value -> value.accountingYear() == null || value.accountingYear()
+                        == local(activity.startInclusive(), activity.timezoneId()).getYear())
+                .filter(value -> locked || applicable(value, activity.buildingId(), provinceCode, gridRegionCode))
                 .toList();
         if (filtered.isEmpty()) {
             throw error(409, FACTOR_MISSING, "活动周期没有完整覆盖且适用的排放因子");
@@ -55,7 +69,10 @@ public class CarbonCalculationCore {
                 factor.inputUnitCode());
         validateBundle(factor);
         return new FactorMatch(factor, converted,
-                "level=" + factor.applicabilityLevel() + ";factor=" + factor.factorVersionId());
+                "level=" + factor.applicabilityLevel() + ";factor=" + factor.factorVersionId()
+                        + ";algorithm=CARBON_FACTOR_MATCH_V2;grid=" + gridRegionCode
+                        + ";dataYear=" + factor.dataYear() + ";accountingYear=" + factor.accountingYear()
+                        + ";selection=" + (locked ? "LOCKED_REPORT" : "ACTIVE_RULE"));
     }
 
     public CalculatedItem calculate(ActivitySegment activity, FactorMatch match, GwpVersion gwp) {
@@ -74,11 +91,23 @@ public class CarbonCalculationCore {
                     .multiply(gwp.value(), MC);
             gwpVersionId = gwp.gwpVersionId();
         } else {
-            if (gwp != null) {
+            boolean co2Mass = "GAS_MASS".equals(factor.resultBasis());
+            if (co2Mass && (factor.category() != FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+                    || !"CO2".equals(factor.gasCode())
+                    || !"CO2_ONLY_ELECTRICITY".equals(factor.gasCoverage())
+                    || gwp == null || !"CO2".equals(gwp.gasCode())
+                    || BigDecimal.ONE.compareTo(gwp.value()) != 0)) {
+                throw error(409, FACTOR_CONFLICT, "电力CO2质量因子必须使用可追溯的CO2 GWP=1版本");
+            }
+            if (!co2Mass && gwp != null) {
                 throw error(409, FACTOR_CONFLICT, "CO2e直接因子不得重复应用GWP");
             }
             exact = match.convertedActivity().multiply(
                     component(factor, ComponentType.DIRECT_EMISSION_FACTOR).value(), MC);
+            if (co2Mass) {
+                exact = exact.multiply(gwp.value(), MC);
+                gwpVersionId = gwp.gwpVersionId();
+            }
         }
         String evidence = "{\"snapshotId\":\"" + activity.snapshotId()
                 + "\",\"activityEvidenceHash\":\"" + activity.evidenceHash()
@@ -88,6 +117,12 @@ public class CarbonCalculationCore {
                 + "\",\"activityUnit\":\"" + activity.unitCode()
                 + "\",\"convertedQuantity\":\"" + match.convertedActivity().toPlainString()
                 + "\",\"factorInputUnit\":\"" + factor.inputUnitCode()
+                + "\",\"sourceVersionId\":\"" + factor.sourceVersionId()
+                + "\",\"dataYear\":\"" + factor.dataYear()
+                + "\",\"accountingYear\":\"" + factor.accountingYear()
+                + "\",\"resultBasis\":\"" + factor.resultBasis()
+                + "\",\"factorUnit\":\"" + (factor.category() == FactorCategory.STATIONARY_COMBUSTION
+                        ? "" : component(factor, ComponentType.DIRECT_EMISSION_FACTOR).unit())
                 + "\",\"gwpVersionId\":\"" + (gwp == null ? "" : gwp.gwpVersionId())
                 + "\",\"gwpValue\":\"" + (gwp == null ? "" : gwp.value().toPlainString())
                 + "\",\"rawKgCO2e\":\"" + exact.toPlainString() + "\"}";
@@ -220,7 +255,8 @@ public class CarbonCalculationCore {
         } else {
             FactorComponent direct = required(components, ComponentType.DIRECT_EMISSION_FACTOR);
             if (components.size() != 1 || direct.value().signum() < 0
-                    || !direct.unit().equals("KG_CO2E/" + factor.inputUnitCode())) {
+                    || !direct.unit().equals(("GAS_MASS".equals(factor.resultBasis())
+                        ? "KG_CO2/" : "KG_CO2E/") + factor.inputUnitCode())) {
                 throw error(409, FACTOR_CONFLICT, "电力或热力直接因子组合参数或单位无效");
             }
         }
@@ -239,10 +275,12 @@ public class CarbonCalculationCore {
         return value;
     }
 
-    private static boolean applicable(FactorVersion value, String buildingId, String province) {
+    private static boolean applicable(FactorVersion value, String buildingId, String province,
+                                      String gridRegion) {
         return switch (value.applicabilityLevel()) {
             case BUILDING_SPECIFIC -> buildingId.equals(value.buildingId());
             case PROVINCE -> province != null && province.equals(value.regionCode());
+            case GRID_REGION -> gridRegion != null && gridRegion.equals(value.regionCode());
             case NATIONAL, NOT_REGION_SPECIFIC -> true;
         };
     }
@@ -254,10 +292,12 @@ public class CarbonCalculationCore {
                 case PROVINCE -> 1;
                 case NATIONAL -> 2;
                 case NOT_REGION_SPECIFIC -> 3;
+                case GRID_REGION -> 100;
             };
             case PURCHASED_ELECTRICITY_LOCATION -> switch (level) {
                 case PROVINCE -> 0;
-                case NATIONAL -> 1;
+                case GRID_REGION -> 1;
+                case NATIONAL -> 2;
                 default -> 100;
             };
             case PURCHASED_HEAT -> switch (level) {

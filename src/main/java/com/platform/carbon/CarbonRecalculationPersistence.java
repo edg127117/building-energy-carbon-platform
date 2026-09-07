@@ -52,6 +52,11 @@ class CarbonRecalculationPersistence {
             if (factor != null) {
                 impacted = impacted.stream().filter(value -> repository.batchTouchesEnergyItem(
                         value.batchId(), factor.energyItemCode())).toList();
+                if (factor.category() == FactorCategory.PURCHASED_ELECTRICITY_LOCATION) {
+                    // 报告账锁定电力因子；升级或补录不创建正式历史重算，研发验证仍可独立复算。
+                    impacted = impacted.stream().filter(value -> value.resultNature()
+                            != ResultNature.FORMAL).toList();
+                }
             }
         }
         // 已冻结或边界不同的活动项仍占有建筑年度锁；保留原变化等待后继批次，不能吞入旧审批依据。
@@ -143,6 +148,11 @@ class CarbonRecalculationPersistence {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     boolean startItem(String itemId, String batchId, String token) {
         if (!repository.lockLease(batchId, token, LocalDateTime.now())) return false;
+        if (repository.electricityFactorChangeBatch(batchId)
+                && repository.findBatch(batchId).resultNature() == ResultNature.FORMAL) {
+            repository.stopLockedReportItem(itemId, LocalDateTime.now());
+            return false;
+        }
         return repository.startItem(itemId, batchId) == 1;
     }
 

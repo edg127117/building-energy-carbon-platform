@@ -139,6 +139,28 @@ class CarbonRecalculationRepository {
         return count != null && count > 0;
     }
 
+    boolean electricityFactorChangeBatch(String batchId) {
+        Integer count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_carbon_recalculation_batch_trigger bt
+                JOIN biz_carbon_recalculation_trigger t ON t.trigger_id=bt.trigger_id
+                JOIN biz_carbon_dependency_change d ON d.change_id=t.change_id
+                JOIN biz_carbon_factor f ON f.factor_id=d.source_object_id
+                WHERE bt.recalculation_batch_id=? AND d.change_type IN ('FACTOR','MISSING_FACTOR_FILLED')
+                  AND f.factor_category='PURCHASED_ELECTRICITY_LOCATION'
+                """, Integer.class, batchId);
+        return count != null && count > 0;
+    }
+
+    void stopLockedReportItem(String itemId, LocalDateTime now) {
+        jdbc.update("""
+                UPDATE biz_carbon_recalculation_item
+                SET status='DEAD',safe_error_code='CARBON_REPORT_FACTOR_LOCKED',
+                    safe_error_message='报告账因子已锁定，不执行电力因子升级重算',
+                    approval_eligible=0,active_lock_key=NULL,completed_at=?
+                WHERE recalculation_item_id=? AND status IN ('PENDING','FAILED_RETRYABLE')
+                """, timestamp(now), itemId);
+    }
+
     boolean lockCurrentResult(String batchId) {
         return one("""
                 SELECT calculation_batch_id FROM biz_carbon_calculation_batch
@@ -471,6 +493,7 @@ class CarbonRecalculationRepository {
     }
 
     int publishBatch(String batchId, LocalDateTime now) {
+        if (electricityFactorChangeBatch(batchId)) return 0;
         List<RecalculationItem> eligible = jdbc.query("""
                 SELECT * FROM biz_carbon_recalculation_item
                 WHERE recalculation_batch_id=? AND status='SUCCEEDED' AND approval_eligible=1
@@ -478,6 +501,16 @@ class CarbonRecalculationRepository {
                 """, CarbonRecalculationRepository::item, batchId);
         if (eligible.isEmpty()) return 0;
         for (RecalculationItem item : eligible) {
+            // 旧版已经排队的候选也不能用新电力因子或新GWP替代已锁定报告。
+            Integer changed = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM biz_carbon_calculation_item candidate
+                    WHERE candidate.calculation_batch_id=? AND candidate.energy_item_code='ELECTRICITY'
+                      AND NOT EXISTS (SELECT 1 FROM biz_carbon_calculation_item original
+                        WHERE original.calculation_batch_id=? AND original.energy_item_code='ELECTRICITY'
+                          AND original.factor_version_id=candidate.factor_version_id
+                          AND COALESCE(original.gwp_version_id,'')=COALESCE(candidate.gwp_version_id,''))
+                    """, Integer.class, item.candidateCalculationBatchId(), item.oldCalculationBatchId());
+            if (changed == null || changed != 0) return 0;
             Integer current = jdbc.queryForObject("""
                     SELECT COUNT(*) FROM biz_carbon_calculation_batch
                     WHERE calculation_batch_id=? AND publication_status IN ('DIRECT','PUBLISHED')

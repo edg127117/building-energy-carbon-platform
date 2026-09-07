@@ -59,7 +59,9 @@ public final class CarbonContracts {
             LocalDateTime effectiveTo,
             @NotBlank @Size(max = 32) String formulaVersionId,
             @NotBlank @Size(max = 32) String roundingPolicyVersionId,
-            @NotEmpty @Size(max = 4) List<@Valid FactorComponentRequest> components) {
+            @NotEmpty @Size(max = 4) List<@Valid FactorComponentRequest> components,
+            @Min(1900) @Max(2200) Integer dataYear,
+            @Min(2000) @Max(2200) Integer accountingYear) {
     }
 
     public record ReviewRequest(
@@ -137,7 +139,7 @@ public final class CarbonContracts {
             String roundingPolicyVersionId, int configRevision, long createdBy,
             LocalDateTime createdAt, Long reviewedBy, LocalDateTime reviewedAt,
             String reviewComment, Long activatedBy, LocalDateTime activatedAt,
-            List<FactorComponentView> components) {
+            List<FactorComponentView> components, Integer dataYear, Integer accountingYear) {
     }
 
     public record DenominatorVersionView(

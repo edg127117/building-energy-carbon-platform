@@ -31,12 +31,19 @@ class CarbonManagementMysqlIntegrationTest {
                 Integer.class)).isZero();
 
         Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init")
+                .target("40").load().migrate();
+        int gwpVersions = jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_gwp_version", Integer.class);
+        Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init")
                 .load().migrate();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_gwp_version", Integer.class))
+                .isEqualTo(gwpVersions);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_electricity_catalog_import",
+                Integer.class)).isZero();
 
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("40");
+                """, String.class)).isEqualTo("41");
         assertThat(jdbc.queryForList("""
                 SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE()
                   AND table_name LIKE 'biz_carbon_%'
