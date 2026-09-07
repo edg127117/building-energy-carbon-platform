@@ -156,7 +156,7 @@ public final class CarbonContracts {
             String calculationItemId, String snapshotId, String energyItemCode,
             String scopeType, BigDecimal activityQuantity, String activityUnitCode,
             String factorVersionId, String formulaVersionId, String gwpVersionId,
-            BigDecimal emissionKgCo2e, String matchReason, String evidenceHash) {
+            BigDecimal emissionKgCo2e, String matchReason, String evidenceHash, String evidenceUrl) {
     }
 
     public record SummaryView(
@@ -180,7 +180,8 @@ public final class CarbonContracts {
             int detailCount, boolean slowCalculation, String safeErrorCode,
             String safeErrorMessage, List<CalculationItemView> items,
             List<CalculationFailureView> failures,
-            List<SummaryView> summaries) {
+            List<SummaryView> summaries, String requestHash, long createdBy,
+            String roundingPolicyVersionId) {
     }
 
     public record RecalculationItemView(

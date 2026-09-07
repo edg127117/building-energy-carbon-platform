@@ -31,7 +31,7 @@ class EerpMysqlTdengineIntegrationTest {
         assertThat(index.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()",Integer.class))
                 .as("调用方必须提供一次性空MySQL库").isZero();
         Flyway.configure().dataSource(mysql).locations("filesystem:src/env/init").load().migrate();
-        assertThat(index.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1",String.class)).isEqualTo("42");
+        assertThat(index.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1",String.class)).isEqualTo("43");
         var taos=new JdbcTemplate(new DriverManagerDataSource(System.getenv("EERP_IT_TDENGINE_URL"),
                 System.getenv("EERP_IT_TDENGINE_USER"),System.getenv("EERP_IT_TDENGINE_PASSWORD")));
         String database="eerp_it_"+UUID.randomUUID().toString().replace("-","");
