@@ -1,0 +1,18 @@
+package com.platform.modbus.mqtt;
+
+/** MQTT 连接、TLS、认证和 ACL 失败的稳定监控分类。 */
+public enum MqttFailureCategory {
+    CA_UNTRUSTED,
+    CERTIFICATE_TIME_INVALID,
+    HOSTNAME_MISMATCH,
+    CLIENT_CERTIFICATE_REJECTED,
+    BAD_CREDENTIALS,
+    NOT_AUTHORIZED,
+    TLS_CONFIGURATION,
+    DNS_FAILURE,
+    CONNECTION_REFUSED,
+    TIMEOUT,
+    BROKER_UNAVAILABLE,
+    PROTOCOL_ERROR,
+    UNKNOWN
+}

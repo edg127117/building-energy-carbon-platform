@@ -1,0 +1,42 @@
+server:
+  address: ${MODBUS_EDGE_BIND_ADDRESS:127.0.0.1}
+  port: ${MODBUS_EDGE_PORT:8092}
+
+spring:
+  application:
+    name: modbus-edge-adapter
+
+modbus-edge:
+  # 缺少经过确认的设备配置时保持关闭，禁止使用示例点位采集真实设备。
+  enabled: ${MODBUS_EDGE_ENABLED:false}
+  worker-threads: ${MODBUS_EDGE_WORKER_THREADS:4}
+  max-attempts: ${MODBUS_EDGE_MAX_ATTEMPTS:3}
+  retry-delay: ${MODBUS_EDGE_RETRY_DELAY:500ms}
+  mqtt:
+    enabled: ${MODBUS_EDGE_MQTT_ENABLED:true}
+    broker-url: ${MODBUS_EDGE_MQTT_BROKER_URL:ssl://127.0.0.1:8883}
+    client-id: ${MODBUS_EDGE_MQTT_CLIENT_ID:modbus-edge-adapter-01}
+    username: ${MODBUS_EDGE_MQTT_USER:}
+    password: ${MODBUS_EDGE_MQTT_PASSWORD:}
+    standard-topic: ${MODBUS_EDGE_MQTT_STANDARD_TOPIC:platform/telemetry/v2/up}
+    application-ack-topic: ${MODBUS_EDGE_MQTT_ACK_TOPIC:platform/telemetry/v2/ack/modbus-edge}
+    connection-timeout: ${MODBUS_EDGE_MQTT_CONNECTION_TIMEOUT:10s}
+    operation-timeout: ${MODBUS_EDGE_MQTT_OPERATION_TIMEOUT:10s}
+    ack-timeout: ${MODBUS_EDGE_MQTT_ACK_TIMEOUT:30s}
+    tls:
+      enabled: ${MODBUS_EDGE_MQTT_TLS_ENABLED:true}
+      # 仅供隔离自动化测试；研发和生产运行不得用它绕过 TLS。
+      allow-plaintext-for-tests: ${MODBUS_EDGE_MQTT_ALLOW_PLAINTEXT_TEST_MODE:false}
+      trust-store: ${MODBUS_EDGE_MQTT_TLS_TRUST_STORE:}
+      trust-store-password: ${MODBUS_EDGE_MQTT_TLS_TRUST_STORE_PASSWORD:}
+      trust-store-type: ${MODBUS_EDGE_MQTT_TLS_TRUST_STORE_TYPE:PKCS12}
+      key-store: ${MODBUS_EDGE_MQTT_TLS_KEY_STORE:}
+      key-store-password: ${MODBUS_EDGE_MQTT_TLS_KEY_STORE_PASSWORD:}
+      key-store-type: ${MODBUS_EDGE_MQTT_TLS_KEY_STORE_TYPE:PKCS12}
+  devices: []
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics

@@ -233,7 +233,7 @@ function Get-ChangedProductionFiles {
         if ([string]::IsNullOrWhiteSpace($row)) { continue }
         $parts = $row -split "`t"
         $path = $parts[-1].Replace('\', '/')
-        $isJavaProduction = $path -match '^src/main/java/.+\.java$'
+        $isJavaProduction = $path -match '^(?:[^/]+/)?src/main/java/.+\.java$'
         $isFrontendProduction = $path -match '^web/src/.+\.(?:vue|ts)$' -and
             $path -notmatch '(^|/)(?:__tests__|tests?)/' -and
             $path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$'
