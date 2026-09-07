@@ -1,0 +1,10 @@
+[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.939 s -- in com.platform.energy.aggregation.NativeQuantityAggregationServiceTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.110 s -- in com.platform.energy.efficiency.CoolingComputationCoreTest
+[INFO] Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.084 s -- in com.platform.energy.efficiency.EerpAnnualCoreTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 37.17 s -- in com.platform.energy.efficiency.EerpApiContractTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.349 s -- in com.platform.energy.efficiency.EerpIndependentBoundaryTest
+[INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.837 s -- in com.platform.energy.efficiency.EerpServiceTest
+[INFO] Tests run: 13, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.461 s -- in com.platform.iot.calculation.CalculationPointReadServiceTest
+[INFO] Tests run: 52, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Total time:  01:20 min
