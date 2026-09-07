@@ -86,11 +86,13 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务。多数据源必须使用明确 Bean 和 `Qualifier`，不得跨数据源执行 SQL。
 
-### 新前端入口与目录边界
+### 前端入口与目录边界
 
-新前端与继承页面保留在同一 `web` 工程，使用独立入口隔离旧全局样式；`index.html` 继续承载旧页面，`platform.html` 承载新前端。进入 `web` 后运行 `npm ci`、`npm run dev:platform` 可预览新骨架；办公端为 `platform.html#/office`，监控端为 `platform.html#/monitor/monitoring`。这是无业务数据、未接入鉴权的骨架预览入口，不是受保护业务入口。
+`web/index.html → src/app/main.ts` 是唯一前端入口，旧入口、旧页面、Ant Design、Tailwind 和旧深色 HVAC 样式已退出。进入 `web` 后运行 `npm ci`、`npm run dev`；登录后办公端默认进入 `#/office/dashboard`，监控端入口为 `#/monitor/monitoring`。哈希路由刷新不需要服务端业务路由回退。
 
-`npm run build` 同时构建旧入口到 `web/dist`、新入口到 `web/dist/platform`；部署整个 `dist` 时新地址为 `/platform/platform.html#/office`，单独托管新产物时为 `/platform.html#/office`。哈希路由刷新不需要服务端业务路由回退；现有生产部署默认入口不变。
+前端已迁入登录、退出、当前用户、路由守卫、平台管理员与建筑范围，以及用户、角色菜单、菜单、建筑访问、建筑/空间/系统、设备/测点、产品模板、待接入设备等既有能力。敏感写操作继续使用后端统一申请、提交、审核和执行链，不恢复已稳定拒绝的旧直接写接口。
+
+继承的 19 个 HVAC 测点、四项指标、历史趋势、计算证据、WebSocket 实时更新与 HTTP 对账作为可替换业务能力保留在 `modules/dashboard` 和 `modules/trend-analysis`；它们不是通用骨架约束，后续调整或移除不会要求重建应用外壳。
 
 | 目录 | 职责与边界 |
 |---|---|
@@ -104,7 +106,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 目录依赖、统一文案和样式变量规则由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束；`npm run lint` 包含此检查。相似 UI 第三次出现时优先抽象复用，不复制控件；自动检查不能替代语义和复用审查。设计来源见[已确认实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，交付状态与候选尺寸见 `PROJECT_STATUS.md`。
 
-浏览器骨架检查入口为 `node web/scripts/verify-platform.mjs`：先在仓库根目录安装已有 Playwright 依赖、完成前端构建，再运行脚本；Windows 可在当前终端设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装 Edge，其他环境使用已安装的 Playwright Chromium。脚本只启动本机临时静态服务，截图和结果写入忽略目录 `.codex-backups/frontend-foundation`，不连接业务后端。
+浏览器检查入口为 `node web/scripts/verify-platform.mjs`：完成前端构建后运行；Windows 可设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装 Edge。脚本只启动本机临时静态服务，使用测试拦截验证登录、办公端、监控端和布局边界，截图和结果写入忽略目录 `.codex-backups/frontend-foundation`，不等于真实后端或现场验收。
 
 ## 5. 目标数据链路
 

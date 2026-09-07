@@ -33,11 +33,10 @@ const navigationOpen = ref(false)
         </div>
         <time class="monitor-clock" :datetime="now.toISOString()">{{ formatDateTime(now) }}</time>
       </header>
-      <div class="monitor-notices">
+      <div v-if="shell.navigationFailed || shell.offline || failed" class="monitor-notices">
         <ElAlert v-if="shell.navigationFailed" :title="t('error.page')" type="error" show-icon :closable="false" />
         <ElAlert v-if="shell.offline" :title="t('error.offline')" type="warning" show-icon :closable="false" />
         <ElAlert v-if="failed" :title="t('error.fullscreen')" type="error" show-icon :closable="false" />
-        <ElAlert :title="t('common.foundation')" :description="t('common.foundationDescription')" type="info" :closable="false" />
       </div>
       <main id="platform-content" class="monitor-content" :aria-label="t('navigation.content')">
         <RouterView v-slot="{ Component }">

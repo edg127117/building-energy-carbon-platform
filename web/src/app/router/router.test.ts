@@ -11,7 +11,7 @@ describe('office and monitor composition', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const pinia = createPinia()
     const router = createPlatformRouter(createMemoryHistory())
-    await router.push('/office')
+    await router.push('/office/drilldown')
     const wrapper = mount(App, { global: { plugins: [pinia, router] } })
     router.addRoute({ path: '/test-unavailable', component: () => Promise.reject(new Error('internal chunk path')) })
     await expect(router.push('/test-unavailable')).rejects.toThrow()
