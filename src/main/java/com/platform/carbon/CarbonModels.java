@@ -20,7 +20,7 @@ public final class CarbonModels {
         STATIONARY_COMBUSTION, PURCHASED_ELECTRICITY_LOCATION, PURCHASED_HEAT
     }
     public enum ApplicabilityLevel {
-        BUILDING_SPECIFIC, PROVINCE, NATIONAL, NOT_REGION_SPECIFIC
+        BUILDING_SPECIFIC, PROVINCE, GRID_REGION, NATIONAL, NOT_REGION_SPECIFIC
     }
     public enum ComponentType {
         LOWER_HEATING_VALUE, CARBON_CONTENT_PER_HEAT, OXIDATION_RATE,
@@ -61,7 +61,7 @@ public final class CarbonModels {
             String roundingPolicyVersionId, int configRevision, long createdBy,
             LocalDateTime createdAt, Long reviewedBy, LocalDateTime reviewedAt,
             String reviewComment, Long activatedBy, LocalDateTime activatedAt,
-            List<FactorComponent> components) {
+            List<FactorComponent> components, Integer dataYear, Integer accountingYear) {
         public FactorVersion {
             components = List.copyOf(components);
         }

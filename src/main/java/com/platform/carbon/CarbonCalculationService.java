@@ -244,8 +244,20 @@ public class CarbonCalculationService {
         if (activities.size() > properties.getMaximumDetails()) {
             throw error(409, LIMIT_EXCEEDED, "计算明细超过单次硬上限");
         }
-        String province = province(read(deadline,
-                () -> ruleRepository.findBuildingRegion(batch.buildingId())));
+        String buildingRegion = read(deadline,
+                () -> ruleRepository.findBuildingRegion(batch.buildingId()));
+        CalculationDetail lockedReport = batch.resultNature() == ResultNature.FORMAL
+                && batch.supersedesBatchId() != null
+                ? read(deadline, () -> repository.detail(batch.supersedesBatchId())) : null;
+        if (batch.resultNature() == ResultNature.FORMAL && batch.supersedesBatchId() != null
+                && (lockedReport == null || !lockedReport.batch().buildingId().equals(batch.buildingId())
+                || lockedReport.batch().resultNature() != ResultNature.FORMAL)) {
+            throw error(409, FACTOR_CONFLICT, "原正式报告不存在或归属不一致，不能重建锁定因子");
+        }
+        List<FactorVersion> lockedElectricity = lockedReport == null ? List.of()
+                : lockedReport.items().stream().filter(item -> "ELECTRICITY".equals(item.energyItemCode()))
+                .map(StoredCalculationItem::factorVersionId).distinct()
+                .map(id -> read(deadline, () -> ruleRepository.findFactorVersion(id))).toList();
         List<CalculatedItem> items = new ArrayList<>();
         List<CalculationFailure> failures = new ArrayList<>();
         List<String> incomplete = new ArrayList<>();
@@ -265,10 +277,13 @@ public class CarbonCalculationService {
                         ZoneId.of(activity.timezoneId()));
                 LocalDateTime end = LocalDateTime.ofInstant(activity.endExclusive(),
                         ZoneId.of(activity.timezoneId()));
-                FactorMatch match = core.match(activity, province, batch.resultNature(),
-                        read(deadline, () -> ruleRepository.findCandidateFactors(
-                                activity.energyItemCode(), start, end)));
-                GwpVersion gwp = gwp(match.factor(), batch.resultNature(), start, end, deadline);
+                boolean locked = lockedReport != null && "ELECTRICITY".equals(activity.energyItemCode());
+                FactorMatch match = locked ? core.matchLockedElectricity(activity, lockedElectricity)
+                        : core.match(activity, buildingRegion, batch.resultNature(),
+                            read(deadline, () -> ruleRepository.findCandidateFactors(
+                                    activity.energyItemCode(), start, end)));
+                GwpVersion gwp = locked ? lockedGwp(lockedReport, match.factor(), deadline)
+                        : gwp(match.factor(), batch.resultNature(), start, end, deadline);
                 items.add(core.calculate(activity, match, gwp));
             } catch (BusinessException exception) {
                 if (batch.resultNature() == ResultNature.FORMAL) throw exception;
@@ -320,6 +335,19 @@ public class CarbonCalculationService {
         if (values.isEmpty()) throw error(409, FACTOR_MISSING, "缺少完整覆盖活动周期的GWP版本");
         if (values.size() != 1) throw error(409, FACTOR_CONFLICT, "活动周期匹配到多个GWP版本");
         return values.getFirst();
+    }
+
+    /** 锁定CO2质量因子的GWP证据也取自原报告，避免手动或上游纠正旁路升级因子。 */
+    private GwpVersion lockedGwp(CalculationDetail report, FactorVersion factor,
+                                 CarbonCalculationDeadline deadline) {
+        if (!"GAS_MASS".equals(factor.resultBasis())) return null;
+        List<String> versions = report.items().stream()
+                .filter(item -> item.factorVersionId().equals(factor.factorVersionId()))
+                .map(StoredCalculationItem::gwpVersionId).distinct().toList();
+        if (versions.size() != 1 || versions.getFirst() == null) {
+            throw error(409, FACTOR_CONFLICT, "原报告GWP证据缺失或冲突");
+        }
+        return read(deadline, () -> ruleRepository.findGwpVersion(versions.getFirst()));
     }
 
     private void create(CarbonCalculationDeadline deadline, CalculationBatch batch) {
@@ -534,12 +562,6 @@ public class CarbonCalculationService {
             validation("周期必须是指定时区的完整自然月、季度或年度");
         }
         return new PeriodWindow(start, end, zone.getId());
-    }
-
-    private static String province(String region) {
-        if (region == null || region.isBlank()) return null;
-        String value = region.trim().toUpperCase(Locale.ROOT);
-        return value.matches("[0-9]{6}") ? value.substring(0, 2) + "0000" : value;
     }
 
     private void audit(long actorId, String buildingId, String action, String batchId,

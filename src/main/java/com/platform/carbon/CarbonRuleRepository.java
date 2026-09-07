@@ -57,6 +57,29 @@ class CarbonRuleRepository {
                 """, CarbonRuleRepository::source, sourceVersionId);
     }
 
+    FactorSourceVersion latestSource(String sourceId) {
+        return one("""
+                SELECT s.source_id,s.source_code,v.* FROM biz_carbon_factor_source s
+                JOIN biz_carbon_factor_source_version v ON v.source_id=s.source_id
+                WHERE s.source_id=? ORDER BY v.version_no DESC LIMIT 1
+                """, CarbonRuleRepository::source, sourceId);
+    }
+
+    String importedElectricityFactor(String entryCode, UsageNature nature) {
+        return optionalString("""
+                SELECT factor_version_id FROM biz_carbon_electricity_catalog_import
+                WHERE entry_code=? AND usage_nature=?
+                """, entryCode, nature.name());
+    }
+
+    void recordElectricityImport(String entryCode, UsageNature nature, String versionId,
+                                 long userId, LocalDateTime now) {
+        jdbc.update("""
+                INSERT INTO biz_carbon_electricity_catalog_import
+                (entry_code,usage_nature,factor_version_id,created_by,created_at) VALUES (?,?,?,?,?)
+                """, entryCode, nature.name(), versionId, userId, timestamp(now));
+    }
+
     List<FactorSourceVersion> listSourceVersions(int limit) {
         return jdbc.query("""
                 SELECT s.source_id,s.source_code,v.* FROM biz_carbon_factor_source s
@@ -95,14 +118,15 @@ class CarbonRuleRepository {
                 (factor_version_id,factor_id,version_no,source_version_id,applicability_level,
                  building_id,region_code,input_unit_code,standard_condition_code,usage_nature,status,
                  effective_from,effective_to,formula_version_id,rounding_policy_version_id,
-                 config_revision,created_by,created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,'PENDING_REVIEW',?,?,?,?,0,?,?)
+                 config_revision,created_by,created_at,data_year,accounting_year)
+                VALUES (?,?,?,?,?,?,?,?,?,?,'PENDING_REVIEW',?,?,?,?,0,?,?,?,?)
                 """, value.factorVersionId(), value.factorId(), value.versionNo(),
                 value.sourceVersionId(), value.applicabilityLevel().name(), value.buildingId(),
                 value.regionCode(), value.inputUnitCode(), value.standardConditionCode(),
                 value.usageNature().name(), timestamp(value.effectiveFrom()),
                 timestamp(value.effectiveTo()), value.formulaVersionId(),
-                value.roundingPolicyVersionId(), value.createdBy(), timestamp(value.createdAt()));
+                value.roundingPolicyVersionId(), value.createdBy(), timestamp(value.createdAt()),
+                value.dataYear(), value.accountingYear());
     }
 
     void insertComponents(String factorVersionId, List<FactorComponent> values) {
@@ -156,6 +180,14 @@ class CarbonRuleRepository {
                 UsageNature.valueOf(rs.getString("usage_nature")),
                 local(rs, "effective_from"), local(rs, "effective_to")),
                 gasCode, nature.name(), timestamp(start), timestamp(end));
+    }
+
+    GwpVersion findGwpVersion(String versionId) {
+        return one("SELECT * FROM biz_carbon_gwp_version WHERE gwp_version_id=?",
+                (rs, row) -> new GwpVersion(rs.getString("gwp_version_id"), rs.getString("gas_code"),
+                        rs.getBigDecimal("gwp_value"), rs.getString("source_reference"),
+                        UsageNature.valueOf(rs.getString("usage_nature")),
+                        local(rs, "effective_from"), local(rs, "effective_to")), versionId);
     }
 
     int reviewFactor(String versionId, int revision, long reviewerId, LocalDateTime now,
@@ -318,18 +350,19 @@ class CarbonRuleRepository {
     }
 
     boolean activeFormulaMatches(String formulaVersionId, FactorCategory category,
-                                 UsageNature nature) {
+                                 UsageNature nature, String resultBasis) {
         String expected = switch (category) {
             case STATIONARY_COMBUSTION -> "STATIONARY_COMBUSTION_CO2_V1";
             case PURCHASED_ELECTRICITY_LOCATION ->
-                    "PURCHASED_ELECTRICITY_LOCATION_CO2E_V1";
+                    "GAS_MASS".equals(resultBasis) ? "PURCHASED_ELECTRICITY_LOCATION_CO2_V1"
+                            : "PURCHASED_ELECTRICITY_LOCATION_CO2E_V1";
             case PURCHASED_HEAT -> "PURCHASED_HEAT_CO2E_V1";
         };
         Integer count = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM biz_carbon_formula_version
-                WHERE formula_version_id=? AND algorithm_code=? AND status='ACTIVE'
+                WHERE formula_version_id=? AND algorithm_code=? AND result_basis=? AND status='ACTIVE'
                   AND (?='DEVELOPMENT_REFERENCE' OR usage_nature='FORMAL')
-                """, Integer.class, formulaVersionId, expected, nature.name());
+                """, Integer.class, formulaVersionId, expected, resultBasis, nature.name());
         return count != null && count == 1;
     }
 
@@ -386,7 +419,8 @@ class CarbonRuleRepository {
                 value.status(), value.effectiveFrom(), value.effectiveTo(),
                 value.formulaVersionId(), value.roundingPolicyVersionId(), value.configRevision(),
                 value.createdBy(), value.createdAt(), value.reviewedBy(), value.reviewedAt(),
-                value.reviewComment(), value.activatedBy(), value.activatedAt(), components);
+                value.reviewComment(), value.activatedBy(), value.activatedAt(), components,
+                value.dataYear(), value.accountingYear());
     }
 
     private static String factorSelect() {
@@ -446,7 +480,8 @@ class CarbonRuleRepository {
                 rs.getString("rounding_policy_version_id"), rs.getInt("config_revision"),
                 rs.getLong("created_by"), local(rs, "created_at"), nullableLong(rs, "reviewed_by"),
                 local(rs, "reviewed_at"), rs.getString("review_comment"),
-                nullableLong(rs, "activated_by"), local(rs, "activated_at"), List.of());
+                nullableLong(rs, "activated_by"), local(rs, "activated_at"), List.of(),
+                nullableInt(rs, "data_year"), nullableInt(rs, "accounting_year"));
     }
 
     private static FactorIdentity factorIdentity(ResultSet rs, int row) throws SQLException {

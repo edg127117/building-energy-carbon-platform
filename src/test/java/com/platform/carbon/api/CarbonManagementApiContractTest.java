@@ -2,10 +2,14 @@ package com.platform.carbon.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.cache.TokenCacheService;
+import com.platform.cache.TokenValidationResult;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -13,6 +17,9 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -25,6 +32,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class CarbonManagementApiContractTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
+    @MockBean private TokenCacheService tokenCacheService;
+
+    @BeforeEach void isolateLoginState() {
+        // 契约测试保留 JWT 和角色校验；登录态不与其他进程共享 Redis 白名单。
+        when(tokenCacheService.validateActiveToken(anyLong(), anyString()))
+                .thenReturn(TokenValidationResult.ACTIVE);
+    }
 
     @Test
     void exposesStableSecurityValidationAndOpenApiContracts() throws Exception {
@@ -47,6 +61,19 @@ class CarbonManagementApiContractTest {
         assertThat(openApi.path("paths").has(
                 "/v1/carbon-management/recalculations/{batchId}/approve")).isTrue();
         assertThat(openApi.path("components").path("schemas").has("CarbonApiError")).isTrue();
+        assertThat(openApi.path("paths").has(
+                "/v1/carbon-management/electricity-factor-catalog/{entryCode}/import")).isTrue();
+        assertThat(openApi.path("components").path("schemas").path("FactorVersionView")
+                .path("properties").has("dataYear")).isTrue();
+        mockMvc.perform(get("/v1/carbon-management/electricity-factor-catalog"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/v1/carbon-management/electricity-factor-catalog")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.length()").value(114));
+        mockMvc.perform(post("/v1/carbon-management/electricity-factor-catalog/unknown/import")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
     }
 
     private String login() throws Exception {

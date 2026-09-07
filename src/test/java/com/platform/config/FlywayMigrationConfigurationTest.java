@@ -60,7 +60,8 @@ class FlywayMigrationConfigurationTest {
                 "V37__mysql_energy_period_closing_recalculation.sql",
                 "V38__mysql_energy_boundary_summary_query.sql",
                 "V39__mysql_carbon_management_foundation.sql",
-                "V40__mysql_carbon_recalculation_recovery.sql");
+                "V40__mysql_carbon_recalculation_recovery.sql",
+                "V41__mysql_electricity_factor_selection.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

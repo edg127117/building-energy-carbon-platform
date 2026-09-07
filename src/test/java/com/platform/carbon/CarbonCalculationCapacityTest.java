@@ -53,6 +53,6 @@ class CarbonCalculationCapacityTest {
                 LifecycleStatus.ACTIVE, LocalDateTime.of(2020, 1, 1, 0, 0), null,
                 "CFV_ELECTRICITY_CO2E_V1", "CRP_DECIMAL128_V1", 1, 1L,
                 LocalDateTime.now(), 2L, LocalDateTime.now(), "审核通过", 3L,
-                LocalDateTime.now(), List.of(component));
+                LocalDateTime.now(), List.of(component), null, null);
     }
 }

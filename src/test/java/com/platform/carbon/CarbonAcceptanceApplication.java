@@ -5,6 +5,7 @@ import com.platform.audit.*;
 import com.platform.cache.BuildingScopeCacheService;
 import com.platform.carbon.CarbonModels.*;
 import com.platform.carbon.api.CarbonManagementController;
+import com.platform.carbon.api.ElectricityFactorCatalogController;
 import com.platform.framework.exception.GlobalExceptionHandler;
 import com.platform.security.JwtUserPrincipal;
 import com.platform.system.mapper.SysUserBuildingMapper;
@@ -70,6 +71,7 @@ import java.util.concurrent.atomic.AtomicInteger;
         CarbonCalculationService.class, CarbonRuleRepository.class, CarbonRuleService.class,
         CarbonRecalculationRepository.class, CarbonRecalculationPersistence.class,
         CarbonRecalculationService.class, CarbonManagementController.class,
+        ElectricityFactorCatalog.class, ElectricityFactorImportService.class, ElectricityFactorCatalogController.class,
         AuditGovernanceProperties.class, JdbcBackendDutyService.class,
         AuditSummarySanitizer.class, JdbcSecurityAuditEvidenceWriter.class,
         SecurityAuditService.class, GlobalExceptionHandler.class, Control.class})

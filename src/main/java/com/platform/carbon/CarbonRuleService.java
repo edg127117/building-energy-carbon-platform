@@ -82,6 +82,12 @@ public class CarbonRuleService {
         String buildingId = nullableText(request.buildingId(), 32, "建筑编码无效");
         String region = nullableCode(request.regionCode(), 64, "地区编码无效");
         validateApplicability(level, buildingId, region);
+        if (level == ApplicabilityLevel.GRID_REGION
+                && (category != FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+                || !Set.of("GRID_NORTH", "GRID_NORTHEAST", "GRID_EAST", "GRID_CENTRAL",
+                "GRID_NORTHWEST", "GRID_SOUTH", "GRID_SOUTHWEST").contains(region))) {
+            validation("区域电网只适用于位置法电力平均因子，且必须使用已定义电网编码");
+        }
         authorization.requireRuleMaintainer(userId, roles, buildingId);
         validateIdentity(scope, category, request.resultBasis(), request.gasCode(),
                 request.gasCoverage());
@@ -91,14 +97,17 @@ public class CarbonRuleService {
         }
         FactorSourceVersion source = requireSource(request.sourceVersionId());
         requireSourceNature(source.usageNature(), nature);
-        if (!repository.activeFormulaMatches(request.formulaVersionId(), category, nature)) {
+        validateYears(category, request);
+        if (!repository.activeFormulaMatches(request.formulaVersionId(), category, nature,
+                normalize(request.resultBasis()))) {
             validation("公式版本不存在、未激活或与因子类别不一致");
         }
         if (!repository.activeRoundingPolicy(request.roundingPolicyVersionId())) {
             validation("舍入策略版本不存在或未激活");
         }
         List<FactorComponent> components = components(request.components(), nature);
-        validateBundle(category, normalize(request.inputUnitCode()), components);
+        validateBundle(category, normalize(request.resultBasis()),
+                normalize(request.inputUnitCode()), components);
         String factorCode = code(request.factorCode(), "因子编码无效");
         String itemCode = code(request.energyItemCode(), "能源品种编码无效");
         LocalDateTime now = LocalDateTime.now();
@@ -128,7 +137,7 @@ public class CarbonRuleService {
                 nature, LifecycleStatus.PENDING_REVIEW, request.effectiveFrom(),
                 request.effectiveTo(), request.formulaVersionId(),
                 request.roundingPolicyVersionId(), 0, userId, now, null, null, null,
-                null, null, components);
+                null, null, components, request.dataYear(), request.accountingYear());
         repository.insertFactorVersion(value);
         repository.insertComponents(value.factorVersionId(), components);
         FactorVersion created = requireFactor(value.factorVersionId());
@@ -346,7 +355,7 @@ public class CarbonRuleService {
         }).toList();
     }
 
-    private static void validateBundle(FactorCategory category, String inputUnit,
+    private static void validateBundle(FactorCategory category, String resultBasis, String inputUnit,
                                        List<FactorComponent> values) {
         if (category == FactorCategory.STATIONARY_COMBUSTION) {
             if (values.size() != 3 || value(values, ComponentType.LOWER_HEATING_VALUE).signum() <= 0
@@ -361,7 +370,7 @@ public class CarbonRuleService {
         } else if (values.size() != 1
                 || value(values, ComponentType.DIRECT_EMISSION_FACTOR).signum() < 0
                 || !unit(values, ComponentType.DIRECT_EMISSION_FACTOR)
-                .equals("KG_CO2E/" + inputUnit)) {
+                .equals(("GAS_MASS".equals(resultBasis) ? "KG_CO2/" : "KG_CO2E/") + inputUnit)) {
             validation("电力或热力因子必须包含一个单位一致的直接排放因子");
         }
     }
@@ -386,16 +395,40 @@ public class CarbonRuleService {
                 || !"CO2_ONLY_FOR_STATIONARY_COMBUSTION".equals(normalize(gasCoverage)))) {
             validation("固定燃烧首版只能使用范围一CO2质量口径");
         }
+        boolean electricityCo2 = category == FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+                && "GAS_MASS".equals(normalize(resultBasis))
+                && "CO2".equals(normalize(gasCode))
+                && "CO2_ONLY_ELECTRICITY".equals(normalize(gasCoverage));
         if (!stationary && (scope != ScopeType.SCOPE_2
-                || !"CO2E_DIRECT".equals(normalize(resultBasis)))) {
-            validation("外购电力和外购热力首版只能使用范围二CO2e直接因子");
+                || (!"CO2E_DIRECT".equals(normalize(resultBasis)) && !electricityCo2))) {
+            validation("范围二要求CO2e直接因子，或明确CO2覆盖的位置法电力平均质量因子");
+        }
+    }
+
+    /** 数据年描述来源统计期，核算年约束业务使用期；不从发布日期推算两者。 */
+    private static void validateYears(FactorCategory category, CreateFactorVersionRequest request) {
+        boolean anyYear = request.dataYear() != null || request.accountingYear() != null;
+        boolean electricityCo2 = category == FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+                && "GAS_MASS".equals(normalize(request.resultBasis()));
+        if (!anyYear && !electricityCo2) return; // 既有版本缺失的年度证据保持缺失，不补造。
+        if (category != FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+                || request.dataYear() == null || request.accountingYear() == null
+                || request.dataYear() < 1900 || request.dataYear() > 2200
+                || request.accountingYear() < 2000 || request.accountingYear() > 2200) {
+            validation("电力因子必须成对提供数据年度和核算年度");
+        }
+        LocalDateTime from = java.time.LocalDate.of(request.accountingYear(), 1, 1).atStartOfDay();
+        if (request.effectiveFrom().isBefore(from) || request.effectiveTo() == null
+                || request.effectiveTo().isAfter(from.plusYears(1))) {
+            validation("电力因子有效期必须位于指定核算年度内");
         }
     }
 
     private static void validateApplicability(ApplicabilityLevel level, String building,
                                               String region) {
         if ((level == ApplicabilityLevel.BUILDING_SPECIFIC) != (building != null)
-                || (level == ApplicabilityLevel.PROVINCE) != (region != null)) {
+                || (level == ApplicabilityLevel.PROVINCE || level == ApplicabilityLevel.GRID_REGION)
+                != (region != null)) {
             validation("因子适用层级与建筑或地区编码不一致");
         }
     }
