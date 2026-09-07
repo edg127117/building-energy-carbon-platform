@@ -1,0 +1,60 @@
+# 仅展示配置结构。地址、点码、单位、字节序和倍率均为虚构测试占位，禁止直接用于真实设备。
+modbus-edge:
+  enabled: false
+  worker-threads: 4
+  max-attempts: 3
+  retry-delay: 500ms
+  mqtt:
+    enabled: true
+    broker-url: ${MODBUS_EDGE_MQTT_BROKER_URL}
+    client-id: ${MODBUS_EDGE_MQTT_CLIENT_ID}
+    username: ${MODBUS_EDGE_MQTT_USER}
+    password: ${MODBUS_EDGE_MQTT_PASSWORD}
+    standard-topic: platform/telemetry/v2/up
+    application-ack-topic: platform/telemetry/v2/ack/modbus-edge
+    connection-timeout: 10s
+    operation-timeout: 10s
+    ack-timeout: 30s
+    tls:
+      enabled: true
+      trust-store: ${MODBUS_EDGE_MQTT_TLS_TRUST_STORE}
+      trust-store-password: ${MODBUS_EDGE_MQTT_TLS_TRUST_STORE_PASSWORD}
+      trust-store-type: PKCS12
+      key-store: ${MODBUS_EDGE_MQTT_TLS_KEY_STORE:}
+      key-store-password: ${MODBUS_EDGE_MQTT_TLS_KEY_STORE_PASSWORD:}
+      key-store-type: PKCS12
+  devices:
+    - name: replace-with-deployment-name
+      enabled: true
+      profile-code: MODBUS_TEST_ONLY
+      profile-version: 1
+      identity-type: CONFIGURED_ID
+      identity-value: replace-with-platform-registered-id
+      poll-interval: 15s
+      connection:
+        type: TCP
+        host: 192.0.2.10
+        port: 502
+        unit-id: 1
+        timeout: 2s
+      points:
+        - code: TEST_TEMPERATURE
+          function: HOLDING_REGISTER
+          address: 0
+          data-type: INT16
+          byte-order: BIG_ENDIAN
+          word-order: HIGH_TO_LOW
+          scale: 0.1
+          offset: 0
+          unit: test-unit
+
+# RTU 设备把 connection 替换为下列结构；串口名仍是占位值。
+#      connection:
+#        type: RTU
+#        serial-port: COM_TEST
+#        baud-rate: 9600
+#        data-bits: 8
+#        stop-bits: 1
+#        parity: NONE
+#        unit-id: 1
+#        timeout: 2s

@@ -571,6 +571,47 @@ function Invoke-RepositoryContractTests {
     Assert-Contains $wrongRisk.Output 'COMMENT_RISK_LEVEL_INVALID' 'production risk mismatch must use a stable error'
     Complete-Case 'risk level must match production change presence'
 
+    $moduleRoot = New-TestRepository 'module-production'
+    Set-Utf8File $moduleRoot 'README.md' "baseline`n"
+    Commit-All $moduleRoot 'baseline'
+    Invoke-GitChecked $moduleRoot @('switch', '-c', 'feature/module-production') | Out-Null
+    Set-Utf8File $moduleRoot 'edge-adapter/src/main/java/com/example/EdgeAdapter.java' @'
+package com.example;
+
+/** 将边缘协议值转换为平台标准报文。 */
+@Deprecated
+public class EdgeAdapter {
+    public String adapt() {
+        return "ok";
+    }
+}
+'@
+    Commit-All $moduleRoot 'add module production code'
+
+    $moduleValid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $moduleRoot @{ PR_BODY = $unifiedBody }
+    Assert-True ($moduleValid.ExitCode -eq 0) "top-level Maven module production code should pass with a production risk level: $($moduleValid.Output)"
+    $moduleWrongRisk = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $moduleRoot @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码') }
+    Assert-True ($moduleWrongRisk.ExitCode -ne 0) 'top-level Maven module production code cannot claim no production code'
+    Assert-Contains $moduleWrongRisk.Output 'COMMENT_RISK_LEVEL_INVALID' 'module production risk mismatch must use a stable error'
+
+    Add-Content -LiteralPath (Join-Path $moduleRoot 'edge-adapter/src/main/java/com/example/EdgeAdapter.java') -Value "`n// 后续优化`n" -Encoding UTF8
+    Commit-All $moduleRoot 'add stale module comment'
+    $moduleComment = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $moduleRoot @{ PR_BODY = $unifiedBody }
+    Assert-True ($moduleComment.ExitCode -ne 0) 'module production comments must be scanned'
+    Assert-Contains $moduleComment.Output 'STALE_OR_LOW_VALUE_COMMENT' 'module production comment findings must use a stable error'
+    Complete-Case 'top-level Maven module production code is guarded and scanned'
+
+    $moduleJavadocRoot = New-TestRepository 'module-javadoc'
+    Set-Utf8File $moduleJavadocRoot 'README.md' "baseline`n"
+    Commit-All $moduleJavadocRoot 'baseline'
+    Invoke-GitChecked $moduleJavadocRoot @('switch', '-c', 'feature/module-javadoc') | Out-Null
+    Set-Utf8File $moduleJavadocRoot 'edge-adapter/src/main/java/com/example/MissingDoc.java' "package com.example;`npublic class MissingDoc {}`n"
+    Commit-All $moduleJavadocRoot 'add undocumented module class'
+    $moduleJavadoc = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $moduleJavadocRoot @{ PR_BODY = $unifiedBody }
+    Assert-True ($moduleJavadoc.ExitCode -ne 0) 'new module Java classes must require class Javadoc'
+    Assert-Contains $moduleJavadoc.Output 'JAVA_CLASS_JAVADOC_MISSING' 'module Javadoc failure must use a stable error'
+    Complete-Case 'new Java classes in top-level Maven modules require Javadoc'
+
     $legacyAudit = New-CompletedAuditContent $root
     $legacy = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-LegacyAuditBody $legacyAudit) }
     Assert-True ($legacy.ExitCode -eq 0) "legacy inline audit should remain compatible: $($legacy.Output)"
