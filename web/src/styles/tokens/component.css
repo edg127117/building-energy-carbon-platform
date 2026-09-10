@@ -8,10 +8,17 @@
   --bec-selection-width: calc(var(--bec-ref-space-64) * 12);
   --bec-selection-offset: calc(var(--bec-ref-space-64) * 2);
   --bec-workspace-header-height: var(--bec-ref-space-64);
+  --bec-workspace-header-background: var(--bec-ref-blue-soft);
+  --bec-workspace-system-background: var(--bec-ref-blue-label);
   --bec-workspace-user-width: calc(var(--bec-ref-space-64) * 2);
   --bec-management-background: var(--bec-ref-management-bg);
   --bec-management-radius: var(--bec-ref-radius-8);
-  --bec-company-logo-width: calc(var(--bec-ref-space-64) + var(--bec-ref-space-48));
+  --bec-management-menu-font-size: var(--bec-ref-font-16);
+  --bec-management-title-font-size: var(--bec-ref-font-18);
+  --bec-workspace-card-title-size: var(--bec-ref-font-18);
+  --bec-company-logo-width: calc(var(--bec-ref-space-64) * 2 + var(--bec-ref-space-32));
+  --bec-company-logo-height: var(--bec-ref-space-40);
+  --bec-workspace-brand-title-size: var(--bec-ref-font-20);
   --bec-workspace-cards-width: calc(var(--bec-ref-space-64) * 17 + var(--bec-ref-space-32));
   --bec-workspace-card-width: calc(var(--bec-ref-space-64) * 5 + var(--bec-ref-space-48));
   --bec-workspace-card-height: calc(var(--bec-ref-space-64) * 4);

@@ -27,7 +27,8 @@ describe('workspace entry cards', () => {
     expect(cards).toHaveLength(count)
     expect(cards.map(card => card.attributes('href'))).toEqual(paths.slice(0, count))
     expect(wrapper.find('.current-system').exists()).toBe(false)
-    expect(wrapper.text()).toContain('公司 LOGO')
+    expect(wrapper.find('.company-logo').attributes('aria-label')).toBe('腾芯筑能科技')
+    expect(wrapper.find('.company-logo img').attributes('src')).toContain('tengcore-logo.png')
     for (const card of cards) {
       expect(card.findAll('button,a,input')).toHaveLength(0)
       expect(card.text()).toContain('进入系统')
