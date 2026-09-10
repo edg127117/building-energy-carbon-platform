@@ -46,7 +46,7 @@ async function logout() {
 </template>
 <style scoped>
 .selection { min-height: 100%; display: flex; flex-direction: column; background: var(--bec-management-background); }
-header { flex-shrink: 0; height: var(--bec-workspace-header-height); padding: 0 var(--bec-space-page); display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-group); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
+header { flex-shrink: 0; height: var(--bec-workspace-header-height); padding: 0 var(--bec-space-page); display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-group); background: var(--bec-workspace-header-background); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); box-shadow: var(--bec-shadow-card); position: relative; z-index: var(--bec-layer-navigation); }
 .account { display: flex; align-items: center; gap: var(--bec-space-group); min-width: 0; }
 .username { max-width: var(--bec-workspace-user-width); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bec-color-text-secondary); }
 main { width: 100%; max-width: var(--bec-workspace-cards-width); margin: auto; padding: var(--bec-ref-space-48) var(--bec-space-page); }
