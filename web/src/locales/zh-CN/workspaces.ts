@@ -1,0 +1,18 @@
+export default {
+  select: '选择系统', selectHint: '请选择要进入的工作系统', switch: '切换系统',
+  monitor: '孪生大屏系统', operations: '智慧运维平台', configuration: '能碳配置管理平台',
+  monitorHint: '查看建筑场景与能碳运行情况', operationsHint: '监测运行、查询分析与设备维护', configurationHint: '维护数据接入、计算口径与权限配置',
+  search: '全局搜索', messages: '消息', user: '当前用户', logout: '退出登录', login: '登录',
+  username: '用户名', password: '密码', required: '请输入用户名和密码', loginFailed: '登录失败，请检查账号信息或稍后重试',
+  accessFailed: '访问权限加载失败，请重试', noAccess: '暂无可访问的系统，请联系管理员配置权限',
+  logoutFailed: '安全退出失败，请重试', back: '返回上一级', groups: '系统菜单',
+  overview: '综合总览', running: '运行总览', realtime: '实时监控', hvac: '暖通空调监控', power: '电力监控', lighting: '照明插座监控', renewable: '可再生能源监控',
+  energy: '能耗管理', energyItems: '分项能耗', energyZones: '分区能耗', trend: '趋势对比', baselineAnalysis: '基准与定额分析', diagnosis: '能耗诊断',
+  carbon: '碳排放管理', carbonOverview: '排放总览', carbonDetails: '排放明细', reduction: '减排管理', assets: '碳资产管理',
+  devices: '设备管理', businessDevices: '业务设备', meters: '监测采集设备', alarms: '报警管理', liveAlarms: '实时报警', historyAlarms: '历史报警',
+  maintenance: '运维管理', plans: '维保计划', orders: '工单管理', faults: '故障记录', reports: '报表中心', energyReports: '能耗报表', carbonReports: '碳排报表',
+  ingestion: '数据接入', pendingDevices: '待接入设备', points: '设备与测点', products: '产品与测点模板', collection: '采集配置', interfaces: '接口配置',
+  space: '空间与系统', buildings: '建筑管理', spaces: '空间管理', systemGroups: '系统分组', indicators: '指标与公式', indicatorList: '指标管理', formulas: '公式管理',
+  factors: '因子管理', emissionFactors: '排放因子', factorVersions: '版本与应用记录', rules: '策略与规则', baselines: '基准与定额', alarmRules: '报警规则',
+  access: '用户与权限', users: '用户管理', roles: '角色与菜单授权', buildingAccess: '建筑访问审核', settings: '系统设置', menus: '菜单管理',
+} as const
