@@ -72,7 +72,7 @@ async function logout() {
 .search-trigger { background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-tag); }
 .icon-trigger { width: var(--bec-control-height); padding: 0; }
 .user-trigger { padding: 0 var(--bec-space-tight); }
-.menu-group { font-size: var(--bec-font-size-navigation); }
+.menu-group { font-size: var(--bec-management-menu-font-size); }
 .group-icon { flex-shrink: 0; width: var(--bec-icon-small); height: var(--bec-icon-small); margin-right: var(--bec-space-section); color: var(--bec-color-text-secondary); stroke-width: 1.5; }
 .menu-label { overflow: hidden; text-overflow: ellipsis; }
 aside { overflow-y: auto; padding: var(--bec-space-group) var(--bec-space-tight); background: var(--bec-color-surface); border-right: var(--bec-border-width) solid var(--bec-color-divider); }

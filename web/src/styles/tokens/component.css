@@ -13,6 +13,9 @@
   --bec-workspace-user-width: calc(var(--bec-ref-space-64) * 2);
   --bec-management-background: var(--bec-ref-management-bg);
   --bec-management-radius: var(--bec-ref-radius-8);
+  --bec-management-menu-font-size: var(--bec-ref-font-16);
+  --bec-management-title-font-size: var(--bec-ref-font-18);
+  --bec-workspace-card-title-size: var(--bec-ref-font-18);
   --bec-company-logo-width: calc(var(--bec-ref-space-64) * 2 + var(--bec-ref-space-32));
   --bec-company-logo-height: var(--bec-ref-space-40);
   --bec-workspace-brand-title-size: var(--bec-ref-font-20);

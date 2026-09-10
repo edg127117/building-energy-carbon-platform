@@ -58,6 +58,6 @@ nav { display: flex; justify-content: center; gap: var(--bec-space-section); }
 .system-icon { width: var(--bec-icon-large); height: var(--bec-icon-large); color: var(--bec-color-action-primary); stroke-width: 1.5; }
 .enter { display: flex; align-items: center; gap: var(--bec-space-tight); margin-top: var(--bec-space-tight); color: var(--bec-color-action-primary); }
 .enter svg { width: var(--bec-icon-small); height: var(--bec-icon-small); }
-strong { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-weight-normal); }
+strong { font-size: var(--bec-workspace-card-title-size); font-weight: var(--bec-font-weight-heading); }
 .access-error { display: grid; gap: var(--bec-space-group); }
 </style>
