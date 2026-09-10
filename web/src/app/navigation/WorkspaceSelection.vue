@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useSession } from '@/modules/auth/public'
 import { t } from '@/locales'
 import { ElAlert, ElButton, ArrowRight } from '@/shared/ui'
-import BrandIdentity from '@/shared/components/BrandIdentity.vue'
+import WorkspaceBrand from './WorkspaceBrand.vue'
+import { workspaceIcons } from './icons'
 import { authorizedPages, workspaces } from './catalog'
 const session = useSession()
 const router = useRouter()
@@ -23,11 +24,10 @@ async function logout() {
 }
 </script>
 <template>
-  <div class="selection">
-    <header><BrandIdentity /><ElButton @click="logout">{{ t('workspaces.logout') }}</ElButton></header>
+  <div class="selection management-surface">
+    <header><WorkspaceBrand /><div class="account"><span class="username" :title="session.user?.username">{{ session.user?.username }}</span><ElButton text @click="logout">{{ t('workspaces.logout') }}</ElButton></div></header>
     <main>
       <h1>{{ t('workspaces.select') }}</h1>
-      <p>{{ t('workspaces.selectHint') }}</p>
       <ElAlert v-if="logoutFailed" :title="t('workspaces.logoutFailed')" type="error" :closable="false" />
       <section v-if="route.query.error || failure || session.failed" class="access-error">
         <ElAlert :title="t('workspaces.accessFailed')" type="error" :closable="false" />
@@ -36,23 +36,27 @@ async function logout() {
       <ElAlert v-else-if="!available.length" :title="t('workspaces.noAccess')" type="info" :closable="false" />
       <nav v-else :aria-label="t('workspaces.select')">
         <RouterLink v-for="system in available" :key="system.id" :to="authorizedPages(session.menus).find(page => page.system === system.id)!.path" class="system-link">
-          <span><strong>{{ t(system.titleKey) }}</strong><small>{{ t(system.hintKey) }}</small></span><ArrowRight aria-hidden="true" />
+          <component :is="workspaceIcons[system.id]" class="system-icon" aria-hidden="true" />
+          <strong>{{ t(system.titleKey) }}</strong>
+          <span class="enter">{{ t('workspaces.enter') }}<ArrowRight aria-hidden="true" /></span>
         </RouterLink>
       </nav>
     </main>
   </div>
 </template>
 <style scoped>
-.selection { min-height: 100%; padding: var(--bec-space-page); }
-header { display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-group); }
-main { max-width: var(--bec-selection-width); margin: var(--bec-selection-offset) auto; }
-h1 { font-size: var(--bec-font-size-system); margin: 0; }
-p { color: var(--bec-color-text-secondary); margin: var(--bec-space-tight) 0 var(--bec-space-section); }
-nav { background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
-.system-link { display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-section); padding: var(--bec-space-section); text-decoration: none; color: var(--bec-color-text-primary); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
-.system-link:last-child { border-bottom: 0; }
-.system-link:hover { background: var(--bec-color-surface-secondary); color: var(--bec-color-action-primary); }
+.selection { min-height: 100%; background: var(--bec-management-background); }
+header { height: var(--bec-workspace-header-height); padding: 0 var(--bec-space-page); display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-group); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
+.account { display: flex; align-items: center; gap: var(--bec-space-group); min-width: 0; }
+.username { max-width: var(--bec-workspace-user-width); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bec-color-text-secondary); }
+main { max-width: var(--bec-workspace-cards-width); margin: var(--bec-selection-offset) auto; padding: 0 var(--bec-space-page); }
+h1 { text-align: center; font-size: var(--bec-font-size-system); margin: 0 0 var(--bec-ref-space-40); }
+nav { display: flex; justify-content: center; gap: var(--bec-space-section); }
+.system-link { flex: 1; max-width: var(--bec-workspace-card-width); min-width: 0; min-height: var(--bec-workspace-card-height); box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: var(--bec-space-section); padding: var(--bec-space-section); text-align: center; text-decoration: none; color: var(--bec-color-text-primary); background: var(--bec-color-surface); border-radius: var(--bec-management-radius); box-shadow: var(--bec-shadow-card); }
+.system-link:hover, .system-link:focus-visible { color: var(--bec-color-action-primary); box-shadow: var(--bec-shadow-raised); }
+.system-icon { width: var(--bec-icon-large); height: var(--bec-icon-large); color: var(--bec-color-action-primary); stroke-width: 1.5; }
+.enter { display: flex; align-items: center; gap: var(--bec-space-tight); color: var(--bec-color-action-primary); }
+.enter svg { width: var(--bec-icon-small); height: var(--bec-icon-small); }
 strong { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-weight-heading); }
-small { display: block; margin-top: var(--bec-space-tight); font-size: var(--bec-font-size-body); color: var(--bec-color-text-secondary); }
 .access-error { display: grid; gap: var(--bec-space-group); }
 </style>

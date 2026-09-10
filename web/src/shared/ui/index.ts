@@ -6,3 +6,4 @@ export {
 export { default as zhCn } from 'element-plus/es/locale/lang/zh-cn'
 export { CircleAlert, CircleCheck, Info, Monitor, Maximize, Minimize, ArrowLeft, Clock, WifiOff } from 'lucide-vue-next'
 export { LayoutGrid, Search, Bell, UserRound, LogOut, ArrowRight, Building2, Settings2, Activity } from 'lucide-vue-next'
+export { House, Zap, Leaf, Cpu, Wrench, ChartNoAxesCombined, Cable, Network, Sigma, SlidersHorizontal, ShieldCheck, Layers } from 'lucide-vue-next'

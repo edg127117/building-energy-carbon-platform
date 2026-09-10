@@ -56,10 +56,28 @@ try {
   await page.getByRole('textbox', { name: '用户名', exact: true }).fill('test-only')
   await page.locator('input[name="password"]').fill('test-only')
   await page.getByRole('button', { name: '登录', exact: true }).click()
-  await page.getByRole('heading', { name: '选择系统' }).waitFor()
+  await page.getByRole('heading', { name: '选择工作区' }).waitFor()
   assert.equal(await page.locator('.system-link').count(), 3)
   for (const [width, height] of [[1920, 1080], [1440, 900], [1366, 768]]) {
     await page.setViewportSize({ width, height })
+    for (const selected of [['monitor'], ['monitor', 'operations'], ['monitor', 'operations', 'configuration']]) {
+      grants = paths.filter(path => selected.includes(path.split('/')[1]))
+      await visit('/systems')
+      await page.locator('.system-link').first().waitFor()
+      assert.equal(await page.locator('.system-link').count(), selected.length)
+      const selection = await page.evaluate(() => ({
+        overflow: document.documentElement.scrollWidth > innerWidth,
+        cards: [...document.querySelectorAll('.system-link')].map(el => { const r = el.getBoundingClientRect(); return { x: r.x, width: r.width, y: r.y, right: r.right } }),
+      }))
+      assert.equal(selection.overflow, false)
+      assert.ok(selection.cards.every(card => card.width <= 368 && card.y === selection.cards[0].y))
+      assert.ok(Math.abs(selection.cards[0].x - (width - selection.cards.at(-1).right)) < 2)
+      await page.locator('.system-link').first().focus()
+      await page.screenshot({ path: resolve(artifacts, `selection-${selected.length}-${width}.png`) })
+      await page.keyboard.press('Enter')
+      await page.locator('[data-page-path]').waitFor()
+    }
+    grants = paths
     for (const path of ['/operations/overview/running', '/configuration/access/users', '/monitor/monitoring']) {
       await visit(path)
       await page.locator('[data-page-path="' + path + '"]').waitFor()
@@ -104,6 +122,14 @@ try {
         await page.getByRole('button', { name: '展开右侧面板', exact: true }).click()
       }
       if (mode === 'office') {
+        assert.equal(await page.locator('.pending-panel').count(), 1)
+        assert.equal(await page.locator('.company-logo').count(), 1)
+        const panel = await page.locator('.pending-panel').evaluate(el => ({
+          text: el.textContent.replace(/\s+/g, ''),
+          background: getComputedStyle(el).backgroundColor,
+        }))
+        assert.ok(panel.text.endsWith('待建设'))
+        assert.equal(panel.background, 'rgb(255, 255, 255)')
         await page.getByRole('button', { name: '全局搜索', exact: true }).click()
         await page.getByRole('heading', { name: '全局搜索', exact: true }).waitFor()
         await page.locator('main').click({ position: { x: 400, y: 200 } })

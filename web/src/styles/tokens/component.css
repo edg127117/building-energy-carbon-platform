@@ -9,6 +9,12 @@
   --bec-selection-offset: calc(var(--bec-ref-space-64) * 2);
   --bec-workspace-header-height: var(--bec-ref-space-64);
   --bec-workspace-user-width: calc(var(--bec-ref-space-64) * 2);
+  --bec-management-background: var(--bec-ref-management-bg);
+  --bec-management-radius: var(--bec-ref-radius-8);
+  --bec-company-logo-width: calc(var(--bec-ref-space-64) + var(--bec-ref-space-48));
+  --bec-workspace-cards-width: calc(var(--bec-ref-space-64) * 17 + var(--bec-ref-space-32));
+  --bec-workspace-card-width: calc(var(--bec-ref-space-64) * 5 + var(--bec-ref-space-48));
+  --bec-workspace-card-height: calc(var(--bec-ref-space-64) * 4);
   --bec-monitor-header-height: calc(var(--bec-ref-space-64) + var(--bec-ref-space-16));
   --bec-scene-panel-width: calc(var(--bec-ref-space-64) * 5 + var(--bec-ref-space-48));
   --bec-scene-summary-height: calc(var(--bec-ref-space-64) + var(--bec-ref-space-32));
