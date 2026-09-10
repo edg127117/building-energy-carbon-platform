@@ -15,5 +15,5 @@ import { t } from '@/locales'
 .workspace-brand { display: flex; align-items: center; gap: var(--bec-space-group); flex-shrink: 0; }
 .company-logo { display: grid; place-items: center; width: var(--bec-company-logo-width); height: var(--bec-control-height); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-control); color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); overflow: hidden; }
 .company-logo :slotted(img) { width: 100%; height: 100%; object-fit: contain; }
-strong { padding-left: var(--bec-space-group); border-left: var(--bec-border-width) solid var(--bec-color-border); font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-heading); white-space: nowrap; }
+strong { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-normal); white-space: nowrap; }
 </style>
