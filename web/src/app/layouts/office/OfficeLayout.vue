@@ -9,11 +9,8 @@ import WorkspaceBrand from '@/app/navigation/WorkspaceBrand.vue'
 import { groupIcons } from '@/app/navigation/icons'
 import { authorizedPages, workspaces } from '@/app/navigation/catalog'
 import { useSession } from '@/modules/auth/public'
-import { useShellRuntime } from '@/app/providers/runtime'
 import { useShellStore } from '@/app/providers/shell-store'
-import { formatDateTime } from '@/shared/utils/format'
 import { t } from '@/locales'
-const { now } = useShellRuntime()
 const shell = useShellStore()
 const session = useSession()
 const route = useRoute()
@@ -39,7 +36,6 @@ async function logout() {
         <SystemSwitcher plain />
       </div>
       <div class="tools">
-        <time :datetime="now.toISOString()">{{ formatDateTime(now) }}</time>
         <ElPopover v-for="item in [{ key: 'search', icon: Search }, { key: 'messages', icon: Bell }]" :key="item.key" trigger="click" :teleported="false" width="var(--bec-navigation-width)">
           <template #reference><ElButton :icon="item.icon" :class="item.key === 'search' ? 'search-trigger' : 'icon-trigger'" text :aria-label="t('workspaces.' + item.key)" :title="t('workspaces.' + item.key)"><span v-if="item.key === 'search'">{{ t('workspaces.search') }}</span></ElButton></template>
           <PendingPage :title="t('workspaces.' + item.key)" />
@@ -71,11 +67,11 @@ async function logout() {
 .workspace-header { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--bec-space-tight); padding: 0 var(--bec-space-page); background: var(--bec-workspace-header-background); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); box-shadow: var(--bec-shadow-card); position: relative; z-index: var(--bec-layer-navigation); }
 .system-navigation { display: flex; align-items: center; gap: var(--bec-space-group); padding-left: var(--bec-space-group); margin-left: var(--bec-space-tight); border-left: var(--bec-border-width) solid var(--bec-color-divider); }
 .current-system { padding: var(--bec-ref-space-4) var(--bec-ref-space-12); border-radius: var(--bec-management-radius); background: var(--bec-workspace-system-background); white-space: nowrap; color: var(--bec-color-action-active); font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-normal); }
-.tools { display: flex; align-items: center; gap: var(--bec-space-tight); margin-left: auto; min-width: 0; }
-time { margin-right: var(--bec-space-tight); white-space: nowrap; color: var(--bec-color-text-secondary); font-variant-numeric: tabular-nums; }
+.tools { display: flex; align-items: center; gap: var(--bec-ref-space-4); margin-left: auto; min-width: 0; }
 .username { display: block; max-width: var(--bec-workspace-user-width); overflow: hidden; text-overflow: ellipsis; }
 .search-trigger { background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-tag); }
-.user-trigger { margin-left: var(--bec-space-tight); }
+.icon-trigger { width: var(--bec-control-height); padding: 0; }
+.user-trigger { padding: 0 var(--bec-space-tight); }
 .menu-group { font-size: var(--bec-font-size-navigation); }
 .group-icon { flex-shrink: 0; width: var(--bec-icon-small); height: var(--bec-icon-small); margin-right: var(--bec-space-section); color: var(--bec-color-text-secondary); stroke-width: 1.5; }
 .menu-label { overflow: hidden; text-overflow: ellipsis; }
