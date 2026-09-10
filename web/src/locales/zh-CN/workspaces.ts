@@ -1,6 +1,6 @@
 export default {
   select: '选择工作区', selectHint: '请选择要进入的工作系统', switch: '切换系统',
-  companyLogo: '公司 LOGO', enter: '进入系统',
+  companyLogo: '腾芯筑能科技', enter: '进入系统',
   monitor: '孪生大屏系统', operations: '智慧运维平台', configuration: '能碳配置管理平台',
   monitorHint: '查看建筑场景与能碳运行情况', operationsHint: '监测运行、查询分析与设备维护', configurationHint: '维护数据接入、计算口径与权限配置',
   search: '全局搜索', messages: '消息', user: '当前用户', logout: '退出登录', login: '登录',

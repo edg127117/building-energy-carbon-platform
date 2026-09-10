@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { t } from '@/locales'
+import companyLogo from '@/shared/assets/tengcore-logo.png'
 
-// 管理入口独立保留品牌槽，正式素材由父级提供，不改变登录页与大屏的品牌呈现。
+// 公司标识仅用于管理入口，保留品牌槽供后续定制，不影响登录页与大屏。
 </script>
 <template>
   <div class="workspace-brand">
     <span class="company-logo" role="img" :aria-label="t('workspaces.companyLogo')">
-      <slot name="logo">{{ t('workspaces.companyLogo') }}</slot>
+      <slot name="logo"><img :src="companyLogo" alt="" /></slot>
     </span>
     <strong>{{ t('terminology.systemName') }}</strong>
   </div>
 </template>
 <style scoped>
 .workspace-brand { display: flex; align-items: center; gap: var(--bec-space-group); flex-shrink: 0; }
-.company-logo { display: grid; place-items: center; width: var(--bec-company-logo-width); height: var(--bec-control-height); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-control); color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); overflow: hidden; }
-.company-logo :slotted(img) { width: 100%; height: 100%; object-fit: contain; }
+.company-logo { display: grid; place-items: center; width: var(--bec-company-logo-width); height: var(--bec-control-height); overflow: hidden; }
+.company-logo img, .company-logo :slotted(img) { display: block; width: 100%; height: 100%; object-fit: contain; }
 strong { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-normal); white-space: nowrap; }
 </style>
