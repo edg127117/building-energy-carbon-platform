@@ -7,6 +7,7 @@ export interface ScreenRegistration {
   path: string
   groupKey: string | null
   order: number | null
+  layout?: 'grid' | 'scene'
   load: () => Promise<{ default: Component }>
 }
 
@@ -20,7 +21,7 @@ export function screenRoutes(registry: readonly ScreenRegistration[]): RouteReco
     paths.add(screen.path); names.add(screen.id)
     return {
       path: screen.path, name: screen.id, component: screen.load,
-      meta: { titleKey: screen.titleKey, mode: 'monitor' },
+      meta: { titleKey: screen.titleKey, mode: 'monitor', screenLayout: screen.layout ?? 'grid' },
     }
   })
 }

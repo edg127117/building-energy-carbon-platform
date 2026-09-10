@@ -28,22 +28,22 @@ const navigationOpen = ref(false)
   <div ref="viewportRef" class="monitor-viewport">
     <div class="monitor-canvas" :style="canvasStyle" data-page-mode="monitor">
       <header class="monitor-header">
-        <BrandIdentity compact />
+        <BrandIdentity />
         <h1>{{ pageTitle }}</h1>
         <div class="bec-actions">
-          <ElButton :icon="Monitor" @click="navigationOpen = true">{{ t('navigation.switchScreen') }}</ElButton>
-          <ElButton :icon="active ? Minimize : Maximize" @click="toggle">{{ t(active ? 'common.exitFullScreen' : 'common.fullScreen') }}</ElButton>
-          <ElButton :icon="ArrowLeft" disabled>{{ t('workspaces.back') }}</ElButton>
+          <time class="monitor-clock" :datetime="now.toISOString()">{{ formatDateTime(now) }}</time>
+          <ElButton :icon="Monitor" :aria-label="t('navigation.switchScreen')" :title="t('navigation.switchScreen')" @click="navigationOpen = true" />
+          <ElButton :icon="active ? Minimize : Maximize" :aria-label="t(active ? 'common.exitFullScreen' : 'common.fullScreen')" :title="t(active ? 'common.exitFullScreen' : 'common.fullScreen')" @click="toggle" />
+          <ElButton :icon="ArrowLeft" :aria-label="t('workspaces.back')" :title="t('workspaces.back')" disabled />
           <SystemSwitcher />
         </div>
-        <time class="monitor-clock" :datetime="now.toISOString()">{{ formatDateTime(now) }}</time>
       </header>
-      <div class="monitor-notices">
+      <div v-if="shell.navigationFailed || shell.offline || failed" class="monitor-notices">
         <ElAlert v-if="shell.navigationFailed" :title="t('error.page')" type="error" show-icon :closable="false" />
         <ElAlert v-if="shell.offline" :title="t('error.offline')" type="warning" show-icon :closable="false" />
         <ElAlert v-if="failed" :title="t('error.fullscreen')" type="error" show-icon :closable="false" />
       </div>
-      <main id="platform-content" class="monitor-content" :aria-label="t('navigation.content')" :data-page-path="route.path">
+      <main id="platform-content" class="monitor-content" :class="{ 'scene-content': route.meta.screenLayout === 'scene' }" :aria-label="t('navigation.content')" :data-page-path="route.path">
         <RouterView v-slot="{ Component }">
           <StateBoundary :key="route.path" :reset-key="route.path"><component :is="Component" /></StateBoundary>
         </RouterView>
@@ -56,11 +56,12 @@ const navigationOpen = ref(false)
 
 <style scoped>
 .monitor-viewport { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bec-color-page); }
-.monitor-canvas { --bec-font-size-body: var(--bec-monitor-font-body); --bec-font-size-small: var(--bec-monitor-font-small); --bec-font-size-title: var(--bec-monitor-font-panel); --bec-chart-font-size: var(--bec-monitor-font-small); display: grid; grid-template-rows: auto auto minmax(0, 1fr); background: var(--bec-color-page); font-size: var(--bec-monitor-font-body); }
-.monitor-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--bec-monitor-gap); padding: var(--bec-monitor-padding) var(--bec-monitor-header-inline); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
-.monitor-header h1 { margin: 0; font-size: var(--bec-monitor-font-title); }
+.monitor-canvas { --bec-font-size-body: var(--bec-monitor-font-body); --bec-font-size-small: var(--bec-monitor-font-small); --bec-font-size-title: var(--bec-monitor-font-panel); --bec-chart-font-size: var(--bec-monitor-font-small); display: grid; grid-template-rows: var(--bec-monitor-header-height) minmax(0, 1fr); background: var(--bec-color-page); font-size: var(--bec-monitor-font-body); }
+.monitor-header { position: relative; z-index: var(--bec-layer-navigation); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: var(--bec-monitor-gap); padding: 0 var(--bec-monitor-header-inline); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
+.monitor-header h1 { margin: 0; font-size: var(--bec-monitor-font-title); text-align: center; }
 .bec-actions { justify-self: end; }
 .monitor-clock { justify-self: end; font-family: var(--bec-font-family-number); font-size: var(--bec-monitor-font-small); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.monitor-notices { padding: var(--bec-monitor-gap) var(--bec-monitor-padding) 0; display: grid; gap: var(--bec-monitor-gap); }
+.monitor-notices { position: absolute; top: var(--bec-monitor-header-height); left: var(--bec-monitor-padding); right: var(--bec-monitor-padding); z-index: var(--bec-layer-notices); display: grid; gap: var(--bec-monitor-gap); }
 .monitor-content { min-width: 0; min-height: 0; padding: var(--bec-monitor-padding); }
+.scene-content { padding: 0; }
 </style>

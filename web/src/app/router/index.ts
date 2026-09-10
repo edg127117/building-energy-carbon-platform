@@ -22,7 +22,7 @@ export const routes: RouteRecordRaw[] = [
       ...pages.filter(page => page.system === system).map(page => ({
         path: page.path, component: screens.find(screen => screen.path === page.path)?.load ?? PendingPage,
         props: () => ({ title: authorizedPages(useSession().menus).find(item => item.id === page.id)?.title ?? t(page.titleKey) }),
-        meta: { system, titleKey: page.titleKey },
+        meta: { system, titleKey: page.titleKey, screenLayout: screens.find(screen => screen.path === page.path)?.layout ?? 'grid' },
       })),
     ],
   })),
