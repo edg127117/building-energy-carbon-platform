@@ -59,6 +59,19 @@ describe('office and monitor composition', () => {
     session.menus[0].visible = 0
     expect(authorizedPages(session.menus)).toHaveLength(pages.length - 1)
   })
+  it('applies the content panel only to management placeholders', () => {
+    authorize()
+    const router = createPlatformRouter(createMemoryHistory())
+    const office = router.resolve('/operations/overview/running')
+    const props = office.matched.at(-1).props.default
+    expect(typeof props).toBe('function')
+    if (typeof props !== 'function') throw new Error('Expected office props function')
+    expect(props(office)).toMatchObject({ panel: true })
+    const monitor = router.resolve('/monitor/monitoring')
+    const screenProps = monitor.matched.at(-1).props.default
+    if (typeof screenProps !== 'function') throw new Error('Expected monitor props function')
+    expect(screenProps(monitor)).not.toHaveProperty('panel')
+  })
   it('resolves all screen addresses to the shared monitor parent and loads pages lazily', () => {
     const router = createPlatformRouter(createMemoryHistory())
     for (const path of ['monitoring', 'trend', 'situation', 'status', 'analysis']) {

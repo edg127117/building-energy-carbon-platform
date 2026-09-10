@@ -112,6 +112,8 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 大屏注册项通过 `layout` 选择场景或普通网格布局，缺省保持网格模式。监控页使用模块内 `SceneScreenLayout`，通过 `scene/top/left/right` 插槽组织建筑场景和悬浮内容；两侧独立收起，不重建或挤压场景，信息层空白允许场景交互。顶栏保持标题居中、品牌居左、时间与必要导航居右；全局异常提示叠加显示，不改变场景尺寸。区域尺寸、半透明背景和层级集中在 Token/主题中；没有为趋势等页面强制增加场景。实际建筑素材、三维交互及业务图表尚未接入，当前区域仅标注“待建设”。
 
+管理端与系统选择页共用应用层 `WorkspaceBrand` 保留公司 Logo 槽；管理菜单图标由应用导航层提供，不参与授权。管理端占位路由显式启用 `PendingPage` 面板模式，搜索浮层与大屏保持原模式。目标外壳使用独立管理表面变量与组件库适配作用域，避免修改大屏和登录页的视觉。
+
 目录依赖、统一文案和样式变量规则由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束；`npm run lint` 包含此检查。相似 UI 第三次出现时优先抽象复用，不复制控件；自动检查不能替代语义和复用审查。设计来源见[已确认实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，交付状态与候选尺寸见 `PROJECT_STATUS.md`。
 
 浏览器骨架检查入口为 `node web/scripts/verify-platform.mjs`：先在仓库根目录安装已有 Playwright 依赖、完成前端构建，再运行脚本；Windows 可在当前终端设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装 Edge，其他环境使用已安装的 Playwright Chromium。脚本只启动本机临时静态服务，截图和结果写入忽略目录 `.codex-backups/frontend-foundation`，不连接业务后端。
