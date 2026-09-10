@@ -45,17 +45,18 @@ async function logout() {
   </div>
 </template>
 <style scoped>
-.selection { min-height: 100%; background: var(--bec-management-background); }
-header { height: var(--bec-workspace-header-height); padding: 0 var(--bec-space-page); display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-group); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
+.selection { min-height: 100%; display: flex; flex-direction: column; background: var(--bec-management-background); }
+header { flex-shrink: 0; height: var(--bec-workspace-header-height); padding: 0 var(--bec-space-page); display: flex; justify-content: space-between; align-items: center; gap: var(--bec-space-group); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
 .account { display: flex; align-items: center; gap: var(--bec-space-group); min-width: 0; }
 .username { max-width: var(--bec-workspace-user-width); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--bec-color-text-secondary); }
-main { max-width: var(--bec-workspace-cards-width); margin: var(--bec-selection-offset) auto; padding: 0 var(--bec-space-page); }
+main { width: 100%; max-width: var(--bec-workspace-cards-width); margin: auto; padding: var(--bec-ref-space-48) var(--bec-space-page); }
 h1 { text-align: center; font-size: var(--bec-font-size-system); margin: 0 0 var(--bec-ref-space-40); }
 nav { display: flex; justify-content: center; gap: var(--bec-space-section); }
 .system-link { flex: 1; max-width: var(--bec-workspace-card-width); min-width: 0; min-height: var(--bec-workspace-card-height); box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: var(--bec-space-section); padding: var(--bec-space-section); text-align: center; text-decoration: none; color: var(--bec-color-text-primary); background: var(--bec-color-surface); border-radius: var(--bec-management-radius); box-shadow: var(--bec-shadow-card); }
-.system-link:hover, .system-link:focus-visible { color: var(--bec-color-action-primary); box-shadow: var(--bec-shadow-raised); }
+.system-link:hover, .system-link:focus-visible { box-shadow: var(--bec-shadow-raised); }
+.system-link:hover .enter, .system-link:focus-visible .enter { color: var(--bec-color-action-hover); text-decoration: underline; text-underline-offset: var(--bec-ref-space-4); }
 .system-icon { width: var(--bec-icon-large); height: var(--bec-icon-large); color: var(--bec-color-action-primary); stroke-width: 1.5; }
-.enter { display: flex; align-items: center; gap: var(--bec-space-tight); color: var(--bec-color-action-primary); }
+.enter { display: flex; align-items: center; gap: var(--bec-space-tight); margin-top: var(--bec-space-tight); color: var(--bec-color-action-primary); }
 .enter svg { width: var(--bec-icon-small); height: var(--bec-icon-small); }
 strong { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-weight-heading); }
 .access-error { display: grid; gap: var(--bec-space-group); }

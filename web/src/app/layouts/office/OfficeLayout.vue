@@ -34,8 +34,10 @@ async function logout() {
     <a class="skip-link" href="#platform-content" @click.prevent="content?.focus()">{{ t('navigation.skipContent') }}</a>
     <header class="workspace-header">
       <WorkspaceBrand />
-      <span class="current-system">{{ t(currentSystem?.titleKey ?? 'workspaces.select') }}</span>
-      <SystemSwitcher />
+      <div class="system-navigation">
+        <span class="current-system">{{ t(currentSystem?.titleKey ?? 'workspaces.select') }}</span>
+        <SystemSwitcher />
+      </div>
       <div class="tools">
         <time :datetime="now.toISOString()">{{ formatDateTime(now) }}</time>
         <ElPopover v-for="item in [{ key: 'search', icon: Search }, { key: 'messages', icon: Bell }]" :key="item.key" trigger="click" :teleported="false" width="var(--bec-navigation-width)">
@@ -67,14 +69,15 @@ async function logout() {
 <style scoped>
 .office-layout { height: 100%; display: grid; grid-template-columns: var(--bec-navigation-width) minmax(0, 1fr); grid-template-rows: var(--bec-workspace-header-height) minmax(0, 1fr); background: var(--bec-management-background); }
 .workspace-header { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--bec-space-tight); padding: 0 var(--bec-space-page); background: var(--bec-color-surface); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); }
-.current-system { padding-left: var(--bec-space-group); margin-left: var(--bec-space-tight); border-left: var(--bec-border-width) solid var(--bec-color-border); white-space: nowrap; color: var(--bec-color-action-primary); font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-heading); }
+.system-navigation { display: flex; align-items: center; gap: var(--bec-space-group); padding-left: var(--bec-space-group); margin-left: var(--bec-space-tight); border-left: var(--bec-border-width) solid var(--bec-color-divider); }
+.current-system { white-space: nowrap; color: var(--bec-color-action-primary); font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-heading); }
 .tools { display: flex; align-items: center; gap: var(--bec-space-tight); margin-left: auto; min-width: 0; }
-time { white-space: nowrap; color: var(--bec-color-text-secondary); font-variant-numeric: tabular-nums; }
+time { margin-right: var(--bec-space-tight); white-space: nowrap; color: var(--bec-color-text-secondary); font-variant-numeric: tabular-nums; }
 .username { display: block; max-width: var(--bec-workspace-user-width); overflow: hidden; text-overflow: ellipsis; }
 .search-trigger { background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-tag); }
 .user-trigger { border-left: var(--bec-border-width) solid var(--bec-color-divider); border-radius: 0; }
 .menu-group { font-size: var(--bec-font-size-navigation); }
-.group-icon { flex-shrink: 0; width: var(--bec-icon-medium); height: var(--bec-icon-medium); margin-right: var(--bec-space-group); }
+.group-icon { flex-shrink: 0; width: var(--bec-icon-medium); height: var(--bec-icon-medium); margin-right: var(--bec-space-group); color: var(--bec-color-text-secondary); stroke-width: 1.5; }
 .menu-label { overflow: hidden; text-overflow: ellipsis; }
 aside { overflow-y: auto; padding: var(--bec-space-group) var(--bec-space-tight); background: var(--bec-color-surface); border-right: var(--bec-border-width) solid var(--bec-color-divider); }
 main { display: flex; flex-direction: column; gap: var(--bec-space-group); min-width: 0; min-height: 0; overflow: auto; padding: var(--bec-space-page); }
