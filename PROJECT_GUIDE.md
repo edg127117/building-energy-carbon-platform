@@ -90,7 +90,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 ### 新前端入口与目录边界
 
-已确认的下一步结构见[前端骨架实施计划第 15 章](docs/designs/frontend-visualization-phase-two-implementation-plan.md#15-三系统骨架改造)：孪生大屏、智慧运维、能碳配置三个工作区仍共用一个 Vue 工程，两个管理平台共享后台外壳，大屏保持独立画布。该结构尚待实施；以下入口及目录说明仍反映当前已合并代码，不能把计划中的系统选择、权限导航或唯一入口当成现状。
+已确认的下一步结构见[前端骨架实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)：第 2—14 章为当前公共规则，第 15 章为菜单、改造与分阶段交付。孪生大屏、智慧运维、能碳配置三个工作区仍共用一个 Vue 工程，两个管理平台共享后台外壳，大屏保持独立画布。前端页面注册与后端授权的装配边界见第 15.6 节，具体契约映射仍需实施前核对。该结构尚待实施；以下入口及目录说明仍反映当前已合并代码，不能把计划中的系统选择、权限导航或唯一入口当成现状。
 
 新前端与继承页面保留在同一 `web` 工程，使用独立入口隔离旧全局样式；`index.html` 继续承载旧页面，`platform.html` 承载新前端。进入 `web` 后运行 `npm ci`、`npm run dev:platform` 可预览新骨架；办公端为 `platform.html#/office`，监控端为 `platform.html#/monitor/monitoring`。这是无业务数据、未接入鉴权的骨架预览入口，不是受保护业务入口。
 
