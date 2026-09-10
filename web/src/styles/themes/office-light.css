@@ -3,6 +3,8 @@
   --bec-color-page: var(--bec-ref-bg);
   --bec-color-surface: var(--bec-ref-white);
   --bec-color-surface-secondary: var(--bec-ref-subtle);
+  --bec-color-scene-background: var(--bec-ref-bg);
+  --bec-color-scene-panel: color-mix(in srgb, var(--bec-color-surface) var(--bec-scene-panel-opacity), transparent);
   --bec-color-text-primary: var(--bec-ref-ink);
   --bec-color-text-secondary: var(--bec-ref-muted);
   --bec-color-text-disabled: var(--bec-ref-disabled);

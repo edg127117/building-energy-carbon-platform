@@ -4,4 +4,12 @@ export default {
   situation: '态势大屏',
   status: '状态大屏',
   analysis: '分析大屏',
+  scene: '试点建筑场景',
+  summary: '顶部指标区',
+  leftPanel: '左侧信息面板',
+  rightPanel: '右侧信息面板',
+  collapseLeft: '收起左侧面板',
+  expandLeft: '展开左侧面板',
+  collapseRight: '收起右侧面板',
+  expandRight: '展开右侧面板',
 } as const

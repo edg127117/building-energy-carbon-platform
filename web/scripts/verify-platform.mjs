@@ -63,7 +63,7 @@ try {
     for (const path of ['/operations/overview/running', '/configuration/access/users', '/monitor/monitoring']) {
       await visit(path)
       await page.locator('[data-page-path="' + path + '"]').waitFor()
-      await page.locator('main .pending-page p').waitFor()
+      await page.locator('main .pending-page p').first().waitFor()
       const mode = path.startsWith('/monitor') ? 'monitor' : 'office'
       const metrics = await page.evaluate(() => {
         const header = document.querySelector('header')
@@ -80,7 +80,29 @@ try {
       assert.ok(metrics.scrollWidth <= width, JSON.stringify(metrics))
       assert.equal(metrics.overflow, false, JSON.stringify(metrics))
       assert.equal(metrics.clipped, false, JSON.stringify(metrics))
-      if (mode === 'monitor') assert.ok(Math.abs(metrics.canvas.width / metrics.canvas.height - 16 / 9) < 0.01)
+      if (mode === 'monitor') {
+        assert.ok(Math.abs(metrics.canvas.width / metrics.canvas.height - 16 / 9) < 0.01)
+        const sceneBounds = await page.locator('.scene-layer').boundingBox()
+        const center = await page.evaluate(() => {
+          const rect = document.querySelector('.scene-layer').getBoundingClientRect()
+          const title = document.querySelector('.monitor-header h1').getBoundingClientRect()
+          const canvas = document.querySelector('.monitor-canvas').getBoundingClientRect()
+          return { hit: !!document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)?.closest('.scene-layer'),
+            titleOffset: Math.abs(title.x + title.width / 2 - canvas.x - canvas.width / 2) }
+        })
+        assert.equal(center.hit, true)
+        assert.ok(center.titleOffset < 1)
+        await page.getByRole('button', { name: '收起左侧面板', exact: true }).focus()
+        await page.keyboard.press('Enter')
+        await page.getByRole('button', { name: '展开左侧面板', exact: true }).waitFor()
+        assert.deepEqual(await page.locator('.scene-layer').boundingBox(), sceneBounds)
+        assert.equal(await page.getByRole('button', { name: '收起右侧面板', exact: true }).count(), 1)
+        await page.getByRole('button', { name: '收起右侧面板', exact: true }).click()
+        assert.deepEqual(await page.locator('.scene-layer').boundingBox(), sceneBounds)
+        await page.screenshot({ path: resolve(artifacts, 'monitor-collapsed-' + width + '.png') })
+        await page.getByRole('button', { name: '展开左侧面板', exact: true }).click()
+        await page.getByRole('button', { name: '展开右侧面板', exact: true }).click()
+      }
       if (mode === 'office') {
         await page.getByRole('button', { name: '全局搜索', exact: true }).click()
         await page.getByRole('heading', { name: '全局搜索', exact: true }).waitFor()
@@ -96,7 +118,7 @@ try {
   for (const path of paths) {
     await visit(path)
     await page.locator('[data-page-path="' + path + '"]').waitFor()
-    await page.locator('main .pending-page p').waitFor()
+    await page.locator('main .pending-page p').first().waitFor()
     assert.ok(page.url().endsWith('#' + path), path)
   }
   await visit('/monitor/monitoring')
@@ -106,6 +128,7 @@ try {
   assert.equal(await page.locator('.monitor-canvas .el-dialog').count(), 1)
   await page.getByRole('menuitem', { name: '趋势大屏', exact: true }).click()
   await page.locator('[data-page-path="/monitor/trend"]').waitFor()
+  assert.equal(await page.locator('.scene-layout').count(), 0)
   await page.getByRole('button', { name: '进入全屏', exact: true }).click()
   await page.getByRole('button', { name: '退出全屏', exact: true }).waitFor()
   await page.getByRole('button', { name: '退出全屏', exact: true }).click()

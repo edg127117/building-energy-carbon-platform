@@ -9,4 +9,14 @@
   --bec-selection-offset: calc(var(--bec-ref-space-64) * 2);
   --bec-workspace-header-height: var(--bec-ref-space-64);
   --bec-workspace-user-width: calc(var(--bec-ref-space-64) * 2);
+  --bec-monitor-header-height: calc(var(--bec-ref-space-64) + var(--bec-ref-space-16));
+  --bec-scene-panel-width: calc(var(--bec-ref-space-64) * 5 + var(--bec-ref-space-48));
+  --bec-scene-summary-height: calc(var(--bec-ref-space-64) + var(--bec-ref-space-32));
+  --bec-scene-toggle-width: var(--bec-ref-space-32);
+  --bec-scene-toggle-height: var(--bec-ref-space-48);
+  --bec-scene-panel-opacity: 88%;
+  --bec-layer-scene: 0;
+  --bec-layer-panels: 1;
+  --bec-layer-navigation: 2;
+  --bec-layer-notices: 3;
 }

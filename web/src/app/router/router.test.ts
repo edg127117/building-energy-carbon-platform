@@ -65,6 +65,7 @@ describe('office and monitor composition', () => {
       const route = router.resolve('/monitor/' + path)
       expect(route.matched[0].path).toBe('/monitor')
       expect(route.meta.mode).toBe('monitor')
+      expect(route.meta.screenLayout).toBe(path === 'monitoring' ? 'scene' : 'grid')
       expect(typeof route.matched.at(-1).components.default).toBe('function')
     }
     expect(router.resolve('/monitor/unknown').matched.at(-1).props.default).toEqual({ state: 'not-found' })
