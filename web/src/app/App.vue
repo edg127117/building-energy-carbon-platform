@@ -3,6 +3,8 @@ import { onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElConfigProvider, ElAlert, ElButton, zhCn } from '@/shared/ui'
 import { t } from '@/locales'
+import { authorizedPages } from '@/app/navigation/catalog'
+import { useSession } from '@/modules/auth/public'
 import { useShellStore } from './providers/shell-store'
 const router = useRouter()
 const route = useRoute()
@@ -12,7 +14,7 @@ const removeError = router.onError(() => { shell.navigationFailed = true })
 const removeAfter = router.afterEach((to, _from, failure) => {
   if (failure) return
   shell.navigationFailed = false
-  document.title = t(String(to.meta.titleKey ?? 'terminology.systemName'))
+  document.title = authorizedPages(useSession().menus).find(page => page.path === to.path)?.title ?? t(String(to.meta.titleKey ?? 'terminology.systemName'))
 })
 onUnmounted(() => { removeError(); removeAfter() })
 </script>
@@ -20,7 +22,7 @@ onUnmounted(() => { removeError(); removeAfter() })
   <ElConfigProvider :locale="zhCn">
     <section v-if="shell.navigationFailed && !route.matched.length" class="initial-error" role="alert">
       <ElAlert :title="t('error.page')" type="error" :closable="false" />
-      <ElButton @click="router.push('/office')">{{ t('navigation.returnOffice') }}</ElButton>
+      <ElButton @click="router.push('/systems')">{{ t('workspaces.select') }}</ElButton>
     </section>
     <RouterView v-else />
   </ElConfigProvider>

@@ -3,12 +3,19 @@ import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElDialog, ElMenu, ElMenuItem, ElSubMenu } from '@/shared/ui'
 import { screens } from '@/modules/large-screen/public'
+import { useSession } from '@/modules/auth/public'
+import { authorizedPages } from '@/app/navigation/catalog'
 import { screenGroups } from '@/shared/models/screen-registration'
 import { t } from '@/locales'
 const visible = defineModel<boolean>({ required: true })
 const router = useRouter()
 const route = useRoute()
-const groups = computed(() => screenGroups(screens))
+const session = useSession()
+const visiblePages = computed(() => authorizedPages(session.menus))
+const groups = computed(() => {
+  const allowed = new Set(visiblePages.value.map(page => page.path))
+  return screenGroups(screens.filter(screen => allowed.has(screen.path)))
+})
 async function select(path: string) {
   visible.value = false
   try { await router.push(path) } catch {
@@ -25,7 +32,7 @@ async function select(path: string) {
       <ElSubMenu v-for="group in groups" :key="group.key ?? 'unassigned'" :index="group.key ?? 'unassigned'">
         <template #title>{{ t(group.key ?? 'navigation.ungrouped') }}</template>
         <ElMenuItem v-for="screen in group.entries" :key="screen.id" :index="screen.path">
-          {{ t(screen.titleKey) }}
+          {{ visiblePages.find(page => page.path === screen.path)?.title ?? t(screen.titleKey) }}
         </ElMenuItem>
       </ElSubMenu>
     </ElMenu>

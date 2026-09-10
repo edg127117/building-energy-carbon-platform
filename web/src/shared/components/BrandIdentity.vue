@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { t } from '@/locales'
+defineProps<{ compact?: boolean }>()
 </script>
 
 <template>
   <div class="brand">
     <span class="brand-placeholder">{{ t('common.companyLogo') }}</span>
-    <span class="brand-name">{{ t('terminology.systemName') }}</span>
+    <span class="brand-name">{{ t(compact ? 'workspaces.monitor' : 'terminology.systemName') }}</span>
   </div>
 </template>
 

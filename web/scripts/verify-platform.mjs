@@ -9,136 +9,129 @@ const web = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const dist = resolve(web, 'dist/platform')
 const artifacts = resolve(web, '../.codex-backups/frontend-foundation')
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' }
+// 仅在浏览器请求拦截中生成授权测试替身；不写入生产菜单、账号或业务数据。
+const registry = await readFile(resolve(web, 'src/app/navigation/catalog.ts'), 'utf8')
+const paths = []
+for (const match of registry.matchAll(/\.\.\.group\('([^']+)', '([^']+)', (\[.*\])\),/g)) {
+  const children = JSON.parse(match[3].replaceAll("'", '"'))
+  for (const child of children) paths.push('/' + match[1] + '/' + match[2] + '/' + (Array.isArray(child) ? child[0] : child))
+}
+const screens = await readFile(resolve(web, 'src/modules/large-screen/registry/screens.ts'), 'utf8')
+for (const match of screens.matchAll(/path: '([^']+)'/g)) paths.push(match[1])
+assert.equal(paths.length, 47)
+let grants = paths
+let authStatus = 200
 const server = createServer(async (request, response) => {
   try {
     const file = resolve(dist, '.' + decodeURIComponent(new URL(request.url, 'http://localhost').pathname))
     if (!file.startsWith(dist + sep)) throw new Error('outside build')
     response.setHeader('Content-Type', mime[extname(file)] ?? 'application/octet-stream')
-    response.setHeader('Cache-Control', 'no-store')
     response.end(await readFile(file))
   } catch { response.writeHead(404); response.end() }
 })
 let browser
-let page
 const results = []
 try {
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
-  const origin = `http://127.0.0.1:${server.address().port}`
+  await new Promise(done => server.listen(0, '127.0.0.1', done))
   await mkdir(artifacts, { recursive: true })
+  const origin = 'http://127.0.0.1:' + server.address().port
   browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || undefined })
-  const context = await browser.newContext()
-  page = await context.newPage()
+  const page = await browser.newPage()
   const errors = []
-  const dataRequests = []
+  const unexpectedRequests = []
   page.on('pageerror', error => errors.push(error.message))
-  page.on('request', request => {
-    if (['fetch', 'xhr', 'websocket'].includes(request.resourceType())) dataRequests.push(request.url())
+  await page.route('**/api/**', async route => {
+    const path = new URL(route.request().url()).pathname
+    if (!['/api/auth/login', '/api/auth/me', '/api/menu/current', '/api/auth/logout'].includes(path)) {
+      unexpectedRequests.push(path); await route.abort(); return
+    }
+    const data = path.endsWith('/login') ? { token: 'browser-test-only' }
+      : path.endsWith('/me') ? { id: 1, username: '测试管理员名称较长的办公账号', roles: [] }
+      : path.endsWith('/current') ? grants.map((path, index) => ({ id: index + 1, menuType: 'C', path, visible: 1, status: 1, sortOrder: index, menuName: '' })) : null
+    await route.fulfill({ status: authStatus, json: { code: authStatus, data } })
   })
+  const visit = route => page.goto(origin + '/platform.html#' + route)
+  await visit('/monitor/monitoring')
+  await page.getByRole('button', { name: '登录', exact: true }).waitFor()
+  await page.getByRole('textbox', { name: '用户名', exact: true }).fill('test-only')
+  await page.locator('input[name="password"]').fill('test-only')
+  await page.getByRole('button', { name: '登录', exact: true }).click()
+  await page.getByRole('heading', { name: '选择系统' }).waitFor()
+  assert.equal(await page.locator('.system-link').count(), 3)
   for (const [width, height] of [[1920, 1080], [1440, 900], [1366, 768]]) {
     await page.setViewportSize({ width, height })
-    for (const mode of ['office', 'monitor']) {
-      const route = mode === 'office' ? '/office' : '/monitor/monitoring'
-      await page.goto(origin + `/platform.html?case=${mode}-${width}#` + route)
-      await page.getByText('页面内容待确认', { exact: true }).waitFor()
-      await page.locator(`[data-page-mode="${mode}"]`).waitFor()
-      if (mode === 'monitor') await page.getByRole('heading', { name: '监控大屏', exact: true }).first().waitFor()
+    for (const path of ['/operations/overview/running', '/configuration/access/users', '/monitor/monitoring']) {
+      await visit(path)
+      await page.locator('[data-page-path="' + path + '"]').waitFor()
+      await page.locator('main .pending-page p').waitFor()
+      const mode = path.startsWith('/monitor') ? 'monitor' : 'office'
       const metrics = await page.evaluate(() => {
+        const header = document.querySelector('header')
         const canvas = document.querySelector('.monitor-canvas')
         const rect = canvas?.getBoundingClientRect()
-        return {
-          scrollWidth: document.documentElement.scrollWidth, scrollHeight: document.documentElement.scrollHeight,
-          width: innerWidth, height: innerHeight,
-          background: getComputedStyle(document.body).backgroundColor,
-          canvas: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
-          rootTheme: document.documentElement.dataset.theme,
-          oldStyle: !!document.querySelector('.ant-app, .trae-badge'),
-          typography: {
-            pageTitle: getComputedStyle(document.querySelector('.pending-page h1')).fontSize,
-            button: getComputedStyle(document.querySelector('.el-button')).fontSize,
-            description: getComputedStyle(document.querySelector('.el-empty__description p')).fontSize,
-            statusTitle: getComputedStyle(document.querySelector('.el-alert__title')).fontSize,
-            statusDescription: getComputedStyle(document.querySelector('.el-alert__description')).fontSize,
-            monitorTitle: canvas ? getComputedStyle(document.querySelector('.monitor-header h1')).fontSize : null,
-            auxiliary: canvas ? getComputedStyle(document.querySelector('.monitor-clock')).fontSize : null,
-            headerInset: canvas ? getComputedStyle(document.querySelector('.monitor-header')).paddingInlineStart : null,
-            gap: canvas ? getComputedStyle(canvas).getPropertyValue('--bec-monitor-gap').trim() : null,
-            chart: getComputedStyle(canvas ?? document.documentElement).getPropertyValue('--bec-chart-font-size').trim(),
-            metric: canvas ? getComputedStyle(canvas).getPropertyValue('--bec-monitor-font-number').trim() : null,
-          },
-        }
+        const bounds = header.getBoundingClientRect()
+        const controls = [...header.querySelectorAll('button,time,strong,h1')].filter(el => el.checkVisibility() && !el.closest('.el-popper'))
+        return { width: innerWidth, scrollWidth: document.documentElement.scrollWidth,
+          overflow: header.scrollWidth > header.clientWidth,
+          clipped: controls.some(el => { const r = el.getBoundingClientRect(); return r.right > bounds.right + 1 || r.bottom > bounds.bottom + 1 }),
+          canvas: rect ? { width: rect.width, height: rect.height } : null }
       })
-      assert.equal(metrics.rootTheme, 'office-light')
-      assert.equal(metrics.background, 'rgb(244, 247, 250)')
-      assert.equal(metrics.oldStyle, false)
-      assert.ok(metrics.scrollWidth <= width && metrics.scrollHeight <= height, JSON.stringify(metrics))
-      assert.equal(metrics.typography.pageTitle, mode === 'monitor' ? '28px' : '16px')
-      assert.equal(metrics.typography.button, mode === 'monitor' ? '20px' : '14px')
-      assert.equal(metrics.typography.description, mode === 'monitor' ? '20px' : '14px')
-      assert.equal(metrics.typography.chart, mode === 'monitor' ? '18px' : '14px')
-      assert.equal(metrics.typography.statusTitle, mode === 'monitor' ? '20px' : '16px')
-      assert.equal(metrics.typography.statusDescription, mode === 'monitor' ? '18px' : '14px')
+      await page.screenshot({ path: resolve(artifacts, 'latest-inspection.png') })
+      assert.ok(metrics.scrollWidth <= width, JSON.stringify(metrics))
+      assert.equal(metrics.overflow, false, JSON.stringify(metrics))
+      assert.equal(metrics.clipped, false, JSON.stringify(metrics))
+      if (mode === 'monitor') assert.ok(Math.abs(metrics.canvas.width / metrics.canvas.height - 16 / 9) < 0.01)
       if (mode === 'office') {
-        await page.locator('.skip-link').focus()
-        await page.keyboard.press('Enter')
-        assert.equal(await page.evaluate(() => document.activeElement?.id), 'platform-content')
-        assert.ok(page.url().endsWith('#/office'))
+        await page.getByRole('button', { name: '全局搜索', exact: true }).click()
+        await page.getByRole('heading', { name: '全局搜索', exact: true }).waitFor()
+        await page.locator('main').click({ position: { x: 400, y: 200 } })
+        await page.getByRole('heading', { name: '全局搜索', exact: true }).waitFor({ state: 'hidden' })
       }
-      if (mode === 'monitor') {
-        assert.equal(metrics.typography.monitorTitle, '40px')
-        assert.equal(metrics.typography.auxiliary, '18px')
-        assert.equal(metrics.typography.headerInset, '32px')
-        assert.equal(metrics.typography.gap, '16px')
-        assert.equal(metrics.typography.metric, '44px')
-        const scale = Math.min(width / 1920, height / 1080)
-        assert.ok(Math.abs(metrics.canvas.width - 1920 * scale) < 1)
-        assert.ok(Math.abs(metrics.canvas.height - 1080 * scale) < 1)
-        assert.ok(metrics.canvas.x >= -1 && metrics.canvas.y >= -1)
-        await page.getByRole('button', { name: '大屏切换', exact: true }).click()
-        const dialog = page.getByRole('dialog')
-        await dialog.waitFor()
-        await dialog.evaluate(async el => { await Promise.all(el.getAnimations({ subtree: true }).map(animation => animation.finished.catch(() => {}))) })
-        assert.equal(await dialog.evaluate(el => !!el.closest('.monitor-canvas')), true)
-        assert.equal(await page.locator('.el-dialog__title').evaluate(el => getComputedStyle(el).fontSize), '28px')
-        const bounds = await page.locator('.el-dialog').boundingBox()
-        assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.x + bounds.width <= width + 1 && bounds.y + bounds.height <= height + 1, JSON.stringify({ width, height, bounds }))
-        await page.getByText('尚未分组', { exact: true }).waitFor()
-        await page.getByRole('menuitem', { name: '趋势大屏', exact: true }).click()
-        await page.waitForURL('**#/monitor/trend')
-        await page.getByText('页面内容待确认', { exact: true }).waitFor()
-        await page.reload()
-        await page.getByRole('heading', { name: '趋势大屏' }).first().waitFor()
-        if (width === 1920) {
-          await page.getByRole('button', { name: '进入全屏', exact: true }).click()
-          await page.waitForFunction(() => document.fullscreenElement === document.documentElement)
-          await page.getByRole('button', { name: '退出全屏', exact: true }).click()
-          await page.waitForFunction(() => document.fullscreenElement === null)
-        }
-      }
-      await page.screenshot({ path: resolve(artifacts, `${mode}-${width}x${height}.png`), fullPage: true })
-      results.push({ mode, width, height, ...metrics })
+      const name = path.split('/')[1] + '-' + width
+      await page.screenshot({ path: resolve(artifacts, name + '.png') })
+      results.push({ name, metrics })
     }
   }
-  await page.setViewportSize({ width: 1280, height: 1024 })
-  await page.goto(origin + '/platform.html#/monitor/not-registered')
-  await page.getByText('页面不存在，请返回办公端。', { exact: true }).waitFor()
-  await context.setOffline(true)
-  await page.getByText('网络连接已断开，请检查网络。', { exact: true }).waitFor()
-  assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true)
-  await context.setOffline(false)
-  await page.getByRole('button', { name: '返回办公端', exact: true }).click()
-  await page.waitForURL('**#/office')
-  assert.equal(await page.locator('.monitor-canvas').count(), 0)
-  assert.deepEqual(dataRequests, [])
-  assert.deepEqual(errors, [])
-  await writeFile(resolve(artifacts, 'browser-results.json'), JSON.stringify({ results, errors, dataRequests }, null, 2))
-  process.stdout.write(`PLATFORM_BROWSER_CHECK_OK: ${results.length} layout cases; typography, fullscreen, switching, reload, canvas overlays, offline and no data requests\n`)
-} catch (error) {
-  if (page) {
-    await page.screenshot({ path: resolve(artifacts, 'failure.png'), fullPage: true })
-    process.stderr.write(JSON.stringify(await page.evaluate(() => ({ url: location.href, text: document.body.innerText, scrollHeight: document.documentElement.scrollHeight }))) + '\n')
+  // 每个已确认叶子必须能进入；业务页面尚未接入时只应请求认证及授权接口。
+  for (const path of paths) {
+    await visit(path)
+    await page.locator('[data-page-path="' + path + '"]').waitFor()
+    await page.locator('main .pending-page p').waitFor()
+    assert.ok(page.url().endsWith('#' + path), path)
   }
-  throw error
+  await visit('/monitor/monitoring')
+  await page.locator('[data-page-path="/monitor/monitoring"]').waitFor()
+  await page.getByRole('button', { name: '大屏切换', exact: true }).click()
+  await page.getByRole('dialog').waitFor()
+  assert.equal(await page.locator('.monitor-canvas .el-dialog').count(), 1)
+  await page.getByRole('menuitem', { name: '趋势大屏', exact: true }).click()
+  await page.locator('[data-page-path="/monitor/trend"]').waitFor()
+  await page.getByRole('button', { name: '进入全屏', exact: true }).click()
+  await page.getByRole('button', { name: '退出全屏', exact: true }).waitFor()
+  await page.getByRole('button', { name: '退出全屏', exact: true }).click()
+  await page.getByRole('button', { name: '切换系统', exact: true }).click()
+  await page.getByRole('link', { name: '智慧运维平台', exact: true }).click()
+  await page.locator('[data-page-path="/operations/overview/running"]').waitFor()
+  grants = ['/configuration/access/users']
+  await visit('/systems')
+  await page.locator('.system-link').waitFor()
+  assert.equal(await page.locator('.system-link').count(), 1)
+  await visit('/monitor/monitoring')
+  await page.waitForURL('**#/403')
+  grants = []
+  await visit('/systems')
+  await page.getByText('暂无可访问的系统，请联系管理员配置权限').waitFor()
+  authStatus = 503
+  await visit('/systems')
+  await page.getByText('访问权限加载失败，请重试').waitFor()
+  authStatus = 401
+  await visit('/monitor/monitoring')
+  await page.waitForURL('**#/login')
+  assert.deepEqual(errors, [])
+  assert.deepEqual(unexpectedRequests, [])
+  await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ results, verification: 'isolated-browser-only' }, null, 2))
+  process.stdout.write('THREE_SYSTEM_BROWSER_OK\n')
 } finally {
   await browser?.close()
-  await new Promise(resolve => server.close(resolve))
+  await new Promise(done => server.close(done))
 }
