@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElAlert, ElButton, ElMenu, ElMenuItem, ElSubMenu, ElPopover, Search, Bell, UserRound } from '@/shared/ui'
 import StateBoundary from '@/shared/components/StateBoundary.vue'
 import PendingPage from '@/shared/components/PendingPage.vue'
+import HeaderDivider from '@/shared/components/HeaderDivider.vue'
 import SystemSwitcher from '@/app/navigation/SystemSwitcher.vue'
 import WorkspaceBrand from '@/app/navigation/WorkspaceBrand.vue'
 import { groupIcons } from '@/app/navigation/icons'
@@ -31,15 +32,21 @@ async function logout() {
     <a class="skip-link" href="#platform-content" @click.prevent="content?.focus()">{{ t('navigation.skipContent') }}</a>
     <header class="workspace-header">
       <WorkspaceBrand />
+      <HeaderDivider />
       <div class="system-navigation">
         <span class="current-system">{{ t(currentSystem?.titleKey ?? 'workspaces.select') }}</span>
+        <HeaderDivider />
         <SystemSwitcher plain />
       </div>
       <div class="tools">
-        <ElPopover v-for="item in [{ key: 'search', icon: Search }, { key: 'messages', icon: Bell }]" :key="item.key" trigger="click" :teleported="false" width="var(--bec-navigation-width)">
-          <template #reference><ElButton :icon="item.icon" :class="item.key === 'search' ? 'search-trigger' : 'icon-trigger'" text :aria-label="t('workspaces.' + item.key)" :title="t('workspaces.' + item.key)"><span v-if="item.key === 'search'">{{ t('workspaces.search') }}</span></ElButton></template>
-          <PendingPage :title="t('workspaces.' + item.key)" />
-        </ElPopover>
+        <HeaderDivider />
+        <template v-for="item in [{ key: 'search', icon: Search }, { key: 'messages', icon: Bell }]" :key="item.key">
+          <ElPopover trigger="click" :teleported="false" width="var(--bec-navigation-width)">
+            <template #reference><ElButton :icon="item.icon" :class="item.key === 'search' ? 'search-trigger' : 'icon-trigger'" text :aria-label="t('workspaces.' + item.key)" :title="t('workspaces.' + item.key)"><span v-if="item.key === 'search'">{{ t('workspaces.search') }}</span></ElButton></template>
+            <PendingPage :title="t('workspaces.' + item.key)" />
+          </ElPopover>
+          <HeaderDivider />
+        </template>
         <ElPopover trigger="click" :teleported="false" width="var(--bec-navigation-width)">
           <template #reference><ElButton class="user-trigger" text :icon="UserRound" :aria-label="t('workspaces.user')"><span class="username" :title="session.user?.username">{{ session.user?.username }}</span></ElButton></template>
           <ElButton @click="logout">{{ t('workspaces.logout') }}</ElButton>
@@ -65,7 +72,7 @@ async function logout() {
 <style scoped>
 .office-layout { height: 100%; display: grid; grid-template-columns: var(--bec-navigation-width) minmax(0, 1fr); grid-template-rows: var(--bec-workspace-header-height) minmax(0, 1fr); background: var(--bec-management-background); }
 .workspace-header { grid-column: 1 / -1; display: flex; align-items: center; gap: var(--bec-space-tight); padding: 0 var(--bec-space-page); background: var(--bec-workspace-header-background); border-bottom: var(--bec-border-width) solid var(--bec-color-divider); box-shadow: var(--bec-shadow-card); position: relative; z-index: var(--bec-layer-navigation); }
-.system-navigation { display: flex; align-items: center; gap: var(--bec-space-group); padding-left: var(--bec-space-group); margin-left: var(--bec-space-tight); border-left: var(--bec-border-width) solid var(--bec-color-divider); }
+.system-navigation { display: flex; align-items: center; gap: var(--bec-space-tight); }
 .current-system { padding: var(--bec-ref-space-4) var(--bec-ref-space-12); border-radius: var(--bec-management-radius); background: var(--bec-workspace-system-background); white-space: nowrap; color: var(--bec-color-action-active); font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-normal); }
 .tools { display: flex; align-items: center; gap: var(--bec-ref-space-4); margin-left: auto; min-width: 0; }
 .username { display: block; max-width: var(--bec-workspace-user-width); overflow: hidden; text-overflow: ellipsis; }

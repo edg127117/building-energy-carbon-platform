@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { t } from '@/locales'
 import companyLogo from '@/shared/assets/tengcore-logo.png'
+import HeaderDivider from '@/shared/components/HeaderDivider.vue'
 
 // 公司标识仅用于管理入口，保留品牌槽供后续定制，不影响登录页与大屏。
 </script>
@@ -9,6 +10,7 @@ import companyLogo from '@/shared/assets/tengcore-logo.png'
     <span class="company-logo" role="img" :aria-label="t('workspaces.companyLogo')">
       <slot name="logo"><img :src="companyLogo" alt="" /></slot>
     </span>
+    <HeaderDivider />
     <strong>{{ t('terminology.systemName') }}</strong>
   </div>
 </template>

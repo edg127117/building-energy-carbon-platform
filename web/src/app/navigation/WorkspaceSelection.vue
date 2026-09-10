@@ -5,6 +5,7 @@ import { useSession } from '@/modules/auth/public'
 import { t } from '@/locales'
 import { ElAlert, ElButton, ArrowRight } from '@/shared/ui'
 import WorkspaceBrand from './WorkspaceBrand.vue'
+import HeaderDivider from '@/shared/components/HeaderDivider.vue'
 import { workspaceIcons } from './icons'
 import { authorizedPages, workspaces } from './catalog'
 const session = useSession()
@@ -25,7 +26,7 @@ async function logout() {
 </script>
 <template>
   <div class="selection management-surface">
-    <header><WorkspaceBrand /><div class="account"><span class="username" :title="session.user?.username">{{ session.user?.username }}</span><ElButton text @click="logout">{{ t('workspaces.logout') }}</ElButton></div></header>
+    <header><WorkspaceBrand /><div class="account"><HeaderDivider /><span class="username" :title="session.user?.username">{{ session.user?.username }}</span><HeaderDivider /><ElButton text @click="logout">{{ t('workspaces.logout') }}</ElButton></div></header>
     <main>
       <h1>{{ t('workspaces.select') }}</h1>
       <ElAlert v-if="logoutFailed" :title="t('workspaces.logoutFailed')" type="error" :closable="false" />
