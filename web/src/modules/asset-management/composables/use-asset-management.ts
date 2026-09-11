@@ -190,12 +190,12 @@ export function useAssetManagement() {
 
   async function loadScope(buildingId: string | undefined) {
     const owner = ++scopeGeneration
-    if (!buildingId) {
-      scopeSpaces.value = []
-      scopeSystemGroups.value = []
-      scopeError.value = null
-      return
-    }
+    // 建筑切换时立即撤下旧范围；清空选择也必须结束加载，迟到响应由代次丢弃。
+    scopeSpaces.value = []
+    scopeSystemGroups.value = []
+    scopeError.value = null
+    scopeLoading.value = false
+    if (!buildingId) return
     scopeLoading.value = true
     scopeError.value = null
     try {
