@@ -1,9 +1,36 @@
 import axios, { type AxiosRequestConfig } from 'axios'
 
+export type ApiResult<T> = {
+  success: boolean
+  code: number
+  msg: string
+  data: T
+}
+
 export class TransportError extends Error {
-  constructor(readonly kind: 'unauthorized' | 'forbidden' | 'network' | 'request', readonly status?: number) {
+  constructor(
+    readonly kind: 'unauthorized' | 'forbidden' | 'network' | 'request',
+    readonly status?: number,
+    readonly businessCode?: number,
+  ) {
     super(kind)
   }
+}
+
+type AuthenticationBridge = {
+  getToken: () => string | null
+  onUnauthorized: () => void
+}
+
+const authenticationBridge: AuthenticationBridge = {
+  getToken: () => localStorage.getItem('token'),
+  onUnauthorized: () => undefined,
+}
+
+/** 应用层在 Pinia 和 Router 就绪后注入认证桥接，传输层不反向依赖业务模块。 */
+export function configureHttpAuthentication(bridge: AuthenticationBridge): void {
+  authenticationBridge.getToken = bridge.getToken
+  authenticationBridge.onUnauthorized = bridge.onUnauthorized
 }
 
 /** 传输层不导入页面、文案或全局认证状态；契约解析和业务错误标识映射归对应模块。 */
@@ -26,5 +53,36 @@ export function createHttpClient(baseURL: string, getToken: () => string | null)
         throw new TransportError(kind, status)
       }
     },
+  }
+}
+
+const platformClient = createHttpClient(
+  import.meta.env.VITE_API_BASE || '/api',
+  () => authenticationBridge.getToken(),
+)
+
+function classifyBusinessFailure(code: number): TransportError {
+  const kind = code === 401 ? 'unauthorized' : code === 403 ? 'forbidden' : 'request'
+  return new TransportError(kind, code, code)
+}
+
+/**
+ * 请求平台统一 Result 契约并只返回 data。
+ *
+ * 后端异常原文不会穿透到页面；401 只通过注入桥接清理会话，最终权限仍由后端判定。
+ */
+export async function requestApi<T>(config: AxiosRequestConfig): Promise<T> {
+  const requestToken = authenticationBridge.getToken()
+  try {
+    const result = await platformClient.request<ApiResult<T>>(config)
+    if (!result || typeof result !== 'object') throw new TransportError('request')
+    if (result.code === 200) return result.data
+    throw classifyBusinessFailure(result.code)
+  } catch (reason) {
+    // 旧账号请求的迟到 401 不能清理切换账号后建立的新会话。
+    if (reason instanceof TransportError && reason.kind === 'unauthorized' && requestToken === authenticationBridge.getToken()) {
+      authenticationBridge.onUnauthorized()
+    }
+    throw reason
   }
 }

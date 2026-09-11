@@ -1,1 +1,36 @@
-export default { title: '趋势分析' } as const
+export default {
+  title: '趋势对比',
+  compatibilityNotice: '当前保留继承的中央空调指标与测点历史查询能力。',
+  modeIndicator: '指标趋势',
+  modePoint: '测点趋势',
+  query: '查询趋势',
+  refresh: '刷新趋势',
+  range1h: '近 1 小时',
+  range6h: '近 6 小时',
+  range24h: '近 24 小时',
+  range7d: '近 7 天',
+  custom: '自定义',
+  startTime: '开始时间',
+  endTime: '结束时间',
+  selectPoints: '选择测点',
+  unitless: '无量纲',
+  updatedAt: '趋势更新时间',
+  updatedAtValue: '趋势更新时间：{time}',
+  noSeries: '当前条件下暂无趋势数据。',
+  validation: {
+    required: '请选择完整的开始和结束时间',
+    invalid: '时间范围无效',
+    order: '开始时间必须早于结束时间',
+    span: '查询跨度不能超过31天',
+  },
+  quality: {
+    q0: 'Q0 真实数据', q1: 'Q1 线性插值', q2: 'Q2 典型值', none: '无数据', unknown: 'Q{quality} 未知质量',
+  },
+  errors: {
+    forbidden: '当前账号无权查看该建筑历史',
+    notFound: '建筑或历史对象不存在，请刷新页面',
+    unavailable: '历史趋势暂不可用，请稍后重试',
+    invalid: '历史查询条件无效',
+    request: '加载历史趋势失败，请稍后重试',
+  },
+} as const

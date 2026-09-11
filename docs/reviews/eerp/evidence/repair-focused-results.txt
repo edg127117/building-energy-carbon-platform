@@ -1,0 +1,23 @@
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.518 s -- in com.platform.energy.efficiency.EerpAnnualCompatibilityTest
+[INFO] Tests run: 8, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.237 s -- in com.platform.energy.efficiency.EerpAnnualCoreTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 52.69 s -- in com.platform.energy.efficiency.EerpApiContractTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.867 s -- in com.platform.energy.efficiency.EerpIndependentBoundaryTest
+[INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 5.204 s -- in com.platform.energy.efficiency.EerpServiceTest
+[INFO] Tests run: 27, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Total time:  02:07 min
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 38.50 s -- in com.platform.energy.efficiency.EerpGovernanceAcceptanceTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Total time:  01:34 min
+EERP_PROCESS_ACCEPTANCE competingProcess=REJECTED kill=FORCED partialWrite=RECOVERED frozenStage=UNCHANGED deadlock=MYSQL_1213 explicitRetry=SUCCEEDED
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 81.75 s -- in com.platform.energy.efficiency.EerpProcessRecoveryTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.390 s -- in com.platform.energy.efficiency.EerpResourceBoundaryTest
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Total time:  02:25 min
+EERP_ACCEPTANCE_YEAR year=2024 timezone=America/New_York periods=367 coolingKwh=4392000.000 electricityKwh=878400.0 eerp=5 displayEerp=5.00 band=GUIDANCE_ONLY sources=METER_CUMULATIVE,FLOW_TEMPERATURE recovery=FROZEN_STAGE
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 108.1 s -- in com.platform.energy.efficiency.EerpIndependentTargetEngineTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+[INFO] BUILD SUCCESS
+[INFO] Total time:  02:46 min

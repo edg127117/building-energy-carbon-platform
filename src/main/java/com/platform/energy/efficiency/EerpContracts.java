@@ -53,6 +53,7 @@ public final class EerpContracts {
             String timezoneVersion, BigDecimal coolingKwh, BigDecimal electricityKwh,
             boolean complete, List<Measure> measures, List<Issue> issues,
             String resultNature, String sourceNature) {}
+    /** 年度原值用于复算；展示字段随结果固定，历史快照缺失时保持null，不在读取时套用新规则。 */
     @Schema(name="EerpAnnualResult")
     public record AnnualResult(String buildingId, String stationId, int year, String timezoneId,
             String timezoneVersion, Instant fromInclusive, Instant toExclusive,
@@ -60,7 +61,11 @@ public final class EerpContracts {
             String calculationStatus, String completeness, String evaluationStatus,
             String evaluationBand, BigDecimal guidanceValue, BigDecimal advancedValue,
             List<String> ruleVersions, List<String> references, String standardVerification,
-            List<String> inputTaskIds, List<Issue> issues, String formulaVersion, String resultNature) {}
+            List<String> inputTaskIds, List<Issue> issues, String formulaVersion, String resultNature,
+            @Schema(description="按本结果固定规则生成的展示值；旧结果或不可计算时为空", nullable=true) BigDecimal displayEerp,
+            @Schema(description="展示舍入版本；旧结果为空", nullable=true) String roundingVersion,
+            @Schema(description="展示小数位数；旧结果为空", nullable=true) Integer displayScale,
+            @Schema(description="展示舍入模式；旧结果为空", nullable=true) String roundingMode) {}
     @Schema(name="EerpTaskView")
     public record TaskView(String taskId, String kind, String buildingId, String stationId,
             String status, long revision, long createdBy, Long submittedBy, Long approvedBy, String predecessorTaskId,

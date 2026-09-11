@@ -4,7 +4,11 @@ export default {
   forbidden: '当前账号无权访问此内容。',
   notFound: '页面不存在，请返回办公端。',
   offline: '网络连接已断开，请检查网络。',
+  network: '网络连接失败，请检查网络后重试。',
   request: '请求失败，请稍后重试。',
   unauthorized: '登录已失效，请重新登录。',
+  conflict: '当前状态已变化，请刷新后重试。',
+  tooManyRequests: '操作过于频繁，请稍后重试。',
+  timeout: '服务响应超时，请稍后重试。',
   fullscreen: '无法切换全屏，请检查浏览器权限。',
 } as const

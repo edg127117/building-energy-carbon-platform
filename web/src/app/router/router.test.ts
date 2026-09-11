@@ -34,7 +34,7 @@ describe('office and monitor composition', () => {
     expect(wrapper.text()).toContain('页面加载失败')
     expect(wrapper.text()).not.toContain('internal chunk path')
     expect(wrapper.find('[data-page-mode="office"]').exists()).toBe(true)
-    await router.push('/operations/energy/trend')
+    await router.push('/operations/carbon/trend')
     await flushPromises()
     expect(useShellStore(pinia).navigationFailed).toBe(false)
     expect(wrapper.text()).toContain('趋势对比')
@@ -58,6 +58,15 @@ describe('office and monitor composition', () => {
     expect(authorizedPages(session.menus)).toHaveLength(pages.length)
     session.menus[0].visible = 0
     expect(authorizedPages(session.menus)).toHaveLength(pages.length - 1)
+  })
+  it('retains administrator checks for migrated management pages in addition to menu grants', async () => {
+    const router = createPlatformRouter(createMemoryHistory())
+    const session = authorize()
+    await router.push('/configuration/access/users')
+    expect(router.currentRoute.value.path).toBe('/403')
+    session.user!.roles = ['PLATFORM_ADMIN']
+    await router.push('/configuration/access/users')
+    expect(router.currentRoute.value.path).toBe('/configuration/access/users')
   })
   it('applies the content panel only to management placeholders', () => {
     authorize()

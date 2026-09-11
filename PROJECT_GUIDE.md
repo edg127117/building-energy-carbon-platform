@@ -81,9 +81,9 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 ### 前端入口与目录边界
 
-新前端与继承页面保留在同一 `web` 工程，通过独立入口隔离全局样式：`index.html` 承载继承页面，`platform.html` 承载新平台。进入 `web` 后运行 `npm ci`、`npm run dev:platform`；`npm run build` 同时构建两个入口。
+前端采用 `index.html → src/app/main.ts` 唯一入口，旧页面、旧全局样式、旧请求客户端及 Ant Design/Tailwind 实现不再保留。进入 `web` 后运行 `npm ci`、`npm run dev`；`npm run build` 构建唯一入口到 `web/dist`。
 
-新平台恢复会话时重新向后端核验身份和授权，不信任本地缓存角色。客户端菜单只能使用服务器返回且已在本地注册的叶子路径；目录不自动授予子页面，管理员角色也不自动扩权。前端导航限制不能替代后端接口鉴权和建筑范围校验。
+平台恢复会话时重新向后端核验身份和授权，不信任本地缓存角色。客户端菜单只能使用服务器返回且已在本地注册的叶子路径；目录不自动授予子页面，管理员角色也不自动扩权。迁入管理页面还需保留平台管理员角色检查；前端导航限制不能替代后端接口鉴权和建筑范围校验。
 
 | 目录 | 职责与边界 |
 |---|---|
@@ -95,7 +95,7 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 监控端采用 1920×1080 逻辑画布等比居中缩放。大屏注册表统一生成路由和切换导航；场景型布局与普通网格布局分开，信息层不得阻断场景交互。图表统一从 `shared/charts` 获取主题、尺寸监听和释放行为。
 
-目录依赖、文案和样式变量由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束。前端结构、菜单和交付阶段见[前端骨架实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，当前完成情况见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
+目录依赖、文案和样式变量由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束。前端结构、菜单和交付阶段见[前端实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，当前迁移和验收状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
 
 ## 5. 目标数据链路
 
