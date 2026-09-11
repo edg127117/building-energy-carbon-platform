@@ -1,11 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
   ElAlert,
   ElButton,
   ElCard,
-  ElDescriptions,
-  ElDescriptionsItem,
   ElDrawer,
   ElEmpty,
   ElForm,
@@ -20,6 +18,8 @@ import {
   ElTable,
   ElTableColumn,
   ElTag,
+  ElTabs,
+  ElTabPane,
   Cpu,
   Pencil,
   Plus,
@@ -40,7 +40,7 @@ const management = useAssetManagement()
 const filterScope = useAssetManagement()
 const filters = reactive<Partial<AssetEquipmentQuery>>({})
 const filterSpaces = computed(() => flattenSpaces(filterScope.scopeSpaces.value))
-const pointsSection = ref<HTMLElement | null>(null)
+const activeDetailTab = ref('archive')
 const equipmentDrawerOpen = ref(false)
 const equipmentEditorOpen = ref(false)
 const pointEditorOpen = ref(false)
@@ -89,11 +89,10 @@ async function changePage(page: number) {
 }
 
 async function openEquipment(equipmentId: string, showPoints = false) {
+  activeDetailTab.value = showPoints ? 'points' : 'archive'
   equipmentDrawerOpen.value = true
   try {
     await management.selectEquipment(equipmentId)
-    await nextTick()
-    if (showPoints) pointsSection.value?.scrollIntoView({ block: 'start' })
   } catch {
     equipmentDrawerOpen.value = false
   }
@@ -237,18 +236,68 @@ onMounted(() => {
       <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="management.equipment.value.page" :page-size="management.equipment.value.size" :total="management.equipment.value.total" @current-change="changePage" /></div>
     </ElCard>
 
-    <ElDrawer :model-value="equipmentDrawerOpen" size="55%" :title="t('assetManagement.equipment.detail')" @update:model-value="equipmentDrawerOpen = false">
+    <ElDrawer :model-value="equipmentDrawerOpen" size="min(100%, var(--bec-dialog-width))" class="equipment-detail-drawer" :title="t('assetManagement.equipment.detail')" @update:model-value="equipmentDrawerOpen = false">
+      <template #header="{ titleId }">
+        <div class="detail-heading">
+          <template v-if="selectedEquipment && !management.equipmentContextLoading.value">
+            <div class="detail-title"><h2 :id="titleId">{{ selectedEquipment.equipmentName }}</h2><AssetStatusTag :status="selectedEquipment.status" /></div>
+            <p>{{ selectedEquipment.equipmentCode || t('common.missing') }}</p>
+          </template>
+          <h2 v-else :id="titleId">{{ t('assetManagement.equipment.detail') }}</h2>
+        </div>
+      </template>
       <ElSkeleton v-if="management.equipmentContextLoading.value" animated :rows="8" />
       <ElAlert v-else-if="management.equipmentContextError.value" :title="management.equipmentContextError.value.message" type="error" show-icon :closable="false" />
-      <template v-else-if="selectedEquipment">
-        <div class="drawer-heading"><div><h2>{{ selectedEquipment.equipmentName }}</h2><p>{{ selectedEquipment.equipmentCode || t('common.missing') }}</p></div><AssetStatusTag :status="selectedEquipment.status" /></div>
+      <ElTabs v-else-if="selectedEquipment" v-model="activeDetailTab" class="detail-tabs">
+        <ElTabPane name="archive" :label="t('assetManagement.equipment.archiveTab')">
+          <div class="detail-content">
+            <section class="detail-section">
+              <h3>{{ t('assetManagement.equipment.basicInformation') }}</h3><dl class="detail-fields">
+                <div><dt>{{ t('assetManagement.labels.equipmentName') }}</dt><dd>{{ selectedEquipment.equipmentName || t('common.missing') }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.equipmentCode') }}</dt><dd>{{ selectedEquipment.equipmentCode || t('common.missing') }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.equipmentType') }}</dt><dd>{{ selectedEquipment.typeCode || t('common.missing') }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.productName') }}</dt><dd>{{ selectedEquipment.productName || t('common.missing') }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.manufacturer') }}</dt><dd>{{ selectedEquipment.manufacturer || t('common.missing') }}</dd></div>
+              </dl>
+            </section>
+            <section class="detail-section">
+              <h3>{{ t('assetManagement.equipment.installationInformation') }}</h3><dl class="detail-fields">
+                <div><dt>{{ t('assetManagement.labels.building') }}</dt><dd>{{ selectedEquipment.buildingName || t('common.missing') }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.space') }}</dt><dd>{{ selectedEquipment.spaceName || t('common.missing') }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.system') }}</dt><dd>{{ selectedEquipment.systemGroupName || t('common.missing') }}</dd></div>
+              </dl>
+            </section>
+          </div>
+        </ElTabPane>
+        <ElTabPane name="points" :label="t('assetManagement.equipment.points')">
+          <div class="detail-content"><section class="drawer-section"><h3>{{ t('assetManagement.equipment.points') }}</h3><ElTable :data="management.points.value" row-key="pointId"><ElTableColumn :label="t('assetManagement.labels.pointName')" prop="pointName" min-width="160" /><ElTableColumn :label="t('assetManagement.labels.pointCode')" prop="pointCode" min-width="160" /><ElTableColumn :label="t('assetManagement.labels.unit')" prop="unit" min-width="90" /><ElTableColumn :label="t('assetManagement.labels.required')" min-width="90"><template #default="{ row }">{{ t(row.required ? 'assetManagement.equipment.yes' : 'assetManagement.equipment.no') }}</template></ElTableColumn><ElTableColumn :label="t('assetManagement.labels.calculation')" min-width="110"><template #default="{ row }"><ElTag :type="row.forCalculation ? 'success' : 'info'">{{ row.forCalculation ? t('assetManagement.labels.calculation') : t('common.missing') }}</ElTag></template></ElTableColumn><ElTableColumn :label="t('assetManagement.actions.viewDetail')" min-width="190"><template #default="{ row }"><div class="row-actions"><ElButton v-if="can(row, 'UPDATE')" :icon="Pencil" link @click="openEditPoint(asPoint(row))">{{ t('assetManagement.actions.editPoint') }}</ElButton><ElPopconfirm v-if="can(row, 'DELETE')" :title="t('assetManagement.messages.deleteConfirm')" :confirm-button-text="t('assetManagement.actions.confirmDelete')" :cancel-button-text="t('assetManagement.actions.cancel')" @confirm="deletePoint(asPoint(row))"><template #reference><ElButton :icon="Trash2" link type="danger">{{ t('assetManagement.actions.deletePoint') }}</ElButton></template></ElPopconfirm></div></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.points')" /></template></ElTable></section></div>
+        </ElTabPane>
+        <ElTabPane name="connection" :label="t('assetManagement.equipment.connectionTab')">
+          <div class="detail-content">
+            <section class="detail-section"><h3>{{ t('assetManagement.equipment.protocolInformation') }}</h3><dl class="detail-fields"><div><dt>{{ t('assetManagement.labels.expectedProfile') }}</dt><dd>{{ selectedEquipment.expectedProfileCode || t('common.missing') }}</dd></div></dl></section>
+            <section class="drawer-section"><h3>{{ t('assetManagement.equipment.identities') }}</h3><ElTable :data="selectedEquipment.identities" row-key="identityId"><ElTableColumn :label="t('assetManagement.labels.identityType')" prop="identityType" min-width="130" /><ElTableColumn :label="t('assetManagement.labels.identity')" prop="identityValue" min-width="180" /><ElTableColumn :label="t('assetManagement.labels.expectedProfile')" prop="expectedProfileCode" min-width="140" /><ElTableColumn :label="t('assetManagement.labels.status')" min-width="100"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.identities')" /></template></ElTable></section>
+          </div>
+        </ElTabPane>
+        <ElTabPane name="parameters" :label="t('assetManagement.equipment.technicalParameters')">
+          <div class="detail-content">
+            <section class="detail-section">
+              <h3>{{ t('assetManagement.equipment.technicalParameters') }}</h3><dl class="detail-fields">
+                <div><dt>{{ t('assetManagement.labels.ratedCapacity') }}</dt><dd>{{ formatNumber(selectedEquipment.ratedCapacity) }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.ratedPower') }}</dt><dd>{{ formatNumber(selectedEquipment.ratedPower) }}</dd></div>
+                <div><dt>{{ t('assetManagement.labels.designCop') }}</dt><dd>{{ formatNumber(selectedEquipment.designCop) }}</dd></div>
+              </dl>
+            </section>
+            <p class="parameter-note">{{ t('assetManagement.forms.parametersReadOnly') }}</p>
+          </div>
+        </ElTabPane>
+        <ElTabPane name="relations" :label="t('assetManagement.equipment.relationsTab')"><div class="detail-pending">{{ t('assetManagement.equipment.pending') }}</div></ElTabPane>
+        <ElTabPane name="maintenance" :label="t('assetManagement.equipment.maintenanceTab')"><div class="detail-pending">{{ t('assetManagement.equipment.pending') }}</div></ElTabPane>
+      </ElTabs>
+      <template v-if="selectedEquipment && !management.equipmentContextLoading.value && !management.equipmentContextError.value" #footer>
         <div class="drawer-actions">
           <ElButton v-if="can(selectedEquipment, 'UPDATE')" :icon="Pencil" @click="openEditEquipment(selectedEquipment.equipmentId)">{{ t('assetManagement.actions.editEquipment') }}</ElButton>
           <ElPopconfirm v-if="can(selectedEquipment, 'DELETE')" :title="t('assetManagement.messages.deleteConfirm')" :confirm-button-text="t('assetManagement.actions.confirmDelete')" :cancel-button-text="t('assetManagement.actions.cancel')" @confirm="deleteEquipment(selectedEquipment.equipmentId)"><template #reference><ElButton :icon="Trash2" type="danger" plain>{{ t('assetManagement.actions.deleteEquipment') }}</ElButton></template></ElPopconfirm>
         </div>
-        <ElDescriptions :column="2" border><ElDescriptionsItem :label="t('assetManagement.labels.building')">{{ selectedEquipment.buildingName || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.space')">{{ selectedEquipment.spaceName || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.system')">{{ selectedEquipment.systemGroupName || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.productName')">{{ selectedEquipment.productName || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.manufacturer')">{{ selectedEquipment.manufacturer || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.expectedProfile')">{{ selectedEquipment.expectedProfileCode || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.ratedCapacity')">{{ formatNumber(selectedEquipment.ratedCapacity) }}</ElDescriptionsItem><ElDescriptionsItem :label="t('assetManagement.labels.ratedPower')">{{ formatNumber(selectedEquipment.ratedPower) }}</ElDescriptionsItem></ElDescriptions>
-        <section class="drawer-section"><h3>{{ t('assetManagement.equipment.identities') }}</h3><ElTable :data="selectedEquipment.identities" row-key="identityId"><ElTableColumn :label="t('assetManagement.labels.identityType')" prop="identityType" min-width="130" /><ElTableColumn :label="t('assetManagement.labels.identity')" prop="identityValue" min-width="180" /><ElTableColumn :label="t('assetManagement.labels.expectedProfile')" prop="expectedProfileCode" min-width="140" /><ElTableColumn :label="t('assetManagement.labels.status')" min-width="100"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.identities')" /></template></ElTable></section>
-        <section ref="pointsSection" class="drawer-section"><h3>{{ t('assetManagement.equipment.points') }}</h3><ElTable :data="management.points.value" row-key="pointId"><ElTableColumn :label="t('assetManagement.labels.pointName')" prop="pointName" min-width="160" /><ElTableColumn :label="t('assetManagement.labels.pointCode')" prop="pointCode" min-width="160" /><ElTableColumn :label="t('assetManagement.labels.unit')" prop="unit" min-width="90" /><ElTableColumn :label="t('assetManagement.labels.calculation')" min-width="110"><template #default="{ row }"><ElTag :type="row.forCalculation ? 'success' : 'info'">{{ row.forCalculation ? t('assetManagement.labels.calculation') : t('common.missing') }}</ElTag></template></ElTableColumn><ElTableColumn :label="t('assetManagement.actions.viewDetail')" min-width="190"><template #default="{ row }"><div class="row-actions"><ElButton v-if="can(row, 'UPDATE')" :icon="Pencil" link @click="openEditPoint(asPoint(row))">{{ t('assetManagement.actions.editPoint') }}</ElButton><ElPopconfirm v-if="can(row, 'DELETE')" :title="t('assetManagement.messages.deleteConfirm')" :confirm-button-text="t('assetManagement.actions.confirmDelete')" :cancel-button-text="t('assetManagement.actions.cancel')" @confirm="deletePoint(asPoint(row))"><template #reference><ElButton :icon="Trash2" link type="danger">{{ t('assetManagement.actions.deletePoint') }}</ElButton></template></ElPopconfirm></div></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.points')" /></template></ElTable></section>
       </template>
     </ElDrawer>
 
@@ -259,8 +308,8 @@ onMounted(() => {
 
 <style scoped>
 .equipment-page { display: grid; gap: var(--bec-space-section); min-width: 0; }
-.page-heading, .drawer-heading, .row-actions { display: flex; align-items: center; gap: var(--bec-space-group); }
-.page-heading, .drawer-heading { justify-content: space-between; }
+.page-heading, .row-actions { display: flex; align-items: center; gap: var(--bec-space-group); }
+.page-heading { justify-content: space-between; }
 .page-heading { align-items: flex-start; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-heading); }
@@ -289,11 +338,32 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .name-link { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); min-width: 0; white-space: normal; text-align: left; }
 .name-link :deep(span) { overflow-wrap: anywhere; }
 .location-cell, .point-summary { display: grid; gap: var(--bec-ref-space-4); }
-.drawer-actions { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); margin-bottom: var(--bec-space-group); }
+.drawer-actions { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); margin-bottom: 0; }
 .page-heading { flex-wrap: wrap; }
 .list-panel .pagination { padding: var(--bec-space-group) var(--bec-space-section); overflow-x: auto; }
 .pagination { display: flex; justify-content: flex-end; padding-top: var(--bec-space-group); }
-.drawer-heading { align-items: flex-start; margin-bottom: var(--bec-space-section); }
+
 .drawer-section { display: grid; gap: var(--bec-space-group); margin-top: var(--bec-space-section); }
 .row-actions { gap: var(--bec-space-tight); flex-wrap: wrap; }
+/* 标题和标签固定在抽屉中，滚动只发生在各标签正文，便于后续扩展长内容。 */
+:deep(.equipment-detail-drawer .el-drawer__header) { padding: var(--bec-space-section); margin-bottom: 0; align-items: flex-start; }
+:deep(.equipment-detail-drawer .el-drawer__body) { display: flex; flex-direction: column; padding: 0; min-height: 0; overflow: hidden; }
+:deep(.equipment-detail-drawer .el-drawer__footer) { padding: var(--bec-space-group) var(--bec-space-section); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
+.detail-heading { min-width: 0; }
+.detail-title { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bec-space-tight); }
+.detail-title h2 { overflow-wrap: anywhere; }
+.detail-heading p { margin-top: var(--bec-ref-space-4); overflow-wrap: anywhere; }
+.detail-tabs { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.detail-tabs :deep(.el-tabs__header) { margin: 0; padding-inline: var(--bec-space-section); flex-shrink: 0; }
+.detail-tabs :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow: auto; }
+.detail-tabs :deep(.el-tab-pane) { min-height: 100%; }
+.detail-content { padding: var(--bec-space-section); display: grid; gap: var(--bec-space-section); }
+.detail-section { display: grid; gap: var(--bec-space-group); }
+.detail-fields { display: grid; gap: var(--bec-space-group); margin: 0; }
+.detail-fields > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); gap: var(--bec-space-group); }
+.detail-fields dt { color: var(--bec-color-text-secondary); }
+.detail-fields dd { margin: 0; overflow-wrap: anywhere; }
+.parameter-note { padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-management-radius); }
+.detail-pending { min-height: var(--bec-chart-height); display: grid; place-items: center; color: var(--bec-color-text-secondary); }
+.detail-content .drawer-section { margin-top: 0; }
 </style>

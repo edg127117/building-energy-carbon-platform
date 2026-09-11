@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ElButton, ElInput, ElPagination, ElSelect } from '@/shared/ui'
-import { listBuildings, listEquipment, listSpaces, listSystemGroups } from '../api/assets'
+import { ElButton, ElInput, ElPagination, ElSelect, ElTabs } from '@/shared/ui'
+import { getEquipment, listBuildings, listEquipment, listEquipmentPoints, listSpaces, listSystemGroups } from '../api/assets'
 import EquipmentPointPage from './EquipmentPointPage.vue'
 
 vi.mock('../api/assets', () => ({
@@ -44,7 +44,7 @@ describe('设备列表筛选', () => {
     vi.mocked(listBuildings).mockResolvedValue({ page: 1, size: 100, total: 0, items: [] })
     vi.mocked(listSpaces).mockResolvedValue([])
     vi.mocked(listSystemGroups).mockResolvedValue({ page: 1, size: 100, total: 0, items: [] })
-    wrapper = mount(EquipmentPointPage, { global: { directives: { loading: {} } } })
+    wrapper = mount(EquipmentPointPage, { attachTo: document.body, global: { directives: { loading: {} } } })
     await flushPromises()
   })
   afterEach(() => wrapper.unmount())
@@ -77,4 +77,48 @@ describe('设备列表筛选', () => {
     expect(listEquipment).toHaveBeenLastCalledWith(expect.objectContaining({ page: 1, buildingId: undefined, spaceId: undefined, systemGroupId: undefined, typeCode: undefined, keyword: undefined }))
     expect(wrapper.findAllComponents(ElSelect)[1].props('disabled')).toBe(true)
   })
+  it('查看测点直接进入测点标签，再次查看档案恢复台账标签', async () => {
+    const equipment = { equipmentId: 'E1', equipmentName: '测试设备', equipmentCode: 'E-01', typeCode: 'WCR', status: 'ACTIVE', identities: [], pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
+    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [equipment as never] })
+    vi.mocked(getEquipment).mockResolvedValue(equipment as never)
+    vi.mocked(listEquipmentPoints).mockResolvedValue([])
+    await submit()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看测点')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(ElTabs).props('modelValue')).toBe('points')
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toEqual(['台账信息', '设备测点', '接入信息', '技术参数', '逻辑关系', '维护记录'])
+    wrapper.findComponent({ name: 'ElDrawer' }).vm.$emit('update:modelValue', false)
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看档案')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(ElTabs).props('modelValue')).toBe('archive')
+  })
+
+  it('待建设标签不发送新请求，参数只读且无权限时不展示编辑入口', async () => {
+    const equipment = { equipmentId: 'E1', equipmentName: '测试设备', equipmentCode: 'E-01', typeCode: 'WCR', status: 'ACTIVE', identities: [], ratedCapacity: 0, ratedPower: null, designCop: 5, pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
+    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [equipment as never] })
+    vi.mocked(getEquipment).mockResolvedValue(equipment as never)
+    vi.mocked(listEquipmentPoints).mockResolvedValue([])
+    await submit()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看档案')!.trigger('click')
+    await flushPromises()
+    for (const name of ['逻辑关系', '维护记录']) {
+      await wrapper.findAll('[role="tab"]').find(tab => tab.text() === name)!.trigger('click')
+      await flushPromises()
+      expect(wrapper.findAll('[role="tabpanel"]').find(panel => panel.isVisible())!.text()).toBe('待建设')
+    }
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === '技术参数')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.findComponent(ElTabs).props('modelValue')).toBe('parameters')
+    const panel = wrapper.find('#pane-parameters')
+    expect(panel.isVisible()).toBe(true)
+    expect(panel.text()).toContain('额定容量0')
+    expect(panel.text()).toContain('额定功率—')
+    expect(panel.text()).toContain('技术参数为只读')
+    expect(panel.findAll('input')).toHaveLength(0)
+    expect(wrapper.findAllComponents(ElButton).some(button => button.text() === '编辑设备')).toBe(false)
+    expect(getEquipment).toHaveBeenCalledTimes(1)
+    expect(listEquipmentPoints).toHaveBeenCalledTimes(1)
+  })
+
 })
