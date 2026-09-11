@@ -52,11 +52,11 @@ function buildingChanged(buildingId: string | undefined) {
 }
 
 function submit() {
-  if (!form.buildingId || !form.spaceId || !form.systemGroupId || !form.typeCode.trim() || !form.equipmentName.trim()) return
+  if (!form.buildingId || (!props.equipment && (!form.spaceId || !form.systemGroupId)) || !form.typeCode.trim() || !form.equipmentName.trim()) return
   emit('save', {
     buildingId: form.buildingId,
-    spaceId: form.spaceId,
-    systemGroupId: form.systemGroupId,
+    spaceId: form.spaceId ?? null,
+    systemGroupId: form.systemGroupId ?? null,
     typeCode: form.typeCode.trim(),
     equipmentName: form.equipmentName.trim(),
     productId: nullable(form.productId),
@@ -84,10 +84,10 @@ function nullable(value: string): string | null { return value.trim() || null }
         </ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.equipmentType')" required><ElInput v-model="form.typeCode" :disabled="Boolean(equipment)" maxlength="20" /></ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.space')" required>
-          <ElSelect v-model="form.spaceId" class="wide-control"><ElOption v-for="item in spaces" :key="item.spaceId" :label="item.spaceName" :value="item.spaceId" /></ElSelect>
+          <ElSelect v-model="form.spaceId" :disabled="Boolean(equipment)" class="wide-control"><ElOption v-for="item in spaces" :key="item.spaceId" :label="item.spaceName" :value="item.spaceId" /></ElSelect>
         </ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.system')" required>
-          <ElSelect v-model="form.systemGroupId" class="wide-control"><ElOption v-for="item in systemGroups" :key="item.systemGroupId" :label="item.systemName" :value="item.systemGroupId" /></ElSelect>
+          <ElSelect v-model="form.systemGroupId" :disabled="Boolean(equipment)" class="wide-control"><ElOption v-for="item in systemGroups" :key="item.systemGroupId" :label="item.systemName" :value="item.systemGroupId" /></ElSelect>
         </ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.productId')"><ElInput v-model="form.productId" :disabled="Boolean(equipment)" maxlength="64" /></ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem>
@@ -96,6 +96,7 @@ function nullable(value: string): string | null { return value.trim() || null }
         <ElFormItem :label="t('assetManagement.labels.designCop')"><ElInputNumber v-model="form.designCop" disabled class="wide-control" /></ElFormItem>
       </div>
       <ElAlert :title="t('assetManagement.forms.activeOnly')" type="info" :closable="false" />
+      <ElAlert v-if="equipment" :title="t('assetManagement.associations.archiveHint')" type="info" :closable="false" />
       <ElAlert :title="t('assetManagement.forms.parametersReadOnly')" type="info" :closable="false" />
     </ElForm>
     <template #footer><ElButton @click="emit('close')">{{ t('assetManagement.actions.cancel') }}</ElButton><ElButton type="primary" :loading="submitting" @click="submit">{{ t('assetManagement.actions.save') }}</ElButton></template>

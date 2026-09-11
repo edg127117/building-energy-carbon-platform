@@ -232,6 +232,100 @@ class RelationGovernanceServiceIntegrationTest {
         assertThat(service.versions(101L, ENERGY, "BLD001").getFirst().revision()).isEqualTo(draft.revision());
     }
 
+    @Test
+    void queriesDraftAndLegacyEquipmentAssociationsWithIsolationScopeAndPagination() {
+        jdbc.update("""
+                INSERT INTO biz_space
+                (space_id,building_id,parent_space_id,space_name,space_code,space_type,floor_level,del_flag)
+                VALUES ('SPACE_ASSOC_TEST','BLD001','SPACE001','关联测试空间','ASSOC_TEST','ROOM',1,0)
+                """);
+        VersionView draft = service.initialize(101L, ENERGY, "BLD001", "init-equipment-query",
+                "初始化设备关联查询");
+        service.updateAssignment(101L, ENERGY, draft.versionId(),
+                new com.platform.relation.api.RelationContracts.AssetAssignmentRequest(
+                        "EQUIPMENT", "EQUIP_WCR_B1", null, null, null, draft.revision()));
+
+        var draftView = service.equipmentAssociations(101L, ENERGY, "BLD001", draft.versionId(),
+                1, 2, null, null, false);
+        assertThat(draftView.versionId()).isEqualTo(draft.versionId());
+        assertThat(draftView.versionRevision()).isEqualTo(1L);
+        assertThat(draftView.total()).isEqualTo(4);
+        assertThat(draftView.items()).hasSize(2);
+        var secondPage = service.equipmentAssociations(101L, ENERGY, "BLD001", draft.versionId(),
+                2, 2, null, null, false);
+        assertThat(secondPage.items()).hasSize(2).doesNotContainAnyElementsOf(draftView.items());
+        assertThat(draftView.spaces()).extracting("spaceId")
+                .containsExactly("SPACE001", "SPACE_ASSOC_TEST");
+        assertThat(draftView.systems()).extracting("systemGroupId").containsExactly("GROUP001");
+
+        var unassigned = service.equipmentAssociations(101L, ENERGY, "BLD001", draft.versionId(),
+                1, 20, null, "WCR1", true);
+        assertThat(unassigned.total()).isEqualTo(1);
+        assertThat(unassigned.items().getFirst().equipmentId()).isEqualTo("EQUIP_WCR_B1");
+        assertThat(unassigned.items().getFirst().spaceId()).isNull();
+        assertThat(unassigned.items().getFirst().systemGroupId()).isNull();
+        var beforeActivation = service.equipmentAssociations(101L, ENERGY, "BLD001", null,
+                1, 20, null, "WCR1", false);
+        assertThat(beforeActivation.items().getFirst().spaceId()).isEqualTo("SPACE001");
+        assertThat(beforeActivation.versionRevision()).isNull();
+
+        VersionView assignedDraft = service.updateAssignment(101L, ENERGY, draft.versionId(),
+                new com.platform.relation.api.RelationContracts.AssetAssignmentRequest(
+                        "EQUIPMENT", "EQUIP_WCR_B1", "SPACE_ASSOC_TEST", "GROUP001", null, 1L));
+        var review = service.submit(101L, ENERGY, assignedDraft.versionId(),
+                "submit-equipment-query", new RevisionReasonRequest(
+                        assignedDraft.revision(), "提交设备空间关联"));
+        service.approve(202L, ADMIN, review.requestId(), "approve-equipment-query",
+                new ReviewDecisionRequest("设备空间关联验证通过"));
+        long modelRevision = service.model(202L, ADMIN, "BLD001").modelRevision();
+        service.activate(202L, ADMIN, assignedDraft.versionId(), "activate-equipment-query",
+                new ActivationRequest(modelRevision, "生效设备空间关联"));
+
+        var legacy = service.equipmentAssociations(101L, ENERGY, "BLD001", null,
+                1, 20, "SPACE001", "一号冷水", false);
+        assertThat(legacy.versionId()).isNull();
+        assertThat(legacy.total()).isZero();
+        var projected = service.equipmentAssociations(101L, ENERGY, "BLD001", null,
+                1, 20, "SPACE_ASSOC_TEST", "一号冷水", false);
+        assertThat(projected.versionId()).isNull();
+        assertThat(projected.total()).isEqualTo(1);
+        assertThat(projected.items().getFirst().spaceId()).isEqualTo("SPACE_ASSOC_TEST");
+        assertThat(projected.items().getFirst().spaceName()).isEqualTo("关联测试空间");
+        assertThat(projected.items().getFirst().systemGroupId()).isEqualTo("GROUP001");
+
+        var uninitializedLegacy = service.equipmentAssociations(101L, ENERGY, "BLD002", null,
+                1, 20, null, null, false);
+        assertThat(uninitializedLegacy.versionId()).isNull();
+        assertThat(uninitializedLegacy.items()).extracting("equipmentId")
+                .containsExactly("EQUIP_WCR_B2");
+
+        assertThatThrownBy(() -> service.equipmentAssociations(101L, ENERGY, "BLD002",
+                draft.versionId(), 1, 20, null, null, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(RelationErrors.CROSS_BUILDING));
+        assertThatThrownBy(() -> service.equipmentAssociations(101L,
+                Set.of("BUILDING_OWNER"), "BLD001", null, 1, 20, null, null, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(RelationErrors.FORBIDDEN));
+        assertThatThrownBy(() -> service.equipmentAssociations(101L, ADMIN,
+                "MISSING_BUILDING", null, 1, 20, null, null, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(RelationErrors.NOT_FOUND));
+        assertThatThrownBy(() -> service.equipmentAssociations(101L, ENERGY,
+                "BLD001", null, Integer.MAX_VALUE, 500, null, null, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode())
+                                .isEqualTo(RelationErrors.VALIDATION_FAILED));
+        when(buildingScopeService.canAccess(101L, ENERGY, "BLD001")).thenReturn(false);
+        assertThatThrownBy(() -> service.equipmentAssociations(101L, ENERGY,
+                "BLD001", null, 1, 20, null, null, false))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo(RelationErrors.FORBIDDEN));
+    }
+
     private String nodeId(String buildingId, String nodeType) {
         return jdbc.queryForObject("""
                 SELECT node_id FROM biz_relation_node
@@ -253,5 +347,7 @@ class RelationGovernanceServiceIntegrationTest {
         jdbc.update("DELETE FROM biz_relation_version");
         jdbc.update("DELETE FROM biz_relation_model");
         jdbc.update("DELETE FROM biz_space WHERE space_id='SPACE_CHILD_TEST'");
+        jdbc.update("UPDATE biz_equipment SET space_id='SPACE001' WHERE space_id='SPACE_ASSOC_TEST'");
+        jdbc.update("DELETE FROM biz_space WHERE space_id='SPACE_ASSOC_TEST'");
     }
 }

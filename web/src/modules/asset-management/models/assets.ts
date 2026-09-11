@@ -141,8 +141,8 @@ export type AssetEquipmentDetail = AssetEquipment & {
 
 export type AssetEquipmentForm = {
   buildingId: string
-  spaceId: string
-  systemGroupId: string
+  spaceId: string | null
+  systemGroupId: string | null
   typeCode: string
   equipmentName: string
   productId: string | null

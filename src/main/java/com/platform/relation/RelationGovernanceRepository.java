@@ -11,6 +11,7 @@ import java.sql.Timestamp;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -698,6 +699,121 @@ public class RelationGovernanceRepository {
                 rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), versionId);
     }
 
+    /**
+     * 指定版本以设备分配快照为查询主体，旧投影以有效设备为主体；空间和系统均左连接，
+     * 确保空归属不会从关联工作区消失。
+     */
+    public List<EquipmentAssociationRow> listEquipmentAssociations(
+            String buildingId, String versionId, String spaceId, String keyword,
+            boolean unassigned, int limit, int offset) {
+        EquipmentAssociationQuery query = equipmentAssociationQuery(
+                buildingId, versionId, spaceId, keyword, unassigned);
+        List<Object> parameters = new ArrayList<>(query.parameters());
+        parameters.add(limit);
+        parameters.add(offset);
+        return jdbc.query(query.sql() + " ORDER BY equipment_code,equipment_id LIMIT ? OFFSET ?",
+                (rs, row) -> new EquipmentAssociationRow(
+                        rs.getString("equipment_id"), rs.getString("equipment_code"),
+                        rs.getString("equipment_name"), rs.getString("space_id"),
+                        rs.getString("space_name"), rs.getString("system_group_id"),
+                        rs.getString("system_group_name")), parameters.toArray());
+    }
+
+    public long countEquipmentAssociations(
+            String buildingId, String versionId, String spaceId,
+            String keyword, boolean unassigned) {
+        EquipmentAssociationQuery query = equipmentAssociationQuery(
+                buildingId, versionId, spaceId, keyword, unassigned);
+        Long count = jdbc.queryForObject("SELECT COUNT(*) FROM (" + query.sql() + ") equipment_query",
+                Long.class, query.parameters().toArray());
+        return count == null ? 0 : count;
+    }
+
+    public List<EquipmentAssociationSpaceRow> listEquipmentAssociationSpaces(
+            String buildingId, String versionId) {
+        if (versionId == null) {
+            return jdbc.query("""
+                    SELECT space_id,space_name,parent_space_id
+                    FROM biz_space
+                    WHERE building_id=? AND del_flag=0
+                    ORDER BY space_name,space_id
+                    """, (rs, row) -> new EquipmentAssociationSpaceRow(
+                    rs.getString(1), rs.getString(2), rs.getString(3)), buildingId);
+        }
+        return jdbc.query("""
+                SELECT i.space_id,s.space_name,i.parent_space_id
+                FROM biz_space_parent_version_item i
+                LEFT JOIN biz_space s
+                  ON s.space_id=i.space_id AND s.building_id=i.building_id AND s.del_flag=0
+                WHERE i.version_id=? AND i.building_id=?
+                ORDER BY i.sort_order,s.space_name,i.space_id
+                """, (rs, row) -> new EquipmentAssociationSpaceRow(
+                rs.getString(1), rs.getString(2), rs.getString(3)), versionId, buildingId);
+    }
+
+    public List<EquipmentAssociationSystemRow> listEquipmentAssociationSystems(String buildingId) {
+        return jdbc.query("""
+                SELECT system_group_id,system_group_name
+                FROM biz_system_group
+                WHERE building_id=? AND del_flag=0
+                ORDER BY system_group_name,system_group_id
+                """, (rs, row) -> new EquipmentAssociationSystemRow(
+                rs.getString(1), rs.getString(2)), buildingId);
+    }
+
+    private EquipmentAssociationQuery equipmentAssociationQuery(
+            String buildingId, String versionId, String spaceId,
+            String keyword, boolean unassigned) {
+        boolean versioned = versionId != null;
+        String assignmentSpace = versioned ? "a.space_id" : "e.space_id";
+        String assignmentSystem = versioned ? "a.system_group_id" : "e.system_group_id";
+        String equipmentId = versioned ? "a.object_id" : "e.equip_id";
+        StringBuilder sql = new StringBuilder("SELECT ").append(equipmentId)
+                .append(" AS equipment_id,e.equip_code AS equipment_code,")
+                .append("e.equip_name AS equipment_name,")
+                .append(assignmentSpace).append(" AS space_id,s.space_name AS space_name,")
+                .append(assignmentSystem).append(" AS system_group_id,")
+                .append("g.system_group_name AS system_group_name ");
+        List<Object> parameters = new ArrayList<>();
+        if (versioned) {
+            sql.append("""
+                    FROM biz_asset_assignment_version_item a
+                    LEFT JOIN biz_equipment e
+                      ON e.equip_id=a.object_id AND e.building_id=a.building_id
+                    """);
+        } else {
+            sql.append("FROM biz_equipment e ");
+        }
+        sql.append(" LEFT JOIN biz_space s ON s.space_id=").append(assignmentSpace)
+                .append(" AND s.building_id=").append(versioned ? "a.building_id" : "e.building_id")
+                .append(" AND s.del_flag=0")
+                .append(" LEFT JOIN biz_system_group g ON g.system_group_id=").append(assignmentSystem)
+                .append(" AND g.building_id=").append(versioned ? "a.building_id" : "e.building_id")
+                .append(" AND g.del_flag=0 WHERE ");
+        if (versioned) {
+            sql.append("a.version_id=? AND a.building_id=? AND a.object_type='EQUIPMENT'");
+            parameters.add(versionId);
+            parameters.add(buildingId);
+        } else {
+            sql.append("e.building_id=? AND e.del_flag=0");
+            parameters.add(buildingId);
+        }
+        if (spaceId != null) {
+            sql.append(" AND ").append(assignmentSpace).append("=?");
+            parameters.add(spaceId);
+        }
+        if (keyword != null) {
+            sql.append(" AND (LOWER(e.equip_code) LIKE ? OR LOWER(COALESCE(e.equip_name,'')) LIKE ?)");
+            String pattern = '%' + keyword.toLowerCase(java.util.Locale.ROOT) + '%';
+            parameters.add(pattern);
+            parameters.add(pattern);
+        }
+        if (unassigned) {
+            sql.append(" AND ").append(assignmentSpace).append(" IS NULL");
+        }
+        return new EquipmentAssociationQuery(sql.toString(), parameters);
+    }
+
     public List<SemanticRow> listSemanticRelations(String versionId) {
         return jdbc.query("""
                 SELECT relation_item_id,relation_type,source_node_id,target_node_id,
@@ -1278,6 +1394,19 @@ public class RelationGovernanceRepository {
     public record AssignmentRow(
             String objectType, String objectId, String spaceId, String systemGroupId,
             String equipmentId, String buildingId, String sourceType) {}
+
+    public record EquipmentAssociationRow(
+            String equipmentId, String equipmentCode, String equipmentName,
+            String spaceId, String spaceName,
+            String systemGroupId, String systemGroupName) {}
+
+    public record EquipmentAssociationSpaceRow(
+            String spaceId, String spaceName, String parentSpaceId) {}
+
+    public record EquipmentAssociationSystemRow(
+            String systemGroupId, String systemName) {}
+
+    private record EquipmentAssociationQuery(String sql, List<Object> parameters) {}
 
     public record SemanticRow(
             String relationItemId, String relationType, String sourceNodeId,

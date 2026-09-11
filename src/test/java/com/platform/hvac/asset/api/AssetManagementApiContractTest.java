@@ -7,6 +7,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
@@ -15,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -24,6 +27,40 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AssetManagementApiContractTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
+    @Autowired private JdbcTemplate jdbc;
+    @Autowired private org.mybatis.spring.SqlSessionTemplate sqlSession;
+
+    @Test
+    @Transactional
+    void keepsUnassignedProjectionWhenEditingArchiveButCannotDetachThroughLegacyApi() throws Exception {
+        String token = login("admin", "123456");
+        String equipmentId = jdbc.queryForObject(
+                "SELECT equip_id FROM biz_equipment WHERE del_flag=0 AND space_id IS NOT NULL LIMIT 1", String.class);
+        JsonNode detail = json(mockMvc.perform(get("/v1/assets/equipment/" + equipmentId)
+                        .header("Authorization", "Bearer " + token)).andReturn()).path("data");
+        var request = objectMapper.createObjectNode();
+        for (String key : new String[]{"buildingId", "equipmentName", "manufacturer", "ratedCapacity", "ratedPower", "designCop"}) {
+            request.set(key, detail.get(key));
+        }
+        request.put("status", "ACTIVE");
+        request.putNull("spaceId");
+        request.putNull("systemGroupId");
+        mockMvc.perform(put("/v1/assets/equipment/" + equipmentId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isBadRequest());
+
+        jdbc.update("UPDATE biz_equipment SET space_id=NULL,system_group_id=NULL WHERE equip_id=?", equipmentId);
+        sqlSession.clearCache();
+        request.put("equipmentName", "关联解除后的台账名称");
+        mockMvc.perform(put("/v1/assets/equipment/" + equipmentId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.equipmentName").value("关联解除后的台账名称"))
+                .andExpect(jsonPath("$.data.spaceId").isEmpty())
+                .andExpect(jsonPath("$.data.systemGroupId").isEmpty());
+    }
 
     @Test
     void exposesStableAssetViewsReferencesAndOpenApi() throws Exception {

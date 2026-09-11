@@ -360,6 +360,21 @@ public class RelationGovernanceController {
                 nodeType, nodeId, depth, page, size));
     }
 
+    @GetMapping("/v1/relation-models/{buildingId}/equipment-associations")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<EquipmentAssociationsView> equipmentAssociations(
+            Authentication authentication, @PathVariable String buildingId,
+            @RequestParam(required = false) String versionId,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size,
+            @RequestParam(required = false) String spaceId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(defaultValue = "false") boolean unassigned) {
+        return Result.success(service.equipmentAssociations(
+                SecurityUser.userId(authentication), SecurityUser.roles(authentication),
+                buildingId, versionId, page, size, spaceId, keyword, unassigned));
+    }
+
     @GetMapping("/v1/relation-models/{buildingId}/effective/metering-boundaries")
     public Result<MeteringBoundariesView> effectiveBoundaries(
             Authentication authentication, @PathVariable String buildingId,

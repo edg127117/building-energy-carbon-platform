@@ -20,18 +20,23 @@ export const pages: PageEntry[] = [
   ...group('operations', 'realtime', ['hvac', 'power', 'lighting', 'renewable']),
   ...group('operations', 'energy', ['energyItems', 'energyZones', 'trend', 'baselineAnalysis', 'diagnosis']),
   ...group('operations', 'carbon', ['carbonOverview', 'carbonDetails', 'trend', 'reduction', 'assets']),
-  ...group('operations', 'devices', ['businessDevices', 'meters']),
+  ...group('operations', 'devices', [['businessDevices', '/system/devices'], 'meters']),
   ...group('operations', 'alarms', ['liveAlarms', 'historyAlarms']),
   ...group('operations', 'maintenance', ['plans', 'orders', 'faults']),
   ...group('operations', 'reports', ['energyReports', 'carbonReports']),
-  ...group('configuration', 'ingestion', [['pendingDevices', '/system/device-onboarding'], ['points', '/system/devices'], ['products', '/system/device-products'], 'collection', 'interfaces']),
-  ...group('configuration', 'space', [['buildings', '/system/buildings'], 'spaces', 'systemGroups']),
+  ...group('configuration', 'ingestion', [['pendingDevices', '/system/device-onboarding'], ['products', '/system/device-products'], 'collection', 'interfaces']),
+  ...group('configuration', 'space', [['buildings', '/system/buildings'], 'spaces', 'systemGroups', 'equipmentSpaces']),
   ...group('configuration', 'indicators', ['indicatorList', 'formulas']),
   ...group('configuration', 'factors', ['emissionFactors', 'factorVersions']),
   ...group('configuration', 'rules', ['baselines', 'alarmRules']),
   ...group('configuration', 'access', [['users', '/system/users'], ['roles', '/system/roles'], ['buildingAccess', '/system/building-access']]),
   ...group('configuration', 'settings', [['menus', '/system/menus']]),
 ]
+
+/** 只迁移既有设备页面的授权和深链接，不扩展为关联配置权限。 */
+export const relocatedPages: Record<string, string> = {
+  '/configuration/ingestion/points': '/operations/devices/businessDevices',
+}
 
 /** 旧路径仅一对一映射同职责入口；不将旧 HVAC 页面授权扩展成五类大屏或整个运维系统。 */
 export function authorizedPages(menus: GrantedMenu[]): PageEntry[] {
@@ -41,13 +46,17 @@ export function authorizedPages(menus: GrantedMenu[]): PageEntry[] {
       if (node.status !== 1 || node.visible !== 1) continue
       if (node.menuType === 'C' && node.path) {
         if (granted.has(node.path)) throw new Error('DUPLICATE_MENU_PATH')
-        if (/^\/(monitor|operations|configuration)\//.test(node.path) && !pages.some(page => page.path === node.path)) throw new Error('UNREGISTERED_MENU_PATH')
+        if (/^\/(monitor|operations|configuration)\//.test(node.path) && !relocatedPages[node.path] && !pages.some(page => page.path === node.path)) throw new Error('UNREGISTERED_MENU_PATH')
         granted.set(node.path, node)
       }
       if (node.children) visit(node.children)
     }
   }
   visit(menus)
+  for (const [previous, current] of Object.entries(relocatedPages)) {
+    const grant = granted.get(previous)
+    if (grant && !granted.has(current)) granted.set(current, { ...grant, menuName: '' })
+  }
   const matched = pages.filter(page => granted.has(page.path) || Boolean(page.legacyPath && granted.has(page.legacyPath)))
   const nodeFor = (page: PageEntry) => granted.get(page.path) ?? granted.get(page.legacyPath ?? '')!
   // 系统和组别仍按批准结构；组内排序及新路径的显示名称来自服务端维护值。
