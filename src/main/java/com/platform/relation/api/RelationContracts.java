@@ -149,6 +149,26 @@ public final class RelationContracts {
             QueryMetadata metadata, String nodeId, String nodeType, String businessObjectId,
             int page, int size, long total, List<RelationEdgeView> edges) {}
 
+    public record EquipmentAssociationItem(
+            String equipmentId, String equipmentCode, String equipmentName,
+            String spaceId, String spaceName,
+            String systemGroupId, String systemGroupName) {}
+
+    public record EquipmentAssociationSpace(
+            String spaceId, String spaceName, String parentSpaceId) {}
+
+    public record EquipmentAssociationSystem(
+            String systemGroupId, String systemName) {}
+
+    /**
+     * 设备关联工作区的只读契约。versionId 为空表示旧投影，非空表示指定关系版本快照。
+     */
+    public record EquipmentAssociationsView(
+            String buildingId, String versionId, Long versionRevision, int page, int size, long total,
+            List<EquipmentAssociationItem> items,
+            List<EquipmentAssociationSpace> spaces,
+            List<EquipmentAssociationSystem> systems) {}
+
     public record MeteringBoundaryView(
             String boundaryId, String boundaryCode, String boundaryName, String energyType,
             String confirmationStatus, String status) {}

@@ -2,6 +2,12 @@ import type { RouteRecordRaw } from 'vue-router'
 
 export const routes: RouteRecordRaw[] = [
   {
+    path: '/configuration/space/equipmentSpaces',
+    name: 'equipment-space-associations',
+    component: () => import('./pages/EquipmentSpacePage.vue'),
+    meta: { titleKey: 'assetManagement.associations.title', mode: 'office', requiresRelationManager: true },
+  },
+  {
     path: '/system/buildings',
     name: 'asset-archive',
     component: () => import('./pages/AssetArchivePage.vue'),

@@ -140,8 +140,8 @@ public final class AssetManagementContracts {
 
     public record EquipmentUpdateRequest(
             @NotBlank String buildingId,
-            @NotBlank String spaceId,
-            @NotBlank String systemGroupId,
+            String spaceId,
+            String systemGroupId,
             @NotBlank @Size(max = 100) String equipmentName,
             @Size(max = 100) String manufacturer,
             BigDecimal ratedCapacity,

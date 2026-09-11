@@ -89,6 +89,7 @@ class RelationGovernanceApiContractTest {
         assertThat(paths.has(
                 "/v1/relation-models/{buildingId}/versions/{versionId}/query/nodes/{nodeType}/{nodeId}/context"))
                 .isTrue();
+        assertThat(paths.has("/v1/relation-models/{buildingId}/equipment-associations")).isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-boundaries"))
                 .isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/effective/metering-assignments"))
@@ -150,6 +151,32 @@ class RelationGovernanceApiContractTest {
 
         mockMvc.perform(get("/v1/relation-models").param("buildingId", BUILDING_ID)
                         .header("Authorization", bearer(thirdPartyToken)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode").value("RELATION_FORBIDDEN"));
+    }
+
+    @Test
+    void exposesLegacyEquipmentAssociationContractAndRejectsOwner() throws Exception {
+        MvcResult associationsResult = mockMvc.perform(
+                        get("/v1/relation-models/{buildingId}/equipment-associations", BUILDING_ID)
+                        .header("Authorization", bearer(managerToken))
+                        .param("page", "1").param("size", "20"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.buildingId").value(BUILDING_ID))
+                .andExpect(jsonPath("$.data.page").value(1))
+                .andExpect(jsonPath("$.data.size").value(20))
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].equipmentId").value("EQUIP_WCR_B2"))
+                .andExpect(jsonPath("$.data.items[0].spaceName").value("二号楼冷源机房"))
+                .andExpect(jsonPath("$.data.spaces[0].spaceId").value("SPACE002"))
+                .andExpect(jsonPath("$.data.systems[0].systemGroupId").value("GROUP002"))
+                .andReturn();
+        JsonNode associationData = json(associationsResult).path("data");
+        assertThat(associationData.has("versionId")).isTrue();
+        assertThat(associationData.get("versionId").isNull()).isTrue();
+
+        mockMvc.perform(get("/v1/relation-models/{buildingId}/equipment-associations", BUILDING_ID)
+                        .header("Authorization", bearer(ownerToken)))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.errorCode").value("RELATION_FORBIDDEN"));
     }

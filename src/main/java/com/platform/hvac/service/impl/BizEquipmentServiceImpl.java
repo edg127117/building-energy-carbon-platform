@@ -120,7 +120,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
         equipment.setBuildingId(existing.getBuildingId());
         equipment.setTypeCode(existing.getTypeCode());
         equipment.setEquipCategory(existing.getEquipCategory());
-        validateBuildingRelationships(equipment);
+        validateBuildingRelationships(equipment, existing);
         this.updateById(equipment);
         return Result.success(equipment);
     }
@@ -138,13 +138,27 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
      * 新增、更新写库前均执行，任一关系不一致返回 400。
      */
     private void validateBuildingRelationships(BizEquipment equipment) {
-        BizSystemGroup group = systemGroupMapper.selectById(equipment.getSystemGroupId());
-        if (group == null || !equipment.getBuildingId().equals(group.getBuildingId())) {
-            throw new BusinessException(400, "设备与系统分组不属于同一建筑");
+        validateBuildingRelationships(equipment, null);
+    }
+
+    /** 允许保留治理生效后的未关联投影，但旧台账入口仍不能主动清空已有归属。 */
+    private void validateBuildingRelationships(BizEquipment equipment, BizEquipment existing) {
+        boolean keepsUnassignedSystem = existing != null && existing.getSystemGroupId() == null
+                && equipment.getSystemGroupId() == null;
+        if (!keepsUnassignedSystem) {
+            BizSystemGroup group = equipment.getSystemGroupId() == null ? null
+                    : systemGroupMapper.selectById(equipment.getSystemGroupId());
+            if (group == null || !equipment.getBuildingId().equals(group.getBuildingId())) {
+                throw new BusinessException(400, "设备与系统分组不属于同一建筑");
+            }
         }
-        BizSpace space = spaceMapper.selectById(equipment.getSpaceId());
-        if (space == null || !equipment.getBuildingId().equals(space.getBuildingId())) {
-            throw new BusinessException(400, "设备与空间不属于同一建筑");
+        boolean keepsUnassignedSpace = existing != null && existing.getSpaceId() == null
+                && equipment.getSpaceId() == null;
+        if (!keepsUnassignedSpace) {
+            BizSpace space = equipment.getSpaceId() == null ? null : spaceMapper.selectById(equipment.getSpaceId());
+            if (space == null || !equipment.getBuildingId().equals(space.getBuildingId())) {
+                throw new BusinessException(400, "设备与空间不属于同一建筑");
+            }
         }
     }
 }

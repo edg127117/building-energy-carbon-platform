@@ -5,6 +5,13 @@ const menu = (path: string, overrides: Partial<GrantedMenu> = {}): GrantedMenu =
   id: 1, menuName: '', menuType: 'C', path, visible: 1, status: 1, sortOrder: 0, ...overrides,
 })
 describe('navigation authorization mapping', () => {
+  it('moves either old equipment grant only to the operations archive', () => {
+    for (const path of ['/system/devices', '/configuration/ingestion/points']) {
+      expect(authorizedPages([menu(path)]).map(page => page.path)).toEqual(['/operations/devices/businessDevices'])
+    }
+    expect(authorizedPages([menu('/configuration/space/equipmentSpaces')]).map(page => page.path)).toEqual(['/configuration/space/equipmentSpaces'])
+    expect(authorizedPages([menu('/configuration/ingestion/points'), menu('/operations/devices/businessDevices')])).toHaveLength(1)
+  })
   it('maps legacy access one-to-one, not to every configuration page', () => {
     expect(authorizedPages([menu('/system/users')]).map(page => page.path)).toEqual(['/configuration/access/users'])
     expect(authorizedPages([menu('/hvac-demo')])).toEqual([])

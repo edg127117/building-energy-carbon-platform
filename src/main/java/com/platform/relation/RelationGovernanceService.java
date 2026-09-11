@@ -4,6 +4,7 @@ import com.platform.relation.RelationGovernanceRepository.AssignmentRow;
 import com.platform.relation.RelationGovernanceRepository.AuditRow;
 import com.platform.relation.RelationGovernanceRepository.BoundaryRow;
 import com.platform.relation.RelationGovernanceRepository.EffectiveMeteringAssignmentRow;
+import com.platform.relation.RelationGovernanceRepository.EquipmentAssociationRow;
 import com.platform.relation.RelationGovernanceRepository.MeteringAssignmentRow;
 import com.platform.relation.RelationGovernanceRepository.MeterStructureRow;
 import com.platform.relation.RelationGovernanceRepository.ModelRow;
@@ -769,6 +770,45 @@ public class RelationGovernanceService {
                 page * (long) boundedSize < total), page, boundedSize, total, items);
     }
 
+    public EquipmentAssociationsView equipmentAssociations(
+            Long userId, Collection<String> roles, String buildingId, String versionId,
+            int page, int size, String spaceId, String keyword, boolean unassigned) {
+        requireHistoryReader(roles);
+        checkBuilding(userId, roles, buildingId);
+        requirePage(page, size);
+        if (!repository.buildingExists(buildingId)) {
+            throw error(404, NOT_FOUND, "建筑不存在");
+        }
+        String selectedVersionId = trim(versionId);
+        Long versionRevision = null;
+        if (selectedVersionId != null) {
+            VersionRow version = requireVersion(selectedVersionId, false);
+            requireSameBuilding(buildingId, version.buildingId());
+            // 在读取关联行之前记录修订号；并发写入后，旧视图只能冲突，不能借新修订覆盖他人。
+            versionRevision = version.configRevision();
+        }
+        int boundedSize = Math.min(size, properties.getMaxPageSize());
+        int offset = pageOffset(page, boundedSize);
+        String selectedSpaceId = trim(spaceId);
+        String selectedKeyword = trim(keyword);
+        long total = repository.countEquipmentAssociations(
+                buildingId, selectedVersionId, selectedSpaceId, selectedKeyword, unassigned);
+        List<EquipmentAssociationItem> items = repository.listEquipmentAssociations(
+                        buildingId, selectedVersionId, selectedSpaceId, selectedKeyword,
+                        unassigned, boundedSize, offset)
+                .stream().map(this::toView).toList();
+        List<EquipmentAssociationSpace> spaces = repository.listEquipmentAssociationSpaces(
+                        buildingId, selectedVersionId).stream()
+                .map(row -> new EquipmentAssociationSpace(
+                        row.spaceId(), row.spaceName(), row.parentSpaceId()))
+                .toList();
+        List<EquipmentAssociationSystem> systems = repository.listEquipmentAssociationSystems(buildingId)
+                .stream().map(row -> new EquipmentAssociationSystem(
+                        row.systemGroupId(), row.systemName())).toList();
+        return new EquipmentAssociationsView(buildingId, selectedVersionId, versionRevision, page, boundedSize,
+                total, items, spaces, systems);
+    }
+
     public MeteringAssignmentsView effectiveMeteringAssignments(
             Long userId, Collection<String> roles, String buildingId, int page, int size) {
         requireReader(roles);
@@ -1232,6 +1272,12 @@ public class RelationGovernanceService {
         }
     }
 
+    private EquipmentAssociationItem toView(EquipmentAssociationRow row) {
+        return new EquipmentAssociationItem(row.equipmentId(), row.equipmentCode(),
+                row.equipmentName(), row.spaceId(), row.spaceName(),
+                row.systemGroupId(), row.systemGroupName());
+    }
+
     private void auditMutation(
             VersionRow before, VersionRow after, long userId, String action, String objectId) {
         auditMutation(before, after, userId, action, objectId, null, null);
@@ -1333,6 +1379,14 @@ public class RelationGovernanceService {
         if (page < 1 || size < 1 || size > properties.getMaxPageSize()) {
             throw error(400, VALIDATION_FAILED, "分页参数不合法");
         }
+    }
+
+    private static int pageOffset(int page, int size) {
+        long offset = (page - 1L) * size;
+        if (offset > Integer.MAX_VALUE) {
+            throw error(400, VALIDATION_FAILED, "分页偏移量超出支持范围");
+        }
+        return (int) offset;
     }
 
     private static String requireKey(String key) {

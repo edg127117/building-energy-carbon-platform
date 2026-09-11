@@ -19,6 +19,28 @@ function authorize() {
 }
 
 describe('office and monitor composition', () => {
+  it('redirects old equipment links while retaining admin and leaf authorization', async () => {
+    const router = createPlatformRouter(createMemoryHistory())
+    const session = authorize()
+    session.menus = [{ id: 1, menuName: '', menuType: 'C', path: '/configuration/ingestion/points', visible: 1, status: 1, sortOrder: 1 }]
+    await router.push('/configuration/ingestion/points')
+    expect(router.currentRoute.value.path).toBe('/403')
+    session.user!.roles = ['PLATFORM_ADMIN']
+    await router.push('/configuration/ingestion/points')
+    expect(router.currentRoute.value.path).toBe('/operations/devices/businessDevices')
+    await router.push('/configuration/space/equipmentSpaces')
+    expect(router.currentRoute.value.path).toBe('/403')
+  })
+  it('permits an explicitly granted association page for energy managers but not building owners', async () => {
+    const router = createPlatformRouter(createMemoryHistory())
+    const session = authorize()
+    session.user!.roles = ['BUILDING_OWNER']
+    await router.push('/configuration/space/equipmentSpaces')
+    expect(router.currentRoute.value.path).toBe('/403')
+    session.user!.roles = ['ENERGY_MANAGER']
+    await router.push('/configuration/space/equipmentSpaces')
+    expect(router.currentRoute.value.path).toBe('/configuration/space/equipmentSpaces')
+  })
   it('keeps office content alive after a lazy route failure and recovers', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const pinia = createPinia()

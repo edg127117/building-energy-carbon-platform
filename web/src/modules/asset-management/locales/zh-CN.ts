@@ -1,4 +1,23 @@
 export default {
+  associations: {
+    title: '设备与空间关联', description: '维护设备所在空间和所属系统；设备台账在智慧运维平台查看。',
+    chooseBuilding: '请选择建筑，可输入名称搜索', view: '查看范围', effective: '当前生效归属', version: '版本',
+    spaceTree: '空间层级', allSpaces: '全部空间', list: '设备归属', unassigned: '未关联', unassignedOnly: '仅未关联空间',
+    filterHint: '空间筛选仅显示直接关联到该空间的设备；不包含下级空间。',
+    refresh: '刷新', edit: '调整关联', saveDraft: '保存到草稿', savedDraft: '已保存到草稿，审核生效前不改变运维台账。',
+    clearHint: '清空选择表示解除该项关联；是否允许提交和生效由后端校验决定。',
+    effectiveHint: '这里显示运维台账使用的当前归属。修改前请新建或选择草稿版本。',
+    draftHint: '正在查看指定版本快照，可能与当前台账不同；只有草稿允许修改。',
+    archiveHint: '空间和系统归属请到能碳配置管理平台的“设备与空间关联”维护。',
+    workflow: '关系版本审核', workflowHint: '修改的是建筑关系版本。提交与审核涉及整个版本，不仅是本页设备；需能源管理员提交、其他平台管理员审核后生效。',
+    initialize: '从现有归属建立草稿', create: '新建关联草稿', validate: '校验并查看版本差异', submit: '提交审核', withdraw: '撤回版本',
+    approve: '批准', reject: '驳回', activate: '生效', reason: '操作原因', confirm: '确认操作',
+    activateHint: '生效将切换整个建筑的关系版本，并同步运维台账的位置归属。启用治理后，结构归属不可通过旧资产接口直接修改或新建。',
+    actionCompleted: '操作成功，已重新读取后端状态。', conflict: '版本已变化或当前操作不满足治理规则，请刷新并检查版本、审核人与校验结果后再试。',
+    errors: '错误', pendingExpert: '待专业确认', warnings: '警告', diff: '整个版本相对基线的变化', added: '新增', removed: '移除',
+    truncated: '差异超过展示上限，请完成整个关系版本的核对后再审核。', initialVersion: '首版没有历史基线，请核对现有归属及其他关系内容。',
+    status: { DRAFT: '草稿', PENDING_REVIEW: '待审核', APPROVED: '已批准', EFFECTIVE: '已生效', SUPERSEDED: '已替代', REJECTED: '已驳回', WITHDRAWN: '已撤回' },
+  },
   title: '资产管理',
   archive: {
     title: '建筑、空间与系统',
@@ -9,7 +28,7 @@ export default {
     systemGroups: '系统分组',
   },
   equipment: {
-    title: '设备与测点',
+    title: '设备台账',
     description: '按建筑、空间与系统查找设备，查看档案和测点配置。',
     filters: '设备筛选',
     archiveTab: '台账信息',
