@@ -32,6 +32,7 @@ async function submit() {
         <ElFormItem :label="t('workspaces.password')"><ElInput v-model="password" type="password" show-password name="password" autocomplete="current-password" :aria-label="t('workspaces.password')" /></ElFormItem>
         <ElButton type="primary" native-type="submit" :loading="busy">{{ t('workspaces.login') }}</ElButton>
       </ElForm>
+      <ElButton text @click="router.push('/password-setup')">{{ t('auth.passwordSetup.title') }}</ElButton>
     </main>
   </div>
 </template>

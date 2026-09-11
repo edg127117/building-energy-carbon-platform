@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 
 const web = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const dist = resolve(web, 'dist/platform')
+const dist = resolve(web, 'dist')
 const artifacts = resolve(web, '../.codex-backups/frontend-foundation')
 const mime = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' }
 // 仅在浏览器请求拦截中生成授权测试替身；不写入生产菜单、账号或业务数据。
@@ -21,6 +21,16 @@ for (const match of screens.matchAll(/path: '([^']+)'/g)) paths.push(match[1])
 assert.equal(paths.length, 47)
 let grants = paths
 let authStatus = 200
+const migratedPaths = new Set(['/operations/realtime/hvac', '/operations/energy/trend',
+  '/configuration/access/users', '/configuration/access/roles', '/configuration/settings/menus', '/configuration/access/buildingAccess',
+  '/configuration/space/buildings', '/configuration/ingestion/points', '/configuration/ingestion/products', '/configuration/ingestion/pendingDevices'])
+const businessRequests = []
+const building = { buildingId: 'TEST-BUILDING', buildingName: '隔离测试建筑', buildingCode: 'TEST-BUILDING' }
+const minute = 1788739200000
+const indicators = ['WCR_COP', 'TOWER_EFF', 'PUMP_EFF', 'AHU_POW_EFF'].map((indicatorCode, index) => ({
+  indicatorId: `TEST-${index}`, indicatorCode, equipId: `TEST-EQUIP-${index}`, minuteStart: minute,
+  status: 'SUCCESS', value: index + 1, unit: '', dataQuality: 0, formulaVersion: 'TEST', missingInputs: [],
+}))
 const server = createServer(async (request, response) => {
   try {
     const file = resolve(dist, '.' + decodeURIComponent(new URL(request.url, 'http://localhost').pathname))
@@ -43,14 +53,29 @@ try {
   await page.route('**/api/**', async route => {
     const path = new URL(route.request().url()).pathname
     if (!['/api/auth/login', '/api/auth/me', '/api/menu/current', '/api/auth/logout'].includes(path)) {
-      unexpectedRequests.push(path); await route.abort(); return
+      const paginated = ['/api/system/users', '/api/building/list', '/api/v1/assets/buildings', '/api/v1/assets/equipment', '/api/v1/assets/system-groups', '/api/v1/device-products', '/api/v1/device-onboarding/pending']
+      const arrays = ['/api/system/roles', '/api/menu/admin/tree', '/api/system/building-access/requests', '/api/v1/assets/spaces']
+      let data
+      if (paginated.includes(path)) data = path.startsWith('/api/v1/')
+        ? { items: [], total: 0, page: 1, size: 100 }
+        : { records: path === '/api/building/list' ? [building] : [], total: path === '/api/building/list' ? 1 : 0, current: 1, size: 100, pages: 1 }
+      else if (arrays.includes(path)) data = []
+      else if (path.endsWith('/snapshot')) data = { buildingId: building.buildingId, generatedAt: minute, points: [] }
+      else if (path.endsWith('/indicators/latest')) data = { buildingId: building.buildingId, generatedAt: minute, indicators }
+      else if (path.endsWith('/indicators/trends')) data = { buildingId: building.buildingId, from: minute - 3600000, to: minute, resolutionMinutes: 5,
+        series: indicators.map(item => ({ ...item, records: [{ time: minute, average: item.value, minimum: item.value, maximum: item.value, sampleCount: 1, dataQuality: 0 }] })) }
+      else { unexpectedRequests.push(path); await route.abort(); return }
+      assert.equal(route.request().method(), 'GET')
+      assert.equal(route.request().headers().authorization, 'Bearer browser-test-only')
+      businessRequests.push(path)
+      await route.fulfill({ status: 200, json: { code: 200, data } }); return
     }
     const data = path.endsWith('/login') ? { token: 'browser-test-only' }
-      : path.endsWith('/me') ? { id: 1, username: '测试管理员名称较长的办公账号', roles: [] }
+      : path.endsWith('/me') ? { id: 1, username: '测试管理员名称较长的办公账号', roles: ['PLATFORM_ADMIN'] }
       : path.endsWith('/current') ? grants.map((path, index) => ({ id: index + 1, menuType: 'C', path, visible: 1, status: 1, sortOrder: index, menuName: '' })) : null
     await route.fulfill({ status: authStatus, json: { code: authStatus, data } })
   })
-  const visit = route => page.goto(origin + '/platform.html#' + route)
+  const visit = route => page.goto(origin + '/index.html#' + route)
   await visit('/monitor/monitoring')
   await page.getByRole('button', { name: '登录', exact: true }).waitFor()
   await page.getByRole('textbox', { name: '用户名', exact: true }).fill('test-only')
@@ -81,7 +106,7 @@ try {
     for (const path of ['/operations/overview/running', '/configuration/access/users', '/monitor/monitoring']) {
       await visit(path)
       await page.locator('[data-page-path="' + path + '"]').waitFor()
-      await page.locator('main .pending-page p').first().waitFor()
+      await page.locator('main h1').first().waitFor()
       const mode = path.startsWith('/monitor') ? 'monitor' : 'office'
       const metrics = await page.evaluate(() => {
         const header = document.querySelector('header')
@@ -122,14 +147,19 @@ try {
         await page.getByRole('button', { name: '展开右侧面板', exact: true }).click()
       }
       if (mode === 'office') {
-        assert.equal(await page.locator('.pending-panel').count(), 1)
         assert.equal(await page.locator('.company-logo').count(), 1)
+        if (!migratedPaths.has(path)) {
+        assert.equal(await page.locator('.pending-panel').count(), 1)
         const panel = await page.locator('.pending-panel').evaluate(el => ({
           text: el.textContent.replace(/\s+/g, ''),
           background: getComputedStyle(el).backgroundColor,
         }))
         assert.ok(panel.text.endsWith('待建设'))
         assert.equal(panel.background, 'rgb(255, 255, 255)')
+        } else {
+          assert.equal(await page.locator('.pending-panel').count(), 0)
+          await page.locator('main .el-empty').first().waitFor()
+        }
         await page.getByRole('button', { name: '全局搜索', exact: true }).click()
         await page.getByRole('heading', { name: '全局搜索', exact: true }).waitFor()
         await page.locator('main').click({ position: { x: 400, y: 200 } })
@@ -140,12 +170,24 @@ try {
       results.push({ name, metrics })
     }
   }
-  // 每个已确认叶子必须能进入；业务页面尚未接入时只应请求认证及授权接口。
+  // 已迁移页面访问隔离业务替身，其余已确认入口继续保持待建设占位。
   for (const path of paths) {
     await visit(path)
     await page.locator('[data-page-path="' + path + '"]').waitFor()
-    await page.locator('main .pending-page p').first().waitFor()
+    await page.locator('main h1').first().waitFor().catch(async error => {
+      throw new Error(`${path}: ${error.message}; page errors: ${errors.join('; ')}; content: ${await page.locator('main').innerText()}`)
+    })
+    if (!migratedPaths.has(path)) await page.locator('main .pending-page p').first().waitFor()
     assert.ok(page.url().endsWith('#' + path), path)
+    if (path === '/operations/realtime/hvac') {
+      await page.locator('.indicator-grid').waitFor()
+      assert.equal(await page.locator('.indicator-grid > *').count(), 4)
+      await page.screenshot({ path: resolve(artifacts, 'hvac-business.png') })
+    }
+    if (path === '/operations/energy/trend') {
+      await page.locator('.trend-chart canvas, .trend-chart svg').first().waitFor()
+      await page.screenshot({ path: resolve(artifacts, 'trend-business.png') })
+    }
   }
   await visit('/monitor/monitoring')
   await page.locator('[data-page-path="/monitor/monitoring"]').waitFor()
@@ -178,7 +220,10 @@ try {
   await page.waitForURL('**#/login')
   assert.deepEqual(errors, [])
   assert.deepEqual(unexpectedRequests, [])
-  await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ results, verification: 'isolated-browser-only' }, null, 2))
+  for (const endpoint of ['/api/system/users', '/api/v1/assets/buildings', '/api/v1/device-products', '/api/v1/device-onboarding/pending']) assert.ok(businessRequests.includes(endpoint), endpoint)
+  assert.ok(businessRequests.some(path => path.endsWith('/indicators/latest')))
+  assert.ok(businessRequests.some(path => path.endsWith('/indicators/trends')))
+  await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ results, businessRequests, verification: 'isolated-browser-only' }, null, 2))
   process.stdout.write('THREE_SYSTEM_BROWSER_OK\n')
 } finally {
   await browser?.close()

@@ -1,1 +1,35 @@
-export default { title: '登录' } as const
+export default {
+  login: {
+    title: '登录平台',
+    description: '请输入已开通账号的登录信息。账号由平台管理员按审批流程开通。',
+    username: '账号',
+    usernamePlaceholder: '请输入账号',
+    password: '密码',
+    passwordPlaceholder: '请输入密码',
+    submit: '登录',
+    setupPassword: '设置密码',
+    success: '登录成功。',
+  },
+  passwordSetup: {
+    title: '设置密码',
+    description: '请输入管理员交付的一次性凭据并设置新密码。',
+    token: '一次性凭据',
+    tokenPlaceholder: '请输入一次性凭据',
+    password: '新密码',
+    passwordPlaceholder: '请输入新密码',
+    submit: '确认设置',
+    returnLogin: '返回登录',
+    success: '密码设置成功，请使用新密码登录。',
+  },
+  forbidden: {
+    title: '无权访问',
+    description: '当前账号没有访问此管理内容的权限。',
+    returnOffice: '返回办公端',
+  },
+  validation: {
+    username: '请填写账号。',
+    password: '请填写密码。',
+    token: '请填写一次性凭据。',
+    newPassword: '请填写新密码。',
+  },
+} as const
