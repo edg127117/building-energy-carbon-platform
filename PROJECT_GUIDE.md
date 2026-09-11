@@ -90,9 +90,15 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 
 ### 新前端入口与目录边界
 
-新前端与继承页面保留在同一 `web` 工程，使用独立入口隔离旧全局样式；`index.html` 继续承载旧页面，`platform.html` 承载新前端。进入 `web` 后运行 `npm ci`、`npm run dev:platform` 可预览新骨架；办公端为 `platform.html#/office`，监控端为 `platform.html#/monitor/monitoring`。这是无业务数据、未接入鉴权的骨架预览入口，不是受保护业务入口。
+已确认结构见[前端骨架实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)：第 2—14 章为公共规则，第 15 章为菜单、改造与分阶段交付。三系统公共骨架已形成代码候选：孪生大屏、智慧运维、能碳配置仍共用一个 Vue 工程，两个管理平台共享后台外壳，大屏保持独立画布。当前只接入认证与菜单授权；旧业务迁移及唯一入口切换尚未执行。
 
-`npm run build` 同时构建旧入口到 `web/dist`、新入口到 `web/dist/platform`；部署整个 `dist` 时新地址为 `/platform/platform.html#/office`，单独托管新产物时为 `/platform.html#/office`。哈希路由刷新不需要服务端业务路由回退；现有生产部署默认入口不变。
+新前端与继承页面保留在同一 `web` 工程，使用独立入口隔离旧全局样式；`index.html` 继续承载旧页面，`platform.html` 承载新前端。进入 `web` 后运行 `npm ci`、`npm run dev:platform`；登录入口为 `platform.html#/login`，登录后进入 `#/systems`，原 `#/office` 重定向至系统选择。单独开发时需配置 `VITE_API_BASE` 指向可访问且允许该来源的后端 API；未配置时使用同源 `/api`。新入口请求 `/auth/login`、`/auth/me`、`/menu/current`、`/auth/logout`，恢复会话时重新向后端核验身份及授权，不信任本地缓存的角色。
+
+`npm run build` 同时构建旧入口到 `web/dist`、新入口到 `web/dist/platform`；部署整个 `dist` 时新地址为 `/platform/platform.html#/systems`，单独托管新产物时为 `/platform.html#/systems`。哈希路由刷新不需要服务端业务路由回退；现有生产部署默认入口不变。
+
+`app/navigation/catalog.ts` 注册已确认的 47 个叶子入口及所属系统、分组；授权取自 `/menu/current` 中启用且可见的 `C` 类叶子精确路径，目录本身不授予子页面，管理员角色也不自动授予全部新入口。新路径使用注册表中的 `/monitor/...`、`/operations/...`、`/configuration/...`；组内顺序及新路径页面名称采用后端菜单维护值，系统归属和一级分组保持批准结构。重复路径或未注册的新系统叶子路径显示权限加载失败，不动态加载任意组件。既有八项后台菜单仅按注册表的 `legacyPath` 一对一映射至配置平台对应占位入口，旧 `/hvac-demo` 不扩权为五类大屏。
+
+部署启用前须通过现有菜单与角色授权流程配置新路径；本候选不新增数据库种子、不自动修改账号权限，不绕过敏感变更审核。授权但尚未实现的页面可进入，仅显示页面名称与“待建设”；全局搜索、消息也只展示待建设状态。无授权系统不显示，直接访问未授权页进入无权限状态；权限加载失败与确实没有权限分别显示。该前端导航限制不替代后端接口鉴权及建筑范围校验。
 
 | 目录 | 职责与边界 |
 |---|---|
@@ -103,6 +109,10 @@ MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件
 | `web/src/locales`、`styles` | 中文公共文案、设计变量、主题和组件库映射；模块文案由公共入口汇入 |
 
 监控端使用统一 1920×1080 逻辑画布，等比居中缩放；弹窗留在画布坐标系，图表提示由图表内部绘制。五类大屏通过 `modules/large-screen/registry/screens.ts` 同时生成路由与切换导航，分组和顺序未定时保持未配置，不实现自动轮播。图表统一从 `shared/charts` 获取主题、尺寸监听和释放行为；页面只提供展示数据与配置。
+
+大屏注册项通过 `layout` 选择场景或普通网格布局，缺省保持网格模式。监控页使用模块内 `SceneScreenLayout`，通过 `scene/top/left/right` 插槽组织建筑场景和悬浮内容；两侧独立收起，不重建或挤压场景，信息层空白允许场景交互。顶栏保持标题居中、品牌居左、时间与必要导航居右；全局异常提示叠加显示，不改变场景尺寸。区域尺寸、半透明背景和层级集中在 Token/主题中；没有为趋势等页面强制增加场景。实际建筑素材、三维交互及业务图表尚未接入，当前区域仅标注“待建设”。
+
+管理端与系统选择页共用应用层 `WorkspaceBrand`，默认显示 `shared/assets/tengcore-logo.png`，并保留公司 Logo 槽；管理菜单图标由应用导航层提供，不参与授权。管理端占位路由显式启用 `PendingPage` 面板模式，搜索浮层与大屏保持原模式。目标外壳使用独立管理表面变量与组件库适配作用域，避免修改大屏和登录页的视觉。
 
 目录依赖、统一文案和样式变量规则由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束；`npm run lint` 包含此检查。相似 UI 第三次出现时优先抽象复用，不复制控件；自动检查不能替代语义和复用审查。设计来源见[已确认实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，交付状态与候选尺寸见 `PROJECT_STATUS.md`。
 

@@ -1,7 +1,7 @@
 import type { ScreenRegistration } from '@/shared/models/screen-registration'
 
 export const screens: readonly ScreenRegistration[] = [
-  { id: 'screen-monitoring', titleKey: 'largeScreen.monitoring', path: '/monitor/monitoring', groupKey: null, order: null,
+  { id: 'screen-monitoring', titleKey: 'largeScreen.monitoring', path: '/monitor/monitoring', groupKey: null, order: null, layout: 'scene',
     load: () => import('../pages/monitoring/IndexPage.vue') },
   { id: 'screen-trend', titleKey: 'largeScreen.trend', path: '/monitor/trend', groupKey: null, order: null,
     load: () => import('../pages/trend/IndexPage.vue') },

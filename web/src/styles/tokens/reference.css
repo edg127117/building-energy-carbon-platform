@@ -1,5 +1,6 @@
 :root {
   --bec-ref-bg: #F4F7FA;
+  --bec-ref-management-bg: #EDF2FA;
   --bec-ref-white: #FFFFFF;
   --bec-ref-subtle: #F8FAFC;
   --bec-ref-ink: #172033;
@@ -11,6 +12,7 @@
   --bec-ref-blue-hover: #1D4ED8;
   --bec-ref-blue-active: #1E40AF;
   --bec-ref-blue-soft: #EFF6FF;
+  --bec-ref-blue-label: #E1ECFF;
   --bec-ref-green: #16875D;
   --bec-ref-amber: #B76E00;
   --bec-ref-red: #C43D4B;

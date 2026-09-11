@@ -1,6 +1,6 @@
 export default {
   loading: '正在加载', empty: '暂无数据', retry: '重新加载', close: '关闭',
-  pendingTitle: '页面内容待确认',
+  pendingTitle: '待建设',
   pendingDescription: '当前仅提供页面外壳。展示内容、数据来源与交互规则确认后，再接入业务功能。',
   foundation: '基础框架预览',
   foundationDescription: '此入口不请求业务数据，不代表业务页面或权限接入已完成。',

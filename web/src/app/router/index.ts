@@ -1,37 +1,50 @@
 import { createRouter, createWebHashHistory, type RouterHistory, type RouteRecordRaw } from 'vue-router'
 import OfficeLayout from '@/app/layouts/office/OfficeLayout.vue'
 import MonitorLayout from '@/app/layouts/monitor/MonitorLayout.vue'
+import WorkspaceSelection from '@/app/navigation/WorkspaceSelection.vue'
+import { pages, authorizedPages } from '@/app/navigation/catalog'
 import PendingPage from '@/shared/components/PendingPage.vue'
-import StateBoundary from '@/shared/components/StateBoundary.vue'
-import { routes as dashboardRoutes } from '@/modules/dashboard/public'
-import { routes as drilldownRoutes } from '@/modules/drilldown/public'
-import { routes as trendRoutes } from '@/modules/trend-analysis/public'
-import { routes as screenRoutes } from '@/modules/large-screen/public'
+import NavigationState from '@/app/navigation/NavigationState.vue'
+import { LoginPage, useSession } from '@/modules/auth/public'
+import { screens } from '@/modules/large-screen/public'
 import { t } from '@/locales'
 
 export const routes: RouteRecordRaw[] = [
-  { path: '/', redirect: '/office' },
-  {
-    path: '/office', component: OfficeLayout, meta: { mode: 'office' },
+  { path: '/', redirect: '/systems' },
+  { path: '/office', redirect: '/systems' },
+  { path: '/login', component: LoginPage, meta: { public: true } },
+  { path: '/systems', component: WorkspaceSelection },
+  ...(['monitor', 'operations', 'configuration'] as const).map(system => ({
+    path: '/' + system, component: system === 'monitor' ? MonitorLayout : OfficeLayout,
+    meta: { system, mode: system === 'monitor' ? 'monitor' : 'office' },
     children: [
-      { path: '', component: PendingPage, props: () => ({ title: t('navigation.office') }), meta: { titleKey: 'navigation.office' } },
-      ...dashboardRoutes, ...drilldownRoutes, ...trendRoutes,
+      { path: '', redirect: '/systems' },
+      ...pages.filter(page => page.system === system).map(page => ({
+        path: page.path, component: screens.find(screen => screen.path === page.path)?.load ?? PendingPage,
+        props: () => ({ title: authorizedPages(useSession().menus).find(item => item.id === page.id)?.title ?? t(page.titleKey), ...(system === 'monitor' ? {} : { panel: true }) }),
+        meta: { system, titleKey: page.titleKey, screenLayout: screens.find(screen => screen.path === page.path)?.layout ?? 'grid' },
+      })),
     ],
-  },
-  {
-    path: '/monitor', component: MonitorLayout, meta: { mode: 'monitor' },
-    children: [
-      { path: '', component: PendingPage, props: () => ({ title: t('navigation.switchScreen') }), meta: { titleKey: 'navigation.switchScreen' } },
-      ...screenRoutes,
-      { path: ':pathMatch(.*)*', component: StateBoundary, props: { state: 'not-found' } },
-    ],
-  },
-  { path: '/:pathMatch(.*)*', component: OfficeLayout, children: [
-    { path: '', component: StateBoundary, props: { state: 'not-found' } },
-  ] },
+  })),
+  { path: '/403', component: NavigationState, props: { state: 'forbidden' } },
+  { path: '/:pathMatch(.*)*', component: NavigationState, props: { state: 'not-found' } },
 ]
 
-/** 占位入口不请求受保护数据；权限契约接入后由应用层安装守卫，不能据空页面推断已鉴权。 */
+/** 守卫运行于 Pinia 安装后；每次导航校验当前菜单，深链接不能绕过授权。 */
 export function createPlatformRouter(history: RouterHistory = createWebHashHistory()) {
-  return createRouter({ history, routes })
+  const router = createRouter({ history, routes })
+  router.beforeEach(async to => {
+    if (to.meta.public) return true
+    const session = useSession()
+    try { await session.refresh(); authorizedPages(session.menus) } catch {
+      session.menus = []; session.failed = true
+      if (!session.token) return '/login'
+      if (to.path !== '/systems') return { path: '/systems', query: { error: 'access' } }
+      return true
+    }
+    if (!session.user) return '/login'
+    if (to.meta.system && !authorizedPages(session.menus).some(page => page.path === to.path)) return '/403'
+    return true
+  })
+  return router
 }

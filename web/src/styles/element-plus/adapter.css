@@ -59,3 +59,14 @@
 .el-tag { --el-tag-border-radius: var(--bec-radius-tag); --el-tag-font-size: var(--bec-font-size-body); }
 .el-alert { --el-alert-title-font-size: var(--bec-font-size-body); --el-alert-title-with-description-font-size: var(--bec-font-size-title); --el-alert-description-font-size: var(--bec-font-size-small); --el-alert-padding: var(--bec-space-tight) var(--bec-panel-padding); }
 [data-page-mode='monitor'] .el-alert { --el-alert-title-with-description-font-size: var(--bec-monitor-font-body); }
+
+/* 管理外壳的菜单适配集中在组件库入口，不影响大屏、登录页或旧入口。 */
+.management-surface .el-menu { --el-menu-item-height: var(--bec-ref-space-48); --el-menu-sub-item-height: var(--bec-ref-space-40); --el-menu-base-level-padding: var(--bec-space-group); --el-menu-level-padding: var(--bec-ref-space-40); --el-menu-hover-bg-color: var(--bec-color-surface-secondary); border-right: 0; }
+.management-surface .el-sub-menu__title, .management-surface .el-menu-item { border-radius: var(--bec-radius-card); margin-bottom: var(--bec-ref-space-4); }
+.management-surface .el-sub-menu__title { color: var(--bec-color-text-secondary); }
+.management-surface .el-sub-menu.is-active > .el-sub-menu__title { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); }
+.management-surface .el-sub-menu.is-active > .el-sub-menu__title .group-icon { color: inherit; }
+.management-surface .el-sub-menu__icon-arrow { color: var(--bec-color-text-secondary); }
+.management-surface .el-menu-item.is-active { background: var(--bec-color-action-soft); font-weight: var(--bec-font-weight-heading); }
+.management-surface .el-menu-item:focus-visible, .management-surface .el-sub-menu__title:focus-visible { outline-offset: calc(var(--bec-ref-space-0) - var(--bec-focus-width)); }
+.management-surface .el-button + .el-button { margin-left: 0; }

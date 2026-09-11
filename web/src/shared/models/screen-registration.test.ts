@@ -13,6 +13,8 @@ describe('single source screen registration', () => {
     const router = createRouter({ history: createMemoryHistory(), routes: screenRoutes(registry) })
     await router.push(extra.path)
     expect(router.currentRoute.value.name).toBe(extra.id)
+    expect(router.currentRoute.value.meta.screenLayout).toBe('grid')
+    expect(router.resolve('/monitor/monitoring').meta.screenLayout).toBe('scene')
     expect(screenGroups(registry).find(g => g.key === extra.groupKey)?.entries).toContain(extra)
     expect(screens.every(s => s.groupKey === null && s.order === null)).toBe(true)
   })
