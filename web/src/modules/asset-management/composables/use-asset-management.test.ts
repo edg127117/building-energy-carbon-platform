@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AssetEquipment, AssetPage } from '../models/assets'
-import { createBuilding, listBuildings, listEquipment } from '../api/assets'
+import { createBuilding, listBuildings, listEquipment, listSpaces, listSystemGroups } from '../api/assets'
 import { useAssetManagement } from './use-asset-management'
 
 vi.mock('../api/assets', () => ({
@@ -51,6 +51,32 @@ describe('资产档案异步状态', () => {
     await firstLoad
 
     expect(management.equipment.value.items[0]?.equipmentId).toBe('latest')
+  })
+
+  it('清空建筑时立即结束范围加载并丢弃迟到响应', async () => {
+    const spaces = deferred<never[]>()
+    vi.mocked(listSpaces).mockReturnValueOnce(spaces.promise)
+    vi.mocked(listSystemGroups).mockResolvedValue({ page: 1, size: 100, total: 0, items: [] })
+    const management = useAssetManagement()
+    const firstLoad = management.loadScope('B1')
+    expect(management.scopeLoading.value).toBe(true)
+    await management.loadScope(undefined)
+    expect(management.scopeLoading.value).toBe(false)
+    spaces.resolve([{ spaceId: 'OLD' } as never])
+    await firstLoad
+    expect(management.scopeSpaces.value).toEqual([])
+  })
+
+  it('新建筑范围加载失败时不保留上一个建筑选项', async () => {
+    vi.mocked(listSpaces).mockResolvedValueOnce([{ spaceId: 'OLD' } as never]).mockRejectedValueOnce(new Error('network'))
+    vi.mocked(listSystemGroups).mockResolvedValue({ page: 1, size: 100, total: 0, items: [] })
+    const management = useAssetManagement()
+    await management.loadScope('B1')
+    await expect(management.loadScope('B2')).rejects.toThrow('network')
+    expect(management.scopeSpaces.value).toEqual([])
+    expect(management.scopeSystemGroups.value).toEqual([])
+    expect(management.scopeLoading.value).toBe(false)
+    expect(management.scopeError.value).not.toBeNull()
   })
 
   it('同一建筑创建在刷新完成前只会发送一次', async () => {
