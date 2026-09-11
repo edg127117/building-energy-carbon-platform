@@ -2,33 +2,28 @@
 
 ## 1. 使用方式
 
-本文件只描述稳定定位、架构和职责。开始任务时依次读取：
+本文件只描述稳定定位、架构、数据链路、职责和入口。开始任务时先读取 [`AGENTS.md`](AGENTS.md)，再按任务需要读取相关章节：
 
-1. [`AGENTS.md`](AGENTS.md)：长期规则和新旧系统边界；
-2. 本文件：模块、数据链路和职责；
-3. [`PROJECT_STATUS.md`](PROJECT_STATUS.md)：当前已实现、计划中、风险和下一步；
-4. 与任务直接相关的代码、测试或专题文档。
+- 当前能力、阶段、风险和下一步：[`PROJECT_STATUS.md`](PROJECT_STATUS.md)；
+- 具体实现：直接相关的代码、测试和专题文档；
+- Git、Hook、PR 和 CI：[`repository-guardrails.md`](docs/development/repository-guardrails.md)。
 
-历史计划只用于解释演进原因，不能代替当前代码和状态文档。
+普通单点任务不要求完整读取本文件或 `PROJECT_STATUS.md`。历史计划只用于解释演进原因，不能代替当前代码和状态文档。
 
 ## 2. 产品定位与范围
 
-本项目目标是建设“建筑能碳监测管理平台”，围绕建筑、空间、系统、设备、测点和计量边界形成可追溯的能源与碳数据链，逐步支持：
+本项目建设“建筑能碳监测管理平台”，围绕建筑、空间、系统、设备、测点和计量边界形成可追溯的能源与碳数据链，逐步支持：
 
 - 冷热源系统；
 - 空调及通风系统；
 - 供配电系统；
 - 环境监测系统。
 
-产品推进顺序为：
+产品阶段依次为数据监测与后台基础架构、可视化实现、虚拟数据测试及次级应用点完善；当前进度只在 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 维护。
 
-1. 数据监测与后台基础架构；
-2. 可视化实现；
-3. 虚拟数据测试及次级应用点完善。
+平台范围以监测、预处理、建模、分析、诊断和展示为主。远程控制、命令下发、响应执行、策略生成与策略下发不属于当前版本。负荷预测、能源审计、运行模式管理及完整自动报告暂缓，启用前必须重新确认范围和输入条件。
 
-当前范围以监测、预处理、建模、分析、诊断和展示为主。远程控制、命令下发、响应执行、策略生成与策略下发不属于当前版本。负荷预测、能源审计、运行模式管理及完整自动报告暂缓，启用前必须重新确认范围和输入条件。
-
-GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条款完成软件实现、专业确认和必要的硬件/现场验证后，才能声明该条款已满足。
+GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成软件实现、专业确认和必要的硬件/现场验证后，才能声明该条款已满足。
 
 ## 3. 与旧中央空调系统的关系
 
@@ -39,39 +34,36 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `baseline/hvac-before-energy-carbon-20260823` | 二次开发前代码冻结点 | 证明继承起点，不代表建筑能碳版本或现场验收完成 |
 | 旧 HVAC 设计、计划和 PR | 历史证据 | 可解释已有实现，不是新平台需求或完成状态 |
 
-新仓库继承了中央空调系统的代码、测试和 Git 历史。继承代码中的 `hvac` 包、19 测点、公式、页面、脚本和制品名称可以继续运行，但应视为待复用或迁移的基础能力；未经新平台范围核对，不得直接推广为通用建筑能碳能力。
+继承代码中的 `hvac` 包、19 测点、公式、页面、脚本和制品名称可以继续运行，但应视为待复用或迁移的基础能力；未经新平台范围核对，不得推广为通用建筑能碳能力。
 
 ## 4. 稳定技术架构
 
-当前继续采用 Spring Boot 单体后端与 Vue 前端：
+平台采用 Spring Boot 单体后端与 Vue 前端。未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务或仓库。
 
-| 层次 | 当前职责 |
+| 模块 | 稳定职责 |
 |---|---|
 | `web/src` | 页面、状态编排、API Client、契约类型和可视化；不生成虚假业务数据 |
 | `com.platform.system`、`security` | 登录、JWT、角色、菜单和建筑权限 |
-| `com.platform.audit` | 独立后台职责、服务端追踪、安全事件和系统敏感变更公共闭环 |
+| `com.platform.audit` | 后台职责、服务端追踪、安全事件和敏感变更公共闭环 |
 | `com.platform.hvac`、`hvac.asset` | 继承的建筑、空间、系统、设备、测点档案及 HVAC 查询 |
 | `com.platform.iot.ingest`、`identity` | 标准报文接入、设备身份和归属解析 |
-| `com.platform.iot.reliability`、`mqtt` | V2 消息级幂等、24 小时热回执、ACK 失败证据与成功监控、TLS 与连接故障分类 |
-| `com.platform.iot.quality`、`dataquality` | 运行校验和 Q0/Q1/Q2 预处理 |
-| `com.platform.iot.qualityusage` | Q0/Q1/Q2 消费策略治理、运行快照、门禁、纠正与恢复 |
-| `com.platform.iot.energymetadata` | 标准测点能源类型、来源、数据性质、统计周期和专业确认属性；不保存采样周期、单位副本或用能系统副本 |
-| `com.platform.energy.activity` | 按建筑、测点、半开时间区间和 seek 游标读取多能源原始活动数据，并执行已确认能源属性及场景化质量门禁 |
-| `com.platform.energy.catalog`、`energy.conversion` | 治理能源品种、单位量纲、折标公式和参数版本，并提供带完整版本证据的研发模拟 `tce` 计算；不输出正式结算结果 |
-| `com.platform.energy.aggregation` | 通过稳定输入端口聚合累计量、显式周期量和瞬时量，固定关系、绑定、质量、事件、修正和积分策略版本；当前仅有研发模拟算法核心 |
-| `com.platform.energy.period` | 按版本化时区生成自然日/月/年边界，维护开放期唯一当前投影，经审核形成月度不可覆盖快照，并以最多 100 项批次执行有界重算；当前仅输出研发模拟结果 |
-| `com.platform.iot.calculation` | 为指标场景读取有界原始测点快照，保留质量阻断行、末端锚点和读取水位；温度、流量无需伪造能源属性 |
-| `com.platform.energy.efficiency` | 电驱动水冷冷站的版本配置、两种冷量来源、原生周期、封账、年度 EERp 和附件阈值研发评价；经 `energy.aggregation` 与 `energy.period` 公共原生量端口计算和发布，不调用折标服务。年度保留 `eerp`，固定保存两位小数 `HALF_UP` 的 `displayEerp` 及 `roundingVersion/displayScale/roundingMode`；旧快照缺失字段保持空，展示舍入不参与阈值评价 |
-| `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
-| `com.platform.relation` | 建筑级关系版本、表计层级和方向、计量边界、分层查询，以及平台 V1 Excel 的模板、预检和草稿导入 |
-| `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
+| `com.platform.iot.reliability`、`mqtt` | V2 消息幂等、平台回执、ACK 失败证据与成功监控、TLS 和连接故障分类 |
+| `com.platform.iot.quality`、`dataquality`、`qualityusage` | Q0/Q1/Q2 生成、使用策略、运行门禁、纠正和恢复 |
+| `com.platform.iot.energymetadata` | 测点能源类型、来源、数据性质、统计周期和专业确认属性 |
+| `com.platform.iot.deviceparameter` | 标准设备参数定义、来源、冲突、双时间版本、审核、生效、查询和重算编排 |
 | `com.platform.iot.onboarding` | 产品模板、未知设备有界发现、绑定和启停 |
 | `com.platform.iot.temporal` | TDengine 时序访问边界 |
+| `com.platform.energy.activity` | 多能源原始活动数据的有界读取和质量门禁 |
+| `com.platform.energy.catalog`、`conversion` | 能源品种、单位量纲、折标公式和参数版本；研发模拟结果不得冒充正式结算 |
+| `com.platform.energy.aggregation`、`period`、`summary` | 活动量聚合、计量事件与修正、周期投影与封账、历史关系和计量边界汇总 |
+| `com.platform.energy.efficiency` | 电驱动水冷冷站原生周期、年度 EERp 和研发评价 |
+| `com.platform.carbon` | 因子与分母版本、范围一/二计算、追溯、重算和批次审批 |
+| `com.platform.relation` | 建筑关系版本、表计层级和方向、计量边界、分层查询及 Excel 草稿导入 |
 | `com.platform.cache`、`config` | Redis 缓存和基础设施装配 |
-| `telemetry-adapter` | 厂商 Topic 到内部 V2 契约的 MQTT 适配与代理 ACK 基础；不等于边缘持久化网关 |
-| `modbus-edge-adapter` | 独立只读 Modbus TCP/RTU 边缘采集进程；配置驱动生成内部 V2 报文，不包含控制或持久化补传 |
+| `telemetry-adapter` | 厂商 Topic 到内部 V2 契约的 MQTT 适配与代理 ACK；不等于边缘持久化网关 |
+| `modbus-edge-adapter` | 只读 Modbus TCP/RTU 采集并生成内部 V2 报文；不包含控制或持久化补传 |
 
-数据源职责保持不变：
+### 数据源职责
 
 - MySQL：用户、权限、建筑、空间、设备、测点、配置、关系和业务状态；
 - TDengine：原始时序、聚合时序、质量结果和指标结果；
@@ -79,97 +71,72 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 - MQTT/HTTP：统一北向接入契约；
 - WebSocket：实时展示通知，权威结果仍由持久化和受保护查询接口提供。
 
-MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件位于
-[`src/env/init`](src/env/init)，构建时只将 `V*.sql` 打包到
-`classpath:db/migration/mysql`。Docker Compose 只创建空数据库，不再并行执行 SQL。
-新库自动执行完整版本链；没有 Flyway 历史表的非空旧库默认拒绝启动，必须先核验
-结构与备份，再按 [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md)
-执行一次性受控接管。已成功应用的版本脚本不得原地修改。
+多数据源必须使用明确 Bean 和 `Qualifier`，不得跨数据源执行 SQL。
 
-未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务。多数据源必须使用明确 Bean 和 `Qualifier`，不得跨数据源执行 SQL。
+### MySQL 迁移
 
-### 新前端入口与目录边界
+MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件位于 [`src/env/init`](src/env/init)，构建时只将 `V*.sql` 打包到 `classpath:db/migration/mysql`。Docker Compose 只创建空数据库，不并行执行 SQL。
 
-已确认结构见[前端骨架实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)：第 2—14 章为公共规则，第 15 章为菜单、改造与分阶段交付。孪生大屏、智慧运维、能碳配置共用一个 Vue 工程，两个管理平台共享后台外壳，大屏保持独立画布。业务迁移候选将八项旧管理页面绑定到配置平台既定入口，将暖通快照及历史趋势绑定到运维平台对应入口；未实现菜单继续待建设，不改动大屏业务范围。
+新库执行完整版本链；没有 Flyway 历史表的非空旧库默认拒绝启动，必须先核验结构与备份，再按 [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md) 执行一次性受控接管。已成功应用的版本脚本不得原地修改。
 
-迁移候选采用 `index.html → src/app/main.ts` 唯一入口，旧页面、旧样式与 Ant Design/Tailwind 依赖退出；不保留旧 `platform.html` 文件。进入 `web` 后运行 `npm ci`、`npm run dev`；登录入口为 `index.html#/login`，登录后进入 `#/systems`，原 `#/office` 重定向至系统选择。单独开发时需配置 `VITE_API_BASE` 指向可访问且允许该来源的后端 API；未配置时使用同源 `/api`。认证请求 `/auth/login`、`/auth/me`、`/menu/current`、`/auth/logout`，恢复会话时重新向后端核验身份及授权，不信任本地缓存的角色。业务 HTTP 和 WebSocket 会话失效统一清理同一会话，不安装第二套路由守卫。
+### 前端入口与目录边界
 
-`npm run build` 构建唯一入口到 `web/dist`，访问 `/index.html#/systems`；哈希路由刷新不需要服务端业务路由回退。开发候选的入口调整不代表生产已经部署；升级时应同步静态入口地址及书签。
+前端采用 `index.html → src/app/main.ts` 唯一入口，旧页面、旧全局样式、旧请求客户端及 Ant Design/Tailwind 实现不再保留。进入 `web` 后运行 `npm ci`、`npm run dev`；`npm run build` 构建唯一入口到 `web/dist`。
 
-`app/navigation/catalog.ts` 注册已确认的 47 个叶子入口及所属系统、分组；授权取自 `/menu/current` 中启用且可见的 `C` 类叶子精确路径，目录本身不授予子页面，管理员角色也不自动授予全部新入口。新路径使用注册表中的 `/monitor/...`、`/operations/...`、`/configuration/...`；组内顺序及新路径页面名称采用后端菜单维护值，系统归属和一级分组保持批准结构。重复路径或未注册的新系统叶子路径显示权限加载失败，不动态加载任意组件。既有八项后台菜单仅按注册表的 `legacyPath` 一对一映射至配置平台对应业务入口，旧 `/hvac-demo` 不扩权为五类大屏。
-
-部署启用前须通过现有菜单与角色授权流程配置新路径；本候选不新增数据库种子、不自动修改账号权限，不绕过敏感变更审核。授权但尚未实现的页面可进入，仅显示页面名称与“待建设”；全局搜索、消息也只展示待建设状态。无授权系统不显示，直接访问未授权页进入无权限状态；迁移管理页面另外保留平台管理员角色检查。权限加载失败与确实没有权限分别显示。该前端导航限制不替代后端接口鉴权及建筑范围校验。
+平台恢复会话时重新向后端核验身份和授权，不信任本地缓存角色。客户端菜单只能使用服务器返回且已在本地注册的叶子路径；目录不自动授予子页面，管理员角色也不自动扩权。迁入管理页面还需保留平台管理员角色检查；前端导航限制不能替代后端接口鉴权和建筑范围校验。
 
 | 目录 | 职责与边界 |
 |---|---|
-| `web/src/app` | 应用装配、路由、办公/监控两套外壳和全局服务；不实现业务规则 |
-| `web/src/modules/<模块>` | 页面放 `pages`、模块组件放 `components`；接入时请求放 `api`，编排放 `composables/stores`，模型放 `models`，文案放 `locales`；模块之间只通过 `public.ts` |
-| `web/src/shared` | 无业务归属的组件、图表、组合函数、模型与工具；基础控件优先从 `shared/ui` 复用 Element Plus |
-| `web/src/infrastructure`、`generated` | 通用传输能力与生成契约边界；不存放页面或领域计算 |
-| `web/src/locales`、`styles` | 中文公共文案、设计变量、主题和组件库映射；模块文案由公共入口汇入 |
+| `web/src/app` | 应用装配、路由、办公/监控外壳和全局服务；不实现业务规则 |
+| `web/src/modules/<模块>` | 页面、模块组件、API、编排、模型和模块文案；模块间只通过 `public.ts` |
+| `web/src/shared` | 无业务归属的组件、图表、组合函数、模型和工具 |
+| `web/src/infrastructure`、`generated` | 通用传输能力和生成契约边界；不存放页面或领域计算 |
+| `web/src/locales`、`styles` | 公共文案、设计变量、主题和组件库映射 |
 
-监控端使用统一 1920×1080 逻辑画布，等比居中缩放；弹窗留在画布坐标系，图表提示由图表内部绘制。五类大屏通过 `modules/large-screen/registry/screens.ts` 同时生成路由与切换导航，分组和顺序未定时保持未配置，不实现自动轮播。图表统一从 `shared/charts` 获取主题、尺寸监听和释放行为；页面只提供展示数据与配置。
+监控端采用 1920×1080 逻辑画布等比居中缩放。大屏注册表统一生成路由和切换导航；场景型布局与普通网格布局分开，信息层不得阻断场景交互。图表统一从 `shared/charts` 获取主题、尺寸监听和释放行为。
 
-大屏注册项通过 `layout` 选择场景或普通网格布局，缺省保持网格模式。监控页使用模块内 `SceneScreenLayout`，通过 `scene/top/left/right` 插槽组织建筑场景和悬浮内容；两侧独立收起，不重建或挤压场景，信息层空白允许场景交互。顶栏保持标题居中、品牌居左、时间与必要导航居右；全局异常提示叠加显示，不改变场景尺寸。区域尺寸、半透明背景和层级集中在 Token/主题中；没有为趋势等页面强制增加场景。实际建筑素材、三维交互及业务图表尚未接入，当前区域仅标注“待建设”。
-
-管理端与系统选择页共用应用层 `WorkspaceBrand`，默认显示 `shared/assets/tengcore-logo.png`，并保留公司 Logo 槽；管理菜单图标由应用导航层提供，不参与授权。管理端占位路由显式启用 `PendingPage` 面板模式，搜索浮层与大屏保持原模式。目标外壳使用独立管理表面变量与组件库适配作用域，避免修改大屏和登录页的视觉。
-
-目录依赖、统一文案和样式变量规则由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束；`npm run lint` 包含此检查。相似 UI 第三次出现时优先抽象复用，不复制控件；自动检查不能替代语义和复用审查。设计来源见[已确认实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，交付状态与候选尺寸见 `PROJECT_STATUS.md`。
-
-浏览器骨架检查入口为 `node web/scripts/verify-platform.mjs`：先在仓库根目录安装已有 Playwright 依赖、完成前端构建，再运行脚本；Windows 可在当前终端设置 `PLAYWRIGHT_CHANNEL=msedge` 使用已安装 Edge，其他环境使用已安装的 Playwright Chromium。脚本只启动本机临时静态服务，截图和结果写入忽略目录 `.codex-backups/frontend-foundation`，不连接业务后端。
+目录依赖、文案和样式变量由 `web/AGENTS.md` 与 `npm run check:architecture` 共同约束。前端结构、菜单和交付阶段见[前端实施计划](docs/designs/frontend-visualization-phase-two-implementation-plan.md)，当前迁移和验收状态见 [`PROJECT_STATUS.md`](PROJECT_STATUS.md)。
 
 ## 5. 目标数据链路
 
+以下是目标链路，不表示每一段都已正式验收：
+
 ```text
 设备与业务系统
-→ 南向协议驱动
-→ 边缘网关/协议适配层
+→ 南向协议驱动或边缘适配
 → 字段、单位、时间和身份归一化
 → 统一 MQTT/HTTP
-→ 平台接入与归属校验
-→ 标准测点能源专业属性解析
-→ V2 消息幂等、不可覆盖原始持久化与平台应用 ACK
+→ 平台接入、归属校验、消息幂等和原始持久化
 → 数据预处理和 Q0/Q1/Q2 质量标识
-→ MySQL/TDengine 持久化
 → 场景化质量使用策略门禁
-→ 多能源活动数据有界读取与证据封装
-→ 能源品种、单位量纲、兼容矩阵与测点品种绑定解析
-→ 已审核折标公式、参数和标准煤低位热值版本解析及确定性 tce 计算
-→ 活动事实起止锚点、有效计量分配、计量事件与审核修正证据装配
-→ 周期封账快照、历史关系和计量边界权威汇总
-→ 版本化排放因子、公式、GWP 与面积/人数分母匹配
-→ 范围一/范围二 CO2e、占比及年度总量强度确定性计算
-→ 依赖变化影响分析、候选重算与正式结果批次审批替代
-→ 标准设备参数版本解析与公式版本证据
-→ 物理空间树与语义关系模型
-→ 表计层级、计量方向与计量边界草稿治理
-→ 能源/碳计量、评价和诊断
+→ 多能源活动数据读取、能源品种和单位解析
+→ 活动量聚合、计量事件、修正和周期封账
+→ 历史关系与计量边界汇总
+→ 折标、能效和碳排确定性计算及版本证据
+→ 依赖变化影响分析、重算和正式结果审批
 → API/WebSocket
 → 看板、趋势、下钻、能流和碳排展示
 ```
 
-当前候选代码覆盖 MQTT 上行、标准报文、身份与测点映射、数据质量、时序存储、通用只读 Modbus TCP/RTU 边缘采集骨架、标准设备参数平台侧治理、建筑级关系版本治理、平台标准 V1 表计 Excel 模板/预检/草稿导入、碳管理基础后端候选、部分 HVAC 指标、查询和展示。其中 Modbus 仅完成配置驱动的软件候选和隔离模拟验证，不代表已取得厂家点表、完成真串口/真实设备或现场验收；设备参数、建筑关系和碳管理也只具有各自已验证的候选软件边界。平台模板不是能源专家真实表格，碳迁移不预置业务排放因子或建筑分母。BACnet、NB-IoT 等其他南向驱动，以及范围三、完整温室气体盘查和跨系统分析，均必须以 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 标记为计划中或部分完成，不能根据目标链路推断已经实现。
-
-V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器标准发布确认、平台入站消费确认和应用 ACK 发布确认语义不同；平台不逐条持久化成功 ACK，成功量进入监控，失败保留异常明细。成功回执默认只作为 24 小时热证据，聚合、质量、公式和页面处理不属于该回执语义。V1 Topic 在迁移期继续独立存在。
+V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器发布确认、平台消费确认和应用 ACK 发布确认语义不同；成功回执默认只作为热证据，聚合、质量、公式和页面处理不属于该回执语义。
 
 ## 6. 空间与语义模型
 
-- 物理空间树保留，用于表达建筑、楼层、区域、房间的包含关系。
-- 在物理树之上建立可版本化的多对多语义关系，表达 `LOCATED_IN`、`PART_OF`、`SERVES`、`MEASURES`、`CONNECTED_TO`、`SUPPLIES`、`RETURNS` 等关系。
-- 语义模型应覆盖空间、系统、设备、测点、计量边界和服务范围，并支持生效时间、来源和审计。
-- 计量边界与物理边界不得默认相同；分摊规则和未分配状态必须显式表达。
-- 表计结构与覆盖对象分开保存；角色、直接上下级和计量方向随关系版本治理，未知事实保持待专家确认。
+- 物理空间树表达建筑、楼层、区域、房间的包含关系；
+- 可版本化语义关系表达空间、系统、设备、测点、计量边界和服务范围；
+- 计量边界与物理边界不得默认相同，分摊规则和未分配状态必须显式表达；
+- 表计层级、方向和覆盖对象分开保存，未知事实保持待专业确认；
 - Excel 导入固定为“平台模板下载 → 无写预检 → 幂等原子写入指定草稿”，不得自动提交、审核或生效。
 
 ## 7. 专业职责边界
 
-| 角色 | 必须提供或确认的内容 | 软件开发职责 |
+| 角色 | 必须提供或确认的内容 | 软件职责 |
 |---|---|---|
-| 能源专家 | 指标、公式、折算与碳因子、边界、阈值、基准、归因、模型、展示逻辑和验收规则 | 将已确认规则实现为可配置、可版本化、可追溯的服务和接口 |
-| 硬件人员 | 设备能力、南向协议、字段路径、单位、采样周期、边缘缓存/补传和现场条件 | 定义统一北向契约、平台接入、状态查询和联调工具 |
-| 软件开发人员 | 架构、数据模型、接口、权限、存储、任务、日志、测试和可视化实现 | 不替能源专家或硬件人员猜测专业输入 |
+| 能源专家 | 指标、公式、折算与碳因子、边界、阈值、基准、归因、模型、展示和验收规则 | 将已确认规则实现为可配置、可版本化、可追溯的服务和接口 |
+| 硬件人员 | 设备能力、南向协议、字段、单位、采样周期、边缘缓存/补传和现场条件 | 定义统一北向契约、平台接入、状态查询和联调工具 |
+| 软件开发人员 | 架构、数据模型、接口、权限、存储、任务、日志、测试和可视化 | 不替能源专家或硬件人员猜测专业输入 |
 
-专业输入未确认时，可以实现安全默认、配置框架和拒绝路径，但不得自行判定哪些指标允许 Q1/Q2、哪些公式有效或哪些设备命令安全。
+专业输入未确认时，可以实现配置框架、安全默认和拒绝路径，但不得自行判定哪些指标允许 Q1/Q2、哪些公式有效或哪些设备命令安全。
 
 ## 8. 关键入口
 
@@ -178,39 +145,20 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 后端 | [`PlatformApplication.java`](src/main/java/com/platform/PlatformApplication.java)、[`pom.xml`](pom.xml) |
 | 前端 | [`web/src`](web/src)、[`web/package.json`](web/package.json) |
 | 本地基础设施 | [`src/env/docker-compose.yml`](src/env/docker-compose.yml) |
-| MySQL 迁移治理 | [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md)、[`src/env/init`](src/env/init) |
-| MQTT 接入 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter) |
+| MySQL 迁移 | [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md)、[`src/env/init`](src/env/init) |
+| MQTT 与南向适配 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter)、[`modbus-edge-adapter`](modbus-edge-adapter) |
 | 资产与设备接入 | [`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding) |
-| 质量使用策略 | [`com.platform.iot.qualityusage`](src/main/java/com/platform/iot/qualityusage)、[`正式候选设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md) |
-| 能源采集元数据 | [`com.platform.iot.energymetadata`](src/main/java/com/platform/iot/energymetadata)、[`候选设计`](docs/designs/2026-08-31-energy-collection-metadata-design.md) |
-| 多能源活动数据读取 | [`com.platform.energy.activity`](src/main/java/com/platform/energy/activity) |
-| 能源字典与测点品种绑定 | [`com.platform.energy.catalog`](src/main/java/com/platform/energy/catalog)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 折标参数与确定性 tce 核心 | [`com.platform.energy.conversion`](src/main/java/com/platform/energy/conversion)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 三类活动量聚合、真实输入适配与计量事件/修正治理 | [`com.platform.energy.aggregation`](src/main/java/com/platform/energy/aggregation)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 周期当前投影、月度封账与有界重算 | [`com.platform.energy.period`](src/main/java/com/platform/energy/period)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 计量边界汇总与多维查询 | [`com.platform.energy.summary`](src/main/java/com/platform/energy/summary)、[`第七闭环候选设计`](docs/designs/2026-09-01-energy-metering-standard-coal-aggregation-design.md) |
-| 冷站 EERp 计算与研发评价（后端活动候选） | [范围、公共契约、接口与验收边界](docs/designs/2026-09-07-eerp-water-cooled-station-design.md) |
-| 碳因子、计算、追溯与自动重算 | [`com.platform.carbon`](src/main/java/com/platform/carbon)、[`碳管理基础闭环设计`](docs/designs/2026-09-02-carbon-management-foundation-design.md)、[`电力平均因子与年度选用规则`](docs/designs/2026-09-07-electricity-factor-selection-design.md) |
-| 建筑关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`正式候选设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
-| 后台职责与审计治理 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`正式候选设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
-| 审计容量验证 | [`Test-AuditCapacityMysql.ps1`](scripts/Test-AuditCapacityMysql.ps1)、[`AuditCapacityMysqlIntegrationTest.java`](src/test/java/com/platform/audit/capacity/AuditCapacityMysqlIntegrationTest.java) |
+| 能源数据与计算 | [`com.platform.energy`](src/main/java/com/platform/energy) |
+| 碳管理 | [`com.platform.carbon`](src/main/java/com/platform/carbon)、[`碳管理设计`](docs/designs/2026-09-02-carbon-management-foundation-design.md) |
+| 关系治理 | [`com.platform.relation`](src/main/java/com/platform/relation)、[`关系治理设计`](docs/designs/2026-08-26-space-semantic-metering-relation-governance-design.md) |
+| 职责与审计 | [`com.platform.audit`](src/main/java/com/platform/audit)、[`职责与审计设计`](docs/designs/2026-08-26-backoffice-duty-audit-governance-design.md) |
 | 当前状态 | [`PROJECT_STATUS.md`](PROJECT_STATUS.md) |
-| Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`.agents/skills/iot-change-verification/SKILL.md`](.agents/skills/iot-change-verification/SKILL.md) |
-| 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`docs/设计冻结书-V1.0-19测点.md`](docs/设计冻结书-V1.0-19测点.md) |
-
-### 碳结果追溯入口
-
-碳结果明细的 `evidenceUrl` 指向 `GET /v1/carbon-management/calculations/{batchId}/items/{itemId}/evidence`（相对 API 路由）。该入口先校验批次所属建筑权限，再按批次与明细共同定位保存的证据；普通列表不装载整批证据 JSON。
-
-新证据使用 `schemaVersion=1`：`upstream.sources` 固定原封账快照及其活动水位、质量、例外和原始计算证据，`upstream.summary` 固定计量边界汇总，另保存关系/汇总策略版本、因子组合及全部参数来源、匹配优先级、单位换算、公式、GWP、舍入和分母依据。小数以十进制字符串保存；查询校验规范化 JSON 摘要，不重新匹配当前规则。历史未保存完整证据的记录返回 `LEGACY_PARTIAL` 和 `originalEvidence`；未提供结构化上游证据的输入标记为 `UPSTREAM_PARTIAL`，不补造历史事实。
-
-当前能源服务仅发布月度封账，适配器据此向月/季/年碳计算提供原始月度段，逐段匹配因子并汇总，不使用年度当前投影或按比例拆分活动量。
-
-V42 在计算批次保存按内容摘要归并的共享证据，明细保留活动事实和共享引用；两者在同一短事务提交。追溯接口重建完整明细后校验原始摘要，缺失引用或内容被改动均拒绝返回。历史批次不回填；相同规则查询仅在单次计算、条件完全相同时复用。本进程结果写入最多两路并发，借连接前的等待消耗原请求截止预算。
+| Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`iot-change-verification`](.agents/skills/iot-change-verification/SKILL.md) |
+| 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`设计冻结书`](docs/设计冻结书-V1.0-19测点.md) |
 
 ## 9. 更新规则
 
-- 稳定定位、模块边界、数据源职责或核心链路变化时更新本文件。
-- 阶段、完成项、风险和下一步只写入 `PROJECT_STATUS.md`，避免重复维护。
-- 旧代码名称只在实际迁移时修改，禁止为改名进行无证据的大范围重构。
-- 当前行为始终以所在 Git 版本的代码和测试为准；本文件不描述某台电脑的瞬时运行状态。
+- 稳定定位、模块边界、数据源职责、核心链路或运行入口变化时更新本文件；
+- 当前阶段、完成项、验证结果、风险和下一步只写入 `PROJECT_STATUS.md`；
+- 具体实现和验收细节写入相应设计或评审文档，本文件只保留入口；
+- 当前行为始终以所在 Git 版本的代码和测试为准。
