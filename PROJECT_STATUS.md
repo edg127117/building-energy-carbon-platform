@@ -25,7 +25,7 @@
 - 产品名称：建筑能碳监测管理平台；
 - 开发仓库：`building-energy-carbon-platform`；
 - 当前状态：已建立新旧系统边界和阶段方向，首个建筑能碳后台业务闭环已形成活动候选实现，但尚未成为经批准的正式版本；
-- 已实现冷站 EERp 后端研发候选：按[已批准设计](docs/designs/2026-09-07-eerp-water-cooled-station-design.md)实现配置审核、累计冷量表与流量温差两条链路、原生量快照、周期封账、自然年度 EERp、严格 4.0/5.0 附件阈值研发评价及有界重算恢复。[独立软件验收](docs/reviews/eerp/2026-09-07-independent-acceptance.md)已重跑固定基线后端回归，并通过一次性 Docker MySQL 8.4 空库至 V43 迁移与 TDengine 3.2.3.0 公共链路：两种来源精确切换形成 365 个封账周期，全年 EERp=5、GUIDANCE_ONLY，写失败后可从固定输入恢复。整体仍为部分通过：年度结果缺设计要求的展示值与舍入版本（P2），真实治理装配、JVM 强杀/跨进程竞争及完整容量矩阵尚未覆盖；专业参数、正式标准适用性和现场验收仍未完成。不提升正式版本，不代表全指标或业务页面完成；
+- 已实现冷站 EERp 后端研发候选：按[已批准设计](docs/designs/2026-09-07-eerp-water-cooled-station-design.md)实现配置审核、累计冷量表与流量温差两条链路、原生量快照、周期封账、自然年度 EERp、严格 4.0/5.0 附件阈值研发评价及有界重算恢复。[独立软件验收](docs/reviews/eerp/2026-09-07-independent-acceptance.md)后已修复年度展示值与舍入版本缺口，并完成[定向复验](docs/reviews/eerp/2026-09-07-repair-verification.md)：实际 Spring 治理服务在 H2 中验证复位事件、发布质量策略及权限撤销；一次性 MySQL 8.4/TDengine 3.2.3.0 验证 JVM 强杀、双进程竞争、死锁后显式恢复，以及 2024 纽约闰年/DST 的 367 个封账周期，全年 EERp=5、展示5.00、GUIDANCE_ONLY；补充年度条数、证据字节和执行超时边界。仍为部分通过：所有事件与关系切换联合重放、生产等价长期容量、专业参数、正式标准适用性和现场验收未完成。不提升正式版本，不代表全指标或业务页面完成；
 - 已确认候选设计：[`数据源与采集策略治理闭环设计`](docs/designs/2026-08-24-collection-source-policy-governance-design.md)，对应候选代码已实现并通过隔离自动化验证，MySQL 8 迁移已随 Flyway 完整链成功执行；治理执行语义、外部联调和现场验收仍未独立验证；
 - 已确认候选设计：[`能源采集元数据完善设计`](docs/designs/2026-08-31-energy-collection-metadata-design.md)，对应后端活动候选已实现独立能源测点属性、建筑范围、乐观锁、采集域审计、专业选项和采集上下文查询，并通过 H2 服务、事务回滚、API 与迁移契约隔离验证；V31 已随隔离 MySQL 8 空库 V01-V32 完整迁移链执行并通过专业枚举与复合外键约束验证，能源专家确认、真实现场数据和独立验收尚未完成；
 - 已确认候选设计：[`Q0/Q1/Q2 使用策略治理与执行闭环设计`](docs/designs/2026-08-24-quality-usage-policy-governance-design.md)，对应完整后端候选代码已实现并通过隔离自动化验证，MySQL 8 迁移已随 Flyway 完整链成功执行；TDengine 3.2.3 执行语义与查询计划、外部联调和独立验收仍未验证；

@@ -46,5 +46,8 @@ class EerpApiContractTest {
         assertThat(spec.path("components").path("schemas").has("EerpApiError")).isTrue();
         var schema=spec.path("components").path("schemas").path("EerpTaskView").path("properties").path("result");
         assertThat(schema.path("oneOf")).hasSize(2);
+        var annual=spec.path("components").path("schemas").path("EerpAnnualResult").path("properties");
+        for(String field:java.util.List.of("eerp","displayEerp","roundingVersion","displayScale","roundingMode"))
+            assertThat(annual.has(field)).as(field).isTrue();
     }
 }

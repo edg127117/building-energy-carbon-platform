@@ -103,6 +103,11 @@ class EerpServiceTest {
         assertThat(r.eerp()).isEqualByComparingTo("5"); assertThat(r.evaluationBand()).isEqualTo("GUIDANCE_ONLY");
         assertThat(r.completeness()).isEqualTo("COMPLETE"); assertThat(r.inputTaskIds()).hasSize(365);
         assertThat(r.standardVerification()).isEqualTo("FULL_TEXT_NOT_VERIFIED");
+        assertThat(r.displayEerp().toPlainString()).isEqualTo("5.00");
+        assertThat(r.roundingVersion()).isEqualTo("EERP_DISPLAY_2DP_HALF_UP_V1");
+        service=newService();
+        var persisted=(AnnualResult)service.task(1,ROLES,annual.taskId()).result();
+        assertThat(persisted).isEqualTo(r);
     }
     @Test void failureDoesNotPublishResultAndResumeUsesFrozenInputAcrossServiceRestart() {
         var config=activate(configuration(false)); baselineHour();
