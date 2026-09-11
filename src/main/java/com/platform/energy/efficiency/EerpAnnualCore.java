@@ -3,6 +3,7 @@ package com.platform.energy.efficiency;
 import com.platform.energy.period.EnergyPeriodBoundary;
 import java.math.BigDecimal;
 import java.math.MathContext;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.*;
@@ -10,6 +11,8 @@ import static com.platform.energy.efficiency.EerpContracts.*;
 
 /** 年度先验证精确区间覆盖，再计算总冷量/总电量；比较使用交叉乘法避免显示舍入跨阈值。 */
 public final class EerpAnnualCore {
+    private static final String DISPLAY_VERSION = "EERP_DISPLAY_2DP_HALF_UP_V1";
+    private static final int DISPLAY_SCALE = 2;
     public record Segment(String taskId, PeriodResult result, Configuration configuration) {}
     public AnnualResult calculate(AnnualRequest request,List<Segment> input,Instant now) {
         var window = EnergyPeriodBoundary.resolve("YEAR",LocalDate.of(request.year(),1,1),request.timezoneId());
@@ -39,11 +42,14 @@ public final class EerpAnnualCore {
         else if (electricity.signum()<=0) issues.add(new Issue("ZERO_DENOMINATOR",null,window.startInclusive(),window.endExclusive()));
         boolean calculable = complete && hasCold && hasElectricity && electricity.signum()>0;
         BigDecimal ratio = calculable ? cold.divide(electricity,MathContext.DECIMAL128) : null;
+        // 直接从总量生成展示值，避免先做DECIMAL128舍入再二次舍入；评价仍只使用下方交叉乘比较。
+        BigDecimal display = calculable ? cold.divide(electricity,DISPLAY_SCALE,RoundingMode.HALF_UP) : null;
         return new AnnualResult(request.buildingId(),request.stationId(),request.year(),request.timezoneId(),request.timezoneVersion(),
                 window.startInclusive(),window.endExclusive(),hasCold?cold:null,hasElectricity?electricity:null,ratio,calculable?"CALCULATED":"NOT_CALCULABLE",
                 complete?"COMPLETE":"INCOMPLETE",calculable?"DEVELOPMENT_EVALUATED":"NOT_EVALUATED",
                 calculable?band(cold,electricity):null,new BigDecimal("4.0"),new BigDecimal("5.0"),List.copyOf(rules),List.copyOf(references),
-                "FULL_TEXT_NOT_VERIFIED",segments.stream().map(Segment::taskId).toList(),List.copyOf(issues),"EERP_ANNUAL_RATIO_V1","DEVELOPMENT_SIMULATION");
+                "FULL_TEXT_NOT_VERIFIED",segments.stream().map(Segment::taskId).toList(),List.copyOf(issues),"EERP_ANNUAL_RATIO_V1","DEVELOPMENT_SIMULATION",
+                display,DISPLAY_VERSION,DISPLAY_SCALE,RoundingMode.HALF_UP.name());
     }
     public static String band(BigDecimal cold,BigDecimal electricity) {
         EerpSupport.require(electricity.signum()>0,"ZERO_DENOMINATOR","评价分母必须大于零");

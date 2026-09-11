@@ -61,7 +61,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；平台只有在相应条�
 | `com.platform.energy.aggregation` | 通过稳定输入端口聚合累计量、显式周期量和瞬时量，固定关系、绑定、质量、事件、修正和积分策略版本；当前仅有研发模拟算法核心 |
 | `com.platform.energy.period` | 按版本化时区生成自然日/月/年边界，维护开放期唯一当前投影，经审核形成月度不可覆盖快照，并以最多 100 项批次执行有界重算；当前仅输出研发模拟结果 |
 | `com.platform.iot.calculation` | 为指标场景读取有界原始测点快照，保留质量阻断行、末端锚点和读取水位；温度、流量无需伪造能源属性 |
-| `com.platform.energy.efficiency` | 电驱动水冷冷站的版本配置、两种冷量来源、原生周期、封账、年度 EERp 和附件阈值研发评价；经 `energy.aggregation` 与 `energy.period` 公共原生量端口计算和发布，不调用折标服务 |
+| `com.platform.energy.efficiency` | 电驱动水冷冷站的版本配置、两种冷量来源、原生周期、封账、年度 EERp 和附件阈值研发评价；经 `energy.aggregation` 与 `energy.period` 公共原生量端口计算和发布，不调用折标服务。年度保留 `eerp`，固定保存两位小数 `HALF_UP` 的 `displayEerp` 及 `roundingVersion/displayScale/roundingMode`；旧快照缺失字段保持空，展示舍入不参与阈值评价 |
 | `com.platform.iot.deviceparameter` | 标准设备参数定义、四类来源候选、冲突、整组双时间版本、审核、生效、查询、迁移与历史重算编排 |
 | `com.platform.relation` | 建筑级关系版本、表计层级和方向、计量边界、分层查询，以及平台 V1 Excel 的模板、预检和草稿导入 |
 | `com.platform.iot.aggregation`、`formula` | 分钟聚合和继承的 HVAC 指标计算 |
