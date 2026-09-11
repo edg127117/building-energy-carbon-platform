@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onUnmounted } from 'vue'
+import { onUnmounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElConfigProvider, ElAlert, ElButton, zhCn } from '@/shared/ui'
 import { t } from '@/locales'
@@ -9,13 +9,14 @@ import { useShellStore } from './providers/shell-store'
 const router = useRouter()
 const route = useRoute()
 const shell = useShellStore()
-// 异步页面导入失败时旧外壳保持可用，不暴露内部路径和加载异常。
+// 异步页面导入失败时当前外壳保持可用，不暴露内部路径和加载异常。
 const removeError = router.onError(() => { shell.navigationFailed = true })
 const removeAfter = router.afterEach((to, _from, failure) => {
   if (failure) return
   shell.navigationFailed = false
   document.title = authorizedPages(useSession().menus).find(page => page.path === to.path)?.title ?? t(String(to.meta.titleKey ?? 'terminology.systemName'))
 })
+watch(() => route.fullPath, () => { shell.navigationFailed = false })
 onUnmounted(() => { removeError(); removeAfter() })
 </script>
 <template>

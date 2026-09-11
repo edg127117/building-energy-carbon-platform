@@ -8,11 +8,10 @@ import postcss from 'postcss'
 
 const src = resolve(dirname(fileURLToPath(import.meta.url)), '../src')
 const roots = ['app', 'modules', 'shared', 'infrastructure', 'generated', 'locales', 'styles']
-const legacyStyles = new Set(['styles/admin.css'])
 const chinese = /[\u3400-\u9fff]/
 const colors = /#[\da-fA-F]{3,8}\b|(?:rgba?|hsla?)\(/
 
-// 只对新骨架执行边界，冻结继承目录不以白名单方式放行到新入口。
+// 唯一前端只允许既定分层根目录，旧模板目录不再以白名单方式保留。
 export function analyzeSource(file, source) {
   const issues = []
   const locale = /(?:^locales\/|\/locales\/)/.test(file)
@@ -27,7 +26,7 @@ export function analyzeSource(file, source) {
     if (specifier.startsWith('@/')) target = specifier.slice(2)
     else if (specifier.startsWith('.')) target = relative(src, resolve(src, dirname(file), specifier)).replaceAll('\\', '/')
     else return
-    if (!roots.includes(target.split('/')[0]) || legacyStyles.has(target)) fail('LEGACY_DEPENDENCY')
+    if (!roots.includes(target.split('/')[0])) fail('LEGACY_DEPENDENCY')
     const targetModule = target.match(/^modules\/([^/]+)\/(.*)/)
     if (targetModule && targetModule[1] !== module && !/^public(?:\.ts)?$/.test(targetModule[2])) fail('MODULE_PUBLIC_ENTRY')
     if (file.startsWith('modules/') && target.startsWith('app/')) fail('REVERSE_APP_DEPENDENCY')
@@ -94,7 +93,7 @@ export function checkFoundation() {
       if (item.isDirectory()) walk(path)
       else {
         const file = relative(src, path).replaceAll('\\', '/')
-        if (/\.(vue|ts|css)$/.test(file) && !/\.(test|spec)\.ts$/.test(file) && !legacyStyles.has(file)) {
+        if (/\.(vue|ts|css)$/.test(file) && !/\.(test|spec)\.ts$/.test(file)) {
           issues.push(...analyzeSource(file, readFileSync(path, 'utf8')))
         }
       }

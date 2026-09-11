@@ -6,11 +6,14 @@ import App from './App.vue'
 import { createPlatformRouter } from './router'
 import { applyTheme } from './providers/theme'
 import { t } from '@/locales'
+import { installPlatformAuthentication } from '@/modules/auth/public'
 
-// 不导入继承入口的 Ant Design、Tailwind 或 HVAC 全局样式。
 applyTheme('office-light')
 document.title = t('terminology.systemName')
 const app = createApp(App)
-app.use(createPinia())
-app.use(createPlatformRouter())
+const pinia = createPinia()
+const router = createPlatformRouter()
+app.use(pinia)
+installPlatformAuthentication(router)
+app.use(router)
 app.mount('#app')
