@@ -240,4 +240,26 @@ public final class AssetManagementContracts {
             List<String> allowedActions,
             long updateTime) {
     }
+
+    @Schema(description = "设备当前测点的最近原始事件；HAS_DATA 仅表示存在原始证据")
+    public record EquipmentReadingsView(
+            String equipmentId,
+            String buildingId,
+            long generatedAt,
+            List<PointReadingView> points) {
+    }
+
+    public record PointReadingView(
+            String pointId,
+            String pointCode,
+            String pointName,
+            String unit,
+            Double value,
+            Long eventTime,
+            Long receivedTime,
+            Integer dataQuality,
+            String status,
+            String usageStatus,
+            String reason) {
+    }
 }

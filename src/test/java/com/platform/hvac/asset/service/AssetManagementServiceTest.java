@@ -1,6 +1,7 @@
 package com.platform.hvac.asset.service;
 
 import com.platform.framework.exception.BusinessException;
+import com.platform.framework.common.Result;
 import com.platform.hvac.asset.api.AssetManagementContracts;
 import com.platform.hvac.mapper.BizDeviceIdentityMapper;
 import com.platform.hvac.mapper.BizPointAliasMapper;
@@ -19,6 +20,10 @@ import com.platform.iot.onboarding.mapper.BizPendingDeviceMapper;
 import com.platform.iot.onboarding.mapper.BizProductPointTemplateMapper;
 import com.platform.iot.onboarding.model.entity.BizProductPointTemplate;
 import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService;
+import com.platform.iot.qualityusage.QualityUsageModels;
+import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
+import com.platform.iot.temporal.HvacRawEventRepository;
+import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -49,6 +54,8 @@ class AssetManagementServiceTest {
     @Mock private BizPendingDeviceMapper pendingMapper;
     @Mock private SysUserBuildingMapper userBuildingMapper;
     @Mock private DeviceParameterLegacyCompatibilityService parameterCompatibilityService;
+    @Mock private HvacRawEventRepository rawEventRepository;
+    @Mock private QualityUsagePolicyResolver qualityUsageResolver;
 
     @InjectMocks private AssetManagementService service;
 
@@ -153,11 +160,146 @@ class AssetManagementServiceTest {
         assertThat(result.pointSummary().configuredRequired()).isZero();
     }
 
+    @Test
+    void rejectsReadingQueryBeforeAccessingEquipmentForNonAdmin() {
+        assertThatThrownBy(() -> service.equipmentReadings("E1", List.of("BUILDING_OWNER")))
+                .isInstanceOfSatisfying(BusinessException.class, exception ->
+                        assertThat(exception.getErrorCode()).isEqualTo("ASSET_FORBIDDEN"));
+        verify(equipmentService, never()).getById(any());
+        verify(rawEventRepository, never()).findLatestByEquipmentPoints(any(), any(), any());
+    }
+
+    @Test
+    void returnsNoDataAndDisabledWithoutCallingQualityPolicy() {
+        BizEquipment equipment = equipment("E1", "B1");
+        BizDataPoint enabled = point("P1", "IDU1_EPP", "EPP", "kWh", "ONLINE");
+        BizDataPoint disabled = point("P2", "IDU1_EPN", "EPN", "kWh", "OFFLINE");
+        when(equipmentService.getById("E1")).thenReturn(equipment);
+        when(dataPointService.listByEquip("E1")).thenReturn(Result.success(List.of(enabled, disabled)));
+        when(rawEventRepository.findLatestByEquipmentPoints("B1", "E1", List.of("P1")))
+                .thenReturn(List.of());
+
+        var result = service.equipmentReadings("E1", List.of("PLATFORM_ADMIN"));
+
+        assertThat(result.points()).extracting(AssetManagementContracts.PointReadingView::status)
+                .containsExactly("DISABLED", "NO_DATA");
+        assertThat(result.points()).allSatisfy(reading -> assertThat(reading.value()).isNull());
+        verify(qualityUsageResolver, never()).runtimeContext();
+    }
+
+    @Test
+    void preservesZeroAndCumulativeRawValueWithExactBuildingEquipmentAndPointScope() {
+        BizEquipment equipment = equipment("E1", "B1");
+        BizDataPoint power = point("P1", "IDU1_P", "P", "kW", "ONLINE");
+        BizDataPoint cumulative = point("P2", "IDU1_EPP", "EPP", "kWh", "ONLINE");
+        when(equipmentService.getById("E1")).thenReturn(equipment);
+        when(dataPointService.listByEquip("E1"))
+                .thenReturn(Result.success(List.of(power, cumulative)));
+        when(rawEventRepository.findLatestByEquipmentPoints(
+                "B1", "E1", List.of("P2", "P1")))
+                .thenReturn(List.of(
+                        new LatestRawReading("P1", 0.0, 1_800_000_000_123L,
+                                1_800_000_001_000L, 0),
+                        new LatestRawReading("P2", 12345.678, 1_800_000_060_123L,
+                                1_800_000_061_000L, 0)));
+        when(qualityUsageResolver.runtimeContext()).thenReturn(null);
+        when(qualityUsageResolver.resolve(
+                org.mockito.ArgumentMatchers.nullable(QualityUsageModels.ResolutionContext.class),
+                any(), org.mockito.ArgumentMatchers.eq("POINT_REALTIME_VIEW"),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq(0)))
+                .thenReturn(new QualityUsageModels.Resolution(
+                        QualityUsageModels.Decision.ALLOW, 0, "POINT_REALTIME_VIEW",
+                        QualityUsageModels.PolicySource.SYSTEM_DEFAULT_Q0_ONLY,
+                        null, 1, "QUALITY_ALLOWED"));
+
+        var result = service.equipmentReadings("E1", List.of("PLATFORM_ADMIN"));
+
+        assertThat(result.buildingId()).isEqualTo("B1");
+        assertThat(result.points()).extracting(AssetManagementContracts.PointReadingView::value)
+                .containsExactly(12345.678, 0.0);
+        assertThat(result.points()).extracting(AssetManagementContracts.PointReadingView::status)
+                .containsOnly("HAS_DATA");
+        assertThat(result.points().getFirst().eventTime()).isEqualTo(1_800_000_060_123L);
+    }
+
+    @Test
+    void hidesQualityBlockedRawValueButKeepsItsEvidenceTimesAndStatus() {
+        BizEquipment equipment = equipment("E1", "B1");
+        BizDataPoint point = point("P1", "IDU1_P", "P", "kW", "ONLINE");
+        when(equipmentService.getById("E1")).thenReturn(equipment);
+        when(dataPointService.listByEquip("E1")).thenReturn(Result.success(List.of(point)));
+        when(rawEventRepository.findLatestByEquipmentPoints("B1", "E1", List.of("P1")))
+                .thenReturn(List.of(new LatestRawReading(
+                        "P1", 8.5, 1_800_000_000_123L, 1_800_000_001_000L, 2)));
+        when(qualityUsageResolver.runtimeContext()).thenReturn(null);
+        when(qualityUsageResolver.resolve(
+                org.mockito.ArgumentMatchers.nullable(QualityUsageModels.ResolutionContext.class),
+                org.mockito.ArgumentMatchers.eq("P1"),
+                org.mockito.ArgumentMatchers.eq("POINT_REALTIME_VIEW"),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq(2)))
+                .thenReturn(new QualityUsageModels.Resolution(
+                        QualityUsageModels.Decision.BLOCK, 2, "POINT_REALTIME_VIEW",
+                        QualityUsageModels.PolicySource.SYSTEM_DEFAULT_Q0_ONLY,
+                        null, 1, "QUALITY_NOT_ALLOWED_BY_DEFAULT"));
+
+        var reading = service.equipmentReadings("E1", List.of("PLATFORM_ADMIN"))
+                .points().getFirst();
+
+        assertThat(reading.status()).isEqualTo("HAS_DATA");
+        assertThat(reading.value()).isNull();
+        assertThat(reading.usageStatus()).isEqualTo("QUALITY_BLOCKED");
+        assertThat(reading.reason()).isEqualTo("QUALITY_NOT_ALLOWED_BY_DEFAULT");
+        assertThat(reading.eventTime()).isEqualTo(1_800_000_000_123L);
+    }
+
+    @Test
+    void propagatesTdengineAndPolicyFailuresInsteadOfReturningNoData() {
+        BizEquipment equipment = equipment("E1", "B1");
+        BizDataPoint point = point("P1", "IDU1_P", "P", "kW", "ONLINE");
+        when(equipmentService.getById("E1")).thenReturn(equipment);
+        when(dataPointService.listByEquip("E1")).thenReturn(Result.success(List.of(point)));
+        when(rawEventRepository.findLatestByEquipmentPoints("B1", "E1", List.of("P1")))
+                .thenThrow(new IllegalStateException("TDENGINE_UNAVAILABLE"))
+                .thenReturn(List.of(new LatestRawReading(
+                        "P1", 8.5, 1_800_000_000_123L, 1_800_000_001_000L, 0)));
+
+        assertThatThrownBy(() -> service.equipmentReadings("E1", List.of("PLATFORM_ADMIN")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("TDENGINE_UNAVAILABLE");
+
+        when(qualityUsageResolver.runtimeContext())
+                .thenThrow(new IllegalStateException("POLICY_SNAPSHOT_UNAVAILABLE"));
+        assertThatThrownBy(() -> service.equipmentReadings("E1", List.of("PLATFORM_ADMIN")))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("POLICY_SNAPSHOT_UNAVAILABLE");
+    }
+
     private static BizSpace space(String id, String buildingId, String parentId) {
         BizSpace value = new BizSpace();
         value.setSpaceId(id);
         value.setBuildingId(buildingId);
         value.setParentSpaceId(parentId);
+        return value;
+    }
+
+    private static BizEquipment equipment(String id, String buildingId) {
+        BizEquipment value = new BizEquipment();
+        value.setEquipId(id);
+        value.setBuildingId(buildingId);
+        return value;
+    }
+
+    private static BizDataPoint point(
+            String id, String code, String suffix, String unit, String status) {
+        BizDataPoint value = new BizDataPoint();
+        value.setPointId(id);
+        value.setEquipId("E1");
+        value.setBuildingId("B1");
+        value.setPointCode(code);
+        value.setPointName(code);
+        value.setSuffixCode(suffix);
+        value.setUnit(unit);
+        value.setStatus(status);
         return value;
     }
 }

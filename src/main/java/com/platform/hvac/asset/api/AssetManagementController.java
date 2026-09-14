@@ -190,6 +190,14 @@ public class AssetManagementController {
                 equipmentId, SecurityUser.roles(authentication)));
     }
 
+    @Operation(summary = "查询设备各测点的最近原始事件值")
+    @GetMapping("/equipment/{equipmentId}/readings")
+    public Result<EquipmentReadingsView> equipmentReadings(
+            @PathVariable String equipmentId, Authentication authentication) {
+        return Result.success(service.equipmentReadings(
+                equipmentId, SecurityUser.roles(authentication)));
+    }
+
     @Operation(summary = "创建设备档案")
     @PostMapping("/equipment")
     public Result<EquipmentListItemView> createEquipment(

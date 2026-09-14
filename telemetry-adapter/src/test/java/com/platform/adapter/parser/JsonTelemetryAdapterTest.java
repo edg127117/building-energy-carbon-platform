@@ -95,6 +95,41 @@ class JsonTelemetryAdapterTest {
     }
 
     @Test
+    void convertsApprovedIndoorUnitNestedSevenPointPayloadWithoutDeviceTime() {
+        ProtocolProfile profile = new ProtocolProfile(
+                "IDU_METER_1039_V1", "INDOOR_UNIT_METER_1039", 1,
+                "device/raw/energy/up", "SN", "/SN",
+                "/param/ID255/M", "1039", null, null,
+                null, null, null, null, "EVIDENCE_ONLY", "NONE", true);
+        List<ProtocolFieldMapping> mappings = List.of(
+                mapping("U", "/param/ID255/1#/U", "VOLTAGE", "V", "V", "1", "0", true, 1),
+                mapping("I", "/param/ID255/1#/I", "CURRENT", "A", "A", "1", "0", true, 2),
+                mapping("P", "/param/ID255/1#/P", "POWER", "kW", "kW", "1", "0", true, 3),
+                mapping("PF", "/param/ID255/1#/Pf", "POWER_FACTOR", "1", "1", "1", "0", true, 4),
+                mapping("F", "/param/ID255/1#/F", "FREQUENCY", "Hz", "Hz", "1", "0", true, 5),
+                mapping("EPP", "/param/ID255/1#/EPP", "POSITIVE_ENERGY", "kWh", "kWh", "1", "0", true, 6),
+                mapping("EPN", "/param/ID255/1#/EPN", "NEGATIVE_ENERGY", "kWh", "kWh", "1", "0", true, 7));
+
+        StandardTelemetryMessage message = adapter.adapt(
+                "device/raw/energy/up",
+                bytes("""
+                        {"SN":"IDU-SN","param":{"ID255":{"M":1039,"1#":{
+                          "U":220.1,"I":0,"P":1.25,"Pf":0.98,"F":50,
+                          "EPP":12345.678,"EPN":0.125
+                        }}}}
+                        """), RECEIVED_TIME, profile, mappings);
+
+        assertThat(message.deviceIdentity().value()).isEqualTo("IDU-SN");
+        assertThat(message.collectedAt()).isNull();
+        assertThat(message.timeSource()).isEqualTo(TimeSource.ADAPTER_RECEIVED);
+        assertThat(message.metrics()).extracting(StandardMetric::code)
+                .containsExactly("VOLTAGE", "CURRENT", "POWER", "POWER_FACTOR", "FREQUENCY",
+                        "POSITIVE_ENERGY", "NEGATIVE_ENERGY");
+        assertThat(message.metrics().get(1).value()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(message.metrics().get(5).value()).isEqualByComparingTo("12345.678");
+    }
+
+    @Test
     void usesDeviceTimestampAndSequenceWhenConfigured() {
         StandardTelemetryMessage message = adapter.adapt(
                 "device/raw/energy-meter/v1/up",

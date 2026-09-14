@@ -74,6 +74,32 @@ GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成�
 
 多数据源必须使用明确 Bean 和 `Qualifier`，不得跨数据源执行 SQL。
 
+### 运维设备原始读数
+
+空调内机使用独立 `IDU` 类型及 `INDOOR_UNIT_METER_1039` 产品/协议族，
+[V44](src/env/init/V44__mysql_indoor_unit_meter_template.sql) 只建立七点模板和命名规则，不创建实际设备或身份。
+[适配器配置](telemetry-adapter/src/main/resources/db/indoor-unit-meter-1039.example.sql) 默认停用；
+正式接入时再补建筑、房间、设备和 SN 归属，并检查 Topic 的唯一协议匹配。
+
+| 报文字段（`/param/ID255/1#` 下） | 测点名称 | 本次确认单位 |
+|---|---|---|
+| `U` | 内机电压 | V |
+| `I` | 内机电流 | A |
+| `P` | 内机输入功率 | kW |
+| `Pf` | 功率因数 | 无量纲，存储为 `1` |
+| `F` | 频率 | Hz |
+| `EPP` | 正向电能 | kWh |
+| `EPN` | 反向电能 | kWh |
+
+七点默认 `for_calc=0`，不绑定旧 `WCR1_*` 测点，不自动进入冷水机组公式或能源结算。
+
+`GET /api/v1/assets/equipment/{equipmentId}/readings` 沿用资产接口的平台管理员权限，
+从 MySQL 确定设备当前测点及单位，再按建筑、设备和测点身份批量读取 TDengine 中各测点的最新原始事件。
+返回的是已入库原始值，不是分钟均值；`HAS_DATA` 只表示存在记录，不表示设备在线或运行正常。
+读数仍经过 `POINT_REALTIME_VIEW` 质量策略，受阻断时数值为空并返回 `usageStatus/reason`。
+`eventTime` 是事件时间，不能默认当作设备采样时间；`receivedTime` 是平台接收时间，
+`generatedAt` 是查询组装时间。原始数据已超出保留期时，不能用分钟均值补造原始读数。
+
 ### MySQL 迁移
 
 MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件位于 [`src/env/init`](src/env/init)，构建时只将 `V*.sql` 打包到 `classpath:db/migration/mysql`。Docker Compose 只创建空数据库，不并行执行 SQL。

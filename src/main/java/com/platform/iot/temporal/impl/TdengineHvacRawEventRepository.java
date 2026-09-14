@@ -3,6 +3,7 @@ package com.platform.iot.temporal.impl;
 import com.platform.config.TdengineProperties;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LateRawMinuteEvidence;
+import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.iot.temporal.model.PointMinuteKey;
 import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
@@ -147,6 +148,39 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + " AND ts < " + quote(new Timestamp(endExclusive).toString())
                 + (includeLate ? "" : " AND late_flag=0");
         return template.queryForList(sql).stream().map(this::mapEvent).toList();
+    }
+
+    @Override
+    public List<LatestRawReading> findLatestByEquipmentPoints(
+            String buildingId, String equipmentId, Collection<String> pointIds) {
+        if (pointIds.isEmpty()) {
+            return List.of();
+        }
+        if (pointIds.size() > 500) {
+            throw new IllegalArgumentException("单台设备查询的测点不能超过 500 个");
+        }
+        String stable = safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(properties.getStRawEvent());
+        String ids = pointIds.stream().distinct().map(this::quote)
+                .collect(java.util.stream.Collectors.joining(","));
+        // building/equip/point 三重条件锁定 MySQL 已确认的当前设备测点。TDengine 3.2.3
+        // 的普通 LIMIT 会限制整批结果，因此按完整身份分区后用 LAST_ROW 批量取每点最新行。
+        String sql = "SELECT point_id, LAST_ROW(val) AS latest_value,"
+                + " LAST_ROW(ts) AS event_time, LAST_ROW(received_time) AS latest_received_time,"
+                + " LAST_ROW(data_quality) AS latest_data_quality FROM " + stable
+                + " WHERE building_id=" + quote(buildingId)
+                + " AND equip_id=" + quote(equipmentId)
+                + " AND point_id IN (" + ids + ")"
+                + " PARTITION BY point_id, point_code, building_id, system_group_id,"
+                + " equip_id, equip_code, family_code, component_code, suffix_code, is_for_calc";
+        return template.queryForList(sql).stream()
+                .map(row -> new LatestRawReading(
+                        text(row, "point_id"),
+                        number(row, "latest_value").doubleValue(),
+                        timestamp(row, "event_time").getTime(),
+                        timestamp(row, "latest_received_time").getTime(),
+                        number(row, "latest_data_quality").intValue()))
+                .toList();
     }
 
     @Override

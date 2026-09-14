@@ -4,6 +4,7 @@ import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.temporal.model.LateRawMinuteEvidence;
 import com.platform.iot.temporal.model.PointMinuteKey;
+import com.platform.iot.temporal.model.LatestRawReading;
 
 import java.util.List;
 import java.util.Collection;
@@ -39,6 +40,13 @@ public interface HvacRawEventRepository {
      */
     List<RawTelemetryEvent> findWindow(
             long startInclusive, long endExclusive, boolean includeLate);
+
+    /**
+     * 按已由 MySQL 确认的设备、建筑和测点集合批量读取各测点最近一条原始事件。
+     * 返回的是事件值，不是分钟平均值；调用方仍须执行展示场景的质量使用策略。
+     */
+    List<LatestRawReading> findLatestByEquipmentPoints(
+            String buildingId, String equipmentId, Collection<String> pointIds);
 
     /**
      * 在 TDengine 侧筛选迟到事件并按“测点 + 分钟”去重，供低频任务恢复遗漏通知。
