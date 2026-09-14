@@ -655,6 +655,13 @@ class DataQualityRecalculationAcceptanceTest {
         }
 
         @Override
+        public List<com.platform.iot.temporal.model.LatestRawReading>
+                findLatestByEquipmentPoints(
+                        String buildingId, String equipmentId, Collection<String> pointIds) {
+            return List.of();
+        }
+
+        @Override
         public List<LateRawMinuteEvidence> findLateMinuteEvidence(
                 long startInclusive,
                 long endExclusive,

@@ -95,12 +95,18 @@ class AssetManagementApiContractTest {
         assertThat(openApi.path("paths").has("/v1/assets/buildings")).isTrue();
         assertThat(openApi.path("paths").has("/v1/assets/equipment/{equipmentId}/points/{pointId}"))
                 .isTrue();
+        assertThat(openApi.path("paths").has("/v1/assets/equipment/{equipmentId}/readings"))
+                .isTrue();
         assertThat(openApi.path("components").path("schemas").has("AssetApiError")).isTrue();
     }
 
     @Test
     void returnsMachineCodesForAnonymousNonAdminValidationAndMissingAssets() throws Exception {
         mockMvc.perform(get("/v1/assets/buildings"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.errorCode").value("ASSET_UNAUTHORIZED"));
+
+        mockMvc.perform(get("/v1/assets/equipment/EQUIP_WCR_B1/readings"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.errorCode").value("ASSET_UNAUTHORIZED"));
 
@@ -111,6 +117,10 @@ class AssetManagementApiContractTest {
                                 """))
                 .andExpect(status().isOk());
         String ownerToken = login("asset_contract_owner", "123456");
+        mockMvc.perform(get("/v1/assets/equipment/EQUIP_WCR_B1/readings")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.errorCode").value("ASSET_FORBIDDEN"));
         mockMvc.perform(get("/v1/assets/buildings")
                         .header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isForbidden())

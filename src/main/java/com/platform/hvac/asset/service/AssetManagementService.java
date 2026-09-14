@@ -29,6 +29,12 @@ import com.platform.iot.onboarding.model.entity.BizProductPointTemplate;
 import com.platform.iot.deviceparameter.DeviceParameterErrors;
 import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService;
 import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService.LegacyProjection;
+import com.platform.iot.qualityusage.QualityUsageModels.Decision;
+import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
+import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
+import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
+import com.platform.iot.temporal.HvacRawEventRepository;
+import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import com.platform.system.model.entity.SysUserBuilding;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +57,7 @@ import java.util.Set;
 import java.util.function.Supplier;
 
 import static com.platform.hvac.asset.api.AssetManagementContracts.*;
+import static com.platform.iot.qualityusage.QualityUsageModels.POINT_REALTIME_VIEW;
 
 @Service
 @RequiredArgsConstructor
@@ -60,7 +67,8 @@ import static com.platform.hvac.asset.api.AssetManagementContracts.*;
  *
  * <p>本服务把既有 HVAC 档案 Service 的实体结果装配为稳定 DTO，并在逻辑删除前显式统计
  * 子空间、设备、测点、身份、别名和授权引用。写操作再次校验平台管理员角色，不能只依赖
- * Controller 注解；本服务只访问 MySQL 配置，不读取或删除 TDengine 时序事实。</p>
+ * Controller 注解。资产档案写操作只访问 MySQL；最近读数入口通过只读仓储读取 TDengine
+ * 原始事件，并继续执行场景化质量使用门禁，不删除或改写时序事实。</p>
  */
 public class AssetManagementService {
     private static final List<String> EDIT_ACTIONS = List.of("UPDATE", "DELETE");
@@ -78,6 +86,8 @@ public class AssetManagementService {
     private final BizPendingDeviceMapper pendingMapper;
     private final SysUserBuildingMapper userBuildingMapper;
     private final DeviceParameterLegacyCompatibilityService parameterCompatibilityService;
+    private final HvacRawEventRepository rawEventRepository;
+    private final QualityUsagePolicyResolver qualityUsageResolver;
 
     public PageResponse<BuildingView> listBuildings(
             int page, int size, String keyword, Collection<String> roles) {
@@ -274,6 +284,63 @@ public class AssetManagementService {
     public EquipmentDetailView equipmentDetail(String equipmentId, Collection<String> roles) {
         requireAdmin(roles);
         return equipmentDetailView(requireEquipment(equipmentId));
+    }
+
+    /**
+     * 返回运维查看所需的逐测点最近原始证据。
+     *
+     * <p>原始表没有设备时钟来源标签，所以 eventTime 只称“事件时间”。存在原始行也不
+     * 推断设备在线或数值正常；值仍通过 POINT_REALTIME_VIEW 场景策略，禁止时置空并
+     * 返回原因。TDengine 或策略快照故障继续向上抛出，不能伪装成 NO_DATA。</p>
+     */
+    public EquipmentReadingsView equipmentReadings(
+            String equipmentId, Collection<String> roles) {
+        requireAdmin(roles);
+        BizEquipment equipment = requireEquipment(equipmentId);
+        List<BizDataPoint> points = dataPointService.listByEquip(equipmentId).getData().stream()
+                .sorted(Comparator.comparing(BizDataPoint::getPointCode)
+                        .thenComparing(BizDataPoint::getPointId))
+                .toList();
+        List<String> enabledPointIds = points.stream()
+                .filter(point -> "ONLINE".equalsIgnoreCase(point.getStatus()))
+                .map(BizDataPoint::getPointId)
+                .toList();
+        Map<String, LatestRawReading> latestByPoint = rawEventRepository
+                .findLatestByEquipmentPoints(
+                        equipment.getBuildingId(), equipmentId, enabledPointIds)
+                .stream()
+                .filter(row -> enabledPointIds.contains(row.pointId()))
+                .collect(java.util.stream.Collectors.toMap(
+                        LatestRawReading::pointId, row -> row, (left, right) -> left));
+        ResolutionContext policyContext = latestByPoint.isEmpty()
+                ? null : qualityUsageResolver.runtimeContext();
+        List<PointReadingView> readings = points.stream()
+                .map(point -> readingView(point, latestByPoint.get(point.getPointId()), policyContext))
+                .toList();
+        return new EquipmentReadingsView(
+                equipmentId, equipment.getBuildingId(), System.currentTimeMillis(), readings);
+    }
+
+    private PointReadingView readingView(
+            BizDataPoint point, LatestRawReading latest, ResolutionContext policyContext) {
+        if (!"ONLINE".equalsIgnoreCase(point.getStatus())) {
+            return new PointReadingView(point.getPointId(), point.getPointCode(), point.getPointName(),
+                    point.getUnit(), null, null, null, null,
+                    "DISABLED", "NOT_EVALUATED", "POINT_DISABLED");
+        }
+        if (latest == null) {
+            return new PointReadingView(point.getPointId(), point.getPointCode(), point.getPointName(),
+                    point.getUnit(), null, null, null, null,
+                    "NO_DATA", "NO_DATA", "NO_RAW_EVENT");
+        }
+        Resolution resolution = qualityUsageResolver.resolve(
+                policyContext, point.getPointId(), POINT_REALTIME_VIEW,
+                QualityUsagePolicyResolver.alignMinute(latest.eventTime()), latest.dataQuality());
+        boolean allowed = resolution.decision() == Decision.ALLOW;
+        return new PointReadingView(point.getPointId(), point.getPointCode(), point.getPointName(),
+                point.getUnit(), allowed ? latest.value() : null,
+                latest.eventTime(), latest.receivedTime(), latest.dataQuality(),
+                "HAS_DATA", resolution.usageStatus().name(), resolution.reason());
     }
 
     @Transactional

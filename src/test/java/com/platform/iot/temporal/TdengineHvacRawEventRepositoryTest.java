@@ -115,6 +115,36 @@ class TdengineHvacRawEventRepositoryTest {
     }
 
     @Test
+    void queriesLatestRawRowsForAllExactEquipmentPointsInOnePartitionedStatement() {
+        Map<String, Object> first = new HashMap<>();
+        first.put("point_id", "POINT101");
+        first.put("latest_value", 0.0);
+        first.put("event_time", new Timestamp(1_800_000_000_000L));
+        first.put("latest_received_time", new Timestamp(1_800_000_001_000L));
+        first.put("latest_data_quality", 0);
+        Map<String, Object> second = new HashMap<>(first);
+        second.put("point_id", "POINT102");
+        second.put("latest_value", 456.7);
+        when(template.queryForList(anyString())).thenReturn(List.of(first, second));
+
+        var result = repository.findLatestByEquipmentPoints(
+                "BLD001", "EQUIP_IDU_1", List.of("POINT101", "POINT102"));
+
+        assertThat(result).hasSize(2);
+        assertThat(result.getFirst().value()).isZero();
+        var sql = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(template).queryForList(sql.capture());
+        assertThat(sql.getValue())
+                .contains("building_id='BLD001'")
+                .contains("equip_id='EQUIP_IDU_1'")
+                .contains("point_id IN ('POINT101','POINT102')")
+                .contains("LAST_ROW(val)")
+                .contains("PARTITION BY point_id, point_code")
+                .doesNotContain("avg_val")
+                .doesNotContain(" LIMIT 1");
+    }
+
+    @Test
     void scansLateEvidenceInTdengineWithGroupingSeekAndLimit() {
         when(template.queryForList(anyString())).thenReturn(List.of());
 
