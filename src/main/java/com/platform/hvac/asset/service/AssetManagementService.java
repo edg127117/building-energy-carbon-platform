@@ -110,6 +110,7 @@ public class AssetManagementService {
         Building building = new Building();
         applyBuilding(request.buildingName(), request.buildingCode(), request.buildingType(),
                 request.constructionYear(), request.totalGfa(), request.climateZone(), building);
+        building.setRegionCode(request.regionCode());
         return buildingView(call(() -> buildingService.add(building).getData()));
     }
 
@@ -123,6 +124,10 @@ public class AssetManagementService {
         building.setBuildingId(buildingId);
         applyBuilding(request.buildingName(), request.buildingCode(), request.buildingType(),
                 request.constructionYear(), request.totalGfa(), request.climateZone(), building);
+        // 旧编辑客户端未传行政区划时保留已有值，不推断或覆盖建筑归属。
+        if (request.regionCode() != null) {
+            building.setRegionCode(request.regionCode());
+        }
         call(() -> buildingService.update(building).getData());
         return buildingView(requireBuilding(buildingId));
     }
@@ -443,7 +448,7 @@ public class AssetManagementService {
         References references = buildingReferences(building.getBuildingId());
         return new BuildingView(building.getBuildingId(), building.getBuildingName(),
                 building.getBuildingCode(), building.getBuildingType(), building.getConstructionYear(),
-                building.getTotalGfa(), building.getClimateZone(), "ACTIVE", references,
+                building.getTotalGfa(), building.getClimateZone(), building.getRegionCode(), "ACTIVE", references,
                 parentActions(references.spaces() + references.systemGroups() + references.equipment()
                         + references.points() + references.authorizations() == 0),
                 millis(building.getUpdateTime(), building.getCreateTime()));

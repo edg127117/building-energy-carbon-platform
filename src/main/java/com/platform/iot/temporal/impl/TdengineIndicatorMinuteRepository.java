@@ -273,11 +273,7 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     private long nextAttemptTimestamp(FormulaCalculationAttempt attempt) {
         Long persistedMaximum = latestAttemptTimestamps.get(attempt.indicatorId());
         if (persistedMaximum == null) {
-            Timestamp maximumTimestamp = template.queryForObject(
-                    "SELECT MAX(ts) FROM " + attemptStable()
-                            + " WHERE indicator_id=" + quote(attempt.indicatorId()),
-                    Timestamp.class);
-            persistedMaximum = maximumTimestamp == null ? null : maximumTimestamp.getTime();
+            persistedMaximum = latestStorageTimestamp(attemptStable(), attempt.indicatorId());
         }
         long minimum = persistedMaximum == null ? Long.MIN_VALUE : persistedMaximum + 1;
         long next = Math.max(attempt.attemptedAt(), minimum);
@@ -288,16 +284,21 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     private long nextResultRevisionTimestamp(FormulaResultRevision revision) {
         Long persistedMaximum = latestResultRevisionTimestamps.get(revision.indicatorId());
         if (persistedMaximum == null) {
-            Timestamp maximumTimestamp = template.queryForObject(
-                    "SELECT MAX(ts) FROM " + resultRevisionStable()
-                            + " WHERE indicator_id=" + quote(revision.indicatorId()),
-                    Timestamp.class);
-            persistedMaximum = maximumTimestamp == null ? null : maximumTimestamp.getTime();
+            persistedMaximum = latestStorageTimestamp(resultRevisionStable(), revision.indicatorId());
         }
         long minimum = persistedMaximum == null ? Long.MIN_VALUE : persistedMaximum + 1;
         long next = Math.max(revision.calculatedAt(), minimum);
         latestResultRevisionTimestamps.put(revision.indicatorId(), next);
         return next;
+    }
+
+    private Long latestStorageTimestamp(String stable, String indicatorId) {
+        // TDengine 3.2.3 不支持 MAX(TIMESTAMP)。按时间降序取单条，重启后仍从已持久化
+        // 水位递增，避免相同计算时间覆盖追加事实；无历史时返回空列表。
+        List<Timestamp> timestamps = template.queryForList(
+                "SELECT ts FROM " + stable + " WHERE indicator_id=" + quote(indicatorId)
+                        + " ORDER BY ts DESC LIMIT 1", Timestamp.class);
+        return timestamps.isEmpty() ? null : timestamps.getFirst().getTime();
     }
 
     /** 当前状态以来源分钟为主键覆盖更新，历史成功和尝试事实不受影响。 */

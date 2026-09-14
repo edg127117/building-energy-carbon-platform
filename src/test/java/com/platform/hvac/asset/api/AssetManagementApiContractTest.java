@@ -32,6 +32,64 @@ class AssetManagementApiContractTest {
 
     @Test
     @Transactional
+    void persistsRegionAndPreservesItWhenLegacyEditOmitsTheField() throws Exception {
+        String token = login("admin", "123456");
+        var request = objectMapper.createObjectNode()
+                .put("buildingName", "区域字段回归建筑")
+                .put("buildingType", "办公").put("totalGfa", 100)
+                .put("climateZone", "夏热冬冷").put("regionCode", "330100");
+        JsonNode created = json(mockMvc.perform(post("/v1/assets/buildings")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.regionCode").value("330100"))
+                .andReturn()).path("data");
+        String id = created.path("buildingId").asText();
+        assertThat(jdbc.queryForObject("SELECT region_code FROM building WHERE building_id=?",
+                String.class, id)).isEqualTo("330100");
+        request.remove("regionCode");
+        mockMvc.perform(put("/v1/assets/buildings/" + id)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.regionCode").value("330100"));
+        request.put("regionCode", "310100");
+        mockMvc.perform(put("/v1/assets/buildings/" + id)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/v1/assets/buildings/" + id)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.regionCode").value("310100"));
+        request.put("regionCode", " ");
+        mockMvc.perform(put("/v1/assets/buildings/" + id)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @Transactional
+    void rejectsMissingRequiredBuildingFieldsBeforeDatabaseInsert() throws Exception {
+        String token = login("admin", "123456");
+        Integer before = jdbc.queryForObject("SELECT COUNT(*) FROM building", Integer.class);
+        for (String field : new String[]{"buildingType", "totalGfa", "climateZone", "regionCode"}) {
+            var request = objectMapper.createObjectNode()
+                    .put("buildingName", "必填字段回归建筑")
+                    .put("buildingType", "办公").put("totalGfa", 100)
+                    .put("climateZone", "夏热冬冷").put("regionCode", "330100");
+            request.remove(field);
+            mockMvc.perform(post("/v1/assets/buildings")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                    .andExpect(status().isBadRequest());
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM building", Integer.class)).isEqualTo(before);
+    }
+
+    @Test
+    @Transactional
     void keepsUnassignedProjectionWhenEditingArchiveButCannotDetachThroughLegacyApi() throws Exception {
         String token = login("admin", "123456");
         String equipmentId = jdbc.queryForObject(
