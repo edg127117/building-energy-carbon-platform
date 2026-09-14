@@ -759,7 +759,8 @@ public class TdengineIndicatorMinuteRepository implements IndicatorMinuteReposit
     }
 
     private String timestamp(long epochMillis) {
-        return quote(new Timestamp(epochMillis).toString());
+        // 使用绝对毫秒值，避免数据库按自身时区解释无时区字符串而偏移事件时间。
+        return Long.toString(epochMillis);
     }
 
     private String number(double value) {

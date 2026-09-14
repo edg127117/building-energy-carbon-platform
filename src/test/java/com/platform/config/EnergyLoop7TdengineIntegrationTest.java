@@ -119,6 +119,11 @@ class EnergyLoop7TdengineIntegrationTest {
             assertThat(timestamps).extracting(Timestamp::getTime)
                     .containsExactly(calculatedAt, calculatedAt + 1);
         }
+        var repository = new TdengineIndicatorMinuteRepository(jdbc, properties);
+        var revision = repository.findResultRevisionAt("IT_INDICATOR", minute, calculatedAt).orElseThrow();
+        assertThat(revision.minuteStart()).isEqualTo(minute);
+        assertThat(revision.calculatedAt()).isEqualTo(calculatedAt);
+        assertThat(repository.findResultRevisionAt("IT_INDICATOR", minute, calculatedAt - 1)).isEmpty();
     }
 
     private static void insertRawEvents(

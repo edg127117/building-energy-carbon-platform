@@ -15,7 +15,6 @@ import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowCallbackHandler;
 
-import java.sql.Timestamp;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -57,7 +56,7 @@ class TdengineIndicatorMinuteRepositoryTest {
         String insertSql = sqlCaptor.getValue();
         assertThat(insertSql)
                 .contains("st_indicator_minute_INDICATOR_WCR_COP_B1")
-                .contains("VALUES ('" + new Timestamp(MINUTE))
+                .contains("VALUES (" + MINUTE)
                 .contains("5.805555555556")
                 .contains("WCR_COP_V1")
                 .contains("AHU''POWER")
@@ -127,7 +126,7 @@ class TdengineIndicatorMinuteRepositoryTest {
                 .contains("MISSING_INPUT")
                 .contains("MISSING_REQUIRED_INPUT")
                 .contains("CHILLER.OUTLET_TEMP,CHILLER''POWER")
-                .contains("VALUES ('" + new Timestamp(MINUTE));
+                .contains("VALUES (" + MINUTE);
     }
 
     @Test
@@ -150,9 +149,9 @@ class TdengineIndicatorMinuteRepositoryTest {
         verify(template).batchUpdate(sqlCaptor.capture());
         assertThat(sqlCaptor.getValue()).containsExactly(
                 "DELETE FROM iot_telemetry.st_indicator_minute_INDICATOR_A"
-                        + " WHERE ts='" + new Timestamp(MINUTE) + "'",
+                        + " WHERE ts=" + MINUTE,
                 "DELETE FROM iot_telemetry.st_indicator_minute_INDICATOR_B"
-                        + " WHERE ts='" + new Timestamp(nextMinute) + "'");
+                        + " WHERE ts=" + nextMinute);
         assertThat(sqlCaptor.getValue())
                 .allSatisfy(sql -> assertThat(sql)
                         .doesNotContain("building_id")
