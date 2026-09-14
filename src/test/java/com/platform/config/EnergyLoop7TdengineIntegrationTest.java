@@ -4,6 +4,9 @@ import com.platform.energy.activity.EnergyActivityDataReader.Cursor;
 import com.platform.energy.activity.TdengineEnergyActivityDataReader;
 import com.platform.energy.period.EnergyPeriodModels.NumericResult;
 import com.platform.energy.period.TdengineEnergyPeriodValueStore;
+import com.platform.iot.formula.model.FormulaCalculationAttempt;
+import com.platform.iot.formula.model.FormulaResultRevision;
+import com.platform.iot.temporal.impl.TdengineIndicatorMinuteRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,10 +14,12 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Locale;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -45,6 +50,8 @@ class EnergyLoop7TdengineIntegrationTest {
         try {
             jdbc.execute("CREATE DATABASE " + database + " KEEP 30 DURATION 1d WAL_LEVEL 1");
             config.initializeHvacSchema(jdbc);
+            config.initializeFormulaSchema(jdbc);
+            verifiesAppendOnlyFormulaTimestampsAcrossRepositoryRestart(jdbc, properties);
             config.initializeEnergyPeriodSchema(jdbc);
             Instant periodStart = Instant.now()
                     .minus(Duration.ofMinutes(5))
@@ -90,6 +97,33 @@ class EnergyLoop7TdengineIntegrationTest {
         } finally {
             jdbc.execute("DROP DATABASE IF EXISTS " + database);
         }
+    }
+
+    private static void verifiesAppendOnlyFormulaTimestampsAcrossRepositoryRestart(
+            JdbcTemplate jdbc, TdengineProperties properties) {
+        long calculatedAt = Instant.now().toEpochMilli();
+        long minute = calculatedAt / 60_000 * 60_000;
+        for (int index = 1; index <= 2; index++) {
+            var repository = new TdengineIndicatorMinuteRepository(jdbc, properties);
+            repository.saveAttempts(List.of(new FormulaCalculationAttempt(
+                    "IT_ATTEMPT_" + index, "IT_INDICATOR", "IT_FORMULA", "BLD_LOOP7",
+                    null, null, minute, calculatedAt, "SUCCESS", null,
+                    "INDICATOR_CALCULATION", "IT_V1", "[]", 1)));
+            repository.saveResultRevisions(List.of(new FormulaResultRevision(
+                    "IT_REVISION_" + index, "IT_ATTEMPT_" + index, "IT_INDICATOR", "IT_FORMULA",
+                    "BLD_LOOP7", null, null, minute, index, 0, "IT_V1", "[]", calculatedAt)));
+        }
+        for (String stable : List.of("st_formula_calc_attempt_v2", "st_formula_result_revision")) {
+            var timestamps = jdbc.queryForList("SELECT ts FROM " + properties.getDatabase() + "." + stable
+                    + " WHERE indicator_id='IT_INDICATOR' ORDER BY ts", Timestamp.class);
+            assertThat(timestamps).extracting(Timestamp::getTime)
+                    .containsExactly(calculatedAt, calculatedAt + 1);
+        }
+        var repository = new TdengineIndicatorMinuteRepository(jdbc, properties);
+        var revision = repository.findResultRevisionAt("IT_INDICATOR", minute, calculatedAt).orElseThrow();
+        assertThat(revision.minuteStart()).isEqualTo(minute);
+        assertThat(revision.calculatedAt()).isEqualTo(calculatedAt);
+        assertThat(repository.findResultRevisionAt("IT_INDICATOR", minute, calculatedAt - 1)).isEmpty();
     }
 
     private static void insertRawEvents(

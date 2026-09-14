@@ -2,6 +2,8 @@ package com.platform.hvac.asset.api;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -26,10 +28,11 @@ public final class AssetManagementContracts {
     public record BuildingCreateRequest(
             @NotBlank @Size(max = 100) String buildingName,
             @Size(max = 50) String buildingCode,
-            @Size(max = 30) String buildingType,
+            @NotBlank @Size(max = 30) String buildingType,
             Integer constructionYear,
-            BigDecimal totalGfa,
-            @Size(max = 30) String climateZone,
+            @NotNull BigDecimal totalGfa,
+            @NotBlank @Size(max = 30) String climateZone,
+            @NotBlank @Pattern(regexp = "\\S+") @Size(max = 12) String regionCode,
             String status) {
     }
 
@@ -40,6 +43,7 @@ public final class AssetManagementContracts {
             Integer constructionYear,
             BigDecimal totalGfa,
             @Size(max = 30) String climateZone,
+            @Pattern(regexp = "\\S+") @Size(max = 12) String regionCode,
             String status) {
     }
 
@@ -52,6 +56,7 @@ public final class AssetManagementContracts {
             Integer constructionYear,
             BigDecimal totalGfa,
             String climateZone,
+            String regionCode,
             String status,
             References references,
             List<String> allowedActions,

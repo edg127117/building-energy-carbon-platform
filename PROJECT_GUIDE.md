@@ -100,6 +100,12 @@ GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成�
 `eventTime` 是事件时间，不能默认当作设备采样时间；`receivedTime` 是平台接收时间，
 `generatedAt` 是查询组装时间。原始数据已超出保留期时，不能用分钟均值补造原始读数。
 
+### 建筑档案接口
+
+`POST /api/v1/assets/buildings` 必须提供建筑名称、类型、总面积、气候区和 `regionCode`；
+缺少必填资料返回 400，不由软件猜测行政区划。列表、详情和写入响应返回 `regionCode`。
+`PUT /api/v1/assets/buildings/{buildingId}` 未提供行政区划时保留原值，显式提供时不能为空白。
+
 ### MySQL 迁移
 
 MySQL 结构由应用启动时的 Flyway 版本链统一推进，迁移源文件位于 [`src/env/init`](src/env/init)，构建时只将 `V*.sql` 打包到 `classpath:db/migration/mysql`。Docker Compose 只创建空数据库，不并行执行 SQL。
