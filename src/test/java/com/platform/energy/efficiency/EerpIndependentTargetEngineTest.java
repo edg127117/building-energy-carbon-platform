@@ -53,7 +53,7 @@ class EerpIndependentTargetEngineTest {
         assertThat(mysql.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()", Integer.class))
                 .as("独立验收必须从一次性空库开始").isZero();
         Flyway.configure().dataSource(mysql.getDataSource()).locations("filesystem:src/env/init").load().migrate();
-        assertThat(mysql.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history", Integer.class)).isEqualTo(43);
+        assertThat(mysql.queryForObject("SELECT MAX(CAST(version AS UNSIGNED)) FROM flyway_schema_history", Integer.class)).isEqualTo(44);
         var taos = new JdbcTemplate(new DriverManagerDataSource(System.getenv("EERP_IT_TDENGINE_URL"),
                 System.getenv("EERP_IT_TDENGINE_USER"), System.getenv("EERP_IT_TDENGINE_PASSWORD")));
         String db = "eerp_accept_" + UUID.randomUUID().toString().replace("-", "");

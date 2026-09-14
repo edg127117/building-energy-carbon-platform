@@ -44,7 +44,11 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("43");
+                """, String.class)).isEqualTo("44");
+        assertThat(jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_product_point_template
+                WHERE product_id='PRODUCT_IDU_METER_1039' AND for_calc=0
+                """, Integer.class)).isEqualTo(7);
         assertThat(jdbc.queryForList("""
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE()
