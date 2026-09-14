@@ -6,6 +6,7 @@
 
 - 当前能力、阶段、风险和下一步：[`PROJECT_STATUS.md`](PROJECT_STATUS.md)；
 - 具体实现：直接相关的代码、测试和专题文档；
+- 监控大屏的内容、布局、交互、下钻及后续复用：[设计与复用规范](docs/designs/monitoring-screen-design-reference.md)；该文档区分独立原型与正式业务能力；
 - Git、Hook、PR 和 CI：[`repository-guardrails.md`](docs/development/repository-guardrails.md)。
 
 普通单点任务不要求完整读取本文件或 `PROJECT_STATUS.md`。历史计划只用于解释演进原因，不能代替当前代码和状态文档。
