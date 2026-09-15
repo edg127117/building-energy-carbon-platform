@@ -1,0 +1,32 @@
+package com.platform.iot.daikin.catalog;
+
+import com.platform.iot.daikin.client.DaikinEndpoint;
+import com.platform.iot.daikin.client.DaikinReadonlyClient;
+import com.platform.iot.daikin.model.DaikinDeviceKey;
+import com.platform.iot.daikin.model.DaikinDeviceObservation;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+
+/**
+ * 连接只读 HTTP 客户端与完整目录校验。结果仍是厂家观测，不会自动创建或绑定平台设备。
+ * 不提供任意端点透传，内外机清单分别读取，避免同一设备在不同清单中被重复建档。
+ */
+public final class DaikinCatalogClient {
+    private final DaikinReadonlyClient client;
+    private final DaikinCatalogReader reader;
+
+    public DaikinCatalogClient(DaikinReadonlyClient client, DaikinCatalogReader reader) {
+        this.client = Objects.requireNonNull(client);
+        this.reader = Objects.requireNonNull(reader);
+    }
+
+    public List<DaikinDeviceObservation> read(String sourceId, DaikinDeviceKey.Kind kind) {
+        Objects.requireNonNull(kind);
+        DaikinEndpoint endpoint = kind == DaikinDeviceKey.Kind.INDOOR
+                ? DaikinEndpoint.INUNITS : DaikinEndpoint.OUTUNITS;
+        return reader.read(sourceId, kind,
+                page -> client.read(endpoint, null, Map.of("page", Integer.toString(page))));
+    }
+}
