@@ -27,6 +27,15 @@ public final class DeviceProductContracts {
             @NotEmpty List<@Valid PointTemplateRequest> points) {
     }
 
+    @Schema(description = "创建大金状态型产品草稿；不生成数值测点，启用仍需审批")
+    public record TypedStateRequest(
+            @NotBlank @Size(max = 50) String productCode,
+            @NotBlank @Size(max = 100) String productName,
+            @Size(max = 100) String manufacturer, @Size(max = 100) String model,
+            @NotBlank @Size(max = 20) String equipmentTypeCode,
+            @NotBlank String expectedProfileCode) {
+    }
+
     @Schema(description = "更新仍为草稿且未被设备使用的产品")
     public record UpdateRequest(
             @NotBlank @Size(max = 100) String productName,

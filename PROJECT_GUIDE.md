@@ -41,7 +41,9 @@ GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成�
 
 平台采用 Spring Boot 单体后端与 Vue 前端。未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务或仓库。
 
-大金只读接入的适配基础位于 `com.platform.iot.daikin`：`client` 负责认证、只读路径和受限 HTTP 传输，`mapping` 将厂家内外机分页转换为保留未知/缺失语义的观测，`catalog` 校验完整目录。该基础不注册自动采集任务或公开接口，不自动建档、绑定或入库；客户端须显式启用并注入经确认的请求封装，默认关闭。已有 MQTT 数值协议配置不能直接替代厂家 HTTP 封装。后续实施边界见[只读接入设计](docs/designs/2026-09-15-daikin-readonly-integration-design.md)，完成状态以 `PROJECT_STATUS.md` 为准。
+大金只读接入位于 `com.platform.iot.daikin`：`client` 负责认证、只读路径和受限 HTTP 传输，`mapping` 规范化内外机字段，`catalog` 校验完整目录，`onboarding` 将可信完整目录登记至既有待接入区，并维护来源、项目建筑映射及版本。来源注册不包含凭据或目标 URL；客户端仍须显式启用并注入经确认的请求封装。完整目录入口是内部应用契约，调用者须先完成分页/总数校验并提供可靠轮次时间；当前未连接后台同步任务，不接收浏览器上传厂家目录。
+
+设备接入继续复用 `DeviceOnboardingService`、台账与公共审批。大金状态型产品和绑定通过增量契约支持零数值测点，旧数值绑定规则保留；绑定完成的身份仍停用，启用另走既有审批，身份配置生效不代表正式数据已采集。`/api/v1/daikin/directory` 提供管理员来源登记和项目建筑映射，`/api/v1/device-products/typed-state` 创建状态产品草稿，`/api/v1/operations/device-onboarding` 提供菜单及建筑范围受控的厂家待接入查询、状态维护和逐设备幂等绑定申请；审核执行仍由原管理员入口负责。V47/V48 新增目录结构、外机类型和内外机状态产品草稿，不迁移菜单、不自动启用产品，不写温度/状态历史。后续实施边界见[只读接入设计](docs/designs/2026-09-15-daikin-readonly-integration-design.md)，完成状态以 `PROJECT_STATUS.md` 为准。
 
 | 模块 | 稳定职责 |
 |---|---|

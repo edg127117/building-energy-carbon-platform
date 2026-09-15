@@ -1,3 +1,8 @@
+DROP TABLE IF EXISTS biz_daikin_catalog_sync;
+DROP TABLE IF EXISTS biz_daikin_directory;
+DROP TABLE IF EXISTS biz_daikin_project_mapping_version;
+DROP TABLE IF EXISTS biz_daikin_project_mapping;
+DROP TABLE IF EXISTS biz_daikin_source;
 DROP TABLE IF EXISTS biz_collection_config_audit_log;
 DROP TABLE IF EXISTS biz_collection_review_request;
 DROP TABLE IF EXISTS biz_collection_policy_version;

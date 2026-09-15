@@ -159,7 +159,9 @@ public class GlobalExceptionHandler {
             String carbonErrorCode) {
         String path = request.getRequestURI();
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
-                || path.startsWith(request.getContextPath() + "/v1/device-onboarding")) {
+                || path.startsWith(request.getContextPath() + "/v1/device-onboarding")
+                || path.startsWith(request.getContextPath() + "/v1/operations/device-onboarding")
+                || path.startsWith(request.getContextPath() + "/v1/daikin/directory")) {
             response.put("errorCode", onboardingErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
             response.put("errorCode", assetErrorCode);

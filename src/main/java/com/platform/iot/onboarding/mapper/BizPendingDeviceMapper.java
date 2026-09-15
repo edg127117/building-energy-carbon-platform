@@ -96,13 +96,14 @@ public interface BizPendingDeviceMapper extends BaseMapper<BizPendingDevice> {
     /**
      * 以状态、截止时间和调用方上限选出一批可清理 ID。
      *
-     * <p>BOUND 记录从不在清理候选中；调用方必须传入正数上限，随后仍需使用带同一截止条件的
+     * <p>BOUND 及厂家目录记录从不在遥测样例清理候选中；调用方必须传入正数上限，随后仍需使用带同一截止条件的
      * 删除方法，以避免读取后新上报的记录被误删。</p>
      */
     @Select("""
             SELECT pending_id
             FROM biz_pending_device
-            WHERE status IN ('DISCOVERED', 'IGNORED')
+            WHERE identity_type <> 'DAIKIN_UNIT'
+              AND status IN ('DISCOVERED', 'IGNORED')
               AND last_seen_time < #{cutoff}
             ORDER BY last_seen_time, pending_id
             LIMIT #{limit}
@@ -129,6 +130,7 @@ public interface BizPendingDeviceMapper extends BaseMapper<BizPendingDevice> {
                 1 = 0
               </otherwise>
             </choose>
+              AND identity_type &lt;&gt; 'DAIKIN_UNIT'
               AND status IN ('DISCOVERED', 'IGNORED')
               AND last_seen_time &lt; #{cutoff}
             </script>

@@ -85,6 +85,14 @@ public class DeviceProductController {
                 productId, request, SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
     }
 
+    @Operation(summary = "创建大金状态型产品草稿")
+    @PostMapping("/typed-state")
+    public Result<DeviceProductContracts.DetailView> createTypedState(Authentication authentication,
+            @Valid @RequestBody DeviceProductContracts.TypedStateRequest request) {
+        return Result.success(service.createTypedState(request, SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication)));
+    }
+
     @Operation(summary = "复制为新的产品草稿")
     @PostMapping("/{productId}/copy")
     public Result<DeviceProductContracts.DetailView> copy(
