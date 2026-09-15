@@ -12,9 +12,10 @@ import { messages as auth } from '@/modules/auth/public'
 import { messages as accessControl } from '@/modules/access-control/public'
 import { messages as assetManagement } from '@/modules/asset-management/public'
 import { messages as deviceOnboarding } from '@/modules/device-onboarding/public'
+import { messages as protocolConfiguration } from '@/modules/protocol-configuration/public'
 
 export const messages = { common, navigation, validation, error, terminology, workspaces, dashboard, drilldown, trendAnalysis,
-  largeScreen, auth, accessControl, assetManagement, deviceOnboarding } as const
+  largeScreen, auth, accessControl, assetManagement, deviceOnboarding, protocolConfiguration } as const
 
 /** 第一版只注册中文；完整句子通过命名占位符替换，不在组件中拼接文案。 */
 export function t(key: string, params: Record<string, string | number> = {}): string {

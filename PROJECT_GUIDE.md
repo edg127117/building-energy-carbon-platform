@@ -100,6 +100,23 @@ GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成�
 `eventTime` 是事件时间，不能默认当作设备采样时间；`receivedTime` 是平台接收时间，
 `generatedAt` 是查询组装时间。原始数据已超出保留期时，不能用分钟均值补造原始读数。
 
+### 协议配置与预览
+
+协议可视化接入目前提供第一阶段草稿与预览，页面入口为 `/configuration/ingestion/protocols`，
+兼容业务路径 `/system/protocol-configurations`，仅对获菜单授权的平台管理员开放。
+`/api/v1/protocol-configurations` 提供分页、详情、创建和按修订号更新；`/inspect` 返回样例字段，
+`/preview` 返回设备身份、时间来源、原值与换算值。更新修订过期返回 409；保存草稿不发布规则。
+
+产品模板中的协议编码、身份类型、启用测点和目标单位是映射约束；预览可关联产品草稿，
+不等于产品已批准。原始样例不随配置保存，不创建设备或写入时序数据。
+`protocol-preview.max-bytes`、`max-depth`、`max-fields` 默认分别为 65536、20、1024；
+`requests-per-minute` 默认每个管理员 60 次，当前为单实例有界限流。映射最多 128 项。
+HTTP DTO 同时设置固定上限，配置可收紧限制，不能靠调大配置绕过 DTO 上限。
+
+平台与适配器共同编译 [protocol-core](protocol-core/README.md) 无 I/O 解析源码，
+保留独立构建入口；打包适配器时需保留相邻共用源码目录。新增存储及管理员菜单由 V45 迁移建立。
+审批发布、云端拉取、加载回执、回退及存量规则迁移属于后续阶段，不能把草稿或预览结果称为云端生效。
+
 ### 建筑档案接口
 
 `POST /api/v1/assets/buildings` 必须提供建筑名称、类型、总面积、气候区和 `regionCode`；

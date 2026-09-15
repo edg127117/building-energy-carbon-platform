@@ -24,7 +24,7 @@ export const pages: PageEntry[] = [
   ...group('operations', 'alarms', ['liveAlarms', 'historyAlarms']),
   ...group('operations', 'maintenance', ['plans', 'orders', 'faults']),
   ...group('operations', 'reports', ['energyReports', 'carbonReports']),
-  ...group('configuration', 'ingestion', [['pendingDevices', '/system/device-onboarding'], ['products', '/system/device-products'], 'collection', 'interfaces']),
+  ...group('configuration', 'ingestion', [['pendingDevices', '/system/device-onboarding'], ['products', '/system/device-products'], ['protocols', '/system/protocol-configurations'], 'collection', 'interfaces']),
   ...group('configuration', 'space', [['buildings', '/system/buildings'], 'spaces', 'systemGroups', 'equipmentSpaces']),
   ...group('configuration', 'indicators', ['indicatorList', 'formulas']),
   ...group('configuration', 'factors', ['emissionFactors', 'factorVersions']),

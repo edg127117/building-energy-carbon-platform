@@ -9,13 +9,14 @@ import { LoginPage, PasswordSetupPage, useSession } from '@/modules/auth/public'
 import { routes as accessRoutes } from '@/modules/access-control/public'
 import { routes as assetRoutes } from '@/modules/asset-management/public'
 import { routes as deviceRoutes } from '@/modules/device-onboarding/public'
+import { routes as protocolRoutes } from '@/modules/protocol-configuration/public'
 import { routes as dashboardRoutes } from '@/modules/dashboard/public'
 import { routes as trendRoutes } from '@/modules/trend-analysis/public'
 import { screens } from '@/modules/large-screen/public'
 import { t } from '@/locales'
 
 // 页面能力按职责落位；既有资产权限保持不变，菜单迁移不授予额外业务角色。
-const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes]
+const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes]
 function businessRoute(page: (typeof pages)[number]) {
   if (page.path === '/operations/realtime/hvac') return dashboardRoutes[0]
   if (page.path === '/operations/energy/trend') return trendRoutes[0]

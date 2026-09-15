@@ -71,6 +71,18 @@
   <build>
     <plugins>
       <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>build-helper-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <executions>
+          <execution>
+            <id>shared-protocol-core</id><phase>generate-sources</phase>
+            <goals><goal>add-source</goal></goals>
+            <configuration><sources><source>${project.basedir}/../protocol-core/src/main/java</source></sources></configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-maven-plugin</artifactId>
       </plugin>
