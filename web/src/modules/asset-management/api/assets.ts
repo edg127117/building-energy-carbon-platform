@@ -6,6 +6,7 @@ import type {
   AssetEquipmentDetail,
   AssetEquipmentForm,
   AssetEquipmentQuery,
+  AssetEquipmentReadings,
   AssetPage,
   AssetPoint,
   AssetPointUpdate,
@@ -76,6 +77,10 @@ export function listEquipment(params: AssetEquipmentQuery) {
 
 export function getEquipment(equipmentId: string) {
   return requestApi<AssetEquipmentDetail>({ method: 'get', url: `${basePath}/equipment/${encoded(equipmentId)}` })
+}
+
+export function getEquipmentReadings(equipmentId: string) {
+  return requestApi<AssetEquipmentReadings>({ method: 'get', url: `${basePath}/equipment/${encoded(equipmentId)}/readings` })
 }
 
 export function createEquipment(data: AssetEquipmentForm) {

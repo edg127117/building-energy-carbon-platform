@@ -179,6 +179,27 @@ export type AssetPointUpdate = {
   status?: string | null
 }
 
+export type AssetPointReading = {
+  pointId: string
+  pointCode: string
+  pointName: string
+  unit: string | null
+  value: number | null
+  eventTime: number | null
+  receivedTime: number | null
+  dataQuality: number | null
+  status: string
+  usageStatus: string
+  reason: string | null
+}
+
+export type AssetEquipmentReadings = {
+  equipmentId: string
+  buildingId: string
+  generatedAt: number
+  points: AssetPointReading[]
+}
+
 export type AssetEquipmentQuery = {
   page: number
   size: number

@@ -52,8 +52,11 @@ public class DeviceProductController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String expectedProfileCode,
+            @RequestParam(required = false) String identityType,
             Authentication authentication) {
-        return Result.success(service.list(page, size, status, keyword, SecurityUser.roles(authentication)));
+        return Result.success(service.list(page, size, status, keyword,
+                expectedProfileCode, identityType, SecurityUser.roles(authentication)));
     }
 
     @Operation(summary = "查询产品及测点模板详情")

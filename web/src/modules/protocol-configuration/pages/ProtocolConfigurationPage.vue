@@ -100,6 +100,11 @@ function newDraft() {
   validationKey.value = null
 }
 
+function openMatchingPendingDevices() {
+  const profileCode = management.form.value.profileCode.trim()
+  if (profileCode) void router.push({ path: '/configuration/ingestion/pendingDevices', query: { profileCode } })
+}
+
 async function inspect() {
   if (!samplePayload.value.trim()) return showValidation('sampleRequired')
   if (sampleBytes.value > 64 * 1024) return showValidation('sampleTooLarge')
@@ -230,7 +235,7 @@ onMounted(() => { void Promise.all([management.loadDrafts(), loadProducts()]).ca
   <section class="protocol-page">
     <header class="page-heading">
       <div><h1>{{ t('protocolConfiguration.title') }}</h1><p>{{ t('protocolConfiguration.description') }}</p></div>
-      <div class="heading-actions"><ElButton @click="router.push('/configuration/ingestion/products')">{{ t('protocolConfiguration.actions.openProducts') }}</ElButton><ElButton :icon="Plus" @click="newDraft">{{ t('protocolConfiguration.actions.newDraft') }}</ElButton><ElButton type="primary" :loading="management.saving.value" @click="save">{{ t('protocolConfiguration.actions.saveDraft') }}</ElButton></div>
+      <div class="heading-actions"><ElButton @click="router.push('/configuration/ingestion/products')">{{ t('protocolConfiguration.actions.openProducts') }}</ElButton><ElButton :disabled="!management.form.value.profileCode.trim()" @click="openMatchingPendingDevices">{{ t('protocolConfiguration.actions.openPendingDevices') }}</ElButton><ElButton :icon="Plus" @click="newDraft">{{ t('protocolConfiguration.actions.newDraft') }}</ElButton><ElButton type="primary" :loading="management.saving.value" @click="save">{{ t('protocolConfiguration.actions.saveDraft') }}</ElButton></div>
     </header>
     <ElAlert :title="t('protocolConfiguration.draftNotice')" type="warning" show-icon :closable="false" />
     <ElAlert v-if="management.error.value" :title="management.error.value" type="error" show-icon :closable="false" />

@@ -6,6 +6,8 @@ import type {
   OnboardingPage,
   PendingDevice,
   PendingDeviceDetail,
+  PendingDeviceConnection,
+  PointNamingRule,
   PendingStatusRequest,
 } from '../models/onboarding'
 
@@ -13,7 +15,7 @@ const productPath = '/v1/device-products'
 const onboardingPath = '/v1/device-onboarding'
 const encoded = (value: string) => encodeURIComponent(value)
 
-export function listDeviceProducts(params: { page: number; size: number; status?: string; keyword?: string }) {
+export function listDeviceProducts(params: { page: number; size: number; status?: string; keyword?: string; expectedProfileCode?: string; identityType?: string }) {
   return requestApi<OnboardingPage<DeviceProductListItem>>({ method: 'get', url: productPath, params })
 }
 
@@ -39,6 +41,14 @@ export function listPendingDevices(params: { page: number; size: number; status?
 
 export function getPendingDevice(pendingId: string) {
   return requestApi<PendingDeviceDetail>({ method: 'get', url: `${onboardingPath}/pending/${encoded(pendingId)}` })
+}
+
+export function getPendingDeviceConnection(pendingId: string) {
+  return requestApi<PendingDeviceConnection>({ method: 'get', url: `${onboardingPath}/pending/${encoded(pendingId)}/connection` })
+}
+
+export function listPointNamingRules() {
+  return requestApi<PointNamingRule[]>({ method: 'get', url: `${onboardingPath}/naming-rules` })
 }
 
 export function updatePendingStatus(pendingId: string, data: PendingStatusRequest) {

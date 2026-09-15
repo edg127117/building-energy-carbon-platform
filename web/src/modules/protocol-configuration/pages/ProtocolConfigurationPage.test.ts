@@ -5,7 +5,8 @@ import { getDeviceProduct, listDeviceProducts } from '@/modules/device-onboardin
 import { inspectProtocolSample } from '../api/protocol-configuration'
 import ProtocolConfigurationPage from './ProtocolConfigurationPage.vue'
 
-vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+const routerPush = vi.fn()
+vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }) }))
 vi.mock('@/modules/device-onboarding/public', async importOriginal => ({ ...(await importOriginal()), getDeviceProduct: vi.fn(), listDeviceProducts: vi.fn() }))
 vi.mock('../api/protocol-configuration', () => ({
   createProtocolConfiguration: vi.fn(), getProtocolConfiguration: vi.fn(), inspectProtocolSample: vi.fn(),
@@ -69,5 +70,12 @@ describe('协议配置页面', () => {
     pending.resolve(product)
     await flushPromises()
     expect(wrapper.findAll('input').some(input => input.element.value === 'V1')).toBe(false)
+  })
+
+  it('按当前协议标识跳转到三系统待接入列表', async () => {
+    wrapper.findAllComponents(ElSelect)[2].vm.$emit('change', 'P1')
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看匹配待接入设备')!.trigger('click')
+    expect(routerPush).toHaveBeenCalledWith({ path: '/configuration/ingestion/pendingDevices', query: { profileCode: 'V1' } })
   })
 })

@@ -77,6 +77,24 @@ export type PendingDeviceDetail = PendingDevice & {
   allowedActions: string[]
 }
 
+export type PendingDeviceConnection = {
+  pendingId: string
+  identityId: string | null
+  identityStatus: 'UNBOUND' | 'ACTIVE' | 'INACTIVE'
+  equipmentId: string | null
+  buildingId: string | null
+  productId: string | null
+  configEffective: boolean
+}
+
+export type PointNamingRule = {
+  ruleId: string
+  ruleName: string
+  familyCode: string
+  componentCode: string
+  pattern: string
+}
+
 export type PendingStatus = 'DISCOVERED' | 'IGNORED'
 
 export type PendingStatusRequest = {

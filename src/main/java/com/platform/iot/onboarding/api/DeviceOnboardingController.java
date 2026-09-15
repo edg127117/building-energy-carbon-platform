@@ -47,6 +47,17 @@ import org.springframework.web.bind.annotation.RestController;
 public class DeviceOnboardingController {
     private final DeviceOnboardingService service;
 
+    @GetMapping("/naming-rules")
+    public Result<java.util.List<DeviceOnboardingContracts.NamingRuleView>> namingRules(Authentication authentication) {
+        return Result.success(service.namingRules(SecurityUser.roles(authentication)));
+    }
+
+    @GetMapping("/pending/{pendingId}/connection")
+    public Result<DeviceOnboardingContracts.ConnectionView> connection(
+            @PathVariable String pendingId, Authentication authentication) {
+        return Result.success(service.connection(pendingId, SecurityUser.roles(authentication)));
+    }
+
     @Operation(summary = "分页查询待绑定设备；列表身份值脱敏")
     @GetMapping("/pending")
     public Result<PageResponse<DeviceOnboardingContracts.PendingListItemView>> pending(

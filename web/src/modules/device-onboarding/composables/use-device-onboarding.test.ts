@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OnboardingPage, PendingDevice } from '../models/onboarding'
-import { listPendingDevices, updatePendingStatus } from '../api/onboarding'
+import { getPendingDeviceConnection, listDeviceProducts, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -8,8 +8,10 @@ vi.mock('../api/onboarding', () => ({
   createDeviceProduct: vi.fn(),
   getDeviceProduct: vi.fn(),
   getPendingDevice: vi.fn(),
+  getPendingDeviceConnection: vi.fn(),
   listDeviceProducts: vi.fn(),
   listPendingDevices: vi.fn(),
+  listPointNamingRules: vi.fn(),
   updateDeviceProduct: vi.fn(),
   updatePendingStatus: vi.fn(),
 }))
@@ -22,6 +24,9 @@ describe('设备接入异步状态', () => {
     vi.clearAllMocks()
     vi.mocked(listPendingDevices).mockResolvedValue(emptyPending)
     vi.mocked(updatePendingStatus).mockResolvedValue({} as never)
+    vi.mocked(listDeviceProducts).mockResolvedValue({ page: 1, size: 20, total: 0, items: [] })
+    vi.mocked(getPendingDeviceConnection).mockResolvedValue({ pendingId: 'D-01', identityId: null, identityStatus: 'UNBOUND', equipmentId: null, buildingId: null, productId: null, configEffective: false })
+    vi.mocked(listPointNamingRules).mockResolvedValue([])
   })
 
   it('忽略迟到的待处理列表响应，只保留最新条件结果', async () => {
@@ -59,6 +64,23 @@ describe('设备接入异步状态', () => {
     await expect(management.changePendingStatus('D-01', 'IGNORED')).rejects.toThrow('transport')
 
     expect(management.operationError.value).toEqual({ message: '请求失败' })
+  })
+
+  it('按待接入协议和身份精确过滤产品', async () => {
+    const management = useDeviceOnboarding()
+    await management.setProductQuery({ status: 'ENABLED', expectedProfileCode: 'V1', identityType: 'SN', keyword: '电表' })
+    expect(listDeviceProducts).toHaveBeenCalledWith({ page: 1, size: 20, status: 'ENABLED', keyword: '电表', expectedProfileCode: 'V1', identityType: 'SN' })
+  })
+
+  it('连接状态请求使用代次隔离迟到响应', async () => {
+    const stale = deferred<Awaited<ReturnType<typeof getPendingDeviceConnection>>>()
+    vi.mocked(getPendingDeviceConnection).mockReturnValueOnce(stale.promise).mockResolvedValueOnce({ pendingId: 'new', identityId: null, identityStatus: 'UNBOUND', equipmentId: null, buildingId: null, productId: null, configEffective: false })
+    const management = useDeviceOnboarding()
+    const first = management.loadPendingConnection('old')
+    await management.loadPendingConnection('new')
+    stale.resolve({ pendingId: 'old', identityId: null, identityStatus: 'UNBOUND', equipmentId: null, buildingId: null, productId: null, configEffective: false })
+    await first
+    expect(management.pendingConnection.value?.pendingId).toBe('new')
   })
 })
 
