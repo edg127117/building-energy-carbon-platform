@@ -24,6 +24,13 @@ class JsonTelemetryAdapterTest {
 
     private JsonTelemetryAdapter adapter;
 
+    @Test
+    void preservesDecimalPrecisionRegardlessOfCallingMapperDefaults() {
+        var message=adaptCorrelation(identityProfile(null,null,null,null),
+                "{\"MAC\":\"test-meter\",\"current_energy\":0.1234567890123456789}");
+        assertThat(message.metrics().getFirst().value()).isEqualByComparingTo("0.1234567890123456789");
+    }
+
     @BeforeEach
     void setUp() {
         adapter = new JsonTelemetryAdapter(new ObjectMapper());

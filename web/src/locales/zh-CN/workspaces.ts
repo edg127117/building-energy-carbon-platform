@@ -12,7 +12,7 @@ export default {
   carbon: '碳排放管理', carbonOverview: '排放总览', carbonDetails: '排放明细', reduction: '减排管理', assets: '碳资产管理',
   devices: '设备管理', businessDevices: '设备台账', meters: '监测采集设备', alarms: '报警管理', liveAlarms: '实时报警', historyAlarms: '历史报警',
   maintenance: '运维管理', plans: '维保计划', orders: '工单管理', faults: '故障记录', reports: '报表中心', energyReports: '能耗报表', carbonReports: '碳排报表',
-  ingestion: '数据接入', pendingDevices: '待接入设备', points: '设备与测点', products: '产品与测点模板', collection: '采集配置', interfaces: '接口配置',
+  ingestion: '数据接入', pendingDevices: '待接入设备', points: '设备与测点', products: '产品与测点模板', protocols: '协议配置与预览', collection: '采集配置', interfaces: '接口配置',
   space: '空间与系统', buildings: '建筑管理', spaces: '空间管理', systemGroups: '系统分组', equipmentSpaces: '设备与空间关联', indicators: '指标与公式', indicatorList: '指标管理', formulas: '公式管理',
   factors: '因子管理', emissionFactors: '排放因子', factorVersions: '版本与应用记录', rules: '策略与规则', baselines: '基准与定额', alarmRules: '报警规则',
   access: '用户与权限', users: '用户管理', roles: '角色与菜单授权', buildingAccess: '建筑访问审核', settings: '系统设置', menus: '菜单管理',
