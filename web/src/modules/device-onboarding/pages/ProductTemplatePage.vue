@@ -56,7 +56,7 @@ async function query() {
 }
 
 async function resetFilters() {
-  management.productQuery.value = { page: 1, size: management.productQuery.value.size, status: undefined, keyword: '' }
+  management.productQuery.value = { page: 1, size: management.productQuery.value.size, status: undefined, keyword: '', expectedProfileCode: undefined, identityType: undefined }
   try {
     await management.loadProducts()
   } catch {

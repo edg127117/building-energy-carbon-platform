@@ -5,7 +5,7 @@ export default {
   actions: {
     newDraft: '新建草稿', loadDraft: '加载草稿', saveDraft: '保存草稿', inspect: '识别字段', preview: '后端解析预览',
     useIdentity: '设为身份路径', useDiscriminator: '设为判别路径', useTimestamp: '设为时间路径', addMapping: '添加测点映射',
-    clearOptionalPath: '清除', removeMapping: '移除', openProducts: '管理产品模板',
+    clearOptionalPath: '清除', removeMapping: '移除', openProducts: '管理产品模板', openPendingDevices: '查看匹配待接入设备',
   },
   sections: { basics: '草稿与产品', sample: '报文样例', fields: '字段树', mapping: '测点映射', preview: '解析预览' },
   labels: {

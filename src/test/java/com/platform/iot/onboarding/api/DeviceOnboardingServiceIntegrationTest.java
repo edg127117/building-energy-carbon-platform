@@ -148,6 +148,9 @@ class DeviceOnboardingServiceIntegrationTest {
     void createsEnablesBindsAndActivatesWithoutTouchingHistoricalTelemetry() {
         DeviceProductContracts.DetailView product = createEnabledProduct("BTEST_PRODUCT_1");
         insertPending("BTEST-PENDING-1", PREFIX + "DEVICE-001", "DISCOVERED");
+        assertThat(onboardingService.connection("BTEST-PENDING-1", ADMIN).identityStatus()).isEqualTo("UNBOUND");
+        assertThatThrownBy(() -> onboardingService.connection("BTEST-PENDING-1", Set.of("OWNER")))
+                .isInstanceOf(BusinessException.class);
 
         DeviceOnboardingContracts.BindResultView bound = onboardingService.bind(
                 "BTEST-PENDING-1",
@@ -161,6 +164,11 @@ class DeviceOnboardingServiceIntegrationTest {
                 ADMIN);
 
         assertThat(bound.status()).isEqualTo("BOUND");
+        var connection = onboardingService.connection("BTEST-PENDING-1", ADMIN);
+        assertThat(connection.identityStatus()).isEqualTo("INACTIVE");
+        assertThat(connection.equipmentId()).isEqualTo(bound.equipmentId());
+        assertThat(connection.productId()).isEqualTo(product.productId());
+        assertThat(connection.configEffective()).isTrue();
         assertThat(bound.configEffective()).isTrue();
         assertThat(jdbcTemplate.queryForObject(
                 "SELECT status FROM biz_device_identity WHERE identity_id = ?",
@@ -183,6 +191,11 @@ class DeviceOnboardingServiceIntegrationTest {
                 bound.identityId(), 1L, ADMIN);
 
         assertThat(active.configEffective()).isTrue();
+        assertThat(onboardingService.connection("BTEST-PENDING-1", ADMIN).identityStatus()).isEqualTo("ACTIVE");
+        assertThat(onboardingService.connection("BTEST-PENDING-1", ADMIN).configEffective()).isTrue();
+        jdbcTemplate.update("UPDATE biz_device_identity SET status=0 WHERE identity_id=?", bound.identityId());
+        assertThat(onboardingService.connection("BTEST-PENDING-1", ADMIN).configEffective()).isFalse();
+        jdbcTemplate.update("UPDATE biz_device_identity SET status=1 WHERE identity_id=?", bound.identityId());
         assertThat(identityProvider.find(new DeviceIdentityKey("MAC", PREFIX + "DEVICE-001")))
                 .isPresent();
         assertThat(jdbcTemplate.queryForObject(
@@ -309,6 +322,25 @@ class DeviceOnboardingServiceIntegrationTest {
                 .isEqualTo("DISABLED");
         assertThat(productService.list(1, 20, null, "BTEST_PRODUCT_3", ADMIN).items())
                 .hasSize(2);
+    }
+
+    @Test
+    void filtersCompatibleProductsBeforePaginationAndListsEnabledNamingRules() {
+        var matched = createEnabledProduct("BTEST_MATCHED");
+        productService.create(new DeviceProductContracts.CreateRequest("BTEST_OTHER", "other", null, null,
+                "WCR", "OTHER_PROFILE", "SN", productPoints()), 1L, ADMIN);
+        var page = productService.list(1, 1, "ENABLED", "BTEST", "hvac_device_v1", "mac", ADMIN);
+        assertThat(page.total()).isEqualTo(1);
+        assertThat(page.items()).extracting(DeviceProductContracts.ListItemView::productId)
+                .containsExactly(matched.productId());
+        assertThat(productService.list(1, 20, null, "BTEST", "OTHER_PROFILE", "MAC", ADMIN).items()).isEmpty();
+        assertThat(onboardingService.namingRules(ADMIN)).anySatisfy(rule -> {
+            assertThat(rule.ruleId()).isEqualTo("RULE_WCR_MAIN");
+            assertThat(rule.familyCode()).isEqualTo("WCR");
+            assertThat(rule.pattern()).isNotBlank();
+        });
+        assertThatThrownBy(() -> onboardingService.namingRules(Set.of("OWNER")))
+                .isInstanceOf(BusinessException.class);
     }
 
     private DeviceProductContracts.DetailView createEnabledProduct(String productCode) {

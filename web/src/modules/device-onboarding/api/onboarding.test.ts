@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
-import { copyDeviceProduct, listDeviceProducts, listPendingDevices, updatePendingStatus } from './onboarding'
+import { copyDeviceProduct, getPendingDeviceConnection, listDeviceProducts, listPendingDevices, listPointNamingRules, updatePendingStatus } from './onboarding'
 
 vi.mock('@/infrastructure/http/public', () => ({ requestApi: vi.fn() }))
 
@@ -11,19 +11,27 @@ describe('设备接入接口契约', () => {
   })
 
   it('通过统一请求层查询产品模板和待接入设备', async () => {
-    await listDeviceProducts({ page: 1, size: 20, status: 'ENABLED', keyword: '空调' })
+    await listDeviceProducts({ page: 1, size: 20, status: 'ENABLED', keyword: '空调', expectedProfileCode: 'V1', identityType: 'SN' })
     await listPendingDevices({ page: 2, size: 20, status: 'DISCOVERED', identity: 'dev', profileCode: 'V1' })
 
     expect(requestApi).toHaveBeenNthCalledWith(1, {
       method: 'get',
       url: '/v1/device-products',
-      params: { page: 1, size: 20, status: 'ENABLED', keyword: '空调' },
+      params: { page: 1, size: 20, status: 'ENABLED', keyword: '空调', expectedProfileCode: 'V1', identityType: 'SN' },
     })
     expect(requestApi).toHaveBeenNthCalledWith(2, {
       method: 'get',
       url: '/v1/device-onboarding/pending',
       params: { page: 2, size: 20, status: 'DISCOVERED', identity: 'dev', profileCode: 'V1' },
     })
+  })
+
+  it('读取待接入连接状态和后端启用命名规则', async () => {
+    await getPendingDeviceConnection('D/01')
+    await listPointNamingRules()
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, { method: 'get', url: '/v1/device-onboarding/pending/D%2F01/connection' })
+    expect(requestApi).toHaveBeenNthCalledWith(2, { method: 'get', url: '/v1/device-onboarding/naming-rules' })
   })
 
   it('保留可直接编辑的草稿与待处理状态接口，不登记已拒绝的敏感直写接口', async () => {

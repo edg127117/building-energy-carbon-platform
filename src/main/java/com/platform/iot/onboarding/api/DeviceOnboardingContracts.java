@@ -14,6 +14,16 @@ public final class DeviceOnboardingContracts {
     private DeviceOnboardingContracts() {
     }
 
+    @Schema(description = "绑定归属与身份缓存状态；不代表测点数据已经入库")
+    public record ConnectionView(String pendingId, String identityId, String identityStatus,
+            String equipmentId, String buildingId, String productId, boolean configEffective) {
+    }
+
+    @Schema(description = "已启用命名规则；pattern 是编码模板提示，最终编码仍由后端校验")
+    public record NamingRuleView(String ruleId, String ruleName, String familyCode,
+            String componentCode, String pattern) {
+    }
+
     @Schema(description = "待绑定列表项；身份值已脱敏")
     public record PendingListItemView(
             String pendingId,

@@ -26,6 +26,7 @@ import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.hvac.service.EquipmentCodeAllocator;
 import com.platform.hvac.service.PointCodeNamingValidator;
 import com.platform.iot.identity.DeviceIdentityKey;
+import com.platform.iot.identity.DeviceIdentitySnapshotUnavailableException;
 import com.platform.iot.collection.mapper.BizDataSourceMapper;
 import com.platform.iot.collection.model.entity.BizDataSource;
 import com.platform.iot.identity.MySqlDeviceIdentityProvider;
@@ -123,6 +124,52 @@ public class DeviceOnboardingService {
     public DeviceOnboardingContracts.PendingDetailView pendingDetail(String pendingId, Set<String> roles) {
         requireAdmin(roles);
         return toDetail(requirePending(pendingId));
+    }
+
+    public List<DeviceOnboardingContracts.NamingRuleView> namingRules(Set<String> roles) {
+        requireAdmin(roles);
+        return namingRuleMapper.selectList(new LambdaQueryWrapper<BizPointNamingRule>()
+                .eq(BizPointNamingRule::getStatus, 1)
+                .orderByAsc(BizPointNamingRule::getFamilyCode)
+                .orderByAsc(BizPointNamingRule::getComponentCode)
+                .orderByAsc(BizPointNamingRule::getRuleId)).stream()
+                .map(rule -> new DeviceOnboardingContracts.NamingRuleView(rule.getRuleId(),
+                        rule.getFamilyCode() + "/" + rule.getComponentCode(), rule.getFamilyCode(),
+                        rule.getComponentCode(), rule.getCodeTemplate())).toList();
+    }
+
+    /** 读取绑定的真实归属；身份缓存生效与时序数据持久化分别提供证据。 */
+    public DeviceOnboardingContracts.ConnectionView connection(String pendingId, Set<String> roles) {
+        requireAdmin(roles);
+        BizPendingDevice pending = requirePending(pendingId);
+        if (!StringUtils.hasText(pending.getBoundIdentityId())) {
+            return new DeviceOnboardingContracts.ConnectionView(pendingId, null, "UNBOUND", null, null, null, false);
+        }
+        BizDeviceIdentity identity = identityMapper.selectById(pending.getBoundIdentityId());
+        if (identity == null || !pending.getIdentityType().equalsIgnoreCase(identity.getIdentityType())
+                || !pending.getIdentityValue().equals(identity.getIdentityValue())) {
+            throw error(409, STATE_CONFLICT, "待接入设备的绑定身份不一致");
+        }
+        BizEquipment equipment = equipmentMapper.selectById(identity.getEquipId());
+        if (equipment == null || !identity.getBuildingId().equals(equipment.getBuildingId())) {
+            throw error(409, STATE_CONFLICT, "绑定设备与身份建筑归属不一致");
+        }
+        boolean active = Integer.valueOf(1).equals(identity.getStatus());
+        boolean effective;
+        try {
+            DeviceIdentityKey key = new DeviceIdentityKey(identity.getIdentityType(), identity.getIdentityValue());
+            var cached = identityProvider.find(key);
+            effective = active ? cached.filter(value -> identity.getIdentityId().equals(value.identityId())
+                    && equipment.getEquipId().equals(value.equipmentId())
+                    && equipment.getBuildingId().equals(value.buildingId())
+                    && identity.getExpectedProfileCode().equals(value.expectedProfileCode())).isPresent()
+                    : identityProvider.isKnown(key) && cached.isEmpty();
+        } catch (DeviceIdentitySnapshotUnavailableException unavailable) {
+            effective = false;
+        }
+        return new DeviceOnboardingContracts.ConnectionView(pendingId, identity.getIdentityId(),
+                active ? "ACTIVE" : "INACTIVE", equipment.getEquipId(), equipment.getBuildingId(),
+                equipment.getProductId(), effective);
     }
 
     /**

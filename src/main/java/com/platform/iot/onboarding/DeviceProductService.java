@@ -44,9 +44,22 @@ public class DeviceProductService {
 
     public PageResponse<DeviceProductContracts.ListItemView> list(
             int page, int size, String status, String keyword, Set<String> roles) {
+        return list(page, size, status, keyword, null, null, roles);
+    }
+
+    public PageResponse<DeviceProductContracts.ListItemView> list(
+            int page, int size, String status, String keyword,
+            String expectedProfileCode, String identityType, Set<String> roles) {
         requireAdmin(roles);
         validatePage(page, size);
         LambdaQueryWrapper<BizDeviceProduct> query = new LambdaQueryWrapper<>();
+        // 先按协议和身份过滤再分页，避免页面只过滤首批产品而遗漏可复用模板。
+        if (StringUtils.hasText(expectedProfileCode)) {
+            query.eq(BizDeviceProduct::getExpectedProfileCode, normalize(expectedProfileCode));
+        }
+        if (StringUtils.hasText(identityType)) {
+            query.eq(BizDeviceProduct::getIdentityType, normalize(identityType));
+        }
         if (StringUtils.hasText(status)) {
             query.eq(BizDeviceProduct::getStatus, normalize(status));
         }

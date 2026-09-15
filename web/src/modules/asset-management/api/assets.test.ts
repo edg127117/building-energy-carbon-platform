@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
-import { createEquipment, listBuildings, updateEquipmentPoint } from './assets'
+import { createEquipment, getEquipmentReadings, listBuildings, updateEquipmentPoint } from './assets'
 
 vi.mock('@/infrastructure/http/public', () => ({ requestApi: vi.fn() }))
 
@@ -52,5 +52,10 @@ describe('资产档案接口契约', () => {
       url: '/v1/assets/equipment/E%2F01/points/P%2F01',
       data: { pointName: '供水温度', minValue: 0, maxValue: 100, forCalculation: true, status: 'ACTIVE' },
     })
+  })
+
+  it('通过资产模块正式接口读取设备最近原始事件', async () => {
+    await getEquipmentReadings('E/01')
+    expect(requestApi).toHaveBeenCalledWith({ method: 'get', url: '/v1/assets/equipment/E%2F01/readings' })
   })
 })
