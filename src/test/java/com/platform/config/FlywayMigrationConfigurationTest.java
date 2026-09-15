@@ -66,7 +66,9 @@ class FlywayMigrationConfigurationTest {
                 "V43__mysql_eerp_cold_station.sql",
                 "V44__mysql_indoor_unit_meter_template.sql",
                 "V45__mysql_protocol_configuration_draft.sql",
-                "V46__mysql_protocol_publication.sql");
+                "V46__mysql_protocol_publication.sql",
+                "V47__mysql_daikin_directory.sql",
+                "V48__mysql_daikin_state_products.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

@@ -74,6 +74,16 @@ public final class DeviceOnboardingContracts {
             @NotEmpty List<@Valid PointBindingRequest> pointBindings) {
     }
 
+    @Schema(description = "类型化状态绑定；不接受数值测点，归属由空间和厂家项目映射校验")
+    public record TypedBindRequest(
+            @NotBlank String productId, @NotBlank String buildingId, @NotBlank String spaceId,
+            @NotBlank String systemGroupId, String existingEquipmentId, @Valid NewEquipmentRequest newEquipment) {
+        public BindRequest asBinding() {
+            return new BindRequest(productId, buildingId, spaceId, systemGroupId,
+                    existingEquipmentId, newEquipment, List.of());
+        }
+    }
+
     @Schema(description = "新建设备台账")
     public record NewEquipmentRequest(
             @NotBlank @Size(max = 100) String equipmentName,

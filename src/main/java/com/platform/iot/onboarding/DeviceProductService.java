@@ -91,8 +91,30 @@ public class DeviceProductService {
     @Transactional
     public DeviceProductContracts.DetailView create(
             DeviceProductContracts.CreateRequest request, Long operatorId, Set<String> roles) {
+        return createProduct(request, operatorId, roles, false);
+    }
+
+    @Transactional
+    public DeviceProductContracts.DetailView createTypedState(
+            DeviceProductContracts.TypedStateRequest request, Long operatorId, Set<String> roles) {
+        if (!Set.of("DAIKIN_INDOOR_V2", "DAIKIN_OUTDOOR_V2").contains(request.expectedProfileCode())) {
+            throw error(400, VALIDATION_FAILED, "不支持的类型化状态协议");
+        }
+        requireAdmin(roles);
+        validateTypedEquipmentType(request.expectedProfileCode(), request.equipmentTypeCode());
+        return createProduct(new DeviceProductContracts.CreateRequest(request.productCode(), request.productName(),
+                request.manufacturer(), request.model(), request.equipmentTypeCode(), request.expectedProfileCode(),
+                "DAIKIN_UNIT", List.of()), operatorId, roles, true);
+    }
+
+    private DeviceProductContracts.DetailView createProduct(DeviceProductContracts.CreateRequest request,
+            Long operatorId, Set<String> roles, boolean typed) {
         requireAdmin(roles);
         validateEquipmentType(request.equipmentTypeCode());
+        if (!typed && (request.points() == null || request.points().isEmpty()
+                || "DAIKIN_UNIT".equals(normalize(request.identityType())))) {
+            throw error(400, VALIDATION_FAILED, "数值产品必须提供测点；厂家状态产品使用类型化入口");
+        }
         validateTemplates(request.points());
         BizDeviceProduct product = new BizDeviceProduct();
         product.setProductCode(normalize(request.productCode()));
@@ -125,6 +147,9 @@ public class DeviceProductService {
         requireAdmin(roles);
         BizDeviceProduct product = requireProductForUpdate(productId);
         requireDraftAndUnused(product);
+        if ("DAIKIN_UNIT".equals(product.getIdentityType()) || "DAIKIN_UNIT".equals(normalize(request.identityType()))) {
+            throw error(409, VALIDATION_FAILED, "状态产品不使用数值产品更新入口，请创建新的状态产品草稿");
+        }
         validateEquipmentType(request.equipmentTypeCode());
         validateTemplates(request.points());
         Map<String, ?> before = summary(product);
@@ -194,7 +219,14 @@ public class DeviceProductService {
             throw error(409, STATE_CONFLICT, "当前产品状态不能启用");
         }
         List<BizProductPointTemplate> points = templates(productId);
-        validateStoredTemplates(points);
+        boolean typed = "DAIKIN_UNIT".equals(product.getIdentityType())
+                && Set.of("DAIKIN_INDOOR_V2", "DAIKIN_OUTDOOR_V2").contains(product.getExpectedProfileCode());
+        if (typed) {
+            validateTypedEquipmentType(product.getExpectedProfileCode(), product.getEquipmentTypeCode());
+            if (!points.isEmpty()) throw error(409, VALIDATION_FAILED, "状态产品不能包含数值测点模板");
+        } else {
+            validateStoredTemplates(points);
+        }
         String before = product.getStatus();
         product.setStatus("ENABLED");
         product.setUpdateTime(LocalDateTime.now());
@@ -269,6 +301,13 @@ public class DeviceProductService {
         }
     }
 
+    private void validateTypedEquipmentType(String profileCode, String typeCode) {
+        validateEquipmentType(typeCode);
+        var type = equipmentTypeMapper.selectById(normalize(typeCode));
+        String category = "DAIKIN_INDOOR_V2".equals(profileCode) ? "INDOOR_UNIT" : "OUTDOOR_UNIT";
+        if (!category.equals(type.getEquipCategory())) throw error(400, VALIDATION_FAILED, "内外机协议与设备种类不一致");
+    }
+
     private void validateEquipmentType(String typeCode) {
         BizEquipmentType type = equipmentTypeMapper.selectById(normalize(typeCode));
         if (type == null || !Integer.valueOf(1).equals(type.getStatus())) {
@@ -299,7 +338,7 @@ public class DeviceProductService {
         List<String> allowed = new ArrayList<>();
         allowed.add("COPY");
         if ("DRAFT".equals(product.getStatus())) {
-            allowed.add("UPDATE");
+            if (!"DAIKIN_UNIT".equals(product.getIdentityType())) allowed.add("UPDATE");
             allowed.add("ENABLE");
         } else if ("ENABLED".equals(product.getStatus())) {
             allowed.add("DISABLE");
