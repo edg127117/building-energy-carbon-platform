@@ -10,6 +10,9 @@ vi.mock('@/modules/device-onboarding/public', async importOriginal => ({ ...(awa
 vi.mock('../api/protocol-configuration', () => ({
   createProtocolConfiguration: vi.fn(), getProtocolConfiguration: vi.fn(), inspectProtocolSample: vi.fn(),
   listProtocolConfigurations: vi.fn(), previewProtocolConfiguration: vi.fn(), updateProtocolConfiguration: vi.fn(),
+  freezeProtocolVersion: vi.fn(), importProtocolVersions: vi.fn(), listProtocolDeploymentHistory: vi.fn(),
+  listProtocolPublicationTargets: vi.fn(), listProtocolVersions: vi.fn(), registerProtocolPublicationTarget: vi.fn(),
+  requestProtocolPublication: vi.fn(), requestProtocolRollback: vi.fn(),
 }))
 
 let wrapper: ReturnType<typeof mount>
@@ -27,6 +30,8 @@ describe('协议配置页面', () => {
     vi.mocked(inspectProtocolSample).mockResolvedValue({ fields: [{ path: '/power', type: 'NUMBER', value: '12.5' }] })
     const api = await import('../api/protocol-configuration')
     vi.mocked(api.listProtocolConfigurations).mockResolvedValue({ page: 1, size: 20, total: 0, items: [] })
+    vi.mocked(api.listProtocolPublicationTargets).mockResolvedValue([])
+    vi.mocked(api.listProtocolVersions).mockResolvedValue([])
     wrapper = mount(ProtocolConfigurationPage)
     await flushPromises()
   })

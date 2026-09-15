@@ -11,6 +11,7 @@ import { t } from '@/locales'
 import { getDeviceProduct, listDeviceProducts, type DeviceProductDetail, type DeviceProductListItem } from '@/modules/device-onboarding/public'
 import { useProtocolConfiguration } from '../composables/use-protocol-configuration'
 import { applyProductContract, validateProtocolConfiguration, type InspectedField, type ProtocolMapping } from '../models/protocol-configuration'
+import ProtocolPublicationPanel from '../components/ProtocolPublicationPanel.vue'
 
 type FieldTreeNode = { id: string; label: string; path?: string; field?: InspectedField; children?: FieldTreeNode[] }
 
@@ -304,6 +305,13 @@ onMounted(() => { void Promise.all([management.loadDrafts(), loadProducts()]).ca
         <ElTable v-else :data="management.preview.value.errors"><ElTableColumn :label="t('protocolConfiguration.labels.result')" prop="code" min-width="150" /><ElTableColumn :label="t('protocolConfiguration.labels.errorPath')" prop="path" min-width="180" /><ElTableColumn :label="t('protocolConfiguration.labels.status')" prop="message" min-width="260" /></ElTable>
       </template>
     </ElCard>
+
+    <ProtocolPublicationPanel
+      :draft-id="management.draft.value?.id ?? null"
+      :draft-revision="management.draft.value?.revision ?? null"
+      :product-enabled="product?.status === 'ENABLED'"
+      :selected-product="product?.status === 'ENABLED' ? product : null"
+    />
   </section>
 </template>
 

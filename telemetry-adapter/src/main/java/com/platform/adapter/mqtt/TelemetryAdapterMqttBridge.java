@@ -57,6 +57,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     private final AdapterMqttProperties properties;
     private final ObjectMapper objectMapper;
     private final JsonTelemetryAdapter telemetryAdapter;
+    private final TelemetryOutputSerializer outputSerializer;
     private final ProtocolProfileProvider profileProvider;
     private final AdapterMqttSslContextFactory sslContextFactory;
     private final AtomicBoolean connecting = new AtomicBoolean();
@@ -70,6 +71,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
             AdapterMqttProperties properties,
             ObjectMapper objectMapper,
             JsonTelemetryAdapter telemetryAdapter,
+            TelemetryOutputSerializer outputSerializer,
             ProtocolProfileProvider profileProvider,
             AdapterMqttSslContextFactory sslContextFactory) {
         this.client = client;
@@ -77,6 +79,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.telemetryAdapter = telemetryAdapter;
+        this.outputSerializer = outputSerializer;
         this.profileProvider = profileProvider;
         this.sslContextFactory = sslContextFactory;
     }
@@ -199,8 +202,9 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
                     System.currentTimeMillis(),
                     resolved.profile(),
                     resolved.mappings());
-            byte[] canonicalPayload = objectMapper.writeValueAsBytes(canonical);
-            if ("ADAPTER_PROXY".equals(canonical.declaredAckMode())) {
+            byte[] canonicalPayload = outputSerializer.serialize(canonical);
+            if (outputSerializer.supportsProxyAck()
+                    && "ADAPTER_PROXY".equals(canonical.declaredAckMode())) {
                 pendingCanonicalId = canonical.canonicalMessageId();
                 pendingProxyAcks.computeIfAbsent(pendingCanonicalId,
                         ignored -> new ConcurrentLinkedQueue<>()).add(message);

@@ -65,6 +65,7 @@ function operationLabel(operation?: SensitiveChangeOperation) {
     BIND_PENDING_DEVICE: 'bindPendingDevice',
     ACTIVATE_DEVICE_IDENTITY: 'activateDeviceIdentity',
     DEACTIVATE_DEVICE_IDENTITY: 'deactivateDeviceIdentity',
+    PUBLISH_PROTOCOL_CONFIGURATION: 'publishProtocolConfiguration',
   }
   return t(`accessControl.operation.${keys[operation ?? 'OPEN_USER_ACCOUNT']}`)
 }
