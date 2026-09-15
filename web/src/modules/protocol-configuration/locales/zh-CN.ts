@@ -31,4 +31,37 @@ export default {
     mappingLimit: '测点映射不能超过 128 项。', mappingRequired: '请至少启用一项测点映射。', duplicateMetric: '同一指标只能启用一次。', mappingContract: '映射的指标、必需性或标准单位与产品模板不一致。',
     mappingFields: '请补全启用映射的来源路径、来源单位、倍率和偏移。', missingRequiredMetric: '产品模板中的必需测点必须全部映射。',
   },
+  publication: {
+    title: '协议发布与回退',
+    description: '冻结已保存草稿，选择构成本目标完整配置集合的版本，并通过公共敏感变更流程审批。',
+    localBoundary: '当前先完成隔离环境闭环。平台仍在本地，目标状态仅采用后端回执；未连接云端时不代表云端已部署。',
+    freezeHint: '先保存当前草稿并选择已启用产品，才能冻结为不可变版本。',
+    versionLabel: '{name} · r{revision} · {digest}',
+    productPage: '{current} / {total}',
+    sections: { versions: '不可变版本集合', target: '发布目标', history: '发布与加载历史' },
+    actions: {
+      refresh: '刷新后台状态', register: '登记目标', freeze: '冻结当前草稿', publish: '创建发布申请', rollback: '申请回退', cancel: '取消',
+      import: '迁移导出配置', parseImport: '读取配置对象', confirmImport: '导入不可变版本', previous: '上一页产品', next: '下一页产品',
+    },
+    labels: {
+      targetName: '目标名称', outputVersion: '输出版本', topics: '允许的 Topic（每行一个）', status: '运行状态', sequence: '当前序号',
+      lastSeen: '最后联系', error: '错误码', digest: '内容摘要', approval: '审批编号', createdAt: '创建时间', loadedAt: '加载时间',
+      profileId: '规则标识', profileCode: '协议标识', importKind: '规则类型', boundProduct: '绑定已启用产品',
+    },
+    placeholders: { target: '选择联系状态正常的目标', topics: 'building/+/meter/up' },
+    empty: { versions: '尚无不可变协议版本', history: '选择目标后显示后端发布历史' },
+    status: { READY: '就绪', PENDING_SYNC: '待同步', LOADED: '已加载', FAILED: '加载失败', UNKNOWN: '状态未知' },
+    validation: {
+      targetRequired: '请填写目标名称并至少配置一个 Topic。', targetUnavailable: '状态未知的目标不能发布或回退。', versionRequired: '请至少选择一个版本作为完整目标集合。',
+      rollbackTarget: '历史记录与当前目标或可回退状态不一致，请刷新后重试。',
+      importPackage: '导出包格式无效：需要 schemaVersion=1，且每条规则包含唯一 profileId 和 profileCode。', productBindings: '请为导出包中的每条启用及归档规则选择一个已启用产品。',
+    },
+    messages: { frozen: '当前草稿已冻结为不可变版本。', imported: '导出配置已拆分并导入不可变版本；尚未发布或生效。', requestCreated: '申请草稿已创建，请在下方公共审批区提交、审核并执行。' },
+    register: { title: '登记适配器目标' },
+    key: { title: '一次性目标密钥', warning: '该密钥仅本次显示。请立即复制并安全交付，关闭后页面不会保存或再次显示。', confirm: '我已安全保存并关闭' },
+    import: {
+      title: '迁移适配器导出配置', notice: '页面只拆分配置对象并建立产品绑定，不执行业务解析。导入不会生效，仍需选入目标完整集合并完成审批。内容仅保留在当前弹窗内。',
+      placeholder: '粘贴包含 snapshot 和可选 archived 的适配器导出 JSON', productPlaceholder: '搜索并选择已启用产品', active: '启用规则', archived: '归档规则',
+    },
+  },
 } as const

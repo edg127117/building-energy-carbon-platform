@@ -66,6 +66,74 @@ export type ProtocolPreview = {
 
 export type ProductPointOption = ProductPointTemplate & { disabled?: boolean }
 
+export type ProtocolOutputVersion = 'V1' | 'V2'
+export type ProtocolTargetStatus = 'READY' | 'PENDING_SYNC' | 'LOADED' | 'FAILED' | 'UNKNOWN'
+export type ProtocolDeploymentStatus = 'PENDING_SYNC' | 'LOADED' | 'FAILED' | 'UNKNOWN'
+
+export type ProtocolPublicationTarget = {
+  targetId: string
+  name: string
+  outputVersion: ProtocolOutputVersion
+  allowedTopics: string[]
+  lastSeen: number
+  currentSequence: number
+  status: ProtocolTargetStatus
+  errorCode: string | null
+}
+
+export type ProtocolTargetCreated = {
+  target: ProtocolPublicationTarget
+  oneTimeKey: string
+}
+
+export type ProtocolFrozenVersion = {
+  versionId: string
+  draftId: string
+  draftRevision: number
+  digest: string
+  configuration: ProtocolConfiguration
+  createdAt: number
+}
+
+export type ProtocolDeployment = {
+  targetId: string
+  sequence: number
+  digest: string
+  approvalId: string
+  status: ProtocolDeploymentStatus
+  errorCode: string | null
+  createdAt: number
+  loadedAt: number
+}
+
+export type ProtocolImportProfile = { profileId: string; profileCode: string; archived: boolean }
+export type ParsedProtocolImport = { snapshotJson: string; archiveJson: string | null; profiles: ProtocolImportProfile[] }
+
+/** 只拆分适配器导出对象并提取绑定键；业务映射内容原样交给后端校验与导入。 */
+export function parseProtocolExportPackage(payload: string): ParsedProtocolImport {
+  const value = JSON.parse(payload) as Record<string, unknown>
+  const snapshot = parseExportGroup(value.snapshot, false)
+  const archived = value.archived == null ? null : parseExportGroup(value.archived, true)
+  const profiles = [...snapshot.profiles, ...(archived?.profiles ?? [])]
+  if (!profiles.length || new Set(profiles.map(item => item.profileId)).size !== profiles.length) throw new Error('INVALID_PROTOCOL_EXPORT')
+  return { snapshotJson: JSON.stringify(snapshot.raw), archiveJson: archived ? JSON.stringify(archived.raw) : null, profiles }
+}
+
+function parseExportGroup(input: unknown, archived: boolean) {
+  if (!input || typeof input !== 'object') throw new Error('INVALID_PROTOCOL_EXPORT')
+  const raw = input as Record<string, unknown>
+  if (raw.schemaVersion !== 1 || !['V1', 'V2'].includes(String(raw.outputVersion)) || !Array.isArray(raw.profiles)) throw new Error('INVALID_PROTOCOL_EXPORT')
+  const profiles = raw.profiles.map(item => {
+    if (!item || typeof item !== 'object') throw new Error('INVALID_PROTOCOL_EXPORT')
+    const profile = (item as Record<string, unknown>).profile
+    if (!profile || typeof profile !== 'object') throw new Error('INVALID_PROTOCOL_EXPORT')
+    const { profileId, profileCode } = profile as Record<string, unknown>
+    if (typeof profileId !== 'string' || !profileId.trim() || typeof profileCode !== 'string' || !profileCode.trim()) throw new Error('INVALID_PROTOCOL_EXPORT')
+    return { profileId, profileCode, archived }
+  })
+  return { raw, profiles }
+}
+
 export const emptyProtocolConfiguration = (): ProtocolConfiguration => ({
   name: '',
   productId: '',

@@ -102,7 +102,7 @@ GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成�
 
 ### 协议配置与预览
 
-协议可视化接入目前提供第一阶段草稿与预览，页面入口为 `/configuration/ingestion/protocols`，
+协议可视化接入提供草稿、预览及受审批的目标发布，页面入口为 `/configuration/ingestion/protocols`，
 兼容业务路径 `/system/protocol-configurations`，仅对获菜单授权的平台管理员开放。
 `/api/v1/protocol-configurations` 提供分页、详情、创建和按修订号更新；`/inspect` 返回样例字段，
 `/preview` 返回设备身份、时间来源、原值与换算值。更新修订过期返回 409；保存草稿不发布规则。
@@ -115,7 +115,18 @@ HTTP DTO 同时设置固定上限，配置可收紧限制，不能靠调大配�
 
 平台与适配器共同编译 [protocol-core](protocol-core/README.md) 无 I/O 解析源码，
 保留独立构建入口；打包适配器时需保留相邻共用源码目录。新增存储及管理员菜单由 V45 迁移建立。
-审批发布、云端拉取、加载回执、回退及存量规则迁移属于后续阶段，不能把草稿或预览结果称为云端生效。
+`/api/v1/protocol-deployments` 管理目标、不可变版本、历史导入和发布申请；
+`PUBLISH_PROTOCOL_CONFIGURATION` 复用公共敏感变更审批，执行时重新核对目标序号、批准产品和绑定别名。
+每次发布包含完整启用集合，回退也分配新序号。目标需先通过 HTTPS 联系平台并声明匹配的解析和输出能力；
+仅收到对应序号及摘要的加载回执才显示 `LOADED`。默认超过180秒无联系显示 `UNKNOWN`，
+可通过 `protocol-publication.contact-timeout-ms` 调整；该状态不是业务遥测持久化 ACK。
+
+适配器专用 `/api/v1/adapter-configurations/{targetId}` 使用独立 `X-Adapter-Key`，
+密钥只在登记时返回，平台仅保存摘要，用户 JWT 无法调用该入口；服务拒绝非加密请求。
+适配器使用 `ADAPTER_PROFILE_MODE=remote` 主动拉取，HTTPS 证书和主机名校验保持开启。
+`jdbc` 是默认兼容模式，两种模式互斥；完整候选快照持久化后才切换，失败保留旧版，冷启动可恢复本地快照。
+首次升级前用适配器只读导出功能备份完整旧规则；启用集合关联批准产品后导入不可变版本，禁用规则只归档。
+新增存储由 V46 迁移建立。平台仅在本地且云端不可达时，正式云端发布仍未具备部署条件，不能把本地验证称为云端上线。
 
 ### 建筑档案接口
 

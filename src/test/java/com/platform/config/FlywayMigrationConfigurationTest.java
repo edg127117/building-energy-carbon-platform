@@ -65,7 +65,8 @@ class FlywayMigrationConfigurationTest {
                 "V42__mysql_carbon_calculation_shared_evidence.sql",
                 "V43__mysql_eerp_cold_station.sql",
                 "V44__mysql_indoor_unit_meter_template.sql",
-                "V45__mysql_protocol_configuration_draft.sql");
+                "V45__mysql_protocol_configuration_draft.sql",
+                "V46__mysql_protocol_publication.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

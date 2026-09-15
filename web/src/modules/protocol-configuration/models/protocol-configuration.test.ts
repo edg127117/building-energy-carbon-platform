@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyProductContract, emptyProtocolConfiguration, validateProtocolConfiguration } from './protocol-configuration'
+import { applyProductContract, emptyProtocolConfiguration, parseProtocolExportPackage, validateProtocolConfiguration } from './protocol-configuration'
 import type { DeviceProductDetail } from '@/modules/device-onboarding/public'
 
 const product = {
@@ -25,5 +25,28 @@ describe('协议草稿与产品模板约束', () => {
     expect(validateProtocolConfiguration(form, product)).toBe('missingRequiredMetric')
     form.mappings = [{ sourcePath: '/t', metricCode: 'temperature', sourceUnit: '℃', targetUnit: 'K', scale: '1', offset: '0', required: true, enabled: true, sortOrder: 0 }]
     expect(validateProtocolConfiguration(form, product)).toBe('mappingContract')
+  })
+})
+
+describe('协议迁移导出包边界', () => {
+  it('仅拆分配置对象并列出启用与归档规则的产品绑定键', () => {
+    const result = parseProtocolExportPackage(JSON.stringify({
+      snapshot: { schemaVersion: 1, outputVersion: 'V1', profiles: [{ profile: { profileId: 'active-1', profileCode: 'A' }, mappings: [{ source: '/p' }] }] },
+      archived: { schemaVersion: 1, outputVersion: 'V1', profiles: [{ profile: { profileId: 'old-1', profileCode: 'OLD' }, mappings: [] }] },
+    }))
+    expect(result.profiles).toEqual([
+      { profileId: 'active-1', profileCode: 'A', archived: false },
+      { profileId: 'old-1', profileCode: 'OLD', archived: true },
+    ])
+    expect(JSON.parse(result.snapshotJson).profiles[0].mappings).toEqual([{ source: '/p' }])
+    expect(JSON.parse(result.archiveJson!).profiles).toHaveLength(1)
+  })
+
+  it.each([
+    '{}',
+    '{"snapshot":{"schemaVersion":2,"profiles":[]}}',
+    '{"snapshot":{"schemaVersion":1,"profiles":[{"profile":{"profileId":"same","profileCode":"A"}}]},"archived":{"schemaVersion":1,"profiles":[{"profile":{"profileId":"same","profileCode":"B"}}]}}',
+  ])('拒绝缺少快照、版本错误或重复规则标识的导出包', payload => {
+    expect(() => parseProtocolExportPackage(payload)).toThrow('INVALID_PROTOCOL_EXPORT')
   })
 })

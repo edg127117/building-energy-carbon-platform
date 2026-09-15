@@ -12,7 +12,23 @@ spring:
     password: ${ADAPTER_MYSQL_PASSWORD:change-me}
 
 adapter:
-  profile-refresh-ms: ${ADAPTER_PROFILE_REFRESH_MS:60000}
+  profile:
+    mode: ${ADAPTER_PROFILE_MODE:jdbc}
+    output-version: ${ADAPTER_OUTPUT_VERSION:V2}
+    refresh-millis: ${ADAPTER_PROFILE_REFRESH_MS:60000}
+    remote:
+      base-url: ${ADAPTER_CONFIGURATION_BASE_URL:}
+      target-id: ${ADAPTER_TARGET_ID:}
+      adapter-key: ${ADAPTER_CONFIGURATION_KEY:}
+      snapshot-file: ${ADAPTER_SNAPSHOT_FILE:data/protocol-snapshot.json}
+      connect-timeout-millis: ${ADAPTER_CONFIGURATION_CONNECT_TIMEOUT_MILLIS:5000}
+      request-timeout-millis: ${ADAPTER_CONFIGURATION_REQUEST_TIMEOUT_MILLIS:10000}
+      max-response-bytes: ${ADAPTER_CONFIGURATION_MAX_RESPONSE_BYTES:2097152}
+      trust-store: ${ADAPTER_CONFIGURATION_TRUST_STORE:}
+      trust-store-password: ${ADAPTER_CONFIGURATION_TRUST_STORE_PASSWORD:}
+      trust-store-type: ${ADAPTER_CONFIGURATION_TRUST_STORE_TYPE:PKCS12}
+    export-enabled: ${ADAPTER_PROFILE_EXPORT_ENABLED:false}
+    export-file: ${ADAPTER_PROFILE_EXPORT_FILE:protocol-migration-export.json}
   mqtt:
     enabled: ${ADAPTER_MQTT_ENABLED:true}
     broker-url: ${ADAPTER_MQTT_BROKER_URL:ssl://127.0.0.1:8883}

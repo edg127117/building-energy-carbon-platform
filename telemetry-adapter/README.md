@@ -22,6 +22,24 @@
 4. 给本地平台 MQTT 账号配置：只需订阅 `device/telemetry/up`；旧迁移链另订阅 `device/data/up`。
 5. 在云端 MySQL 新增并启用协议模板和字段映射。
 
+协议模板默认仍由 JDBC 加载。切换为平台发布的远程完整快照时配置：
+
+```text
+ADAPTER_PROFILE_MODE=remote
+ADAPTER_OUTPUT_VERSION=V2
+ADAPTER_CONFIGURATION_BASE_URL=https://platform.example.com/api
+ADAPTER_TARGET_ID=telemetry-adapter-01
+ADAPTER_CONFIGURATION_KEY=<独立随机凭据>
+ADAPTER_SNAPSHOT_FILE=data/protocol-snapshot.json
+```
+
+`ADAPTER_CONFIGURATION_BASE_URL` 已包含 `/api`，适配器只追加
+`/v1/adapter-configurations/{targetId}`。客户端固定校验 HTTPS 证书且不跟随重定向；使用私有 CA
+或本地联调证书时，通过 `ADAPTER_CONFIGURATION_TRUST_STORE`、
+`ADAPTER_CONFIGURATION_TRUST_STORE_PASSWORD` 和 `ADAPTER_CONFIGURATION_TRUST_STORE_TYPE`
+提供 PKCS12/JKS 信任库，不能关闭 TLS 校验。`ADAPTER_OUTPUT_VERSION` 必须与快照的
+`outputVersion` 相同；V1 输出旧标准报文，V2 保留关联标识和 ACK 能力字段。
+
 构建和测试：
 
 ```powershell
@@ -37,6 +55,22 @@ Actuator 端口暴露到公网；确需修改监听地址时使用 `ADAPTER_BIND
 ```powershell
 java -jar target/telemetry-adapter-1.0-SNAPSHOT.jar
 ```
+
+首次迁移旧 JDBC 规则可运行一次只读导出。命令不会写旧数据库，也不会自动切换配置来源；
+运行前应先用数据库只读账号验证权限：
+
+```powershell
+java -jar target/telemetry-adapter-1.0-SNAPSHOT.jar `
+  --spring.main.web-application-type=none `
+  --adapter.mqtt.enabled=false `
+  --adapter.profile.mode=jdbc `
+  --adapter.profile.output-version=V2 `
+  --adapter.profile.export-enabled=true `
+  --adapter.profile.export-file=protocol-migration-export.json
+```
+
+输出是一个 `MigrationExport`：`snapshot` 只含启用模板和启用映射，可交给平台导入并逐模板
+关联产品；`archived` 原样保存禁用模板和禁用映射，只供归档，不得发布到运行适配器。
 
 ## 3. 如何做到“通用”
 

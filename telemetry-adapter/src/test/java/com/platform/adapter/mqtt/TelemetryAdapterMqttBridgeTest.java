@@ -8,6 +8,7 @@ import com.platform.adapter.profile.ProtocolProfile;
 import com.platform.adapter.profile.ProtocolProfileProvider;
 import com.platform.adapter.profile.ProtocolProfileUnavailableException;
 import com.platform.adapter.profile.ResolvedProtocolProfile;
+import com.platform.adapter.profile.AdapterProfileProperties;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.MqttException;
 import org.eclipse.paho.client.mqttv3.MqttMessage;
@@ -38,6 +39,7 @@ class TelemetryAdapterMqttBridgeTest {
     private ProtocolProfileProvider profileProvider;
     private TaskScheduler scheduler;
     private TelemetryAdapterMqttBridge bridge;
+    private AdapterProfileProperties profileProperties;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -56,15 +58,38 @@ class TelemetryAdapterMqttBridgeTest {
         properties.setInitialRetryMillis(1000);
         properties.getTls().setEnabled(false);
         properties.getTls().setAllowPlaintextForTests(true);
+        profileProperties = new AdapterProfileProperties();
         bridge = new TelemetryAdapterMqttBridge(
                 client,
                 scheduler,
                 properties,
                 objectMapper,
                 new JsonTelemetryAdapter(objectMapper),
+                new TelemetryOutputSerializer(objectMapper, profileProperties),
                 profileProvider,
                 new AdapterMqttSslContextFactory());
         when(profileProvider.resolve(anyString(), any())).thenReturn(resolved());
+    }
+
+    @Test
+    void serializesConfiguredV1ContractWithoutV2ReliabilityFields() throws Exception {
+        profileProperties.setOutputVersion("V1");
+        MqttMessage raw = message(47, """
+                {"MAC":"123456789012345","current_energy":12.34}
+                """);
+
+        bridge.messageArrived("device/raw/energy/up", raw);
+
+        ArgumentCaptor<byte[]> payload = ArgumentCaptor.forClass(byte[].class);
+        verify(client).publish(anyString(), payload.capture(), anyInt(), any(Boolean.class));
+        JsonNode canonical = new ObjectMapper().readTree(payload.getValue());
+        assertThat(canonical.path("standardVersion").asText()).isEqualTo("1.0");
+        assertThat(canonical.path("eventTime").asLong()).isPositive();
+        assertThat(canonical.path("receivedTime").asLong()).isPositive();
+        assertThat(canonical.path("timeSource").asText()).isEqualTo("SERVER_RECEIVED");
+        assertThat(canonical.has("canonicalMessageId")).isFalse();
+        assertThat(canonical.has("declaredAckMode")).isFalse();
+        verify(client).messageArrivedComplete(47, 1);
     }
 
     @Test

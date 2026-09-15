@@ -139,6 +139,7 @@ export type SensitiveChangeOperation =
   | 'BIND_PENDING_DEVICE'
   | 'ACTIVATE_DEVICE_IDENTITY'
   | 'DEACTIVATE_DEVICE_IDENTITY'
+  | 'PUBLISH_PROTOCOL_CONFIGURATION'
 
 export type SensitiveChange = {
   requestId: string

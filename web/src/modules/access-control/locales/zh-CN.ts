@@ -182,6 +182,7 @@ export default {
     bindPendingDevice: '绑定待接入设备',
     activateDeviceIdentity: '启用设备身份',
     deactivateDeviceIdentity: '停用设备身份',
+    publishProtocolConfiguration: '发布或回退协议配置',
   },
   validation: {
     username: '请填写账号。',

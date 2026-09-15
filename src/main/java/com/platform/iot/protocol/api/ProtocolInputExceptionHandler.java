@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.Map;
 
 /** 样例可能含设备敏感字段，输入错误不得记录包含拒绝值的 Bean Validation 异常文本。 */
-@RestControllerAdvice(assignableTypes=ProtocolConfigurationController.class)
+@RestControllerAdvice(assignableTypes={ProtocolConfigurationController.class,ProtocolPublicationController.class,AdapterConfigurationController.class})
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class ProtocolInputExceptionHandler {
     @ExceptionHandler({MethodArgumentNotValidException.class,HttpMessageNotReadableException.class})

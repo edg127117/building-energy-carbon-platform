@@ -5,6 +5,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +22,11 @@ import java.util.Map;
  * 时继续使用上一完整版本，避免 MQTT 热路径读到半份配置或逐包访问数据库。</p>
  */
 @Component
+@ConditionalOnProperty(
+        prefix = "adapter.profile",
+        name = "mode",
+        havingValue = "jdbc",
+        matchIfMissing = true)
 public class JdbcProtocolProfileProvider implements ProtocolProfileProvider {
 
     private static final Logger log = LoggerFactory.getLogger(JdbcProtocolProfileProvider.class);
@@ -38,7 +44,7 @@ public class JdbcProtocolProfileProvider implements ProtocolProfileProvider {
         refresh();
     }
 
-    @Scheduled(fixedDelayString = "${adapter.profile-refresh-ms:60000}")
+    @Scheduled(fixedDelayString = "${adapter.profile.refresh-millis:60000}")
     public void refresh() {
         try {
             List<ProtocolProfile> profiles = jdbcTemplate.query("""
