@@ -74,13 +74,23 @@ public final class DeviceOnboardingContracts {
             @NotEmpty List<@Valid PointBindingRequest> pointBindings) {
     }
 
-    @Schema(description = "类型化状态绑定；不接受数值测点，归属由空间和厂家项目映射校验")
+    @Schema(description = "类型化厂家绑定；可显式绑定内机温度测点，归属由空间和厂家项目映射校验")
     public record TypedBindRequest(
             @NotBlank String productId, @NotBlank String buildingId, @NotBlank String spaceId,
-            @NotBlank String systemGroupId, String existingEquipmentId, @Valid NewEquipmentRequest newEquipment) {
+            @NotBlank String systemGroupId, String existingEquipmentId, @Valid NewEquipmentRequest newEquipment,
+            List<@Valid PointBindingRequest> pointBindings, String numericSourceId) {
+        public TypedBindRequest {
+            pointBindings = pointBindings == null ? List.of() : List.copyOf(pointBindings);
+        }
+
+        public TypedBindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
+                String existingEquipmentId, NewEquipmentRequest newEquipment) {
+            this(productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment, List.of(), null);
+        }
+
         public BindRequest asBinding() {
             return new BindRequest(productId, buildingId, spaceId, systemGroupId,
-                    existingEquipmentId, newEquipment, List.of());
+                    existingEquipmentId, newEquipment, pointBindings);
         }
     }
 

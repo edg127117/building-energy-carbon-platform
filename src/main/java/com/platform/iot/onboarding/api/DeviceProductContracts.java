@@ -33,7 +33,16 @@ public final class DeviceProductContracts {
             @NotBlank @Size(max = 100) String productName,
             @Size(max = 100) String manufacturer, @Size(max = 100) String model,
             @NotBlank @Size(max = 20) String equipmentTypeCode,
-            @NotBlank String expectedProfileCode) {
+            @NotBlank String expectedProfileCode,
+            List<@Valid PointTemplateRequest> temperatureTemplates) {
+        public TypedStateRequest {
+            temperatureTemplates = temperatureTemplates == null ? List.of() : List.copyOf(temperatureTemplates);
+        }
+
+        public TypedStateRequest(String productCode, String productName, String manufacturer, String model,
+                String equipmentTypeCode, String expectedProfileCode) {
+            this(productCode, productName, manufacturer, model, equipmentTypeCode, expectedProfileCode, List.of());
+        }
     }
 
     @Schema(description = "更新仍为草稿且未被设备使用的产品")

@@ -102,9 +102,10 @@ public class DeviceProductService {
         }
         requireAdmin(roles);
         validateTypedEquipmentType(request.expectedProfileCode(), request.equipmentTypeCode());
+        validateTypedTemperatureTemplates(request.expectedProfileCode(), request.temperatureTemplates());
         return createProduct(new DeviceProductContracts.CreateRequest(request.productCode(), request.productName(),
                 request.manufacturer(), request.model(), request.equipmentTypeCode(), request.expectedProfileCode(),
-                "DAIKIN_UNIT", List.of()), operatorId, roles, true);
+                "DAIKIN_UNIT", request.temperatureTemplates()), operatorId, roles, true);
     }
 
     private DeviceProductContracts.DetailView createProduct(DeviceProductContracts.CreateRequest request,
@@ -223,7 +224,7 @@ public class DeviceProductService {
                 && Set.of("DAIKIN_INDOOR_V2", "DAIKIN_OUTDOOR_V2").contains(product.getExpectedProfileCode());
         if (typed) {
             validateTypedEquipmentType(product.getExpectedProfileCode(), product.getEquipmentTypeCode());
-            if (!points.isEmpty()) throw error(409, VALIDATION_FAILED, "状态产品不能包含数值测点模板");
+            validateStoredTypedTemperatureTemplates(product.getExpectedProfileCode(), points);
         } else {
             validateStoredTemplates(points);
         }
@@ -298,6 +299,33 @@ public class DeviceProductService {
         }
         if (points.stream().anyMatch(point -> point.getUnit() == null || point.getUnit().isBlank())) {
             throw error(409, VALIDATION_FAILED, "产品测点模板单位不完整");
+        }
+    }
+
+    private void validateTypedTemperatureTemplates(String profileCode,
+            List<DeviceProductContracts.PointTemplateRequest> points) {
+        validateTemplates(points);
+        if (!points.isEmpty() && !"DAIKIN_INDOOR_V2".equals(profileCode)) {
+            throw error(400, VALIDATION_FAILED, "大金外机状态产品不能配置温度测点模板");
+        }
+        for (DeviceProductContracts.PointTemplateRequest point : points) {
+            if (!Set.of("roomTemp", "temperature").contains(point.metricCode().trim())
+                    || !"°C".equals(point.unit().trim())
+                    || Boolean.TRUE.equals(point.forCalc())) {
+                throw error(400, VALIDATION_FAILED, "大金内机温度模板仅支持 roomTemp/temperature、°C 且不参与计算");
+            }
+        }
+    }
+
+    private void validateStoredTypedTemperatureTemplates(String profileCode, List<BizProductPointTemplate> points) {
+        if (!points.isEmpty() && !"DAIKIN_INDOOR_V2".equals(profileCode)) {
+            throw error(409, VALIDATION_FAILED, "大金外机状态产品不能包含温度测点模板");
+        }
+        for (BizProductPointTemplate point : points) {
+            if (!Set.of("roomTemp", "temperature").contains(point.getMetricCode())
+                    || !"°C".equals(point.getUnit()) || !Integer.valueOf(0).equals(point.getForCalc())) {
+                throw error(409, VALIDATION_FAILED, "大金内机温度模板配置无效");
+            }
         }
     }
 

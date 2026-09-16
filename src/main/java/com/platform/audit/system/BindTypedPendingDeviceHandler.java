@@ -32,17 +32,27 @@ public class BindTypedPendingDeviceHandler implements SensitiveOperationHandler 
         String equipmentId = optionalText(binding.existingEquipmentId(), 32, message);
         var equipment = binding.newEquipment();
         if ((equipmentId == null) == (equipment == null)) throw invalid(message);
+        if (binding.pointBindings().size() > 2) throw invalid(message);
+        var points = binding.pointBindings().stream().map(point -> {
+            if (point == null) throw invalid(message);
+            return new DeviceOnboardingContracts.PointBindingRequest(
+                    requireText(point.metricCode(), 100, message), optionalText(point.existingPointId(), 32, message),
+                    optionalText(point.pointCode(), 100, message), optionalText(point.pointName(), 100, message),
+                    optionalText(point.namingRuleId(), 32, message), optionalText(point.familyCode(), 20, message),
+                    optionalText(point.componentCode(), 20, message), optionalText(point.dataType(), 20, message));
+        }).toList();
         var normalized = new DeviceOnboardingContracts.TypedBindRequest(
                 requireText(binding.productId(), 32, message), requireText(binding.buildingId(), 32, message),
                 requireText(binding.spaceId(), 32, message), requireText(binding.systemGroupId(), 32, message),
                 equipmentId, equipment == null ? null : new DeviceOnboardingContracts.NewEquipmentRequest(
                         requireText(equipment.equipmentName(), 100, message),
-                        optionalText(equipment.manufacturer(), 100, message)));
+                        optionalText(equipment.manufacturer(), 100, message)), points,
+                optionalText(binding.numericSourceId(), 32, message));
         String building = service.resolveTypedBindBuilding(pendingId, normalized,
                 DeviceOnboardingSensitiveOperationHandlers.PLATFORM_ADMIN);
         return new NormalizedSensitiveCommand(building, "PENDING_DEVICE", pendingId,
                 support.canonical(new Command(pendingId, normalized), message),
-                "buildingId=" + building + ";bindingType=TYPED_STATE;pointCount=0");
+                "buildingId=" + building + ";bindingType=TYPED_STATE;pointCount=" + points.size());
     }
 
     @Override

@@ -24,6 +24,17 @@ class DaikinCatalogReaderTest {
     private final DaikinCatalogReader reader = new DaikinCatalogReader(decoder, clock, 3, 10);
 
     @Test
+    void monitoringKeepsAcceptedPageWhenLaterPageFails() {
+        var accepted = new ArrayList<DaikinDevicePageDecoder.Page>();
+        assertThatThrownBy(() -> reader.visitPages("test-source", DaikinDeviceKey.Kind.INDOOR, current -> {
+            if (current == 2) throw new IllegalStateException("isolated page failure");
+            return page(1, 2, 2, "1");
+        }, () -> { }, accepted::add)).hasMessage("isolated page failure");
+        assertThat(accepted).hasSize(1);
+        assertThat(accepted.getFirst().devices()).hasSize(1);
+    }
+
+    @Test
     void readsCompleteCatalogInPageOrderWithoutTransportOrDatabase() {
         List<Integer> requests = new ArrayList<>();
         var result = reader.read("test-source", DaikinDeviceKey.Kind.INDOOR, page -> {

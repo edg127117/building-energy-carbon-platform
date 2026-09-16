@@ -38,6 +38,16 @@ class TdengineHvacRawEventRepositoryTest {
     }
 
     @Test
+    void pointHistoryRestrictsSourceOwnershipWindowCursorAndLimitInDatabase() {
+        when(template.queryForList(startsWith("SELECT *"))).thenReturn(List.of());
+        repository.findPointHistory("BLD001", "EQUIP001", "POINT001", 1000, 9000, 2000L, 501);
+        var sql = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(template).queryForList(sql.capture());
+        assertThat(sql.getValue()).contains("building_id='BLD001'", "equip_id='EQUIP001'", "point_id='POINT001'",
+                "source_system='DAIKIN_V2'", "AND ts>=", "AND ts<", "AND ts>", "ORDER BY ts ASC LIMIT 501");
+    }
+
+    @Test
     void createsChildBeforeFirstPointEventIsQueriedAndInserted() {
         when(template.queryForList(startsWith("SELECT val"))).thenReturn(List.of());
 

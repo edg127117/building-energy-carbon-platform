@@ -55,7 +55,9 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
     /** 新版本管理 API 使用各自机器码，旧接口继续保持既有三字段响应。 */
     private static void addVersionedErrorCode(HttpServletRequest request, Map<String, Object> body) {
         String path = request.getRequestURI();
-        if (path.startsWith(request.getContextPath() + "/v1/device-products")
+        if (path.startsWith(request.getContextPath() + "/v1/hvac-monitoring")) {
+            body.put("errorCode", "DAIKIN_MONITORING_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")
                 || path.startsWith(request.getContextPath() + "/v1/operations/device-onboarding")
                 || path.startsWith(request.getContextPath() + "/v1/daikin/")) {
