@@ -66,7 +66,7 @@ class TdengineHvacRawEventRepositoryTest {
 
     @Test
     void daikinCleanupDeletesOnePointAndOneBoundedTimeWindow() {
-        when(template.queryForList(startsWith("SELECT tbname,point_id,MIN(ts)"))).thenReturn(List.of(Map.of(
+        when(template.queryForList(startsWith("SELECT tbname,point_id,FIRST(ts)"))).thenReturn(List.of(Map.of(
                 "tbname", "raw_custom_1", "point_id", "POINT001",
                 "oldest_ts", new Timestamp(1_700_000_000_000L))));
         when(template.queryForList(contains("source_system<>'DAIKIN_V2'"))).thenReturn(List.of());
@@ -84,7 +84,7 @@ class TdengineHvacRawEventRepositoryTest {
 
     @Test
     void daikinCleanupDoesNotDeleteMixedSourceTimeWindow() {
-        when(template.queryForList(startsWith("SELECT tbname,point_id,MIN(ts)"))).thenReturn(List.of(Map.of(
+        when(template.queryForList(startsWith("SELECT tbname,point_id,FIRST(ts)"))).thenReturn(List.of(Map.of(
                 "tbname", "raw_custom_1", "point_id", "POINT001",
                 "oldest_ts", new Timestamp(1_700_000_000_000L))));
         when(template.queryForList(contains("source_system<>'DAIKIN_V2'")))

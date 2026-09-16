@@ -339,8 +339,9 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
         }
         String stable = safeIdentifier(properties.getDatabase()) + "."
                 + safeIdentifier(properties.getStRawEvent());
+        // TDengine 3.2.3 的 MIN 不接受 TIMESTAMP；FIRST 按主时间轴选择最早的非空时间。
         List<Map<String, Object>> candidates = template.queryForList(
-                "SELECT tbname,point_id,MIN(ts) AS oldest_ts FROM " + stable
+                "SELECT tbname,point_id,FIRST(ts) AS oldest_ts FROM " + stable
                         + " WHERE source_system=" + quote(sourceSystem)
                         + " AND ts<" + quote(new Timestamp(eventTimeExclusive).toString())
                         + (afterPointId == null ? "" : " AND tbname>" + quote(afterPointId))
