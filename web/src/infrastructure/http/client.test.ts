@@ -2,6 +2,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { AxiosError, AxiosHeaders } from 'axios'
 import { configureHttpAuthentication, createHttpClient, requestApi, TransportError } from './client'
 describe('transport boundary', () => {
+  it('保留稳定错误码但不透传服务端异常原文', async () => {
+    const client = createHttpClient('/test', () => null)
+    await expect(client.request({ url: '/only-a-test', adapter: async config => {
+      throw new AxiosError('secret', 'ERR_BAD_RESPONSE', config, undefined, {
+        status: 400, data: { errorCode: 'PROTOCOL_SNAPSHOT_AMBIGUOUS_PROFILE_SELECTOR', msg: 'SQL secret' },
+        statusText: '', headers: new AxiosHeaders(), config,
+      })
+    } })).rejects.toMatchObject({ message: 'request', errorCode: 'PROTOCOL_SNAPSHOT_AMBIGUOUS_PROFILE_SELECTOR' })
+  })
   it('does not expire a newer session on a late unauthorized reply', async () => {
     let token = 'old'
     const onUnauthorized = vi.fn()

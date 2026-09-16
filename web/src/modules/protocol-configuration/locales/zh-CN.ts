@@ -33,7 +33,7 @@ export default {
   },
   publication: {
     title: '协议发布与回退',
-    description: '冻结已保存草稿，选择构成本目标完整配置集合的版本，并通过公共敏感变更流程审批。',
+    description: '选择需要新增或更新的协议版本。发布会自动保留目标已有的其他协议；同一协议的新版本替换旧版本。回退会恢复所选历史完整配置。',
     localBoundary: '当前先完成隔离环境闭环。平台仍在本地，目标状态仅采用后端回执；未连接云端时不代表云端已部署。',
     freezeHint: '先保存当前草稿并选择已启用产品，才能冻结为不可变版本。',
     versionLabel: '{name} · r{revision} · {digest}',
@@ -52,7 +52,9 @@ export default {
     empty: { versions: '尚无不可变协议版本', history: '选择目标后显示后端发布历史' },
     status: { READY: '就绪', PENDING_SYNC: '待同步', LOADED: '已加载', FAILED: '加载失败', UNKNOWN: '状态未知' },
     validation: {
-      targetRequired: '请填写目标名称并至少配置一个 Topic。', targetUnavailable: '状态未知的目标不能发布或回退。', versionRequired: '请至少选择一个版本作为完整目标集合。',
+      ambiguous: '同一 Topic 存在重复判别条件，或无判别条件的规则与其他规则冲突。请调整规则后重新冻结。',
+      invalidConfiguration: '发布配置校验未通过。请检查同一协议是否选择了多个版本、产品是否变更，以及 Topic 是否在目标允许范围内。',
+      targetRequired: '请填写目标名称并至少配置一个 Topic。', targetUnavailable: '状态未知的目标不能发布或回退。', versionRequired: '请至少选择一个需要新增或更新的协议版本。',
       rollbackTarget: '历史记录与当前目标或可回退状态不一致，请刷新后重试。',
       importPackage: '导出包格式无效：需要 schemaVersion=1，且每条规则包含唯一 profileId 和 profileCode。', productBindings: '请为导出包中的每条启用及归档规则选择一个已启用产品。',
     },

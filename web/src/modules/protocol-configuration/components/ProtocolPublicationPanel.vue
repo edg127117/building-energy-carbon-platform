@@ -14,7 +14,7 @@ import {
 } from '@/shared/ui'
 import { t } from '@/locales'
 import { formatDateTime } from '@/shared/utils/format'
-import { requestErrorMessage } from '@/shared/utils/request-error'
+import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
 import {
   freezeProtocolVersion,
   importProtocolVersions,
@@ -50,6 +50,14 @@ const versionIds = ref<string[]>([])
 const loading = ref(false)
 const actionBusy = ref(false)
 const error = ref<string | null>(null)
+function publicationError(reason: unknown): string {
+  const code = requestErrorCode(reason)
+  if (code) {
+    if (code === 'PROTOCOL_SNAPSHOT_AMBIGUOUS_PROFILE_SELECTOR') return t('protocolConfiguration.publication.validation.ambiguous')
+    if (code === 'PROTOCOL_VALIDATION_FAILED' || code?.startsWith('PROTOCOL_SNAPSHOT_')) return t('protocolConfiguration.publication.validation.invalidConfiguration')
+  }
+  return requestErrorMessage(reason)
+}
 const registerOpen = ref(false)
 const targetName = ref('')
 const outputVersion = ref<ProtocolOutputVersion>('V1')
@@ -86,7 +94,7 @@ async function loadEnabledProducts(page = 1, keyword = productKeyword.value) {
     const current = props.selectedProduct?.status === 'ENABLED' ? [props.selectedProduct] : []
     productOptions.value = [...new Map([...current, ...productOptions.value, ...result.items].map(item => [item.productId, item])).values()]
   } catch (reason) {
-    error.value = requestErrorMessage(reason)
+    error.value = publicationError(reason)
   } finally {
     productsLoading.value = false
   }
@@ -104,7 +112,7 @@ async function refresh() {
     if (targetId.value && !nextTargets.some(item => item.targetId === targetId.value)) targetId.value = ''
     if (targetId.value) await loadHistory(targetId.value)
   } catch (reason) {
-    error.value = requestErrorMessage(reason)
+    error.value = publicationError(reason)
     throw reason
   } finally {
     loading.value = false
@@ -125,7 +133,7 @@ async function loadHistory(value: string) {
     const result = await listProtocolDeploymentHistory(value)
     if (owner === historyGeneration && targetId.value === value) history.value = result
   } catch (reason) {
-    if (owner === historyGeneration && targetId.value === value) error.value = requestErrorMessage(reason)
+    if (owner === historyGeneration && targetId.value === value) error.value = publicationError(reason)
     throw reason
   }
 }
@@ -140,7 +148,7 @@ async function freezeCurrentDraft() {
     if (!versionIds.value.includes(frozen.versionId)) versionIds.value = [...versionIds.value, frozen.versionId]
     ElMessage.success(t('protocolConfiguration.publication.messages.frozen'))
   } catch (reason) {
-    error.value = requestErrorMessage(reason)
+    error.value = publicationError(reason)
   } finally {
     actionBusy.value = false
   }
@@ -167,10 +175,10 @@ async function registerTarget() {
     try {
       targets.value = await listProtocolPublicationTargets()
     } catch (reason) {
-      error.value = requestErrorMessage(reason)
+      error.value = publicationError(reason)
     }
   } catch (reason) {
-    error.value = requestErrorMessage(reason)
+    error.value = publicationError(reason)
   } finally {
     actionBusy.value = false
   }
@@ -220,7 +228,7 @@ async function importVersions() {
     importOpen.value = false
     ElMessage.success(t('protocolConfiguration.publication.messages.imported'))
   } catch (reason) {
-    error.value = requestErrorMessage(reason)
+    error.value = publicationError(reason)
   } finally {
     actionBusy.value = false
   }
@@ -271,7 +279,7 @@ async function createApproval(action: () => Promise<SensitiveChange>) {
     changes.current.value = await action()
     ElMessage.success(t('protocolConfiguration.publication.messages.requestCreated'))
   } catch (reason) {
-    error.value = requestErrorMessage(reason)
+    error.value = publicationError(reason)
   } finally {
     actionBusy.value = false
   }

@@ -16,3 +16,7 @@ export function requestErrorMessage(reason: unknown): string {
 export function requestErrorStatus(reason: unknown): number | null {
   return reason instanceof TransportError ? reason.status ?? null : null
 }
+
+export function requestErrorCode(reason: unknown): string | null {
+  return reason instanceof TransportError ? reason.errorCode ?? null : null
+}

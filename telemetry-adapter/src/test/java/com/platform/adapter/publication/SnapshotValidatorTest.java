@@ -48,7 +48,7 @@ class SnapshotValidatorTest {
     }
 
     @Test
-    void requiresExactTopicAndOneDiscriminatorPathPerTopic() {
+    void requiresExactTopicButAllowsDifferentDiscriminatorPaths() {
         Entry wildcard = entry("P1", "/version", "1", "DECIMAL");
         ProtocolProfile p = wildcard.profile();
         ProtocolProfile wildcardProfile = copy(p, "device/raw/+", p.deviceIdentityType(),
@@ -58,11 +58,10 @@ class SnapshotValidatorTest {
                 .isInstanceOf(SnapshotValidationException.class)
                 .extracting("errorCode").isEqualTo("WILDCARD_SOURCE_TOPIC");
 
-        assertThatThrownBy(() -> SnapshotValidator.validate(new Snapshot(1, "V2", List.of(
+        assertThatCode(() -> SnapshotValidator.validate(new Snapshot(1, "V2", List.of(
                 entry("P1", "/version", "1", "DECIMAL"),
                 entry("P2", "/kind", "2", "DECIMAL"))), "V2"))
-                .isInstanceOf(SnapshotValidationException.class)
-                .extracting("errorCode").isEqualTo("INCONSISTENT_VERSION_SELECTOR_PATH");
+                .doesNotThrowAnyException();
     }
 
     @Test

@@ -78,6 +78,27 @@ class ProtocolPublicationTest {
         jdbc.update("UPDATE biz_product_point_template SET unit='W' WHERE product_id=?",product);
         assertThatThrownBy(()->command(t,a,1)).isInstanceOf(BusinessException.class);
     }
+    @Test void addsNewProtocolWithoutRemovingCurrentAndAllowsExplicitRollback() throws Exception {
+        var t=target(); String targetId=t.target().targetId(); service.pull(targetId,1,"V1");
+        var indoor=version("1039"); var first=command(t,indoor,0); approve(first);
+        service.receipt(targetId,new Receipt(1,first.digest(),"LOADED",null));
+        product=UUID.randomUUID().toString().replace("-","");
+        jdbc.update("INSERT INTO biz_device_product(product_id,product_code,product_name,equipment_type_code,expected_profile_code,identity_type,status) VALUES(?,?,?,'WCR','OUTDOOR','SN','ENABLED')",product,product,"外机");
+        jdbc.update("INSERT INTO biz_product_point_template(template_point_id,product_id,metric_code,point_name_template,suffix_code,unit,required_flag,status) VALUES(?,?, 'POWER','功率','P','kW',1,1)",UUID.randomUUID().toString().replace("-",""),product);
+        var c=new Configuration("外机",product,"OUTDOOR","device/raw/publication","SN","/SN","/param/ID1/M","339",null,config("339").mappings());
+        var draft=drafts.create(c,1L,ProtocolPublicationService.ADMIN);
+        var outdoor=service.freeze(draft.id(),draft.revision(),1,ProtocolPublicationService.ADMIN);
+        var added=command(t,outdoor,1);
+        assertThat(added.versionIds()).containsExactlyInAnyOrder(indoor.versionId(),outdoor.versionId());
+        assertThat(mapper.readTree(added.contentJson()).path("profiles")).hasSize(2);
+        var both=service.prepare(new PublishRequest(targetId,1,List.of(indoor.versionId(),outdoor.versionId()),"both"),ProtocolPublicationService.ADMIN);
+        assertThat(both.digest()).isEqualTo(added.digest());
+        approve(added); service.receipt(targetId,new Receipt(2,added.digest(),"LOADED",null));
+        var forged=new FrozenCommand(targetId,2,first.digest(),first.contentJson(),first.versionIds());
+        assertThatThrownBy(()->service.validateCommand(forged)).isInstanceOf(BusinessException.class);
+        approve(service.rollback(new RollbackRequest(targetId,1,2,"explicit"),ProtocolPublicationService.ADMIN));
+        assertThat(service.pull(targetId,1,"V1").digest()).isEqualTo(first.digest());
+    }
     @Test void preventsSelfApprovalAndPayloadTampering() {
         var t=target();service.pull(t.target().targetId(),1,"V1");var c=command(t,version("A"),0);
         var r=changes.createDraft(1,"PUBLISH_PROTOCOL_CONFIGURATION",mapper.valueToTree(c),"unique");
