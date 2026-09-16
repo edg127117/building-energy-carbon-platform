@@ -45,6 +45,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class DeviceProductController {
     private final DeviceProductService service;
 
+    @Operation(summary = "查询产品可使用的已启用设备类型")
+    @GetMapping("/equipment-types")
+    public Result<java.util.List<DeviceProductContracts.EquipmentTypeView>> equipmentTypes(
+            Authentication authentication) {
+        return Result.success(service.equipmentTypes(SecurityUser.roles(authentication)));
+    }
+
     @Operation(summary = "分页查询产品模板")
     @GetMapping
     public Result<PageResponse<DeviceProductContracts.ListItemView>> list(

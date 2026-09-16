@@ -1,6 +1,8 @@
 package com.platform.audit.api;
 
 import com.platform.audit.sensitive.SensitiveChangeService;
+import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.AuditEnvironmentMode;
 import com.platform.framework.common.Result;
 import com.platform.security.SecurityUser;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -29,6 +31,17 @@ import static com.platform.audit.api.SensitiveChangeContracts.View;
 /** 平台管理员使用的系统敏感变更两步审批入口；后台职责由服务层动态校验。 */
 public class SensitiveChangeController {
     private final SensitiveChangeService service;
+    private final AuditGovernanceProperties properties;
+
+    /** 返回实际生效的审批模式供页面提示，不授予职责，也不改变审批步骤。 */
+    @GetMapping("/policy")
+    public Result<ApprovalPolicy> policy() {
+        return Result.success(new ApprovalPolicy(properties.getEnvironmentMode().name(),
+                properties.isAllowSelfApproval()
+                        && properties.getEnvironmentMode() != AuditEnvironmentMode.PRODUCTION));
+    }
+
+    public record ApprovalPolicy(String environmentMode, boolean selfApprovalAllowed) { }
 
     @PostMapping
     public Result<View> create(Authentication authentication, @Valid @RequestBody CreateRequest request) {

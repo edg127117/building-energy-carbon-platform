@@ -1,4 +1,8 @@
 import { requestApi } from '@/infrastructure/http/public'
+
+export function getApprovalPolicy(): Promise<{ environmentMode: string; selfApprovalAllowed: boolean }> {
+  return requestApi({ method: 'get', url: '/v1/backoffice/change-requests/policy' })
+}
 import type {
   BuildingAccessRequest,
   BuildingAccessStatus,

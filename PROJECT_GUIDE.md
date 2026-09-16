@@ -260,6 +260,14 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | Git 与验证 | [`repository-guardrails.md`](docs/development/repository-guardrails.md)、[`iot-change-verification`](.agents/skills/iot-change-verification/SKILL.md) |
 | 旧系统历史 | [`docs/superpowers/README.md`](docs/superpowers/README.md)、[`设计冻结书`](docs/设计冻结书-V1.0-19测点.md) |
 
+### 产品类型与研发审批
+
+产品编辑器通过 `/api/v1/device-products/equipment-types` 选择已启用类型，产品页复用公共审批控件完成提交、审核和执行。V54 复用 V48 的 ODU 分类，补充 `ODU[n]` 命名规则，不预置电表协议、测点或真实设备。
+
+本机研发可显式设置 `AUDIT_ENVIRONMENT_MODE=DEVELOPMENT`（隔离验收用 `TEST`）与 `AUDIT_ALLOW_SELF_APPROVAL=true`，服务绑定到 `127.0.0.1`。默认自审关闭；`PRODUCTION` 与自审同时开启时后端拒绝启动。环境模式由部署正确声明。
+同一管理员仍需提交和审核两项后台职责，依次提交、审核、执行并保留审计记录；开关不授予职责。
+受鉴权保护的 `GET /api/v1/backoffice/change-requests/policy` 返回有效审批模式供页面提示，不替代后端权限校验。生产部署关闭自审并使用独立审核账号。
+
 ## 9. 更新规则
 
 - 稳定定位、模块边界、数据源职责、核心链路或运行入口变化时更新本文件；

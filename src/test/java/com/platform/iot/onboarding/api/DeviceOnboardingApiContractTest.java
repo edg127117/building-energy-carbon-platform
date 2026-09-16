@@ -28,6 +28,11 @@ class DeviceOnboardingApiContractTest {
     void exposesVersionedOpenApiStablePageAndMachineErrorCode() throws Exception {
         String adminToken = login("admin", "123456");
 
+        mockMvc.perform(get("/v1/device-products/equipment-types")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data[0].typeCode").isString())
+                .andExpect(jsonPath("$.data[0].typeName").isString());
+
         mockMvc.perform(get("/v1/device-products")
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isOk())
@@ -74,6 +79,9 @@ class DeviceOnboardingApiContractTest {
                                 """))
                 .andExpect(status().isOk());
         String ownerToken = login("btest_owner", "123456");
+        mockMvc.perform(get("/v1/device-products/equipment-types")
+                        .header("Authorization", "Bearer " + ownerToken))
+                .andExpect(status().isForbidden());
         mockMvc.perform(get("/v1/device-onboarding/naming-rules")
                         .header("Authorization", "Bearer " + ownerToken))
                 .andExpect(status().isForbidden());

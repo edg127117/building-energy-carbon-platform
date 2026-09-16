@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
-import { ElAlert, ElButton, ElCheckbox, ElDialog, ElEmpty, ElForm, ElFormItem, ElInput, ElInputNumber } from '@/shared/ui'
+import { ElAlert, ElButton, ElCheckbox, ElDialog, ElEmpty, ElForm, ElFormItem, ElInput, ElInputNumber, ElSelect, ElOption } from '@/shared/ui'
 import { t } from '@/locales'
-import type { DeviceProductDetail, DeviceProductForm, ProductPointTemplate } from '../models/onboarding'
+import type { DeviceProductDetail, DeviceProductForm, ProductPointTemplate, EquipmentTypeOption } from '../models/onboarding'
 
-const props = withDefaults(defineProps<{ open: boolean; product?: DeviceProductDetail | null; submitting?: boolean }>(), { product: null, submitting: false })
+const props = withDefaults(defineProps<{ open: boolean; product?: DeviceProductDetail | null; submitting?: boolean; equipmentTypes?: EquipmentTypeOption[]; equipmentTypesLoading?: boolean; equipmentTypesError?: string }>(), { product: null, submitting: false, equipmentTypes: () => [], equipmentTypesLoading: false, equipmentTypesError: undefined })
 const emit = defineEmits<{ close: []; save: [value: DeviceProductForm] }>()
 const validationKey = ref<string | null>(null)
 const form = reactive<Omit<DeviceProductForm, 'points'> & { points: ProductPointTemplate[] }>({
@@ -57,6 +57,7 @@ function submit() {
 }
 
 function validate(): string | null {
+  if (!props.equipmentTypes.some(type => type.typeCode === form.equipmentTypeCode)) return 'validation.equipmentType'
   if (!props.product && !form.productCode.trim()) return 'validation.productCode'
   if (![form.productName, form.equipmentTypeCode, form.expectedProfileCode, form.identityType].every(value => value.trim())) return 'validation.productFields'
   if (!form.points.length) return 'validation.productPoints'
@@ -76,13 +77,13 @@ function nullable(value: string): string | null { return value.trim() || null }
 <template>
   <ElDialog :model-value="open" :title="title" width="70%" @update:model-value="emit('close')">
     <ElAlert :title="t('deviceOnboarding.forms.productDraftOnly')" type="info" :closable="false" />
-    <ElForm label-position="top" class="editor-form" @submit.prevent="submit">
+    <ElAlert v-if="equipmentTypesError" :title="equipmentTypesError" type="error" :closable="false" /><ElForm label-position="top" class="editor-form" @submit.prevent="submit">
       <div class="form-grid">
         <ElFormItem :label="t('deviceOnboarding.labels.productCode')" required><ElInput v-model="form.productCode" :disabled="Boolean(product)" maxlength="50" /></ElFormItem>
         <ElFormItem :label="t('deviceOnboarding.labels.productName')" required><ElInput v-model="form.productName" maxlength="100" /></ElFormItem>
         <ElFormItem :label="t('deviceOnboarding.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem>
         <ElFormItem :label="t('deviceOnboarding.labels.model')"><ElInput v-model="form.model" maxlength="100" /></ElFormItem>
-        <ElFormItem :label="t('deviceOnboarding.labels.equipmentType')" required><ElInput v-model="form.equipmentTypeCode" maxlength="20" /></ElFormItem>
+        <ElFormItem :label="t('deviceOnboarding.labels.equipmentType')" required><ElSelect v-model="form.equipmentTypeCode" filterable :loading="equipmentTypesLoading"><ElOption v-for="type in equipmentTypes" :key="type.typeCode" :value="type.typeCode" :label="`${type.typeName} · ${type.typeCode}`" /></ElSelect></ElFormItem>
         <ElFormItem :label="t('deviceOnboarding.labels.expectedProfile')" required><ElInput v-model="form.expectedProfileCode" maxlength="50" /></ElFormItem>
         <ElFormItem :label="t('deviceOnboarding.labels.identityType')" required><ElInput v-model="form.identityType" maxlength="20" /></ElFormItem>
       </div>

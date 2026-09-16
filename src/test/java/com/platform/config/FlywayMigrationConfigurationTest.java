@@ -73,7 +73,8 @@ class FlywayMigrationConfigurationTest {
                 "V50__mysql_daikin_monitoring_state.sql",
                 "V51__mysql_daikin_monitoring_checkpoint.sql",
                 "V52__mysql_daikin_runtime.sql",
-                "V53__mysql_daikin_retention.sql");
+                "V53__mysql_daikin_retention.sql",
+                "V54__mysql_outdoor_unit_type.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

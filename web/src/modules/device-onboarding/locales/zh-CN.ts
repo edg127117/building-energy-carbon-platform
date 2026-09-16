@@ -144,6 +144,7 @@ export default {
     productDraftOnly: '启用后的产品不能直接编辑，请复制为新草稿后调整。',
   },
   validation: {
+    equipmentType: '请选择已启用的设备类型；类型加载失败时请重新打开表单重试。',
     productCode: '请填写产品编码。',
     productFields: '请填写产品名称、设备类型、期望协议和身份类型。',
     productPoints: '产品至少需要一个测点模板。',

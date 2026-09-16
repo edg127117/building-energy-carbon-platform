@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OnboardingPage, PendingDevice } from '../models/onboarding'
-import { getPendingDeviceConnection, listDeviceProducts, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
+import { listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -10,6 +10,7 @@ vi.mock('../api/onboarding', () => ({
   getPendingDevice: vi.fn(),
   getPendingDeviceConnection: vi.fn(),
   listDeviceProducts: vi.fn(),
+  listEquipmentTypes: vi.fn(),
   listPendingDevices: vi.fn(),
   listPointNamingRules: vi.fn(),
   updateDeviceProduct: vi.fn(),
@@ -20,6 +21,17 @@ vi.mock('@/shared/utils/request-error', () => ({ requestErrorMessage: () => '请
 const emptyPending: OnboardingPage<PendingDevice> = { page: 1, size: 20, total: 0, items: [] }
 
 describe('设备接入异步状态', () => {
+  it('类型查询失败显示错误，重试后恢复有效选项', async () => {
+    const management = useDeviceOnboarding()
+    vi.mocked(listEquipmentTypes).mockRejectedValueOnce(new Error('transport'))
+    await management.loadEquipmentTypes()
+    expect(management.equipmentTypesError.value?.message).toBe('请求失败')
+    expect(management.equipmentTypesLoading.value).toBe(false)
+    vi.mocked(listEquipmentTypes).mockResolvedValueOnce([{ typeCode: 'ODU', typeName: '空调外机' }])
+    await management.loadEquipmentTypes()
+    expect(management.equipmentTypes.value[0]?.typeCode).toBe('ODU')
+    expect(management.equipmentTypesError.value).toBeNull()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(listPendingDevices).mockResolvedValue(emptyPending)

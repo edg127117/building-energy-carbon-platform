@@ -85,6 +85,19 @@ class DeviceOnboardingServiceIntegrationTest {
     }
 
     @Test
+    void equipmentTypeOptionsExcludeDisabledTypes() {
+        jdbcTemplate.update("INSERT INTO biz_equipment_type (type_code,type_name,asset_code_prefix,equip_category,standard_source,status) VALUES ('BTEST_OFF','Disabled','BO','TEST','TEST',0)");
+        try {
+            assertThat(productService.equipmentTypes(ADMIN)).isNotEmpty()
+                    .noneMatch(type -> type.typeCode().equals("BTEST_OFF"));
+            assertThatThrownBy(() -> productService.equipmentTypes(Set.of("OWNER")))
+                    .isInstanceOf(BusinessException.class);
+        } finally {
+            jdbcTemplate.update("DELETE FROM biz_equipment_type WHERE type_code='BTEST_OFF'");
+        }
+    }
+
+    @Test
     void approvedSensitiveChangesReuseOnboardingTransactionsAndTrustedBuildingScope() {
         DeviceProductContracts.DetailView draft = productService.create(
                 productRequest("BTEST_PRODUCT_APPROVED"), 1L, ADMIN);

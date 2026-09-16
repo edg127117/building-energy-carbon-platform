@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
+import { getApprovalPolicy } from '../api/access-control'
 import {
   ElAlert,
   ElButton,
@@ -29,6 +30,18 @@ const emit = defineEmits<{
 const requestId = ref('')
 const reviewComment = ref('')
 const reviewError = ref<string | null>(null)
+const selfApprovalAllowed = ref(false)
+const policyUnavailable = ref(false)
+
+onMounted(async () => {
+  try {
+    const policy = await getApprovalPolicy()
+    selfApprovalAllowed.value = policy.selfApprovalAllowed
+      && ['DEVELOPMENT', 'TEST'].includes(policy.environmentMode)
+  } catch {
+    policyUnavailable.value = true
+  }
+})
 
 watch(() => props.change?.requestId, value => {
   if (value) requestId.value = value
@@ -103,6 +116,9 @@ function review(action: 'approve' | 'reject') {
 
     <ElAlert v-if="change?.oneTimeToken" :title="t('accessControl.change.tokenTitle')" :description="t('accessControl.change.tokenDescription')" type="warning" show-icon :closable="false" />
     <ElInput v-if="change?.oneTimeToken" :model-value="change.oneTimeToken" readonly :aria-label="t('accessControl.change.tokenTitle')" />
+
+    <ElAlert v-if="selfApprovalAllowed" :title="t('accessControl.change.localSelfApproval')" type="warning" show-icon :closable="false" />
+    <ElAlert v-if="policyUnavailable" :title="t('accessControl.change.policyUnavailable')" type="info" show-icon :closable="false" />
 
     <template v-if="change">
       <ElDescriptions :column="1" border>

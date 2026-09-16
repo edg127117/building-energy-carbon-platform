@@ -27,7 +27,7 @@ import {
 } from '@/shared/ui'
 import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import { t } from '@/locales'
-import { useSensitiveChange } from '@/modules/access-control/public'
+import { ChangeRequestControl, useSensitiveChange } from '@/modules/access-control/public'
 import ProductEditorDialog from '../components/ProductEditorDialog.vue'
 import ProductStatusTag from '../components/ProductStatusTag.vue'
 import { useDeviceOnboarding } from '../composables/use-device-onboarding'
@@ -74,11 +74,13 @@ async function openDetail(productId: string) {
 }
 
 function openCreate() {
+  void management.loadEquipmentTypes()
   editingProduct.value = null
   editorOpen.value = true
 }
 
 function openEdit(product: DeviceProductDetail) {
+  void management.loadEquipmentTypes()
   editingProduct.value = product
   editorOpen.value = true
 }
@@ -133,6 +135,18 @@ function productChangeSubmitting(operation: 'ENABLE_DEVICE_PRODUCT' | 'DISABLE_D
   return sensitiveChange.isPending(`start:${operation}:${productId}`)
 }
 
+async function afterApprovalAction(action: () => Promise<unknown>, execute = false) {
+  try {
+    await action()
+    if (execute) {
+      const productId = selectedProduct.value?.productId
+      await management.loadProducts()
+      if (productId) await management.selectProduct(productId)
+    }
+  } catch {
+    // 公共审批控件显示受控错误；只有执行成功才刷新产品启停状态。
+  }
+}
 function can(value: unknown, action: string) {
   return canRunOnboardingAction(value as { allowedActions?: string[] }, action)
 }
@@ -172,7 +186,8 @@ onMounted(() => { void management.loadProducts().catch(() => undefined) })
       </template>
     </ElDrawer>
 
-    <ProductEditorDialog :open="editorOpen" :product="editingProduct" :submitting="editorSubmitting" @close="editorOpen = false" @save="save" />
+    <ChangeRequestControl :change="sensitiveChange.current.value" :busy="sensitiveChange.pending.value.size > 0" @lookup="id => afterApprovalAction(() => sensitiveChange.load(id))" @submit="id => afterApprovalAction(() => sensitiveChange.submit(id))" @withdraw="id => afterApprovalAction(() => sensitiveChange.withdraw(id))" @approve="(id, comment) => afterApprovalAction(() => sensitiveChange.approve(id, comment))" @reject="(id, comment) => afterApprovalAction(() => sensitiveChange.reject(id, comment))" @execute="id => afterApprovalAction(() => sensitiveChange.execute(id), true)" />
+    <ProductEditorDialog :equipment-types="management.equipmentTypes.value" :equipment-types-loading="management.equipmentTypesLoading.value" :equipment-types-error="management.equipmentTypesError.value?.message" :open="editorOpen" :product="editingProduct" :submitting="editorSubmitting" @close="editorOpen = false" @save="save" />
     <ElDialog :model-value="copyOpen" :title="t('deviceOnboarding.forms.copyProduct')" @update:model-value="copyOpen = false"><ElForm label-position="top"><ElFormItem :label="t('deviceOnboarding.labels.productCode')" required><ElInput v-model="copyCode" maxlength="50" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.productName')" required><ElInput v-model="copyName" maxlength="100" /></ElFormItem><ElAlert v-if="copyError" :title="copyError" type="error" show-icon :closable="false" /></ElForm><template #footer><ElButton @click="copyOpen = false">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="copySubmitting" @click="copy">{{ t('deviceOnboarding.actions.copyProduct') }}</ElButton></template></ElDialog>
   </section>
 </template>

@@ -6,12 +6,14 @@ import {
   getPendingDevice,
   getPendingDeviceConnection,
   listDeviceProducts,
+  listEquipmentTypes,
   listPendingDevices,
   listPointNamingRules,
   updateDeviceProduct,
   updatePendingStatus,
 } from '../api/onboarding'
 import type {
+  EquipmentTypeOption,
   DeviceProductDetail,
   DeviceProductForm,
   DeviceProductListItem,
@@ -33,6 +35,24 @@ const emptyPage = <T>(size = 20): OnboardingPage<T> => ({ page: 1, size, total: 
  * 列表与详情用代次隔离迟到响应，草稿保存和待处理状态变更按对象加锁；敏感变更申请由权限模块单独编排。
  */
 export function useDeviceOnboarding() {
+  const equipmentTypes = ref<EquipmentTypeOption[]>([])
+  const equipmentTypesError = ref<RequestState>(null)
+  const equipmentTypesLoading = ref(false)
+  let equipmentTypesGeneration = 0
+
+  async function loadEquipmentTypes() {
+    const owner = ++equipmentTypesGeneration
+    equipmentTypesLoading.value = true
+    equipmentTypesError.value = null
+    try {
+      const result = await listEquipmentTypes()
+      if (owner === equipmentTypesGeneration) equipmentTypes.value = result
+    } catch (reason) {
+      if (owner === equipmentTypesGeneration) equipmentTypesError.value = requestState(reason)
+    } finally {
+      if (owner === equipmentTypesGeneration) equipmentTypesLoading.value = false
+    }
+  }
   const productQuery = ref({
     page: 1,
     size: 20,
@@ -251,6 +271,7 @@ export function useDeviceOnboarding() {
   }
 
   return {
+    equipmentTypes, equipmentTypesError, equipmentTypesLoading, loadEquipmentTypes,
     productQuery,
     products,
     productsLoading,

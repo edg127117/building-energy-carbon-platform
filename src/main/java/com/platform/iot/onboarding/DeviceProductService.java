@@ -42,6 +42,14 @@ public class DeviceProductService {
     private final BizEquipmentMapper equipmentMapper;
     private final OnboardingAuditService auditService;
 
+    public List<DeviceProductContracts.EquipmentTypeView> equipmentTypes(Set<String> roles) {
+        requireAdmin(roles);
+        return equipmentTypeMapper.selectList(new LambdaQueryWrapper<BizEquipmentType>()
+                        .eq(BizEquipmentType::getStatus, 1).orderByAsc(BizEquipmentType::getTypeCode))
+                .stream().map(type -> new DeviceProductContracts.EquipmentTypeView(
+                        type.getTypeCode(), type.getTypeName())).toList();
+    }
+
     public PageResponse<DeviceProductContracts.ListItemView> list(
             int page, int size, String status, String keyword, Set<String> roles) {
         return list(page, size, status, keyword, null, null, roles);
