@@ -74,4 +74,26 @@ public interface HvacRawEventRepository {
 
     /** 仅按设备采集时间删除保留期之前的逐条事件，不影响正式分钟和指标结果。 */
     void deleteBefore(long eventTimeExclusive);
+
+    /** 按pointId稳定分页列出TDengine子表，并标明页内点是否已有指定来源历史。 */
+    default List<RetentionPoint> findRetentionPoints(String afterTableName, int limit, String protectedSource) {
+        throw new UnsupportedOperationException("Point retention scan is unavailable");
+    }
+
+    /** 单测点按事件时间删除，不在DELETE中依赖普通来源列过滤。 */
+    default void deletePointBefore(String tableName, long eventTimeExclusive) {
+        throw new UnsupportedOperationException("Point retention delete is unavailable");
+    }
+
+    /**
+     * 删除指定来源所在单个测点的一段历史时间窗；返回本轮是否执行了删除窗口。
+     */
+    default SourceDeletionScan deleteSourceBeforeInBoundedWindow(String sourceSystem, long eventTimeExclusive,
+                                                                  long maximumWindowMillis,
+                                                                  String afterPointId) {
+        throw new UnsupportedOperationException("Bounded source retention is unavailable");
+    }
+
+    record RetentionPoint(String tableName, String pointId, boolean protectedSourcePresent) { }
+    record SourceDeletionScan(boolean workPerformed, boolean endOfScan, String nextPointCursor) { }
 }

@@ -23,7 +23,8 @@ import static com.platform.iot.daikin.monitoring.query.DaikinMonitoringQueryDtos
 
 /**
  * 大金监测查询的数据权限边界。每次请求同时校验 HVAC 叶子菜单和当前建筑授权；SQL继续按
- * 采集时归属快照过滤事件与设备异常，来源异常仅通过本建筑监测目标建立可见关联。
+ * 采集时归属快照过滤事件与设备异常，来源异常通过本建筑监测目标建立可见关联；
+ * 独立运行统计还允许通过当前正式绑定与项目映射关联，不要求已启动分钟采集。
  */
 @Service
 public class DaikinMonitoringQueryService {
@@ -143,6 +144,28 @@ public class DaikinMonitoringQueryService {
         return equipmentTarget(userId, roles, equipmentId).buildingId();
     }
 
+    /** 运行统计可先于分钟采集启用；授权依赖正式绑定，不要求已经产生分钟监测目标。 */
+    public RuntimeScope requireRuntimeEquipment(Long userId, Set<String> roles, String equipmentId) {
+        requireMenu(userId, roles);
+        requireId(equipmentId, "equipmentId");
+        var rows = jdbc.query("""
+                SELECT i.identity_id,e.building_id,m.mapping_version
+                FROM biz_equipment e
+                JOIN biz_device_identity i ON i.equip_id=e.equip_id AND i.building_id=e.building_id
+                  AND i.identity_type='DAIKIN_UNIT'
+                JOIN biz_pending_device p ON p.bound_identity_id=i.identity_id AND p.status='BOUND'
+                JOIN biz_daikin_directory d ON d.pending_id=p.pending_id
+                JOIN biz_daikin_project_mapping m ON m.source_id=d.source_id AND m.site_id=d.site_id
+                  AND m.building_id=e.building_id
+                WHERE e.equip_id=? AND e.del_flag=0 LIMIT 2
+                """, (rs, row) -> new RuntimeScope(rs.getString(1), rs.getString(2), rs.getInt(3)), equipmentId);
+        if (rows.size() != 1) throw forbidden();
+        buildings.checkAccess(userId, roles, rows.getFirst().buildingId());
+        return rows.getFirst();
+    }
+
+    public record RuntimeScope(String identityId, String buildingId, int mappingVersion) { }
+
     public DeviceCurrentView current(Long userId, Set<String> roles, String equipmentId) {
         EquipmentTarget target = equipmentTarget(userId, roles, equipmentId);
         List<CurrentFieldView> fields = jdbc.query("""
@@ -220,6 +243,7 @@ public class DaikinMonitoringQueryService {
         if (!active) parameters.add(clock.millis() - ONE_YEAR_MS);
         parameters.add(buildingId);
         parameters.add(buildingId);
+        parameters.add(buildingId);
         String afterSql = "";
         if (after != null) {
             afterSql = " AND (" + timeColumn + "<? OR (" + timeColumn + "=? AND x.exception_id<?))";
@@ -241,7 +265,15 @@ public class DaikinMonitoringQueryService {
                     JOIN biz_equipment e ON e.equip_id=t.equipment_id AND e.del_flag=0
                     JOIN biz_device_identity i ON i.identity_id=t.identity_id AND i.equip_id=e.equip_id
                       AND i.building_id=e.building_id AND i.identity_type='DAIKIN_UNIT'
-                    WHERE t.source_id=x.source_id AND e.building_id=?)))
+                    WHERE t.source_id=x.source_id AND e.building_id=?))
+                    OR (x.scope_type='SOURCE' AND x.exception_type='RUNTIME_FETCH' AND EXISTS (
+                      SELECT 1 FROM biz_daikin_directory d
+                      JOIN biz_pending_device p ON p.pending_id=d.pending_id AND p.status='BOUND'
+                      JOIN biz_device_identity i ON i.identity_id=p.bound_identity_id AND i.identity_type='DAIKIN_UNIT'
+                      JOIN biz_equipment e ON e.equip_id=i.equip_id AND e.building_id=i.building_id AND e.del_flag=0
+                      JOIN biz_daikin_project_mapping m ON m.source_id=d.source_id AND m.site_id=d.site_id
+                        AND m.building_id=e.building_id
+                      WHERE d.source_id=x.source_id AND e.building_id=?)))
                 """ + afterSql + " ORDER BY " + timeColumn + " DESC,x.exception_id DESC LIMIT ?";
         List<ExceptionView> rows = jdbc.query(sql,
                 (rs, row) -> new ExceptionView(rs.getLong(1), rs.getString(2), rs.getString(3),

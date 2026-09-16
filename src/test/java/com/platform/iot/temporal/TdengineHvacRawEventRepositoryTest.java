@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +36,65 @@ class TdengineHvacRawEventRepositoryTest {
         properties.setDatabase("iot_telemetry");
         properties.setStRawEvent("st_raw_event");
         repository = new TdengineHvacRawEventRepository(template, properties);
+    }
+
+    @Test
+    void retentionPointScanIsBoundedAndDetectsHistoricalDaikinSource() {
+        when(template.queryForList(startsWith("SELECT DISTINCT tbname,point_id"))).thenReturn(List.of(
+                Map.of("tbname", "raw_custom_1", "point_id", "POINT001"),
+                Map.of("tbname", "raw_custom_2", "point_id", "POINT002")));
+        when(template.queryForList(startsWith("SELECT source_system FROM")))
+                .thenReturn(List.of(Map.of("source_system", "DAIKIN_V2")), List.of());
+
+        var points = repository.findRetentionPoints("POINT000", 100, "DAIKIN_V2");
+
+        assertThat(points).containsExactly(
+                new HvacRawEventRepository.RetentionPoint("raw_custom_1", "POINT001", true),
+                new HvacRawEventRepository.RetentionPoint("raw_custom_2", "POINT002", false));
+        verify(template).queryForList(contains("tbname>'POINT000' ORDER BY tbname LIMIT 100"));
+    }
+
+    @Test
+    void retentionDeletesOnlyOnePointBeforeItsCutoff() {
+        long cutoff = 1_700_000_000_000L;
+
+        repository.deletePointBefore("raw_custom_1", cutoff);
+
+        verify(template).execute(contains("DELETE FROM iot_telemetry.raw_custom_1 WHERE ts < '"
+                + new Timestamp(cutoff) + "'"));
+    }
+
+    @Test
+    void daikinCleanupDeletesOnePointAndOneBoundedTimeWindow() {
+        when(template.queryForList(startsWith("SELECT tbname,point_id,MIN(ts)"))).thenReturn(List.of(Map.of(
+                "tbname", "raw_custom_1", "point_id", "POINT001",
+                "oldest_ts", new Timestamp(1_700_000_000_000L))));
+        when(template.queryForList(contains("source_system<>'DAIKIN_V2'"))).thenReturn(List.of());
+
+        var result = repository.deleteSourceBeforeInBoundedWindow(
+                "DAIKIN_V2", 1_800_000_000_000L, Duration.ofDays(7).toMillis(), null);
+
+        assertThat(result.workPerformed()).isTrue();
+        String start = new Timestamp(1_700_000_000_000L).toString();
+        String end = new Timestamp(1_700_000_000_000L + Duration.ofDays(7).toMillis()).toString();
+        verify(template).execute(org.mockito.ArgumentMatchers.<String>argThat(sql -> sql.contains("raw_custom_1")
+                && sql.contains("ts >= '" + start + "'")
+                && sql.contains("ts < '" + end + "'")));
+    }
+
+    @Test
+    void daikinCleanupDoesNotDeleteMixedSourceTimeWindow() {
+        when(template.queryForList(startsWith("SELECT tbname,point_id,MIN(ts)"))).thenReturn(List.of(Map.of(
+                "tbname", "raw_custom_1", "point_id", "POINT001",
+                "oldest_ts", new Timestamp(1_700_000_000_000L))));
+        when(template.queryForList(contains("source_system<>'DAIKIN_V2'")))
+                .thenReturn(List.of(Map.of("source_system", "MQTT_FREEZE_V1")));
+
+        var result = repository.deleteSourceBeforeInBoundedWindow(
+                "DAIKIN_V2", 1_800_000_000_000L, Duration.ofDays(7).toMillis(), null);
+
+        assertThat(result.endOfScan()).isTrue();
+        verify(template, never()).execute(startsWith("DELETE FROM"));
     }
 
     @Test
