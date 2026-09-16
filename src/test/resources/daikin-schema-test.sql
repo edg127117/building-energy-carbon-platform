@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS biz_daikin_directory_sync_job;
 DROP TABLE IF EXISTS biz_daikin_catalog_sync;
 DROP TABLE IF EXISTS biz_daikin_directory;
 DROP TABLE IF EXISTS biz_daikin_project_mapping_version;

@@ -58,7 +58,7 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")
                 || path.startsWith(request.getContextPath() + "/v1/operations/device-onboarding")
-                || path.startsWith(request.getContextPath() + "/v1/daikin/directory")) {
+                || path.startsWith(request.getContextPath() + "/v1/daikin/")) {
             body.put("errorCode", "ONBOARDING_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
             body.put("errorCode", "ASSET_UNAUTHORIZED");

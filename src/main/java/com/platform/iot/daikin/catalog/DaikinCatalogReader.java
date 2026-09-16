@@ -13,7 +13,7 @@ import java.util.Objects;
 import java.util.function.IntFunction;
 
 /**
- * 有界读取一个来源的一类设备目录。分页完成前不向调用方交付部分清单，也不产生数据库副作用。
+ * 有界读取一个来源的一类设备目录。分页完成前不向调用方交付部分清单，也不写入设备目录。
  * 分页数量变化、重复身份或计数不符拒绝该轮，防止用不完整清单驱动设备删除或归属变更。
  */
 public final class DaikinCatalogReader {
@@ -34,17 +34,26 @@ public final class DaikinCatalogReader {
 
     public List<DaikinDeviceObservation> read(String sourceId, DaikinDeviceKey.Kind kind,
                                               IntFunction<JsonNode> fetchPage) {
+        return read(sourceId, kind, fetchPage, () -> { });
+    }
+
+    /** 每页请求前允许调用方核验/续期任务租约；回调失败立即终止，不请求该页或交付残页。 */
+    public List<DaikinDeviceObservation> read(String sourceId, DaikinDeviceKey.Kind kind,
+                                              IntFunction<JsonNode> fetchPage, Runnable beforeFetch) {
         Objects.requireNonNull(fetchPage);
+        Objects.requireNonNull(beforeFetch);
         // 本地参数错误不得先触发外部请求；目录只允许明确的内机或外机类型。
         DaikinDeviceKey.requireIdentity(sourceId);
         Objects.requireNonNull(kind);
         Map<DaikinDeviceKey, DaikinDeviceObservation> devices = new LinkedHashMap<>();
+        beforeFetch.run();
         DaikinDevicePageDecoder.Page first = decoder.decode(sourceId, kind, fetchPage.apply(1), clock.instant());
         if (first.currentPage() != 1 || first.totalPages() > maxPages || first.totalCount() > maxDevices) {
             throw invalid();
         }
         add(devices, first);
         for (int page = 2; page <= first.totalPages(); page++) {
+            beforeFetch.run();
             DaikinDevicePageDecoder.Page next = decoder.decode(sourceId, kind, fetchPage.apply(page), clock.instant());
             if (next.currentPage() != page || next.totalCount() != first.totalCount()
                     || next.totalPages() != first.totalPages()) throw invalid();

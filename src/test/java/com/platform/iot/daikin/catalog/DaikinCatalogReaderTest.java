@@ -71,6 +71,20 @@ class DaikinCatalogReaderTest {
     }
 
     @Test
+    void lostLeaseStopsBeforeNextPageAndDoesNotDeliverPartialCatalog() {
+        var requests = new ArrayList<Integer>();
+        AtomicInteger leaseChecks = new AtomicInteger();
+        assertThatThrownBy(() -> reader.read("test-source", DaikinDeviceKey.Kind.INDOOR, current -> {
+            requests.add(current);
+            return page(current, 3, 3, Integer.toString(current));
+        }, () -> {
+            if (leaseChecks.incrementAndGet() == 2) throw new IllegalStateException("lease lost");
+        })).isInstanceOf(IllegalStateException.class).hasMessage("lease lost");
+        assertThat(requests).containsExactly(1);
+        assertThat(leaseChecks).hasValue(2);
+    }
+
+    @Test
     void invalidLocalIdentityNeverTriggersFetch() {
         AtomicInteger requests = new AtomicInteger();
         assertThatThrownBy(() -> reader.read(" ", DaikinDeviceKey.Kind.INDOOR, page -> {
