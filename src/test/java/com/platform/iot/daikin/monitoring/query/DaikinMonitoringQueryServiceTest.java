@@ -49,8 +49,11 @@ class DaikinMonitoringQueryServiceTest {
                 """);
         jdbc.execute("""
                 CREATE TABLE biz_daikin_directory(
-                  pending_id VARCHAR(64) PRIMARY KEY,source_id VARCHAR(200) NOT NULL,device_kind VARCHAR(10) NOT NULL)
+                  pending_id VARCHAR(64) PRIMARY KEY,source_id VARCHAR(200) NOT NULL,device_kind VARCHAR(10) NOT NULL,
+                  site_id VARCHAR(200))
                 """);
+        jdbc.execute("CREATE TABLE biz_pending_device(pending_id VARCHAR(64),bound_identity_id VARCHAR(32),status VARCHAR(20))");
+        jdbc.execute("CREATE TABLE biz_daikin_project_mapping(source_id VARCHAR(200),site_id VARCHAR(200),building_id VARCHAR(32))");
         buildings = mock(BuildingScopeService.class);
         menus = mock(SysMenuMapper.class);
         SysMenu menu = new SysMenu();
@@ -235,7 +238,7 @@ class DaikinMonitoringQueryServiceTest {
         jdbc.update("INSERT INTO biz_equipment VALUES (?,?,'space','system',0)", equipment, building);
         jdbc.update("INSERT INTO biz_device_identity VALUES (?,?,?,'DAIKIN_UNIT',1)",
                 identity, equipment, building);
-        jdbc.update("INSERT INTO biz_daikin_directory VALUES (?,?,'INDOOR')", pending, source);
+        jdbc.update("INSERT INTO biz_daikin_directory(pending_id,source_id,device_kind) VALUES (?,?,'INDOOR')", pending, source);
         jdbc.update("""
                 INSERT INTO biz_daikin_monitoring_target
                   (identity_id,source_id,pending_id,equipment_id,building_id,space_id,system_group_id,

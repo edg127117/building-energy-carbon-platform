@@ -7,7 +7,6 @@ import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.iot.temporal.model.PointMinuteKey;
 import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
-import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -304,6 +303,69 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + safeIdentifier(properties.getStRawEvent());
         template.execute("DELETE FROM " + stable + " WHERE ts < "
                 + quote(new Timestamp(eventTimeExclusive).toString()));
+    }
+
+    @Override
+    public List<RetentionPoint> findRetentionPoints(String afterTableName, int limit, String protectedSource) {
+        if (limit < 1 || limit > 500) throw new IllegalArgumentException("Invalid retention point page");
+        String stable = safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(properties.getStRawEvent());
+        String cursor = afterTableName == null ? "" : " WHERE tbname>" + quote(afterTableName);
+        List<Map<String, Object>> rows = template.queryForList(
+                "SELECT DISTINCT tbname,point_id FROM " + stable + cursor + " ORDER BY tbname LIMIT " + limit);
+        return rows.stream().map(row -> {
+            String tableName = safeIdentifier(text(row, "tbname"));
+            String pointId = text(row, "point_id");
+            boolean present = !template.queryForList("SELECT source_system FROM "
+                    + safeIdentifier(properties.getDatabase()) + "." + tableName
+                    + " WHERE source_system=" + quote(protectedSource) + " LIMIT 1").isEmpty();
+            return new RetentionPoint(tableName, pointId, present);
+        }).toList();
+    }
+
+    @Override
+    public void deletePointBefore(String tableName, long eventTimeExclusive) {
+        template.execute("DELETE FROM " + safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(tableName) + " WHERE ts < "
+                + eventTimeExclusive);
+    }
+
+    @Override
+    public SourceDeletionScan deleteSourceBeforeInBoundedWindow(String sourceSystem, long eventTimeExclusive,
+                                                                 long maximumWindowMillis,
+                                                                 String afterPointId) {
+        if (eventTimeExclusive < 0 || maximumWindowMillis < 1) {
+            throw new IllegalArgumentException("Invalid bounded retention window");
+        }
+        String stable = safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(properties.getStRawEvent());
+        // TDengine 3.2.3 的 MIN 不接受 TIMESTAMP；FIRST 按主时间轴选择最早的非空时间。
+        List<Map<String, Object>> candidates = template.queryForList(
+                "SELECT tbname,point_id,FIRST(ts) AS oldest_ts FROM " + stable
+                        + " WHERE source_system=" + quote(sourceSystem)
+                        + " AND ts<" + eventTimeExclusive
+                        + (afterPointId == null ? "" : " AND tbname>" + quote(afterPointId))
+                        + " GROUP BY tbname,point_id ORDER BY tbname LIMIT 100");
+        String cursor = afterPointId;
+        for (Map<String, Object> candidate : candidates) {
+            String pointId = text(candidate, "point_id");
+            String tableName = safeIdentifier(text(candidate, "tbname"));
+            String child = safeIdentifier(properties.getDatabase()) + "." + tableName;
+            long start = timestamp(candidate, "oldest_ts").getTime();
+            long end = Math.min(eventTimeExclusive, Math.addExact(start, maximumWindowMillis));
+            // 原始事件库使用毫秒精度；数值边界避免 JVM 与服务端时区不同造成窗口偏移。
+            String range = " WHERE ts >= " + start + " AND ts < " + end;
+            // TDengine DELETE 不能可靠按普通列过滤；混合来源时间窗宁可延后，也不能连带删除其他来源。
+            if (!template.queryForList("SELECT source_system FROM " + child + range
+                    + " AND (source_system IS NULL OR source_system<>" + quote(sourceSystem) + ") LIMIT 1").isEmpty()) {
+                cursor = tableName;
+                continue;
+            }
+            template.execute("DELETE FROM " + child + range);
+            return new SourceDeletionScan(true, false, cursor);
+        }
+        boolean endOfScan = candidates.size() < 100;
+        return new SourceDeletionScan(!candidates.isEmpty(), endOfScan, endOfScan ? null : cursor);
     }
 
     private RawTelemetryEvent mapEvent(Map<String, Object> row) {

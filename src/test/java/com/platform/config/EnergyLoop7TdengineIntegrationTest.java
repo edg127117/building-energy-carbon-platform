@@ -7,6 +7,7 @@ import com.platform.energy.period.TdengineEnergyPeriodValueStore;
 import com.platform.iot.formula.model.FormulaCalculationAttempt;
 import com.platform.iot.formula.model.FormulaResultRevision;
 import com.platform.iot.temporal.impl.TdengineIndicatorMinuteRepository;
+import com.platform.iot.temporal.impl.TdengineHvacRawEventRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -94,8 +95,63 @@ class EnergyLoop7TdengineIntegrationTest {
                     EXPLAIN SELECT ts,revision FROM %s.st_energy_period_result
                     WHERE building_id='BLD_LOOP7' AND point_id='POINT_A'
                     """.formatted(database)).isEmpty()).isFalse();
+            verifiesDaikinRetentionOnDedicatedDatabase(jdbc);
         } finally {
             jdbc.execute("DROP DATABASE IF EXISTS " + database);
+        }
+    }
+
+    private static void verifiesDaikinRetentionOnDedicatedDatabase(JdbcTemplate jdbc) {
+        String database = "daikin_retention_it_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        var properties = new TdengineProperties();
+        properties.setDatabase(database);
+        jdbc.execute("CREATE DATABASE " + database + " KEEP 365 DURATION 1d WAL_LEVEL 1");
+        try {
+            new TdengineConfig(properties).initializeHvacSchema(jdbc);
+            long now = Instant.now().toEpochMilli();
+            long old = now - Duration.ofDays(100).toMillis();
+            long recent = now - Duration.ofDays(60).toMillis();
+            // 使用非约定命名子表，验证清理按真实 TBNAME，而不是拼接测点名猜表名。
+            for (String child : List.of("a_mixed", "b_daikin", "c_normal", "d_alias")) {
+                String source = child.equals("a_mixed") || child.equals("b_daikin") ? "DAIKIN_V2" : "OTHER_SOURCE";
+                for (long timestamp : new long[] {old, recent}) {
+                    jdbc.execute(rawInsert(database, child, child.toUpperCase(Locale.ROOT), "RETENTION_TEST", timestamp, 20)
+                            .replace("LOOP7_SIMULATION", source));
+                }
+            }
+            jdbc.execute(rawInsert(database, "a_mixed", "A_MIXED", "RETENTION_TEST", old + 1000, 21)
+                    .replace("LOOP7_SIMULATION", "OTHER_SOURCE"));
+            var repository = new TdengineHvacRawEventRepository(jdbc, properties);
+            String cursor = null;
+            boolean deleted = false;
+            for (int scan = 0; scan < 10; scan++) {
+                var result = repository.deleteSourceBeforeInBoundedWindow("DAIKIN_V2", now - Duration.ofDays(90).toMillis(),
+                        Duration.ofDays(7).toMillis(), cursor);
+                deleted |= result.workPerformed();
+                cursor = result.nextPointCursor();
+                if (result.endOfScan()) break;
+            }
+            assertThat(deleted).isTrue();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + database + ".a_mixed", Long.class)).isEqualTo(3);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + database + ".b_daikin", Long.class)).isEqualTo(1);
+            var visited = new java.util.ArrayList<String>();
+            cursor = null;
+            for (int scan = 0; scan < 10; scan++) {
+                var points = repository.findRetentionPoints(cursor, 1, "DAIKIN_V2");
+                if (points.isEmpty()) break;
+                var point = points.getFirst();
+                visited.add(point.tableName());
+                boolean protectedPoint = point.protectedSourcePresent() || point.pointId().equals("D_ALIAS");
+                repository.deletePointBefore(point.tableName(), now - Duration.ofDays(protectedPoint ? 90 : 30).toMillis());
+                cursor = point.tableName();
+            }
+            assertThat(visited).containsExactly("a_mixed", "b_daikin", "c_normal", "d_alias");
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + database + ".a_mixed", Long.class)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + database + ".b_daikin", Long.class)).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + database + ".c_normal", Long.class)).isZero();
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + database + ".d_alias", Long.class)).isEqualTo(1);
+        } finally {
+            jdbc.execute("DROP DATABASE " + database);
         }
     }
 

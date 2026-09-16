@@ -23,7 +23,9 @@ class DaikinMonitoringApiTest {
     @Test
     void anonymousCannotReadMonitoringOrTemperature() throws Exception {
         for (String path : new String[] {"/v1/hvac-monitoring/buildings/BLD001/devices",
-                "/v1/hvac-monitoring/devices/missing/temperatures/current?field=roomTemp"}) {
+                "/v1/hvac-monitoring/devices/missing/temperatures/current?field=roomTemp",
+                "/v1/hvac-monitoring/devices/missing/runtime",
+                "/v1/hvac-monitoring/devices/missing/runtime/" + "a".repeat(64) + "/revisions"}) {
             mvc.perform(get(path)).andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.errorCode").value("DAIKIN_MONITORING_UNAUTHORIZED"));
         }
@@ -40,5 +42,8 @@ class DaikinMonitoringApiTest {
         var paths = mapper.readTree(spec.getResponse().getContentAsString()).path("paths");
         assertThat(paths.has("/v1/hvac-monitoring/devices/{equipmentId}/temperatures")).isTrue();
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/temperatures").has("post")).isFalse();
+        assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/runtime").has("get")).isTrue();
+        assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/runtime").has("post")).isFalse();
+        assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/runtime/{valueId}/revisions").has("get")).isTrue();
     }
 }
