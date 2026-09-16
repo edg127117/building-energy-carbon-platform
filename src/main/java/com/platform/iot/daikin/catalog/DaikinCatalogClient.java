@@ -23,10 +23,16 @@ public final class DaikinCatalogClient {
     }
 
     public List<DaikinDeviceObservation> read(String sourceId, DaikinDeviceKey.Kind kind) {
+        return read(sourceId, kind, () -> { });
+    }
+
+    public List<DaikinDeviceObservation> read(String sourceId, DaikinDeviceKey.Kind kind,
+                                              Runnable beforeFetch) {
         Objects.requireNonNull(kind);
+        Objects.requireNonNull(beforeFetch);
         DaikinEndpoint endpoint = kind == DaikinDeviceKey.Kind.INDOOR
                 ? DaikinEndpoint.INUNITS : DaikinEndpoint.OUTUNITS;
         return reader.read(sourceId, kind,
-                page -> client.read(endpoint, null, Map.of("page", Integer.toString(page))));
+                page -> client.read(endpoint, null, Map.of("page", Integer.toString(page))), beforeFetch);
     }
 }

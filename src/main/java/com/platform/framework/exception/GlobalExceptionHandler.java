@@ -161,7 +161,7 @@ public class GlobalExceptionHandler {
         if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")
                 || path.startsWith(request.getContextPath() + "/v1/operations/device-onboarding")
-                || path.startsWith(request.getContextPath() + "/v1/daikin/directory")) {
+                || path.startsWith(request.getContextPath() + "/v1/daikin/")) {
             response.put("errorCode", onboardingErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/assets")) {
             response.put("errorCode", assetErrorCode);

@@ -44,7 +44,7 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("48");
+                """, String.class)).isEqualTo("49");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_protocol_draft",Integer.class)).isZero();
         for(String table:List.of("biz_protocol_target","biz_protocol_version","biz_protocol_deployment","biz_protocol_migration_archive")) {
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM "+table,Integer.class)).isZero();
@@ -60,7 +60,7 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForList("""
                 SELECT table_name FROM information_schema.tables
                 WHERE table_schema=DATABASE()
-                """, String.class)).containsAll(LOOP_TABLES);
+                """, String.class)).containsAll(LOOP_TABLES).contains("biz_daikin_directory_sync_job");
         assertThat(jdbc.queryForList("""
                 SELECT index_name FROM information_schema.statistics
                 WHERE table_schema=DATABASE()
