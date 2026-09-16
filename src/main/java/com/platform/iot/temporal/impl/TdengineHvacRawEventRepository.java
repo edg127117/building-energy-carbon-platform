@@ -327,7 +327,7 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
     public void deletePointBefore(String tableName, long eventTimeExclusive) {
         template.execute("DELETE FROM " + safeIdentifier(properties.getDatabase()) + "."
                 + safeIdentifier(tableName) + " WHERE ts < "
-                + quote(new Timestamp(eventTimeExclusive).toString()));
+                + eventTimeExclusive);
     }
 
     @Override
@@ -343,7 +343,7 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
         List<Map<String, Object>> candidates = template.queryForList(
                 "SELECT tbname,point_id,FIRST(ts) AS oldest_ts FROM " + stable
                         + " WHERE source_system=" + quote(sourceSystem)
-                        + " AND ts<" + quote(new Timestamp(eventTimeExclusive).toString())
+                        + " AND ts<" + eventTimeExclusive
                         + (afterPointId == null ? "" : " AND tbname>" + quote(afterPointId))
                         + " GROUP BY tbname,point_id ORDER BY tbname LIMIT 100");
         String cursor = afterPointId;
@@ -353,8 +353,8 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
             String child = safeIdentifier(properties.getDatabase()) + "." + tableName;
             long start = timestamp(candidate, "oldest_ts").getTime();
             long end = Math.min(eventTimeExclusive, Math.addExact(start, maximumWindowMillis));
-            String range = " WHERE ts >= " + quote(new Timestamp(start).toString())
-                    + " AND ts < " + quote(new Timestamp(end).toString());
+            // 原始事件库使用毫秒精度；数值边界避免 JVM 与服务端时区不同造成窗口偏移。
+            String range = " WHERE ts >= " + start + " AND ts < " + end;
             // TDengine DELETE 不能可靠按普通列过滤；混合来源时间窗宁可延后，也不能连带删除其他来源。
             if (!template.queryForList("SELECT source_system FROM " + child + range
                     + " AND (source_system IS NULL OR source_system<>" + quote(sourceSystem) + ") LIMIT 1").isEmpty()) {

@@ -60,8 +60,7 @@ class TdengineHvacRawEventRepositoryTest {
 
         repository.deletePointBefore("raw_custom_1", cutoff);
 
-        verify(template).execute(contains("DELETE FROM iot_telemetry.raw_custom_1 WHERE ts < '"
-                + new Timestamp(cutoff) + "'"));
+        verify(template).execute("DELETE FROM iot_telemetry.raw_custom_1 WHERE ts < " + cutoff);
     }
 
     @Test
@@ -75,11 +74,11 @@ class TdengineHvacRawEventRepositoryTest {
                 "DAIKIN_V2", 1_800_000_000_000L, Duration.ofDays(7).toMillis(), null);
 
         assertThat(result.workPerformed()).isTrue();
-        String start = new Timestamp(1_700_000_000_000L).toString();
-        String end = new Timestamp(1_700_000_000_000L + Duration.ofDays(7).toMillis()).toString();
+        long start = 1_700_000_000_000L;
+        long end = start + Duration.ofDays(7).toMillis();
         verify(template).execute(org.mockito.ArgumentMatchers.<String>argThat(sql -> sql.contains("raw_custom_1")
-                && sql.contains("ts >= '" + start + "'")
-                && sql.contains("ts < '" + end + "'")));
+                && sql.contains("ts >= " + start)
+                && sql.contains("ts < " + end)));
     }
 
     @Test
