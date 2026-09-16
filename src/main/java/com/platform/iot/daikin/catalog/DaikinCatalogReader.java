@@ -11,6 +11,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.IntFunction;
+import java.util.function.Consumer;
 
 /**
  * 有界读取一个来源的一类设备目录。分页完成前不向调用方交付部分清单，也不写入设备目录。
@@ -40,6 +41,21 @@ public final class DaikinCatalogReader {
     /** 每页请求前允许调用方核验/续期任务租约；回调失败立即终止，不请求该页或交付残页。 */
     public List<DaikinDeviceObservation> read(String sourceId, DaikinDeviceKey.Kind kind,
                                               IntFunction<JsonNode> fetchPage, Runnable beforeFetch) {
+        return scan(sourceId, kind, fetchPage, beforeFetch, page -> { });
+    }
+
+    /**
+     * 监测允许已校验页先产生观测，后页失败仍保留已覆盖设备；目录同步不得使用此增量回调删除设备。
+     * 返回成功仍须通过全部分页一致性校验，回调完成不等于整轮成功。
+     */
+    public void visitPages(String sourceId, DaikinDeviceKey.Kind kind, IntFunction<JsonNode> fetchPage,
+                           Runnable beforeFetch, Consumer<DaikinDevicePageDecoder.Page> acceptedPage) {
+        scan(sourceId, kind, fetchPage, beforeFetch, Objects.requireNonNull(acceptedPage));
+    }
+
+    private List<DaikinDeviceObservation> scan(String sourceId, DaikinDeviceKey.Kind kind,
+            IntFunction<JsonNode> fetchPage, Runnable beforeFetch,
+            Consumer<DaikinDevicePageDecoder.Page> acceptedPage) {
         Objects.requireNonNull(fetchPage);
         Objects.requireNonNull(beforeFetch);
         // 本地参数错误不得先触发外部请求；目录只允许明确的内机或外机类型。
@@ -52,12 +68,14 @@ public final class DaikinCatalogReader {
             throw invalid();
         }
         add(devices, first);
+        acceptedPage.accept(first);
         for (int page = 2; page <= first.totalPages(); page++) {
             beforeFetch.run();
             DaikinDevicePageDecoder.Page next = decoder.decode(sourceId, kind, fetchPage.apply(page), clock.instant());
             if (next.currentPage() != page || next.totalCount() != first.totalCount()
                     || next.totalPages() != first.totalPages()) throw invalid();
             add(devices, next);
+            acceptedPage.accept(next);
         }
         if (devices.size() != first.totalCount()) throw invalid();
         return List.copyOf(devices.values());

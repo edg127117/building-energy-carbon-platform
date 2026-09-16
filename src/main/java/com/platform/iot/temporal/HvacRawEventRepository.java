@@ -19,6 +19,12 @@ import java.util.Set;
  */
 public interface HvacRawEventRepository {
 
+    /** 单测点有界历史分页，不扩大原有全平台分钟窗口查询；afterExclusive为上一页末条时间。 */
+    default List<RawTelemetryEvent> findPointHistory(String buildingId, String equipmentId, String pointId,
+            long startInclusive, long endExclusive, Long afterExclusive, int limit) {
+        throw new UnsupportedOperationException("Point history query is unavailable");
+    }
+
     /**
      * 写入或覆盖同一测点、同一设备采集时间的事件，并区分新行、完全重复和冲突更新。
      */

@@ -158,7 +158,9 @@ public class GlobalExceptionHandler {
             String energyPeriodErrorCode, String energySummaryErrorCode,
             String carbonErrorCode) {
         String path = request.getRequestURI();
-        if (path.startsWith(request.getContextPath() + "/v1/device-products")
+        if (path.startsWith(request.getContextPath() + "/v1/hvac-monitoring")) {
+            response.put("errorCode", onboardingErrorCode.replace("ONBOARDING_", "DAIKIN_MONITORING_"));
+        } else if (path.startsWith(request.getContextPath() + "/v1/device-products")
                 || path.startsWith(request.getContextPath() + "/v1/device-onboarding")
                 || path.startsWith(request.getContextPath() + "/v1/operations/device-onboarding")
                 || path.startsWith(request.getContextPath() + "/v1/daikin/")) {

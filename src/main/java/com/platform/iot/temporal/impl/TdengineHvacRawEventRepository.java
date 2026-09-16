@@ -151,6 +151,22 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
     }
 
     @Override
+    public List<RawTelemetryEvent> findPointHistory(String buildingId, String equipmentId, String pointId,
+            long startInclusive, long endExclusive, Long afterExclusive, int limit) {
+        if (startInclusive < 0 || startInclusive >= endExclusive || limit < 1 || limit > 1001) {
+            throw new IllegalArgumentException("Invalid bounded history query");
+        }
+        String stable = safeIdentifier(properties.getDatabase()) + "." + safeIdentifier(properties.getStRawEvent());
+        String sql = "SELECT * FROM " + stable + " WHERE building_id=" + quote(buildingId)
+                + " AND equip_id=" + quote(equipmentId) + " AND point_id=" + quote(pointId)
+                + " AND source_system='DAIKIN_V2' AND ts>=" + quote(new Timestamp(startInclusive).toString())
+                + " AND ts<" + quote(new Timestamp(endExclusive).toString())
+                + (afterExclusive == null ? "" : " AND ts>" + quote(new Timestamp(afterExclusive).toString()))
+                + " ORDER BY ts ASC LIMIT " + limit;
+        return template.queryForList(sql).stream().map(this::mapEvent).toList();
+    }
+
+    @Override
     public List<LatestRawReading> findLatestByEquipmentPoints(
             String buildingId, String equipmentId, Collection<String> pointIds) {
         if (pointIds.isEmpty()) {

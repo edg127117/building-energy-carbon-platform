@@ -68,6 +68,7 @@ public class DeviceOnboardingService {
     private static final ZoneId MYSQL_ZONE = ZoneId.of("Asia/Shanghai");
     private static final Set<String> ADMIN = Set.of("PLATFORM_ADMIN");
     private static final int EQUIPMENT_CODE_ATTEMPTS = 3;
+    private static final String DAIKIN_SOURCE_SYSTEM = "DAIKIN_V2";
 
     private final com.platform.iot.daikin.onboarding.DaikinDirectoryService directoryService;
     private final BizPendingDeviceMapper pendingMapper;
@@ -269,7 +270,7 @@ public class DeviceOnboardingService {
         requireAdmin(roles);
         BindTransactionResult result;
         try {
-            result = transactionTemplate.execute(status -> doBind(pendingId, request.asBinding(), operatorId, true));
+            result = transactionTemplate.execute(status -> doBindTyped(pendingId, request, operatorId));
         } catch (DuplicateKeyException exception) {
             throw error(409, DUPLICATE, "身份已被其他绑定占用");
         }
@@ -281,6 +282,11 @@ public class DeviceOnboardingService {
     private static boolean isTypedProduct(BizDeviceProduct product) {
         return "DAIKIN_UNIT".equals(product.getIdentityType())
                 && Set.of("DAIKIN_INDOOR_V2", "DAIKIN_OUTDOOR_V2").contains(product.getExpectedProfileCode());
+    }
+
+    private BindTransactionResult doBindTyped(String pendingId,
+            DeviceOnboardingContracts.TypedBindRequest request, Long operatorId) {
+        return doBind(pendingId, request.asBinding(), operatorId, true, request.numericSourceId());
     }
 
     /** 身份状态先提交数据库，再以刷新后快照是否可见决定接口能否返回成功。 */
@@ -331,6 +337,11 @@ public class DeviceOnboardingService {
 
     private BindTransactionResult doBind(
             String pendingId, DeviceOnboardingContracts.BindRequest request, Long operatorId, boolean typed) {
+        return doBind(pendingId, request, operatorId, typed, null);
+    }
+
+    private BindTransactionResult doBind(String pendingId, DeviceOnboardingContracts.BindRequest request,
+            Long operatorId, boolean typed, String numericSourceId) {
         // 与目录同步统一使用来源/项目→待接入记录的锁顺序，避免并发绑定和同步形成反向锁。
         if (typed) directoryService.requireBinding(pendingId, request.buildingId(), requirePending(pendingId).getProfileCode());
         BizPendingDevice pending = pendingMapper.selectByIdForUpdate(pendingId);
@@ -351,10 +362,14 @@ public class DeviceOnboardingService {
         validateOwnership(request);
         if (typed) {
             directoryService.requireBinding(pendingId, request.buildingId(), product.getExpectedProfileCode());
-            if (!isTypedProduct(product) || !request.pointBindings().isEmpty()
-                    || templateMapper.selectCount(new LambdaQueryWrapper<BizProductPointTemplate>()
-                    .eq(BizProductPointTemplate::getProductId, product.getProductId())) != 0) {
-                throw error(409, VALIDATION_FAILED, "类型化状态绑定仅支持无数值测点的大金状态产品");
+            List<BizProductPointTemplate> typedTemplates = templates(product.getProductId());
+            if (!isTypedProduct(product) || !typedTemperatureTemplatesValid(product, typedTemplates)) {
+                throw error(409, VALIDATION_FAILED, "类型化产品的温度测点模板无效");
+            }
+            if (request.pointBindings().isEmpty() && typedTemplates.stream().anyMatch(template ->
+                    Integer.valueOf(1).equals(template.getStatus())
+                            && Integer.valueOf(1).equals(template.getRequiredFlag()))) {
+                throw error(400, VALIDATION_FAILED, "缺少产品必填温度测点映射");
             }
         } else if ("DAIKIN_UNIT".equals(pending.getIdentityType()) || request.pointBindings() == null
                 || request.pointBindings().isEmpty()) {
@@ -367,8 +382,16 @@ public class DeviceOnboardingService {
             throw error(409, DUPLICATE, "目标设备已关联其他大金身份");
         }
         BizDeviceIdentity identity = createDisabledIdentity(pending, product, equipment);
-        PointBindingResult pointResult = typed ? new PointBindingResult(List.of(), List.of())
-                : bindPoints(pending, equipment, enabledTemplates(product.getProductId()), request.pointBindings());
+        PointBindingResult pointResult;
+        if (typed && request.pointBindings().isEmpty()) {
+            pointResult = new PointBindingResult(List.of(), List.of());
+        } else if (typed) {
+            BizDataSource source = requireTypedNumericDataSource(numericSourceId, equipment.getBuildingId());
+            pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()),
+                    request.pointBindings(), source, DAIKIN_SOURCE_SYSTEM);
+        } else {
+            pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()), request.pointBindings());
+        }
         if (pendingMapper.updateStatus(pendingId, "DISCOVERED", "BOUND", identity.getIdentityId()) != 1) {
             throw error(409, STATE_CONFLICT, "待绑定状态已被其他操作修改");
         }
@@ -533,6 +556,12 @@ public class DeviceOnboardingService {
             List<BizProductPointTemplate> templates,
             List<DeviceOnboardingContracts.PointBindingRequest> requests) {
         BizDataSource dataSource = requireOnboardingDataSource(equipment.getBuildingId());
+        return bindPoints(pending, equipment, templates, requests, dataSource, standardSourceSystem);
+    }
+
+    private PointBindingResult bindPoints(BizPendingDevice pending, BizEquipment equipment,
+            List<BizProductPointTemplate> templates, List<DeviceOnboardingContracts.PointBindingRequest> requests,
+            BizDataSource dataSource, String sourceSystem) {
         Map<String, BizProductPointTemplate> templateByMetric = new LinkedHashMap<>();
         templates.forEach(template -> templateByMetric.put(template.getMetricCode(), template));
         Map<String, DeviceOnboardingContracts.PointBindingRequest> requestByMetric = new LinkedHashMap<>();
@@ -557,14 +586,14 @@ public class DeviceOnboardingService {
             BizProductPointTemplate template = templateByMetric.get(entry.getKey());
             BizDataPoint point = resolvePoint(equipment, template, entry.getValue());
             String sourcePointCode = "%s:%s:%s".formatted(
-                    pending.getIdentityType(), pending.getIdentityValue(), template.getMetricCode());
-            BizPointAlias alias = existingAlias(equipment.getBuildingId(), sourcePointCode);
+                    typedSourcePrefix(sourceSystem, pending), pending.getIdentityValue(), template.getMetricCode());
+            BizPointAlias alias = existingAlias(equipment.getBuildingId(), sourceSystem, sourcePointCode);
             boolean aliasCreated = false;
             if (alias == null) {
                 alias = new BizPointAlias();
                 alias.setBuildingId(equipment.getBuildingId());
                 alias.setSourceId(dataSource.getSourceId());
-                alias.setSourceSystem(standardSourceSystem);
+                alias.setSourceSystem(sourceSystem);
                 alias.setSourcePointCode(sourcePointCode);
                 alias.setPointId(point.getPointId());
                 alias.setStatus(1);
@@ -578,10 +607,14 @@ public class DeviceOnboardingService {
             pointIds.add(point.getPointId());
             aliases.add(new BoundAlias(
                     alias.getAliasId(),
-                    new PointAliasKey(equipment.getBuildingId(), standardSourceSystem, sourcePointCode),
+                    new PointAliasKey(equipment.getBuildingId(), sourceSystem, sourcePointCode),
                     point.getPointId(), template.getMetricCode(), aliasCreated));
         }
         return new PointBindingResult(List.copyOf(pointIds), List.copyOf(aliases));
+    }
+
+    private static String typedSourcePrefix(String sourceSystem, BizPendingDevice pending) {
+        return DAIKIN_SOURCE_SYSTEM.equals(sourceSystem) ? "DAIKIN_UNIT" : pending.getIdentityType();
     }
 
     private BizDataSource requireOnboardingDataSource(String buildingId) {
@@ -600,6 +633,18 @@ public class DeviceOnboardingService {
             return candidates.getFirst();
         }
         throw error(409, STATE_CONFLICT, "设备接入无法唯一确定已启用 MQTT 数据源");
+    }
+
+    private BizDataSource requireTypedNumericDataSource(String sourceId, String buildingId) {
+        if (!StringUtils.hasText(sourceId)) {
+            throw error(400, VALIDATION_FAILED, "温度测点绑定必须明确选择 HTTP 数据源");
+        }
+        BizDataSource source = dataSourceMapper.selectById(sourceId.trim());
+        if (source == null || !buildingId.equals(source.getBuildingId())
+                || !"HTTP".equals(source.getTransportType()) || !"ENABLED".equals(source.getStatus())) {
+            throw error(400, VALIDATION_FAILED, "温度测点数据源必须是同建筑已启用 HTTP 来源");
+        }
+        return source;
     }
 
     private BizDataPoint resolvePoint(
@@ -673,10 +718,10 @@ public class DeviceOnboardingService {
         }
     }
 
-    private BizPointAlias existingAlias(String buildingId, String sourcePointCode) {
+    private BizPointAlias existingAlias(String buildingId, String sourceSystem, String sourcePointCode) {
         return aliasMapper.selectOne(new LambdaQueryWrapper<BizPointAlias>()
                 .eq(BizPointAlias::getBuildingId, buildingId)
-                .eq(BizPointAlias::getSourceSystem, standardSourceSystem)
+                .eq(BizPointAlias::getSourceSystem, sourceSystem)
                 .eq(BizPointAlias::getSourcePointCode, sourcePointCode));
     }
 
@@ -728,7 +773,8 @@ public class DeviceOnboardingService {
         BizDeviceProduct product = equipment == null ? null : productMapper.selectById(equipment.getProductId());
         if (pending == null || product == null || !isTypedProduct(product)
                 || !"ENABLED".equals(product.getStatus())
-                || !identity.getBuildingId().equals(equipment.getBuildingId())) {
+                || !identity.getBuildingId().equals(equipment.getBuildingId())
+                || !typedTemperatureTemplatesValid(product, templates(product.getProductId()))) {
             throw error(409, VALIDATION_FAILED, "类型化身份缺少有效目录和产品关联");
         }
         directoryService.requireBinding(pending.getPendingId(), identity.getBuildingId(), identity.getExpectedProfileCode());
@@ -745,7 +791,7 @@ public class DeviceOnboardingService {
         String prefix = "%s:%s:".formatted(key.type(), key.value());
         return aliasMapper.selectList(new LambdaQueryWrapper<BizPointAlias>()
                         .eq(BizPointAlias::getBuildingId, buildingId)
-                        .eq(BizPointAlias::getSourceSystem, standardSourceSystem)
+                        .in(BizPointAlias::getSourceSystem, standardSourceSystem, DAIKIN_SOURCE_SYSTEM)
                         .eq(BizPointAlias::getStatus, 1)).stream()
                 .filter(alias -> alias.getSourcePointCode().startsWith(prefix))
                 .toList();
@@ -783,6 +829,22 @@ public class DeviceOnboardingService {
             throw error(409, VALIDATION_FAILED, "产品没有启用测点模板");
         }
         return templates;
+    }
+
+    private List<BizProductPointTemplate> templates(String productId) {
+        return templateMapper.selectList(new LambdaQueryWrapper<BizProductPointTemplate>()
+                .eq(BizProductPointTemplate::getProductId, productId)
+                .orderByAsc(BizProductPointTemplate::getSortOrder)
+                .orderByAsc(BizProductPointTemplate::getTemplatePointId));
+    }
+
+    private boolean typedTemperatureTemplatesValid(BizDeviceProduct product,
+            List<BizProductPointTemplate> templates) {
+        if (!templates.isEmpty() && !"DAIKIN_INDOOR_V2".equals(product.getExpectedProfileCode())) return false;
+        return templates.stream().allMatch(template ->
+                Set.of("roomTemp", "temperature").contains(template.getMetricCode())
+                        && "°C".equals(template.getUnit())
+                        && Integer.valueOf(0).equals(template.getForCalc()));
     }
 
     private DeviceOnboardingContracts.PendingListItemView toListItem(BizPendingDevice pending) {
