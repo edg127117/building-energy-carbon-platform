@@ -1,5 +1,6 @@
 import { requestApi } from '@/infrastructure/http/public'
 import type {
+  EquipmentTypeOption,
   DeviceProductDetail,
   DeviceProductForm,
   DeviceProductListItem,
@@ -14,6 +15,10 @@ import type {
 const productPath = '/v1/device-products'
 const onboardingPath = '/v1/device-onboarding'
 const encoded = (value: string) => encodeURIComponent(value)
+
+export function listEquipmentTypes() {
+  return requestApi<EquipmentTypeOption[]>({ method: 'get', url: `${productPath}/equipment-types` })
+}
 
 export function listDeviceProducts(params: { page: number; size: number; status?: string; keyword?: string; expectedProfileCode?: string; identityType?: string }) {
   return requestApi<OnboardingPage<DeviceProductListItem>>({ method: 'get', url: productPath, params })

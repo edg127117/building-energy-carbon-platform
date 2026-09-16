@@ -12,6 +12,9 @@ import java.util.List;
 
 /** 产品模板管理 API 的独立请求和响应契约。 */
 public final class DeviceProductContracts {
+    public record EquipmentTypeView(String typeCode, String typeName) {
+    }
+
     private DeviceProductContracts() {
     }
 

@@ -141,3 +141,4 @@ export function pendingStatusKey(status: string | null | undefined): PendingStat
 export function canRunOnboardingAction(value: { allowedActions?: string[] }, action: string): boolean {
   return value.allowedActions?.includes(action) === true
 }
+export type EquipmentTypeOption = { typeCode: string; typeName: string }

@@ -54,6 +54,17 @@ class SensitiveChangeApiContractTest {
     }
 
     @Test
+    void policyRequiresAuthenticationAndReportsDevelopmentMode() throws Exception {
+        mockMvc.perform(get("/v1/backoffice/change-requests/policy"))
+                .andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/v1/backoffice/change-requests/policy")
+                        .header("Authorization", "Bearer " + login()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.environmentMode").value("TEST"))
+                .andExpect(jsonPath("$.data.selfApprovalAllowed").value(true));
+    }
+
+    @Test
     void exposesCompleteDevelopmentTwoStepFlowAndServerTrace() throws Exception {
         String token = login();
         MvcResult created = mockMvc.perform(post("/v1/backoffice/change-requests")

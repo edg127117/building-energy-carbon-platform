@@ -135,6 +135,8 @@ export default {
     },
   },
   change: {
+    localSelfApproval: '研发自审已开启：具备提交和审核职责的管理员可自行审核并执行；操作仍保留审计记录。',
+    policyUnavailable: '审批模式读取失败，请刷新重试；是否允许自审以服务端校验为准。',
     title: '敏感变更申请',
     description: '敏感操作需依次创建、提交、审核和执行；页面不会自动越过审核步骤。',
     requestId: '申请编号',

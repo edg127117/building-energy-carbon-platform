@@ -8,6 +8,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AuditGovernancePropertiesTest {
     @Test
+    void developmentDefaultsToSeparateReviewer() {
+        AuditGovernanceProperties properties = new AuditGovernanceProperties();
+        assertThat(properties.isAllowSelfApproval()).isFalse();
+        JdbcBackendDutyService service = new JdbcBackendDutyService(null, properties);
+        assertThatThrownBy(() -> service.requireSeparation(1L, 1L))
+                .isInstanceOf(BusinessException.class);
+        service.requireSeparation(1L, 2L);
+    }
+
+    @Test
     void productionCannotStartWithSelfApprovalEnabled() {
         AuditGovernanceProperties properties = new AuditGovernanceProperties();
         properties.setEnvironmentMode(AuditEnvironmentMode.PRODUCTION);
