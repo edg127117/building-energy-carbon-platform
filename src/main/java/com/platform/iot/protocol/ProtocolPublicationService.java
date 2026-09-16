@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.adapter.profile.*;
 import com.platform.adapter.publication.ProtocolSnapshotContracts.*;
 import com.platform.adapter.publication.SnapshotValidator;
+import com.platform.adapter.publication.SnapshotValidationException;
 import com.platform.audit.sensitive.*;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.onboarding.OnboardingAuditService;
@@ -109,6 +110,22 @@ public class ProtocolPublicationService {
         requireReady(target,request.expectedSequence());
         var ids=request.versionIds().stream().sorted().toList();
         if(ids.size()!=new HashSet<>(ids).size()) throw ProtocolErrors.invalid("协议版本重复");
+        // 普通发布按协议编码更新，未选择的现有协议必须保留；删减仅能通过显式历史回退。
+        Map<String,String> merged=new TreeMap<>();
+        repository.deployment(target.id(),target.sequence()).ifPresent(current -> {
+            for(String versionId:readIds(current.versions())) {
+                var version=repository.version(versionId).orElseThrow(ProtocolErrors::notFound);
+                merged.put(read(version.json(),Configuration.class).profileCode(),versionId);
+            }
+        });
+        Set<String> selectedCodes=new HashSet<>();
+        for(String versionId:ids) {
+            String code=entry(versionId).profile().profileCode();
+            if(!selectedCodes.add(code)) throw ProtocolErrors.invalid("同一协议只能选择一个版本");
+            merged.put(code,versionId);
+        }
+        ids=merged.values().stream().sorted().toList();
+        if(ids.size()>100) throw ProtocolErrors.invalid("完整配置集合最多包含100个协议");
         var entries=ids.stream().map(this::entry).toList();
         Snapshot snapshot=new Snapshot(1,target.output(),entries);
         validateSnapshot(target,snapshot);
@@ -124,10 +141,20 @@ public class ProtocolPublicationService {
         var ids=readIds(previous.versions());
         ids.forEach(this::entry);
         validateSnapshot(target,read(previous.json(),Snapshot.class));
-        return new FrozenCommand(target.id(),target.sequence(),previous.digest(),previous.json(),ids);
+        return new FrozenCommand(target.id(),target.sequence(),previous.digest(),previous.json(),ids,true);
     }
     /** 审批处理器重新规范化冻结命令，禁止从通用审批入口提交任意未经约束的快照。 */
     public FrozenCommand validateCommand(FrozenCommand command) {
+        if(command.rollback()) {
+            var target=target(command.targetId(),false);
+            requireReady(target,command.expectedSequence());
+            // 回退只接受本目标曾加载的完整历史快照，不能借回退标记提交任意删减集合。
+            var previous=repository.deployments(target.id()).stream().filter(d -> "LOADED".equals(d.status())
+                    && Objects.equals(d.digest(),command.digest()) && Objects.equals(d.json(),command.contentJson())
+                    && Objects.equals(readIds(d.versions()),command.versionIds())).findFirst()
+                    .orElseThrow(()->ProtocolErrors.invalid("回退内容不属于已加载的历史配置"));
+            return rollback(new RollbackRequest(target.id(),previous.sequence(),target.sequence(),"validation"),ADMIN);
+        }
         var expected=prepare(new PublishRequest(command.targetId(),command.expectedSequence(),command.versionIds(),"validation"),ADMIN);
         if(!Objects.equals(command.digest(),expected.digest())||!Objects.equals(command.contentJson(),expected.contentJson()))
             throw ProtocolErrors.invalid("审批内容与冻结协议版本不一致");
@@ -190,7 +217,10 @@ public class ProtocolPublicationService {
         return new Entry(profile,mappings);
     }
     private void validateSnapshot(ProtocolPublicationRepository.Target target,Snapshot snapshot) {
-        try {SnapshotValidator.validate(snapshot,target.output());} catch(IllegalArgumentException e) {throw ProtocolErrors.invalid("完整配置集合校验失败");}
+        try {SnapshotValidator.validate(snapshot,target.output());}
+        catch(SnapshotValidationException e) {
+            throw new BusinessException(400,"PROTOCOL_SNAPSHOT_"+e.getErrorCode(),"完整配置集合校验失败");
+        }
         Set<String> allowed=new HashSet<>(readIds(target.topics()));
         if(snapshot.profiles().stream().anyMatch(p->!allowed.contains(p.profile().sourceTopic()))) throw ProtocolErrors.invalid("协议 Topic 超出目标授权范围");
         if(json(snapshot).getBytes(StandardCharsets.UTF_8).length>1048576) throw ProtocolErrors.invalid("完整配置集合超过1 MiB");

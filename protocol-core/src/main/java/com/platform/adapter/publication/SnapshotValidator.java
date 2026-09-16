@@ -8,8 +8,6 @@ import com.platform.adapter.publication.ProtocolSnapshotContracts.Snapshot;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
-import java.util.HashMap;
 import java.util.Set;
 
 /** 对完整发布集合执行平台与适配器一致的静态能力校验。 */
@@ -51,10 +49,9 @@ public final class SnapshotValidator {
         Set<String> profileKeys = new HashSet<>();
         Set<String> mappingIds = new HashSet<>();
         Set<String> selectors = new HashSet<>();
-        Map<String, String> versionPathsByTopic = new HashMap<>();
         for (Entry entry : entries) {
             validateEntry(entry, outputVersion, profileIds, profileKeys, mappingIds,
-                    selectors, versionPathsByTopic);
+                    selectors);
         }
     }
 
@@ -64,8 +61,7 @@ public final class SnapshotValidator {
             Set<String> profileIds,
             Set<String> profileKeys,
             Set<String> mappingIds,
-            Set<String> selectors,
-            Map<String, String> versionPathsByTopic) {
+            Set<String> selectors) {
         if (entry == null || entry.profile() == null) {
             fail("PROFILE_MISSING", "协议模板不能为空");
         }
@@ -103,11 +99,7 @@ public final class SnapshotValidator {
         if ((expectedVersion == null) != (versionPath == null)) {
             fail("INCOMPLETE_VERSION_SELECTOR", "协议版本路径与期望值必须同时配置或同时为空");
         }
-        String priorPath = versionPathsByTopic.putIfAbsent(
-                topic, versionPath == null ? "" : versionPath);
-        if (priorPath != null && !priorPath.equals(versionPath == null ? "" : versionPath)) {
-            fail("INCONSISTENT_VERSION_SELECTOR_PATH", "同一主题必须使用同一协议判别路径");
-        }
+        // 不同设备报文可在不同路径携带型号；静态校验排除重复条件，运行时仍须唯一命中。
         String selector = topic + '\u001f' + (versionPath == null
                 ? "*" : versionPath + '\u001f' + expectedVersion);
         if (!selectors.add(selector)) {

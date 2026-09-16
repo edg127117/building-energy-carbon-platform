@@ -10,6 +10,7 @@ import {
   requestProtocolRollback,
 } from '../api/protocol-configuration'
 import ProtocolPublicationPanel from './ProtocolPublicationPanel.vue'
+import { TransportError } from '@/infrastructure/http/public'
 
 vi.mock('@/modules/device-onboarding/public', async importOriginal => ({ ...(await importOriginal()), listDeviceProducts: vi.fn() }))
 vi.mock('../api/protocol-configuration', () => ({
@@ -28,6 +29,19 @@ const approval = { requestId: 'REQUEST-1', operationCode: 'PUBLISH_PROTOCOL_CONF
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 
 describe('协议发布面板边界', () => {
+  it('展示可操作的冲突原因而非通用请求失败', async () => {
+    vi.mocked(requestProtocolPublication).mockRejectedValueOnce(new TransportError('request', 400, undefined, 'PROTOCOL_SNAPSHOT_AMBIGUOUS_PROFILE_SELECTOR'))
+    const wrapper = mount(ProtocolPublicationPanel, { props: { draftId: null, draftRevision: null, productEnabled: false, selectedProduct: null } })
+    await flushPromises()
+    wrapper.findComponent(ElSelect).vm.$emit('change', 'READY-1')
+    wrapper.findComponent(ElCheckboxGroup).vm.$emit('update:modelValue', ['VERSION-1'])
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '创建发布申请')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('同一 Topic 存在重复判别条件')
+    expect(wrapper.text()).toContain('自动保留目标已有的其他协议')
+    wrapper.unmount()
+  })
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(listProtocolPublicationTargets).mockResolvedValue([readyTarget, unknownTarget] as never)

@@ -24,7 +24,11 @@ public final class ProtocolPublicationContracts {
     public record DeploymentView(String targetId,long sequence,String digest,String approvalId,
             String status,String errorCode,long createdAt,long loadedAt) {}
     public record FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,
-            List<String> versionIds) {}
+            List<String> versionIds,boolean rollback) {
+        public FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,List<String> versionIds) {
+            this(targetId,expectedSequence,digest,contentJson,versionIds,false);
+        }
+    }
     public record ImportRequest(@NotBlank @Size(max=1048576) String snapshotJson,
             @Size(max=1048576) String archiveJson,@NotEmpty @Size(max=100) Map<String,String> productBindings) {}
 }

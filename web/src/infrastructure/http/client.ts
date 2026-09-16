@@ -5,6 +5,7 @@ export type ApiResult<T> = {
   code: number
   msg: string
   data: T
+  errorCode?: string
 }
 
 export class TransportError extends Error {
@@ -12,6 +13,7 @@ export class TransportError extends Error {
     readonly kind: 'unauthorized' | 'forbidden' | 'network' | 'request',
     readonly status?: number,
     readonly businessCode?: number,
+    readonly errorCode?: string,
   ) {
     super(kind)
   }
@@ -50,7 +52,8 @@ export function createHttpClient(baseURL: string, getToken: () => string | null)
         const status = axios.isAxiosError(reason) ? reason.response?.status : undefined
         const kind = status === 401 ? 'unauthorized' : status === 403 ? 'forbidden' : status ? 'request' : 'network'
         // 不向展示层透传服务端异常原文，避免泄漏内部信息。
-        throw new TransportError(kind, status)
+        const errorCode = axios.isAxiosError(reason) ? stableErrorCode(reason.response?.data?.errorCode) : undefined
+        throw new TransportError(kind, status, undefined, errorCode)
       }
     },
   }
@@ -61,9 +64,13 @@ const platformClient = createHttpClient(
   () => authenticationBridge.getToken(),
 )
 
-function classifyBusinessFailure(code: number): TransportError {
+function stableErrorCode(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,99}$/.test(value) ? value : undefined
+}
+
+function classifyBusinessFailure(code: number, errorCode?: string): TransportError {
   const kind = code === 401 ? 'unauthorized' : code === 403 ? 'forbidden' : 'request'
-  return new TransportError(kind, code, code)
+  return new TransportError(kind, code, code, stableErrorCode(errorCode))
 }
 
 /**
@@ -77,7 +84,7 @@ export async function requestApi<T>(config: AxiosRequestConfig): Promise<T> {
     const result = await platformClient.request<ApiResult<T>>(config)
     if (!result || typeof result !== 'object') throw new TransportError('request')
     if (result.code === 200) return result.data
-    throw classifyBusinessFailure(result.code)
+    throw classifyBusinessFailure(result.code, result.errorCode)
   } catch (reason) {
     // 旧账号请求的迟到 401 不能清理切换账号后建立的新会话。
     if (reason instanceof TransportError && reason.kind === 'unauthorized' && requestToken === authenticationBridge.getToken()) {

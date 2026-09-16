@@ -30,6 +30,37 @@ class RemoteProtocolProfileProviderTest {
     Path tempDir;
 
     @Test
+    void routesIndoorAndOutdoorPathsAndRejectsBothMatching() throws Exception {
+        List<Entry> entries = new ArrayList<>();
+        for (String model : List.of("1039", "339")) {
+            String path = "1039".equals(model) ? "/param/ID255/M" : "/param/ID1/M";
+            ProtocolProfile profile = new ProtocolProfile(model, "METER_" + model, 1,
+                    "device/raw/energy/up", "SN", "/SN", path, model, null, null,
+                    null, null, null, null, "EVIDENCE_ONLY", "NONE", true);
+            ProtocolFieldMapping mapping = new ProtocolFieldMapping("MAP_" + model, model,
+                    "/value", "POWER", "DECIMAL", "kW", "kW", BigDecimal.ONE, BigDecimal.ZERO, true, true, 1);
+            entries.add(new Entry(profile, List.of(mapping)));
+        }
+        String content = objectMapper.writeValueAsString(new Snapshot(1, "V2", entries));
+        String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                .digest(content.getBytes(StandardCharsets.UTF_8)));
+        FakeClient client = new FakeClient();
+        client.next = Optional.of(new Envelope(1, digest, content));
+        RemoteProtocolProfileProvider provider = provider(properties("V2"), client);
+        provider.initialize();
+        assertThat(client.receipts.getFirst().status()).isEqualTo("LOADED");
+        assertThat(provider.resolve("device/raw/energy/up", objectMapper.readTree(
+                "{\"param\":{\"ID255\":{\"M\":\"1039\"}}}")).profile().profileCode()).isEqualTo("METER_1039");
+        assertThat(provider.resolve("device/raw/energy/up", objectMapper.readTree(
+                "{\"param\":{\"ID1\":{\"M\":\"339\"}}}")).profile().profileCode()).isEqualTo("METER_339");
+        assertThatThrownBy(() -> provider.resolve("device/raw/energy/up", objectMapper.readTree(
+                "{\"param\":{\"ID255\":{\"M\":\"1039\"},\"ID1\":{\"M\":\"339\"}}}")))
+                .isInstanceOf(ProtocolProfileResolutionException.class);
+        assertThatThrownBy(() -> provider.resolve("device/raw/energy/up", objectMapper.readTree("{}")))
+                .isInstanceOf(ProtocolProfileResolutionException.class);
+    }
+
+    @Test
     void persistsBeforeSwitchAndRestoresAfterOfflineRestart() throws Exception {
         FakeClient firstClient = new FakeClient();
         Envelope envelope = envelope(1, "V2", "PROFILE_A", "/MAC");
