@@ -30,7 +30,7 @@ const revisionId = ref<string | null>(null)
 const runtimeRows = computed(() => [...(runtime.data.value?.items ?? [])].sort((a, b) => b.periodStart - a.periodStart))
 const option = computed<ChartOption>(() => ({
   tooltip: { trigger: 'axis' }, grid: { left: 55, right: 20, top: 25, bottom: 45 },
-  xAxis: { type: 'time' }, yAxis: { type: 'value', name: history.data.value?.unit ?? '°C', scale: true },
+  xAxis: { type: 'time' }, yAxis: { type: 'value', scale: true },
   // 缺口插入空节点仅用于断线，不新增任何业务读数或插值。
   series: [{ type: 'line', connectNulls: false, showSymbol: true, data: temperatureSeries(history.data.value?.items ?? []) }],
 }))
@@ -97,6 +97,7 @@ onMounted(loadCurrent)
         <ElAlert v-if="temperature.error.value" :title="temperature.error.value" type="warning" :closable="false" />
         <p v-if="temperature.data.value">{{ text('value') }}{{ ': ' }}{{ temperature.data.value.reading?.value ?? t('common.missing') }} {{ temperature.data.value.unit }}{{ ' · ' }}{{ daikinLabel(temperature.data.value.fieldStatus) }}{{ ' · ' }}{{ date(temperature.data.value.reading?.observedAt ?? null) }} <ElTag v-if="temperature.data.value.reading?.quality && temperature.data.value.reading.quality.decision !== 'ALLOW'" type="warning">{{ text('qualityBlocked') }}</ElTag><ElTag v-if="temperature.data.value.reading?.stale" type="warning">{{ text('stale') }}</ElTag></p>
         <ElAlert v-if="history.error.value" :title="history.error.value" type="error" :closable="false" />
+        <p class="chart-unit">{{ text('temperatureUnit') }}{{ '（' }}{{ history.data.value?.unit ?? '°C' }}{{ '）' }}</p>
         <div class="chart"><ChartView :option="option" :loading="history.loading.value" :empty="!history.data.value?.items.length" :accessible-label="text('temperature')" /></div>
         <ElButton :disabled="history.data.value?.nextCursor == null" @click="loadTemperature(history.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
       </ElTabPane>

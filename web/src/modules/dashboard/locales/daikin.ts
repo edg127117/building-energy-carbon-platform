@@ -5,7 +5,7 @@ export default {
   exception: '存在异常', none: '暂无已接入的厂家设备', detail: '查看监测', field: '字段', value: '最近有效值',
   status: '本次取数状态', attempt: '最近尝试', events: '状态变化', before: '变化前', after: '变化后',
   eventNotice: '保留 1 年；变化发生于两次观测之间，不代表精确操作时间或操作人。', gap: '中间有采集间断',
-  temperature: '温度曲线', roomTemp: '室温', setpoint: '设定温度', fromTo: '查询时间范围', query: '查询',
+  temperatureUnit: '温度', temperature: '温度曲线', roomTemp: '室温', setpoint: '设定温度', fromTo: '查询时间范围', query: '查询',
   temperatureNotice: '可查询最近 90 天的温度；未采集或不可用的数据以断点显示。',
   invalidRange: '请选择最近 90 天内的有效时间范围。', next: '下一页', first: '回到首页',
   runtime: '厂家运行统计', DAY: '日', MONTH: '月', YEAR: '年', period: '统计区间（结束时间不含）',
