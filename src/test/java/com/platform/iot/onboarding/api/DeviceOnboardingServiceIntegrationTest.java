@@ -406,6 +406,26 @@ class DeviceOnboardingServiceIntegrationTest {
         return sensitiveChangeService.execute(1L, draft.requestId()).change();
     }
 
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void rejectsMissingSourceBeforeCreatingApprovalDraft() {
+        var product = createEnabledProduct("BTEST_SOURCE_REQUIRED");
+        insertPending("BTEST-SOURCE", "BTEST-SOURCE-DEVICE", "DISCOVERED");
+        jdbcTemplate.update("UPDATE biz_data_source SET status='DISABLED' WHERE building_id='BLD001'");
+        var bind = objectMapper.createObjectNode()
+                .put("pendingId", "BTEST-SOURCE").put("productId", product.productId())
+                .put("buildingId", "BLD001").put("spaceId", "SPACE001")
+                .put("systemGroupId", "GROUP001").put("existingEquipmentId", "EQUIP_WCR_B1");
+        bind.putArray("pointBindings").addObject()
+                .put("metricCode", "temperature").put("existingPointId", "POINT001");
+        int before = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request", Integer.class);
+        assertThatThrownBy(() -> sensitiveChangeService.createDraft(1L, "BIND_PENDING_DEVICE", bind, "missing-source"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        exception -> assertThat(exception.getErrorCode()).isEqualTo(OnboardingErrors.SOURCE_REQUIRED));
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request", Integer.class)).isEqualTo(before);
+        assertThat(pendingMapper.selectById("BTEST-SOURCE").getStatus()).isEqualTo("DISCOVERED");
+    }
+
     private void grant(BackendDuty duty) {
         LocalDateTime now = LocalDateTime.now().minusMinutes(1);
         jdbcTemplate.update("""

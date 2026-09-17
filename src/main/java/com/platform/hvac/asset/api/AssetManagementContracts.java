@@ -103,7 +103,7 @@ public final class AssetManagementContracts {
 
     public record SystemGroupCreateRequest(
             @NotBlank String buildingId,
-            @Size(max = 50) String systemCode,
+            @NotBlank(message = "请填写系统编码") @Size(max = 50) String systemCode,
             @NotBlank @Size(max = 100) String systemName,
             @Size(max = 30) String systemType,
             String status) {

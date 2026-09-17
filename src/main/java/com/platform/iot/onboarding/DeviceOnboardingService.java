@@ -181,7 +181,10 @@ public class DeviceOnboardingService {
             String pendingId, DeviceOnboardingContracts.BindRequest request, Set<String> roles) {
         requireAdmin(roles);
         requirePending(pendingId);
-        return validateOwnership(request);
+        String buildingId = validateOwnership(request);
+        // 在创建审批申请前反馈可修正的前置配置问题；执行绑定仍重新校验，避免审批期间配置变化。
+        requireOnboardingDataSource(buildingId);
+        return buildingId;
     }
 
     /** 从持久化身份解析建筑范围，禁止公共申请使用客户端自报建筑。 */
@@ -632,7 +635,12 @@ public class DeviceOnboardingService {
         if (exact.isEmpty() && candidates.size() == 1) {
             return candidates.getFirst();
         }
-        throw error(409, STATE_CONFLICT, "设备接入无法唯一确定已启用 MQTT 数据源");
+        if (candidates.isEmpty()) {
+            throw error(409, OnboardingErrors.SOURCE_REQUIRED,
+                    "该建筑尚无已启用的数据源，请先由配置管理员完成 MQTT 数据源审批并启用，再重新提交绑定申请");
+        }
+        throw error(409, OnboardingErrors.SOURCE_AMBIGUOUS,
+                "该建筑存在多个数据源，无法确定本次接入来源，请由配置管理员核对标准报文来源配置后重新提交");
     }
 
     private BizDataSource requireTypedNumericDataSource(String sourceId, String buildingId) {
