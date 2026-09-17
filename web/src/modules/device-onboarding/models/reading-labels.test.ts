@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { identityTypeText, readingReasonText, readingStatusText, syncJobStatusText } from './reading-labels'
+import { identityTypeText, profileText, readingReasonText, readingStatusText, syncJobResultText, syncJobStatusText } from './reading-labels'
 
 describe('读数的客户展示', () => {
   it('区分历史数据、质量使用策略与在线状态', () => {
@@ -17,5 +17,14 @@ describe('读数的客户展示', () => {
   it('完整翻译目录同步任务状态', () => {
     expect(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED'].map(syncJobStatusText))
       .toEqual(['待执行', '执行中', '等待重试', '已完成', '失败'])
+  })
+  it('目录同步结果和大金协议不直接暴露技术编码', () => {
+    expect(syncJobResultText(null)).toBe('未发现异常')
+    expect(syncJobResultText('DAIKIN_SYNC_TRANSPORT_FAILURE')).toContain('自动重试')
+    expect(syncJobResultText('DAIKIN_SYNC_AUTHENTICATION_REQUIRED')).toContain('厂家授权')
+    expect(syncJobResultText('FUTURE_ERROR')).toBe('同步未完成，请联系运维人员。')
+    expect(profileText('DAIKIN_INDOOR_V2')).toBe('大金室内机 2.0')
+    expect(profileText('DAIKIN_OUTDOOR_V2')).toBe('大金室外机 2.0')
+    expect(profileText('FUTURE_PROFILE')).toBe('其他接入协议')
   })
 })

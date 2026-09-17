@@ -62,19 +62,35 @@ async function business(page, route) {
     evidence.checks.push('Real admin login and server menu authorization');
     await page.goto(`${front}/#/operations/devices/pendingDevices`);
     await page.getByRole('heading', { name: '待接入设备', exact: true }).waitFor();
-    await page.getByPlaceholder('已登记的厂家逻辑来源标识').fill(state.sourceId);
+    await page.getByRole('tab', { name: '大金空调接入', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '厂家设备', exact: true }).count(), 0,
+      'Device source switch must use clear content tabs instead of header buttons.');
+    await page.getByPlaceholder('请输入配置管理员提供的数据源标识').fill(state.sourceId);
     const submitted = page.waitForResponse(response => response.url().endsWith('/sync-jobs') && response.request().method() === 'POST');
-    await page.getByRole('button', { name: '提交厂家同步', exact: true }).click();
+    await page.getByRole('button', { name: '开始目录同步', exact: true }).click();
     assert.equal((await submitted).status(), 202);
+    assert.equal(await page.getByPlaceholder('请输入配置管理员提供的数据源标识').inputValue(), '',
+      'Submitted technical source id must be cleared from the customer-facing form.');
     await control('dispatch');
     state = await eventually(() => control('state', 'GET'), value => Boolean(value.pendingId), 'directory persisted');
     const refreshed = page.waitForResponse(response => response.url().includes('/sync-jobs/') && response.request().method() === 'GET');
-    await page.getByRole('button', { name: '刷新同步结果', exact: true }).click();
+    await page.getByRole('button', { name: '更新任务状态', exact: true }).click();
     const job = await (await refreshed).json();
     assert.equal(job.data.status, 'SUCCEEDED');
     await page.getByText('已完成', { exact: true }).waitFor();
+    await page.getByText('最新同步结果', { exact: true }).waitFor();
+    await page.getByText('未发现异常', { exact: true }).waitFor();
     assert.equal(await page.getByText('SUCCEEDED', { exact: true }).count(), 0, 'Directory status must not expose the backend enum.');
+    assert.equal(await page.getByText(state.sourceId, { exact: true }).isVisible(), false,
+      'Full source id must remain collapsed in technical details.');
+    assert.equal(await page.getByText(job.data.jobId, { exact: true }).isVisible(), false,
+      'Full job id must remain collapsed in technical details.');
     await page.screenshot({ path: path.join(output, '01-directory.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth), false,
+      'Directory onboarding must not overflow the narrow viewport.');
+    await page.screenshot({ path: path.join(output, '01-directory-mobile.png'), fullPage: true });
+    await page.setViewportSize({ width: 1440, height: 1050 });
     evidence.checks.push('UI submitted manufacturer directory job; actual backend persisted pending device');
 
     // Approval fixture calls the existing governance service; it does not bypass binding with SQL.
