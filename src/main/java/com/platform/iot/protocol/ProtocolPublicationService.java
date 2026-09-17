@@ -104,6 +104,24 @@ public class ProtocolPublicationService {
         ProtocolDraftService.requireAdmin(roles);var t=target(target,false);
         return repository.deployments(target).stream().map(d->deploymentView(d,t)).toList();
     }
+    public DeploymentDetail deployment(String targetId,long sequence,Set<String> roles) {
+        ProtocolDraftService.requireAdmin(roles);
+        var target=target(targetId,false);
+        var deployment=repository.deployment(target.id(),sequence).orElseThrow(ProtocolErrors::notFound);
+        var view=deploymentView(deployment,target);
+        return new DeploymentDetail(view.targetId(),view.sequence(),view.digest(),view.approvalId(),view.status(),
+                view.errorCode(),view.createdAt(),view.loadedAt(),versionSummaries(readIds(deployment.versions())));
+    }
+    /** 复用正式发布校验并只返回计算结果，不冻结版本、创建审批或写入发布记录。 */
+    public PublicationPreview preview(PreviewRequest request,Set<String> roles) {
+        var command=prepare(new PublishRequest(request.targetId(),request.expectedSequence(),request.versionIds(),"preview"),roles);
+        return publicationPreview(command,currentVersionIds(command.targetId(),command.expectedSequence()));
+    }
+    /** 历史回退预览与正式回退使用相同的已加载历史集合约束，但不分配新序号。 */
+    public PublicationPreview rollbackPreview(RollbackPreviewRequest request,Set<String> roles) {
+        var command=rollback(new RollbackRequest(request.targetId(),request.historicalSequence(),request.expectedSequence(),"rollback-preview"),roles);
+        return publicationPreview(command,currentVersionIds(command.targetId(),command.expectedSequence()));
+    }
     public FrozenCommand prepare(PublishRequest request,Set<String> roles) {
         ProtocolDraftService.requireAdmin(roles);
         var target=target(request.targetId(),false);
@@ -238,6 +256,38 @@ public class ProtocolPublicationService {
     private DeploymentView deploymentView(ProtocolPublicationRepository.Deployment d,ProtocolPublicationRepository.Target t) {
         String status=d.sequence()==t.sequence()&&System.currentTimeMillis()-t.seen()>contactTimeout?"UNKNOWN":d.status();
         return new DeploymentView(d.target(),d.sequence(),d.digest(),d.approval(),status,d.error(),d.created(),d.loaded());
+    }
+    private PublicationPreview publicationPreview(FrozenCommand command,List<String> currentIds) {
+        var current=versionSummaries(currentIds);
+        var target=versionSummaries(command.versionIds());
+        Map<String,VersionSummary> before=new TreeMap<>();
+        Map<String,VersionSummary> after=new TreeMap<>();
+        current.forEach(version->before.put(version.profileCode(),version));
+        target.forEach(version->after.put(version.profileCode(),version));
+        Set<String> codes=new TreeSet<>(before.keySet());codes.addAll(after.keySet());
+        var changes=codes.stream().map(code->{
+            var oldVersion=before.get(code);var newVersion=after.get(code);
+            ChangeType type=oldVersion==null?ChangeType.ADDED:newVersion==null?ChangeType.REMOVED:
+                    oldVersion.versionId().equals(newVersion.versionId())?ChangeType.RETAINED:ChangeType.REPLACED;
+            return new ProfileChange(code,type,oldVersion,newVersion);
+        }).toList();
+        return new PublicationPreview(command.targetId(),command.expectedSequence(),command.digest(),current,target,changes);
+    }
+    private List<String> currentVersionIds(String targetId,long sequence) {
+        if(sequence==0) return List.of();
+        return readIds(repository.deployment(targetId,sequence).orElseThrow(ProtocolErrors::notFound).versions());
+    }
+    private List<VersionSummary> versionSummaries(List<String> versionIds) {
+        return versionIds.stream().map(this::versionSummary)
+                .sorted(Comparator.comparing(VersionSummary::profileCode)).toList();
+    }
+    private VersionSummary versionSummary(String versionId) {
+        var version=repository.version(versionId).orElseThrow(ProtocolErrors::notFound);
+        var configuration=read(version.json(),Configuration.class);
+        int mappingCount=version.entryJson()==null
+                ?(int)configuration.mappings().stream().filter(mapping->mapping.enabled()).count()
+                :read(version.entryJson(),Entry.class).mappings().size();
+        return new VersionSummary(version.id(),configuration.name(),configuration.profileCode(),version.revision(),mappingCount);
     }
     private VersionView versionView(ProtocolPublicationRepository.Version v) {return new VersionView(v.id(),v.draftId(),v.revision(),v.digest(),read(v.json(),Configuration.class),v.created());}
     private String safeError(String code) {return code!=null&&code.matches("[A-Z0-9_]{1,80}")?code:"LOAD_FAILED";}

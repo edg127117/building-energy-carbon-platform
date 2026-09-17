@@ -21,8 +21,20 @@ public final class ProtocolPublicationContracts {
             @NotEmpty @Size(max=100) List<@NotBlank String> versionIds,@NotBlank @Size(max=100) String idempotencyKey) {}
     public record RollbackRequest(@NotBlank String targetId,@Min(1) long historicalSequence,
             @Min(0) long expectedSequence,@NotBlank @Size(max=100) String idempotencyKey) {}
+    public record PreviewRequest(@NotBlank String targetId,@Min(0) long expectedSequence,
+            @NotEmpty @Size(max=100) List<@NotBlank String> versionIds) {}
+    public record RollbackPreviewRequest(@NotBlank String targetId,@Min(0) long expectedSequence,
+            @Min(1) long historicalSequence) {}
+    public enum ChangeType {ADDED,REPLACED,RETAINED,REMOVED}
+    public record VersionSummary(String versionId,String name,String profileCode,long revision,int mappingCount) {}
+    public record ProfileChange(String profileCode,ChangeType changeType,
+            VersionSummary beforeVersion,VersionSummary afterVersion) {}
+    public record PublicationPreview(String targetId,long expectedSequence,String digest,
+            List<VersionSummary> currentVersions,List<VersionSummary> targetVersions,List<ProfileChange> changes) {}
     public record DeploymentView(String targetId,long sequence,String digest,String approvalId,
             String status,String errorCode,long createdAt,long loadedAt) {}
+    public record DeploymentDetail(String targetId,long sequence,String digest,String approvalId,
+            String status,String errorCode,long createdAt,long loadedAt,List<VersionSummary> versions) {}
     public record FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,
             List<String> versionIds,boolean rollback) {
         public FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,List<String> versionIds) {

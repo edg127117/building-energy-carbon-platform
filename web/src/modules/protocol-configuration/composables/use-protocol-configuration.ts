@@ -30,17 +30,20 @@ export function useProtocolConfiguration() {
   const saving = ref(false)
   const error = ref<string | null>(null)
   let loadGeneration = 0
+  let listGeneration = 0
   let inspectGeneration = 0
   let previewGeneration = 0
   let editGeneration = 0
 
   async function loadDrafts(page = 1) {
     const owner = ++loadGeneration
+    // 返回指定草稿时列表和详情并行加载；详情不能丢弃列表中的显示名称。
+    const listOwner = ++listGeneration
     loading.value = true
     error.value = null
     try {
       const result = await listProtocolConfigurations({ page, size: drafts.value.size })
-      if (owner === loadGeneration) drafts.value = result
+      if (listOwner === listGeneration) drafts.value = result
       return result
     } catch (reason) {
       if (owner === loadGeneration) error.value = protocolRequestErrorMessage(reason)

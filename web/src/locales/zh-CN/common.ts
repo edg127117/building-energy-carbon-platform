@@ -1,4 +1,5 @@
 export default {
+  copy: '复制', copied: '已复制', copyFailed: '复制失败，请手动选择复制',
   loading: '正在加载', empty: '暂无数据', retry: '重新加载', close: '关闭',
   pendingTitle: '待建设',
   pendingDescription: '当前仅提供页面外壳。展示内容、数据来源与交互规则确认后，再接入业务功能。',
