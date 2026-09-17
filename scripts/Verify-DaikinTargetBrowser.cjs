@@ -72,7 +72,8 @@ async function business(page, route) {
     await page.getByRole('button', { name: '刷新同步结果', exact: true }).click();
     const job = await (await refreshed).json();
     assert.equal(job.data.status, 'SUCCEEDED');
-    await page.getByText('SUCCEEDED', { exact: true }).waitFor();
+    await page.getByText('已完成', { exact: true }).waitFor();
+    assert.equal(await page.getByText('SUCCEEDED', { exact: true }).count(), 0, 'Directory status must not expose the backend enum.');
     await page.screenshot({ path: path.join(output, '01-directory.png'), fullPage: true });
     evidence.checks.push('UI submitted manufacturer directory job; actual backend persisted pending device');
 
@@ -131,6 +132,9 @@ async function business(page, route) {
     await control('runtime');
     await page.getByRole('tab', { name: '厂家运行统计', exact: true }).click();
     await page.getByText('累计运行时长:', { exact: false }).first().waitFor();
+    await page.getByText(/^已完成: \d+$/).waitFor();
+    assert.equal(await page.getByText(/^(QUEUED|RUNNING|RETRY_WAIT|SUCCEEDED|FAILED|UNSUPPORTED|EXPIRED):/).count(), 0,
+      'Runtime synchronization summary must not expose backend enums.');
     await page.screenshot({ path: path.join(output, '04-runtime.png'), fullPage: true });
     const runtime = await business(page, `/v1/hvac-monitoring/devices/${state.equipmentId}/runtime?granularity=DAY`);
     assert.equal(runtime.status, 200);

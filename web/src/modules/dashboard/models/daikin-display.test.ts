@@ -16,6 +16,10 @@ describe('manufacturer display boundaries', () => {
     expect(daikinLabel('vendor-future-mode')).toBe('vendor-future-mode')
     expect(daikinLabel('constructor')).toBe('constructor')
   })
+  it('translates every runtime synchronization state for customer display', () => {
+    expect(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED', 'UNSUPPORTED', 'EXPIRED'].map(daikinLabel))
+      .toEqual(['待执行', '执行中', '等待重试', '已完成', '失败', '不支持', '已过期'])
+  })
   it('uses manufacturer period timezone independently of browser timezone', () => {
     expect(runtimePeriodTime(Date.parse('2026-09-16T16:00:00Z'), 'Asia/Shanghai')).toContain('2026/09/17')
     expect(runtimePeriodTime(0, 'unsupported-zone')).toBe('1970-01-01T00:00:00.000Z')

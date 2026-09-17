@@ -148,6 +148,14 @@ export default {
     present: '本轮仍存在',
     missing: '本轮已缺失',
   },
+  syncJobStatus: {
+    QUEUED: '待执行',
+    RUNNING: '执行中',
+    RETRY_WAIT: '等待重试',
+    SUCCEEDED: '已完成',
+    FAILED: '失败',
+    unknown: '同步状态待确认',
+  },
   messages: {
     sourceRequired: '该建筑还没有已启用的接入数据源。请联系配置管理员，完成该建筑的 MQTT 数据源审批并启用，再重新提交绑定申请。新建测点的映射和采集策略可在绑定后补齐。',
     sourceAmbiguous: '该建筑有多个接入数据源，无法确定本次设备应使用哪一个。请联系配置管理员核对标准报文来源配置，再重新提交绑定申请。',
