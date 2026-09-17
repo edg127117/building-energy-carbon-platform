@@ -98,9 +98,9 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
 <style scoped>
 .device-list { min-width: 0; padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); } .device-list .el-pagination { margin-top: var(--bec-space-group); }
 .daikin-panel { display: grid; gap: var(--bec-space-section); min-width: 0; }
-header { display: flex; justify-content: space-between; gap: var(--bec-space-section); flex-wrap: wrap; } h1 { margin: 0; font-size: var(--bec-font-size-system); }
-p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); } .filters { display: flex; gap: var(--bec-space-tight); flex-wrap: wrap; align-items: flex-end; }
-.filter-field { display: grid; gap: var(--bec-space-tight); } .filter-field .el-input { width: calc(var(--bec-control-height) * 7); }
+header { display: flex; flex-direction: column; align-items: flex-start; gap: var(--bec-space-tight); } h1 { margin: 0; font-size: var(--bec-font-size-system); }
+p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); } .filters { display: flex; gap: var(--bec-space-tight); flex-wrap: wrap; align-items: center; }
+.filter-field { display: flex; align-items: center; gap: var(--bec-space-tight); } .filter-field > span { white-space: nowrap; } .filter-field .el-input { width: calc(var(--bec-control-height) * 7); }
 .el-select { width: calc(var(--bec-control-height) * 6); } .el-pagination { max-width: 100%; overflow-x: auto; }
 @media (max-width: 600px) { .filters { width: 100%; } .el-select { flex: 1; min-width: calc(var(--bec-control-height) * 4); } }
 </style>
