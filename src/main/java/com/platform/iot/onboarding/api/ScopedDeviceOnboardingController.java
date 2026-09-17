@@ -60,6 +60,29 @@ public class ScopedDeviceOnboardingController {
                 pendingId, page, size));
     }
 
+    @GetMapping("/pending/{pendingId}/products/{productId}")
+    public Result<DeviceProductContracts.DetailView> product(Authentication authentication,
+            @PathVariable String pendingId, @PathVariable String productId) {
+        return Result.success(service.product(SecurityUser.userId(authentication), SecurityUser.roles(authentication),
+                pendingId, productId));
+    }
+
+    @GetMapping("/pending/{pendingId}/numeric-sources")
+    public Result<List<ScopedDeviceOnboardingService.NumericSource>> numericSources(Authentication authentication,
+            @PathVariable String pendingId) {
+        return Result.success(service.numericSources(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), pendingId));
+    }
+
+    @GetMapping("/pending/{pendingId}/binding-options")
+    public Result<ScopedDeviceOnboardingService.BindingOptions> bindingOptions(Authentication authentication,
+            @PathVariable String pendingId, @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size, @RequestParam(required = false) String spaceId,
+            @RequestParam(required = false) String systemGroupId) {
+        return Result.success(service.bindingOptions(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), pendingId, page, size, spaceId, systemGroupId));
+    }
+
     @GetMapping("/pending/{pendingId}/connection")
     public Result<DeviceOnboardingContracts.ConnectionView> connection(Authentication authentication,
             @PathVariable String pendingId) {
@@ -83,6 +106,13 @@ public class ScopedDeviceOnboardingController {
                         item.pendingId(), item.binding(), item.idempotencyKey())).toList()));
     }
 
+    @PostMapping("/pending/{pendingId}/identity-status-requests")
+    public Result<ScopedDeviceOnboardingService.BindingApplication> identityStatus(Authentication authentication,
+            @PathVariable String pendingId, @Valid @RequestBody IdentityStatusRequest request) {
+        return Result.success(service.requestIdentityStatus(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), pendingId, request.targetStatus(), request.idempotencyKey()));
+    }
+
     @Schema(name = "ScopedOnboardingBindingRequest", description = "幂等绑定申请；重试同一请求必须复用幂等键")
     public record BindingRequest(@NotNull @Valid DeviceOnboardingContracts.TypedBindRequest binding,
                                  @NotBlank @Size(max = 100) String idempotencyKey) { }
@@ -92,4 +122,6 @@ public class ScopedDeviceOnboardingController {
                             @NotBlank @Size(max = 100) String idempotencyKey) { }
     @Schema(name = "ScopedOnboardingBatchRequest")
     public record BatchRequest(@NotEmpty @Size(max = 50) List<@NotNull @Valid BatchItem> items) { }
+    public record IdentityStatusRequest(@NotBlank String targetStatus,
+                                        @NotBlank @Size(max = 100) String idempotencyKey) { }
 }
