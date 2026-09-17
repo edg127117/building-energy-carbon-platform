@@ -42,6 +42,16 @@ export function previewProtocolConfiguration(configuration: ProtocolConfiguratio
 
 const deploymentPath = '/v1/protocol-deployments'
 
+export function previewProtocolPublication(data: { targetId: string; expectedSequence: number; versionIds: string[] }) {
+  return requestApi<import('../models/protocol-configuration').ProtocolPublicationPreview>({ method: 'post', url: `${deploymentPath}/preview`, data })
+}
+export function previewProtocolRollback(data: { targetId: string; expectedSequence: number; historicalSequence: number }) {
+  return requestApi<import('../models/protocol-configuration').ProtocolPublicationPreview>({ method: 'post', url: `${deploymentPath}/rollback-preview`, data })
+}
+export function getProtocolDeploymentDetail(targetId: string, sequence: number) {
+  return requestApi<import('../models/protocol-configuration').ProtocolDeploymentDetail>({ method: 'get', url: `${deploymentPath}/targets/${encoded(targetId)}/history/${sequence}` })
+}
+
 export function listProtocolPublicationTargets() {
   return requestApi<ProtocolPublicationTarget[]>({ method: 'get', url: `${deploymentPath}/targets` })
 }

@@ -1,21 +1,66 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
 import {
-  ElAlert, ElButton, ElCard, ElCheckbox, ElEmpty, ElForm, ElFormItem, ElInput, ElInputNumber, ElMessage,
-  ElOption, ElPagination, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag, ElTree, Plus, RefreshCw, Search, Trash2,
+  ElAlert, ElButton, ElCard, ElEmpty, ElForm, ElFormItem, ElInput, ElMessage, ElMessageBox,
+  ElOption, ElPagination, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag, ElTree, Plus, RefreshCw, Search,
 } from '@/shared/ui'
 import { formatDateTime } from '@/shared/utils/format'
 import { requestErrorMessage } from '@/shared/utils/request-error'
 import { t } from '@/locales'
-import { getDeviceProduct, listDeviceProducts, type DeviceProductDetail, type DeviceProductListItem } from '@/modules/device-onboarding/public'
+import { getDeviceProduct, listDeviceProducts, ProductWorkspace, type DeviceProductDetail, type DeviceProductListItem } from '@/modules/device-onboarding/public'
 import { useProtocolConfiguration } from '../composables/use-protocol-configuration'
-import { applyProductContract, validateProtocolConfiguration, type InspectedField, type ProtocolMapping } from '../models/protocol-configuration'
+import { emptyProtocolConfiguration, applyProductContract, validateProtocolConfiguration, type InspectedField } from '../models/protocol-configuration'
+import MetricMappingEditor from '../components/MetricMappingEditor.vue'
 import ProtocolPublicationPanel from '../components/ProtocolPublicationPanel.vue'
 
 type FieldTreeNode = { id: string; label: string; path?: string; field?: InspectedField; children?: FieldTreeNode[] }
 
 const router = useRouter()
+const route = useRoute()
+const step = ref(0)
+const preparing = ref(false)
+const publicationPanel = ref<InstanceType<typeof ProtocolPublicationPanel> | null>(null)
+const dirty = computed(() => JSON.stringify(management.form.value) !== JSON.stringify(management.draft.value?.configuration ?? emptyProtocolConfiguration()))
+const missingPoints = computed(() => productPoints.value.filter(point => point.required && !management.form.value.mappings.some(mapping => mapping.enabled && mapping.metricCode === point.metricCode)))
+async function confirmDiscard() {
+  if (!dirty.value && !samplePayload.value) return true
+  try { await ElMessageBox.confirm(t('protocolConfiguration.flow.leaveWarning'), t('protocolConfiguration.flow.confirm'), { type: 'warning' }); return true } catch { return false }
+}
+onBeforeRouteLeave(() => confirmDiscard())
+function beforeUnload(event: BeforeUnloadEvent) { if (dirty.value || samplePayload.value) { event.preventDefault(); event.returnValue = '' } }
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
+async function preparePublication() {
+  if (preparing.value) return
+  const issue = validateProtocolConfiguration(management.form.value, product.value)
+  if (issue) { showValidation(issue); return }
+  if (product.value?.status !== 'ENABLED') { showValidation('productDisabled'); return }
+  preparing.value = true
+  try {
+    // 保存可能归一化配置，因此只用保存后的当前内容重新预览，再冻结相同修订。
+    const saved = await management.save()
+    if (!saved || dirty.value) return
+    ElMessage.success(t('protocolConfiguration.messages.saved'))
+    await management.runPreview(samplePayload.value, Date.now())
+    if (!management.preview.value?.success || dirty.value) return
+    step.value = 3
+    await nextTick()
+    await publicationPanel.value?.freezeCurrentDraft()
+  } catch { /* 保存与解析错误由页面展示；失败后不继续冻结。 */ }
+  finally { preparing.value = false }
+}
+function locateError(path: string) {
+  const mapping = management.form.value.mappings.find(item => item.sourcePath === path || item.metricCode === path)
+  if (mapping) locateMetric(mapping.metricCode)
+  else step.value = 1
+}
+function timeSourceName(source: string | null) {
+  return source === 'DEVICE_REPORTED' || source === 'ADAPTER_RECEIVED' ? t('protocolConfiguration.timeSources.' + source) : source || t('common.missing')
+}
+function metricName(code: string) { return productPoints.value.find(point => point.metricCode === code)?.pointNameTemplate ?? code }
+function locateMetric(code: string) { step.value = 1; requestAnimationFrame(() => document.getElementById('metric-' + code)?.scrollIntoView({ block: 'center', behavior: 'smooth' })) }
+
 const management = useProtocolConfiguration()
 const productPage = ref<{ page: number; size: number; total: number; items: DeviceProductListItem[] }>({ page: 1, size: 20, total: 0, items: [] })
 const product = ref<DeviceProductDetail | null>(null)
@@ -56,7 +101,8 @@ async function loadProducts(page = 1, keyword = productKeyword.value) {
   }
 }
 
-async function selectProduct(productId: string) {
+async function selectProduct(productId: string, internal = false) {
+  if (!internal && management.form.value.mappings.length && !await confirmDiscard()) return
   const owner = ++productDetailGeneration
   product.value = null
   validationKey.value = null
@@ -73,12 +119,13 @@ async function selectProduct(productId: string) {
 }
 
 async function loadSelectedDraft(id: string) {
-  if (!id) return
+  if (preparing.value) return
+  if (!id || !await confirmDiscard()) return
   const owner = ++editorGeneration
   try {
     const detail = await management.selectDraft(id)
     if (owner !== editorGeneration) return
-    await selectProduct(detail.configuration.productId)
+    await selectProduct(detail.configuration.productId, true)
     if (owner !== editorGeneration) return
     void loadProducts(1)
     samplePayload.value = ''
@@ -88,7 +135,10 @@ async function loadSelectedDraft(id: string) {
   }
 }
 
-function newDraft() {
+async function newDraft() {
+  if (preparing.value) return
+  if (!await confirmDiscard()) return
+  step.value = 0
   ++editorGeneration
   ++productDetailGeneration
   ++productListGeneration
@@ -102,7 +152,7 @@ function newDraft() {
 
 function openMatchingPendingDevices() {
   const profileCode = management.form.value.profileCode.trim()
-  if (profileCode) void router.push({ path: '/configuration/ingestion/pendingDevices', query: { profileCode } })
+  if (profileCode) void router.push({ path: '/operations/devices/pendingDevices', query: { view: 'general', profileCode, draftId: management.draft.value?.id ?? undefined } })
 }
 
 async function inspect() {
@@ -131,32 +181,6 @@ function setPath(kind: 'identity' | 'discriminator' | 'timestamp') {
   validationKey.value = null
 }
 
-function addMapping() {
-  const field = selectedField.value
-  if (!field) return showValidation('selectedField')
-  if (field.type !== 'NUMBER') return showValidation('numericMapping')
-  if (management.form.value.mappings.length >= 128) return showValidation('mappingLimit')
-  management.form.value.mappings.push({ sourcePath: field.path, metricCode: '', sourceUnit: '', targetUnit: '', scale: '1', offset: '0', required: false, enabled: true, sortOrder: management.form.value.mappings.length })
-  validationKey.value = null
-}
-
-function updateMetric(row: unknown, metricCode: string) {
-  const mapping = row as ProtocolMapping
-  const point = productPoints.value.find(item => item.metricCode === metricCode)
-  mapping.metricCode = metricCode
-  mapping.targetUnit = point?.unit ?? ''
-  mapping.required = point?.required ?? false
-}
-
-function isRequiredMetric(metricCode: string) {
-  return productPoints.value.find(point => point.metricCode === metricCode)?.required === true
-}
-
-function removeMapping(index: number) {
-  management.form.value.mappings.splice(index, 1)
-  management.form.value.mappings.forEach((mapping, order) => { mapping.sortOrder = order })
-}
-
 async function save() {
   const issue = validateProtocolConfiguration(management.form.value, product.value)
   if (issue) return showValidation(issue)
@@ -176,7 +200,10 @@ async function preview() {
   if (!samplePayload.value.trim()) return showValidation('sampleRequired')
   if (sampleBytes.value > 64 * 1024) return showValidation('sampleTooLarge')
   validationKey.value = null
-  try { await management.runPreview(samplePayload.value, Date.now()) } catch {
+  try {
+    await management.runPreview(samplePayload.value, Date.now())
+    if (management.preview.value) step.value = 2
+  } catch {
     // 结构与权限错误由统一请求层转换；语义失败仍以 HTTP 200 结果呈现。
   }
 }
@@ -216,7 +243,8 @@ function searchProducts(keyword: string) {
   void loadProducts(1)
 }
 
-function changeProductStatus(status: 'DRAFT' | 'ENABLED') {
+async function changeProductStatus(status: 'DRAFT' | 'ENABLED') {
+  if (management.form.value.mappings.length && !await confirmDiscard()) return
   ++productDetailGeneration
   productStatus.value = status
   product.value = null
@@ -228,7 +256,10 @@ function changeProductStatus(status: 'DRAFT' | 'ENABLED') {
   void loadProducts(1)
 }
 
-onMounted(() => { void Promise.all([management.loadDrafts(), loadProducts()]).catch(() => undefined) })
+onMounted(() => {
+  void Promise.all([management.loadDrafts(), loadProducts()]).catch(() => undefined)
+  if (typeof route.query.draftId === 'string') void loadSelectedDraft(route.query.draftId)
+})
 </script>
 
 <template>
@@ -242,76 +273,82 @@ onMounted(() => { void Promise.all([management.loadDrafts(), loadProducts()]).ca
     <ElAlert v-if="productsError" :title="productsError" type="error" show-icon :closable="false" />
     <ElAlert v-if="validationKey" :title="t(`protocolConfiguration.validation.${validationKey}`)" type="error" show-icon :closable="false" />
 
-    <div class="editor-grid">
-      <div class="editor-column">
-        <ElCard shadow="never">
-          <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.basics') }}</h2><ElTag type="warning">{{ t('protocolConfiguration.states.draft') }}</ElTag></div></template>
-          <ElSkeleton v-if="management.loading.value" animated :rows="5" />
-          <ElForm v-else label-position="top" class="form-grid">
-            <ElFormItem :label="t('protocolConfiguration.labels.draft')" class="span-2"><ElSelect :model-value="management.draft.value?.id ?? ''" filterable clearable :placeholder="t('protocolConfiguration.placeholders.draft')" @change="loadSelectedDraft"><ElOption v-for="item in management.drafts.value.items" :key="item.id" :value="item.id" :label="`${item.configuration.name} · r${item.revision}`" /></ElSelect></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.name')" required><ElInput v-model="management.form.value.name" maxlength="100" :placeholder="t('protocolConfiguration.placeholders.name')" /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.productStatus')"><ElSelect :model-value="productStatus" @change="changeProductStatus"><ElOption value="DRAFT" :label="t('protocolConfiguration.productStatus.draft')" /><ElOption value="ENABLED" :label="t('protocolConfiguration.productStatus.enabled')" /></ElSelect></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.product')" required><ElSelect :model-value="management.form.value.productId" filterable remote :remote-method="searchProducts" :loading="productsLoading" :placeholder="t('protocolConfiguration.placeholders.product')" @change="selectProduct"><ElOption v-for="item in productPage.items" :key="item.productId" :value="item.productId" :label="`${item.productName} · ${item.productCode}`" /></ElSelect></ElFormItem>
-            <div class="span-2 product-pagination"><ElPagination size="small" layout="total, prev, pager, next" :current-page="productPage.page" :page-size="productPage.size" :total="productPage.total" @current-change="page => loadProducts(page)" /></div>
-            <ElFormItem :label="t('protocolConfiguration.labels.profileCode')"><ElInput v-model="management.form.value.profileCode" disabled /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.identityType')"><ElInput v-model="management.form.value.identityType" disabled /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.sourceTopic')" required class="span-2"><ElInput v-model="management.form.value.sourceTopic" maxlength="255" :placeholder="t('protocolConfiguration.placeholders.topic')" /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.identityPath')" required><ElInput v-model="management.form.value.identityPath" readonly /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.timestampPath')"><ElInput v-model="management.form.value.timestampPath" readonly clearable /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.discriminatorPath')"><ElInput v-model="management.form.value.discriminatorPath" readonly clearable /></ElFormItem>
-            <ElFormItem :label="t('protocolConfiguration.labels.discriminatorValue')"><ElInput v-model="management.form.value.discriminatorValue" maxlength="100" :disabled="!management.form.value.discriminatorPath" :placeholder="t('protocolConfiguration.placeholders.discriminatorValue')" /></ElFormItem>
-          </ElForm>
-          <div class="pagination"><ElPagination size="small" layout="total, prev, next" :current-page="management.drafts.value.page" :page-size="management.drafts.value.size" :total="management.drafts.value.total" @current-change="page => management.loadDrafts(page).catch(() => undefined)" /></div>
-        </ElCard>
+    <nav class="step-navigation" :aria-label="t('protocolConfiguration.flow.steps')"><ElButton v-for="(label, index) in ['product', 'mapping', 'preview', 'publication', 'device']" :key="label" :type="step === index ? 'primary' : 'default'" :aria-current="step === index ? 'step' : undefined" @click="step = index">{{ index + 1 }}{{ "." }}{{ t('protocolConfiguration.flow.' + label) }}</ElButton></nav>
+    <div class="flow-summary"><strong>{{ product?.productName || t('protocolConfiguration.validation.product') }}</strong><span>{{ t(management.saving.value ? 'protocolConfiguration.flow.saving' : dirty ? 'protocolConfiguration.flow.unsaved' : 'protocolConfiguration.flow.saved') }}</span><span>{{ t('protocolConfiguration.flow.remaining', { count: missingPoints.length }) }}</span></div>
+    <fieldset :disabled="preparing" class="editor-lock">
+      <div v-show="step < 2" class="editor-grid" :class="{ 'product-stage': step === 0 }">
+        <div class="editor-column">
+          <ElCard v-show="step === 0" shadow="never">
+            <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.basics') }}</h2><ElTag type="warning">{{ t('protocolConfiguration.states.draft') }}</ElTag></div></template>
+            <ElSkeleton v-if="management.loading.value" animated :rows="5" />
+            <ElForm v-else label-position="top" class="form-grid">
+              <ElFormItem :label="t('protocolConfiguration.labels.draft')" class="span-2"><ElSelect :model-value="management.draft.value?.id ?? ''" filterable clearable :placeholder="t('protocolConfiguration.placeholders.draft')" @change="loadSelectedDraft"><ElOption v-for="item in management.drafts.value.items" :key="item.id" :value="item.id" :label="t('protocolConfiguration.publication.versionLabel', { name: item.configuration.name, revision: item.revision })" /></ElSelect></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.name')" required><ElInput v-model="management.form.value.name" maxlength="100" :placeholder="t('protocolConfiguration.placeholders.name')" /></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.productStatus')"><ElSelect :model-value="productStatus" @change="changeProductStatus"><ElOption value="DRAFT" :label="t('protocolConfiguration.productStatus.draft')" /><ElOption value="ENABLED" :label="t('protocolConfiguration.productStatus.enabled')" /></ElSelect></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.product')" required><ElSelect :model-value="management.form.value.productId" filterable remote :remote-method="searchProducts" :loading="productsLoading" :placeholder="t('protocolConfiguration.placeholders.product')" @change="selectProduct"><ElOption v-for="item in productPage.items" :key="item.productId" :value="item.productId" :label="`${item.productName} · ${item.productCode}`" /></ElSelect></ElFormItem>
+              <div class="span-2 product-pagination"><ElPagination size="small" layout="total, prev, pager, next" :current-page="productPage.page" :page-size="productPage.size" :total="productPage.total" @current-change="page => loadProducts(page)" /></div>
+              <details class="span-2">
+                <summary>{{ t('protocolConfiguration.flow.technical') }}</summary><ElFormItem :label="t('protocolConfiguration.labels.profileCode')"><ElInput v-model="management.form.value.profileCode" disabled /></ElFormItem>
+                <ElFormItem :label="t('protocolConfiguration.labels.identityType')"><ElInput v-model="management.form.value.identityType" disabled /></ElFormItem>
+              </details>
+            </ElForm>
+            <ProductWorkspace :product="product" @selected="id => selectProduct(id, true)" />
+            <ElButton type="primary" :disabled="!product" @click="step = 1">{{ t('protocolConfiguration.flow.mapping') }}</ElButton>
+            <div class="pagination"><ElPagination size="small" layout="total, prev, next" :current-page="management.drafts.value.page" :page-size="management.drafts.value.size" :total="management.drafts.value.total" @current-change="page => management.loadDrafts(page).catch(() => undefined)" /></div>
+          </ElCard>
 
-        <ElCard shadow="never">
-          <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.sample') }}</h2><span class="byte-count">{{ t('protocolConfiguration.counters.sampleBytes', { count: sampleBytes }) }}</span></div></template>
-          <ElInput v-model="samplePayload" type="textarea" :rows="10" resize="vertical" :placeholder="t('protocolConfiguration.placeholders.sample')" />
-          <div class="section-actions"><ElButton type="primary" :icon="Search" :loading="management.inspecting.value" @click="inspect">{{ t('protocolConfiguration.actions.inspect') }}</ElButton><ElButton :icon="RefreshCw" :disabled="!previewReady" :loading="management.previewing.value" @click="preview">{{ t('protocolConfiguration.actions.preview') }}</ElButton></div>
+          <ElCard v-show="step === 1" shadow="never">
+            <ElForm label-position="top" class="form-grid">
+              <ElFormItem :label="t('protocolConfiguration.labels.sourceTopic')" required class="span-2"><ElInput v-model="management.form.value.sourceTopic" maxlength="255" :placeholder="t('protocolConfiguration.placeholders.topic')" /></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.identityPath')" required><ElInput v-model="management.form.value.identityPath" readonly /></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.timestampPath')"><ElInput v-model="management.form.value.timestampPath" readonly clearable /></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.discriminatorPath')"><ElInput v-model="management.form.value.discriminatorPath" readonly clearable /></ElFormItem>
+              <ElFormItem :label="t('protocolConfiguration.labels.discriminatorValue')"><ElInput v-model="management.form.value.discriminatorValue" maxlength="100" :disabled="!management.form.value.discriminatorPath" :placeholder="t('protocolConfiguration.placeholders.discriminatorValue')" /></ElFormItem>
+            </ElForm>
+          </ElCard>
+          <ElCard v-show="step === 1" shadow="never">
+            <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.sample') }}</h2><span class="byte-count">{{ t('protocolConfiguration.counters.sampleBytes', { count: sampleBytes }) }}</span></div></template>
+            <ElInput v-model="samplePayload" type="textarea" :rows="10" resize="vertical" :placeholder="t('protocolConfiguration.placeholders.sample')" />
+            <div class="section-actions"><ElButton type="primary" :icon="Search" :loading="management.inspecting.value" @click="inspect">{{ t('protocolConfiguration.actions.inspect') }}</ElButton><ElButton :icon="RefreshCw" :disabled="!previewReady" :loading="management.previewing.value" @click="preview">{{ t('protocolConfiguration.actions.preview') }}</ElButton></div>
+          </ElCard>
+          <ElCard v-show="step === 1" shadow="never" class="field-panel">
+            <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.fields') }}</h2><ElTag v-if="selectedField" type="info">{{ t('protocolConfiguration.fieldTypes.' + selectedField.type) }}</ElTag></div></template>
+            <ElEmpty v-if="!fieldTree.length" :description="t('protocolConfiguration.states.fieldEmpty')" />
+            <template v-else>
+              <ElTree :data="fieldTree" node-key="id" default-expand-all highlight-current @node-click="selectFieldNode"><template #default="{ data }"><div class="tree-node"><span>{{ data.label }}</span><span v-if="data.field" class="field-value">{{ data.field.value }}</span></div></template></ElTree>
+              <div v-if="selectedField" class="field-selection">
+                <dl><dt>{{ t('protocolConfiguration.labels.selectedField') }}</dt><dd>{{ selectedField.path }}</dd><dt>{{ t('protocolConfiguration.labels.sampleValue') }}</dt><dd>{{ selectedField.value || '—' }}</dd></dl>
+                <div class="field-actions"><ElButton size="small" @click="setPath('identity')">{{ t('protocolConfiguration.actions.useIdentity') }}</ElButton><ElButton size="small" @click="setPath('discriminator')">{{ t('protocolConfiguration.actions.useDiscriminator') }}</ElButton><ElButton size="small" @click="setPath('timestamp')">{{ t('protocolConfiguration.actions.useTimestamp') }}</ElButton></div>
+              </div>
+            </template>
+          </ElCard>
+        </div>
+
+        <ElCard v-show="step === 1" shadow="never">
+          <template #header><h2>{{ t('protocolConfiguration.sections.mapping') }}</h2></template>
+          <MetricMappingEditor v-model:mappings="management.form.value.mappings" :points="productPoints" :fields="management.fields.value" />
+          <div class="section-actions"><ElButton type="primary" :disabled="!previewReady" :loading="management.previewing.value" @click="preview().then(() => { step = 2 })">{{ t('protocolConfiguration.actions.preview') }}</ElButton></div>
         </ElCard>
       </div>
 
-      <ElCard shadow="never" class="field-panel">
-        <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.fields') }}</h2><ElTag v-if="selectedField" type="info">{{ selectedField.type }}</ElTag></div></template>
-        <ElEmpty v-if="!fieldTree.length" :description="t('protocolConfiguration.states.fieldEmpty')" />
+
+      <ElCard v-show="step === 2" shadow="never">
+        <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.preview') }}</h2><ElTag v-if="management.preview.value" :type="management.preview.value.success ? 'success' : 'danger'">{{ t(`protocolConfiguration.states.${management.preview.value.success ? 'success' : 'failed'}`) }}</ElTag></div></template>
+        <ElEmpty v-if="!management.preview.value" :description="t('protocolConfiguration.states.previewEmpty')" />
         <template v-else>
-          <ElTree :data="fieldTree" node-key="id" default-expand-all highlight-current @node-click="selectFieldNode"><template #default="{ data }"><div class="tree-node"><span>{{ data.label }}</span><span v-if="data.field" class="field-value">{{ data.field.value }}</span></div></template></ElTree>
-          <div v-if="selectedField" class="field-selection">
-            <dl><dt>{{ t('protocolConfiguration.labels.selectedField') }}</dt><dd>{{ selectedField.path }}</dd><dt>{{ t('protocolConfiguration.labels.sampleValue') }}</dt><dd>{{ selectedField.value || '—' }}</dd></dl>
-            <div class="field-actions"><ElButton size="small" @click="setPath('identity')">{{ t('protocolConfiguration.actions.useIdentity') }}</ElButton><ElButton size="small" @click="setPath('discriminator')">{{ t('protocolConfiguration.actions.useDiscriminator') }}</ElButton><ElButton size="small" @click="setPath('timestamp')">{{ t('protocolConfiguration.actions.useTimestamp') }}</ElButton><ElButton size="small" type="primary" :disabled="selectedField.type !== 'NUMBER'" @click="addMapping">{{ t('protocolConfiguration.actions.addMapping') }}</ElButton></div>
-          </div>
+          <dl class="preview-summary"><div><dt>{{ t('protocolConfiguration.labels.identityType') }}</dt><dd>{{ management.preview.value.identityType === 'SN' ? t('protocolConfiguration.flow.serialNumber') : management.preview.value.identityType || '—' }}</dd></div><div><dt>{{ t('protocolConfiguration.labels.identityValue') }}</dt><dd>{{ management.preview.value.identityValue || '—' }}</dd></div><div><dt>{{ t('protocolConfiguration.labels.timeSource') }}</dt><dd>{{ timeSourceName(management.preview.value.timeSource) }}</dd></div><div><dt>{{ t('protocolConfiguration.labels.eventTime') }}</dt><dd>{{ management.preview.value.eventTime ? formatDateTime(management.preview.value.eventTime) : '—' }}</dd></div></dl>
+          <details v-if="management.preview.value.success"><summary>{{ t('protocolConfiguration.flow.results', { count: management.preview.value.metrics.length }) }}</summary><ElTable :data="management.preview.value.metrics" row-key="metricCode"><ElTableColumn :label="t('protocolConfiguration.labels.metric')" min-width="150"><template #default="{ row }">{{ metricName(row.metricCode) }}</template></ElTableColumn><ElTableColumn :label="t('protocolConfiguration.labels.sourcePath')" prop="sourcePath" min-width="170" /><ElTableColumn :label="t('protocolConfiguration.labels.rawValue')" prop="rawValue" min-width="110" /><ElTableColumn :label="t('protocolConfiguration.labels.value')" prop="value" min-width="110" /><ElTableColumn :label="t('protocolConfiguration.labels.targetUnit')" prop="unit" min-width="90" /><ElTableColumn :label="t('protocolConfiguration.labels.status')" min-width="120"><template #default="{ row }"><ElTag :type="row.status === 'PRESENT' ? 'success' : 'info'">{{ t(`protocolConfiguration.states.${row.status === 'PRESENT' ? 'present' : 'missingOptional'}`) }}</ElTag></template></ElTableColumn></ElTable></details>
+          <ElTable v-else :data="management.preview.value.errors"><ElTableColumn :label="t('protocolConfiguration.labels.result')" min-width="150"><template #default="{ row }"><details><summary>{{ t('protocolConfiguration.flow.technical') }}</summary>{{ row.code }}</details></template></ElTableColumn><ElTableColumn :label="t('protocolConfiguration.labels.errorPath')" prop="path" min-width="180" /><ElTableColumn :label="t('protocolConfiguration.labels.status')" prop="message" min-width="260" /><ElTableColumn><template #default="{ row }"><ElButton link @click="locateError(row.path)">{{ t('protocolConfiguration.flow.fixMapping') }}</ElButton></template></ElTableColumn></ElTable>
+          <div class="section-actions"><ElButton @click="step = 1">{{ t('protocolConfiguration.flow.fixMapping') }}</ElButton><ElButton type="primary" :disabled="!management.preview.value.success || product?.status !== 'ENABLED'" :loading="preparing" @click="preparePublication">{{ t('protocolConfiguration.flow.prepare') }}</ElButton></div>
+          <ElAlert v-if="product?.status !== 'ENABLED'" :title="t('protocolConfiguration.validation.productDisabled')" type="info" :closable="false" />
         </template>
+        <div v-if="missingPoints.length"><ElButton v-for="point in missingPoints" :key="point.metricCode" link @click="locateMetric(point.metricCode)">{{ point.pointNameTemplate }}</ElButton></div>
       </ElCard>
-    </div>
-
-    <ElCard shadow="never">
-      <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.mapping') }}</h2><span>{{ t('protocolConfiguration.counters.mappings', { count: management.form.value.mappings.length }) }}</span></div></template>
-      <ElTable :data="management.form.value.mappings">
-        <ElTableColumn :label="t('protocolConfiguration.labels.sourcePath')" prop="sourcePath" min-width="180" show-overflow-tooltip />
-        <ElTableColumn :label="t('protocolConfiguration.labels.metric')" min-width="210"><template #default="{ row }"><ElSelect :model-value="row.metricCode" filterable @change="value => updateMetric(row, value)"><ElOption v-for="point in productPoints" :key="point.metricCode" :value="point.metricCode" :label="`${point.pointNameTemplate} · ${point.metricCode}`" /></ElSelect></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.sourceUnit')" min-width="125"><template #default="{ row }"><ElInput v-model="row.sourceUnit" maxlength="20" :placeholder="t('protocolConfiguration.placeholders.sourceUnit')" /></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.targetUnit')" min-width="100"><template #default="{ row }"><ElInput v-model="row.targetUnit" disabled /></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.scale')" min-width="100"><template #default="{ row }"><ElInput v-model="row.scale" maxlength="40" /></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.offset')" min-width="100"><template #default="{ row }"><ElInput v-model="row.offset" maxlength="40" /></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.required')" width="76"><template #default="{ row }"><ElCheckbox v-model="row.required" :disabled="isRequiredMetric(row.metricCode)" /></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.enabled')" width="76"><template #default="{ row }"><ElCheckbox v-model="row.enabled" /></template></ElTableColumn>
-        <ElTableColumn :label="t('protocolConfiguration.labels.sortOrder')" width="110"><template #default="{ row }"><ElInputNumber v-model="row.sortOrder" :min="0" controls-position="right" /></template></ElTableColumn>
-        <ElTableColumn width="70" fixed="right"><template #default="{ $index }"><ElButton link type="danger" :icon="Trash2" :aria-label="t('protocolConfiguration.actions.removeMapping')" @click="removeMapping($index)" /></template></ElTableColumn>
-        <template #empty><ElEmpty :description="t('protocolConfiguration.states.mappingEmpty')" /></template>
-      </ElTable>
-    </ElCard>
-
-    <ElCard shadow="never">
-      <template #header><div class="section-heading"><h2>{{ t('protocolConfiguration.sections.preview') }}</h2><ElTag v-if="management.preview.value" :type="management.preview.value.success ? 'success' : 'danger'">{{ t(`protocolConfiguration.states.${management.preview.value.success ? 'success' : 'failed'}`) }}</ElTag></div></template>
-      <ElEmpty v-if="!management.preview.value" :description="t('protocolConfiguration.states.previewEmpty')" />
-      <template v-else>
-        <dl class="preview-summary"><div><dt>{{ t('protocolConfiguration.labels.identityType') }}</dt><dd>{{ management.preview.value.identityType || '—' }}</dd></div><div><dt>{{ t('protocolConfiguration.labels.identityValue') }}</dt><dd>{{ management.preview.value.identityValue || '—' }}</dd></div><div><dt>{{ t('protocolConfiguration.labels.timeSource') }}</dt><dd>{{ management.preview.value.timeSource || '—' }}</dd></div><div><dt>{{ t('protocolConfiguration.labels.eventTime') }}</dt><dd>{{ management.preview.value.eventTime ? formatDateTime(management.preview.value.eventTime) : '—' }}</dd></div></dl>
-        <ElTable v-if="management.preview.value.success" :data="management.preview.value.metrics" row-key="metricCode"><ElTableColumn :label="t('protocolConfiguration.labels.metric')" prop="metricCode" min-width="150" /><ElTableColumn :label="t('protocolConfiguration.labels.sourcePath')" prop="sourcePath" min-width="170" /><ElTableColumn :label="t('protocolConfiguration.labels.rawValue')" prop="rawValue" min-width="110" /><ElTableColumn :label="t('protocolConfiguration.labels.value')" prop="value" min-width="110" /><ElTableColumn :label="t('protocolConfiguration.labels.targetUnit')" prop="unit" min-width="90" /><ElTableColumn :label="t('protocolConfiguration.labels.status')" min-width="120"><template #default="{ row }"><ElTag :type="row.status === 'PRESENT' ? 'success' : 'info'">{{ t(`protocolConfiguration.states.${row.status === 'PRESENT' ? 'present' : 'missingOptional'}`) }}</ElTag></template></ElTableColumn></ElTable>
-        <ElTable v-else :data="management.preview.value.errors"><ElTableColumn :label="t('protocolConfiguration.labels.result')" prop="code" min-width="150" /><ElTableColumn :label="t('protocolConfiguration.labels.errorPath')" prop="path" min-width="180" /><ElTableColumn :label="t('protocolConfiguration.labels.status')" prop="message" min-width="260" /></ElTable>
-      </template>
-    </ElCard>
-
+    </fieldset>
+    <section v-show="step === 4"><ElAlert :title="t('protocolConfiguration.flow.deviceBoundary')" type="info" :closable="false" /><ElButton type="primary" :disabled="!management.form.value.profileCode" @click="openMatchingPendingDevices">{{ t('protocolConfiguration.actions.openPendingDevices') }}</ElButton></section>
     <ProtocolPublicationPanel
+      v-show="step === 3" ref="publicationPanel" :active="step === 3" :freeze-ready="!dirty && management.preview.value?.success === true"
+
       :draft-id="management.draft.value?.id ?? null"
       :draft-revision="management.draft.value?.revision ?? null"
       :product-enabled="product?.status === 'ENABLED'"
@@ -321,6 +358,10 @@ onMounted(() => { void Promise.all([management.loadDrafts(), loadProducts()]).ca
 </template>
 
 <style scoped>
+.editor-lock { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: var(--bec-space-section); }
+.step-navigation, .flow-summary { display: flex; flex-wrap: wrap; gap: var(--bec-space-group); align-items: center; }
+.step-navigation :deep(.el-button) { margin-left: 0; }
+summary { cursor: pointer; padding-block: var(--bec-space-group); }
 .protocol-page, .editor-column { display: grid; gap: var(--bec-space-section); min-width: 0; }
 .page-heading, .heading-actions, .section-heading, .section-actions, .field-actions { display: flex; align-items: center; gap: var(--bec-space-group); }
 .page-heading, .section-heading { justify-content: space-between; }
@@ -332,6 +373,7 @@ h2 { font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-h
 p, .byte-count, .field-value, dt { color: var(--bec-color-text-secondary); }
 p { max-width: var(--bec-text-measure); }
 .editor-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(var(--bec-navigation-width), 2fr); gap: var(--bec-space-section); align-items: stretch; }
+.editor-grid.product-stage { grid-template-columns: 1fr; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--bec-space-group); }
 .span-2 { grid-column: 1 / -1; }
 .pagination, .section-actions { margin-top: var(--bec-space-group); }

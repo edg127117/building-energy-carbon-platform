@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElButton, ElCheckboxGroup, ElOption, ElSelect } from '@/shared/ui'
 import {
+  previewProtocolPublication, previewProtocolRollback,
   listProtocolDeploymentHistory,
   listProtocolPublicationTargets,
   listProtocolVersions,
@@ -14,11 +15,13 @@ import { TransportError } from '@/infrastructure/http/public'
 
 vi.mock('@/modules/device-onboarding/public', async importOriginal => ({ ...(await importOriginal()), listDeviceProducts: vi.fn() }))
 vi.mock('../api/protocol-configuration', () => ({
+  previewProtocolPublication: vi.fn(), previewProtocolRollback: vi.fn(), getProtocolDeploymentDetail: vi.fn(),
   freezeProtocolVersion: vi.fn(), importProtocolVersions: vi.fn(), listProtocolDeploymentHistory: vi.fn(),
   listProtocolPublicationTargets: vi.fn(), listProtocolVersions: vi.fn(), registerProtocolPublicationTarget: vi.fn(),
   requestProtocolPublication: vi.fn(), requestProtocolRollback: vi.fn(),
 }))
 
+vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }) }))
 const readyTarget = { targetId: 'READY-1', name: '隔离适配器', outputVersion: 'V1', allowedTopics: ['raw/a'], lastSeen: 1000, currentSequence: 3, status: 'READY', errorCode: null }
 const unknownTarget = { ...readyTarget, targetId: 'UNKNOWN-1', name: '失联适配器', status: 'UNKNOWN' }
 const version = {
@@ -30,13 +33,13 @@ const deferred = <T>() => { let resolve!: (value: T) => void; const promise = ne
 
 describe('协议发布面板边界', () => {
   it('展示可操作的冲突原因而非通用请求失败', async () => {
-    vi.mocked(requestProtocolPublication).mockRejectedValueOnce(new TransportError('request', 400, undefined, 'PROTOCOL_SNAPSHOT_AMBIGUOUS_PROFILE_SELECTOR'))
+    vi.mocked(previewProtocolPublication).mockRejectedValueOnce(new TransportError('request', 400, undefined, 'PROTOCOL_SNAPSHOT_AMBIGUOUS_PROFILE_SELECTOR'))
     const wrapper = mount(ProtocolPublicationPanel, { props: { draftId: null, draftRevision: null, productEnabled: false, selectedProduct: null } })
     await flushPromises()
     wrapper.findComponent(ElSelect).vm.$emit('change', 'READY-1')
     wrapper.findComponent(ElCheckboxGroup).vm.$emit('update:modelValue', ['VERSION-1'])
     await flushPromises()
-    await wrapper.findAllComponents(ElButton).find(button => button.text() === '创建发布申请')!.trigger('click')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '确认发布内容')!.trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('同一 Topic 存在重复判别条件')
     expect(wrapper.text()).toContain('自动保留目标已有的其他协议')
@@ -44,6 +47,8 @@ describe('协议发布面板边界', () => {
   })
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(previewProtocolPublication).mockResolvedValue({ targetId: 'READY-1', expectedSequence: 3, digest: 'd', currentVersions: [], targetVersions: [], changes: [] })
+    vi.mocked(previewProtocolRollback).mockResolvedValue({ targetId: 'READY-1', expectedSequence: 3, digest: 'd', currentVersions: [], targetVersions: [], changes: [] })
     vi.mocked(listProtocolPublicationTargets).mockResolvedValue([readyTarget, unknownTarget] as never)
     vi.mocked(listProtocolVersions).mockResolvedValue([version] as never)
     vi.mocked(listProtocolDeploymentHistory).mockResolvedValue([
@@ -63,10 +68,16 @@ describe('协议发布面板边界', () => {
     wrapper.findComponent(ElSelect).vm.$emit('change', 'READY-1')
     wrapper.findComponent(ElCheckboxGroup).vm.$emit('update:modelValue', ['VERSION-1'])
     await flushPromises()
-    const publish = wrapper.findAllComponents(ElButton).find(button => button.text() === '创建发布申请')!
+    const publish = wrapper.findAllComponents(ElButton).find(button => button.text() === '确认发布内容')!
     await publish.trigger('click')
     await flushPromises()
 
+    expect(requestProtocolPublication).not.toHaveBeenCalled()
+    expect(previewProtocolPublication).toHaveBeenCalled()
+    const confirm = wrapper.findComponent('[data-testid="confirm-publication"]')
+    expect(confirm.attributes('disabled')).toBeUndefined()
+    await confirm.trigger('click')
+    await flushPromises()
     expect(requestProtocolPublication).toHaveBeenCalledWith({
       targetId: 'READY-1', expectedSequence: 3, versionIds: ['VERSION-1'], idempotencyKey: expect.any(String),
     })
@@ -88,11 +99,38 @@ describe('协议发布面板边界', () => {
     targetSelect.vm.$emit('change', 'READY-1')
     targetSelect.vm.$emit('change', 'READY-2')
     await flushPromises()
-    expect(wrapper.text()).toContain('digest-b')
+    expect(wrapper.text()).toContain('适配器 B')
     oldHistory.resolve([{ targetId: 'READY-1', sequence: 1, digest: 'digest-a', approvalId: 'A1', status: 'LOADED', errorCode: null, createdAt: 1000, loadedAt: 1100 }] as never)
     await flushPromises()
-    expect(wrapper.text()).not.toContain('digest-a')
+    expect(wrapper.findAllComponents(ElButton).filter(button => button.text() === '查看规则清单')).toHaveLength(1)
     expect(wrapper.findAllComponents(ElButton).filter(button => button.text() === '申请回退')).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('切换目标使迟到的发布预览失效，不能提交旧集合', async () => {
+    const pending = deferred<Awaited<ReturnType<typeof previewProtocolPublication>>>()
+    vi.mocked(previewProtocolPublication).mockReturnValueOnce(pending.promise)
+    vi.mocked(listProtocolPublicationTargets).mockResolvedValue([readyTarget, { ...readyTarget, targetId: 'READY-2' }] as never)
+    const wrapper = mount(ProtocolPublicationPanel, { props: { draftId: null, draftRevision: null, productEnabled: false, selectedProduct: null } })
+    await flushPromises()
+    wrapper.findComponent(ElSelect).vm.$emit('change', 'READY-1')
+    wrapper.findComponent(ElCheckboxGroup).vm.$emit('update:modelValue', ['VERSION-1'])
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '确认发布内容')!.trigger('click')
+    wrapper.findComponent(ElSelect).vm.$emit('change', 'READY-2')
+    await flushPromises()
+    pending.resolve({ targetId: 'READY-1', expectedSequence: 3, digest: 'old', currentVersions: [], targetVersions: [], changes: [] })
+    await flushPromises()
+    expect(wrapper.findComponent('[data-testid="confirm-publication"]').exists()).toBe(false)
+    expect(requestProtocolPublication).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('当前编辑没有有效解析结果时不能直接冻结旧修订', async () => {
+    const wrapper = mount(ProtocolPublicationPanel, { props: { draftId: 'DRAFT-1', draftRevision: 2, productEnabled: true, selectedProduct: null, freezeReady: false } })
+    await flushPromises()
+    const freeze = wrapper.findAllComponents(ElButton).find(button => button.text() === '冻结当前草稿')!
+    expect(freeze.props('disabled')).toBe(true)
     wrapper.unmount()
   })
 

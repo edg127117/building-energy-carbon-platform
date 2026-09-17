@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { getApprovalPolicy } from '../api/access-control'
 import {
-  ElAlert,
+  CopyableValue, ElAlert,
   ElButton,
   ElCard,
   ElDescriptions,
@@ -16,6 +16,7 @@ import type { SensitiveChange, SensitiveChangeOperation } from '../models/access
 
 const props = withDefaults(defineProps<{
   change?: SensitiveChange | null
+  businessView?: boolean
   busy?: boolean
 }>(), { change: null, busy: false })
 const emit = defineEmits<{
@@ -108,7 +109,8 @@ function review(action: 'approve' | 'reject') {
         <h2>{{ t('accessControl.change.title') }}</h2>
         <p>{{ t('accessControl.change.description') }}</p>
       </div>
-      <div class="lookup">
+      <details v-if="businessView"><summary>{{ t('accessControl.change.lookup') }}</summary><ElInput v-model="requestId" :placeholder="t('accessControl.change.requestIdPlaceholder')" /><ElButton :loading="busy" @click="lookup">{{ t('accessControl.change.lookup') }}</ElButton></details>
+      <div v-else class="lookup">
         <ElInput v-model="requestId" :placeholder="t('accessControl.change.requestIdPlaceholder')" :aria-label="t('accessControl.change.requestId')" />
         <ElButton :loading="busy" @click="lookup">{{ t('accessControl.change.lookup') }}</ElButton>
       </div>
@@ -122,13 +124,14 @@ function review(action: 'approve' | 'reject') {
 
     <template v-if="change">
       <ElDescriptions :column="1" border>
-        <ElDescriptionsItem :label="t('accessControl.change.requestId')">{{ change.requestId }}</ElDescriptionsItem>
+        <ElDescriptionsItem v-if="!businessView" :label="t('accessControl.change.requestId')">{{ change.requestId }}</ElDescriptionsItem>
         <ElDescriptionsItem :label="t('accessControl.change.operation')">{{ operationLabel(change.operationCode) }}</ElDescriptionsItem>
         <ElDescriptionsItem :label="t('accessControl.change.status')"><ElTag :type="statusType">{{ statusLabel(change.status) }}</ElTag></ElDescriptionsItem>
         <ElDescriptionsItem v-if="change.submittedAt" :label="t('accessControl.change.submittedAt')">{{ formatDateTime(change.submittedAt) }}</ElDescriptionsItem>
         <ElDescriptionsItem v-if="change.reviewComment" :label="t('accessControl.change.reviewComment')">{{ change.reviewComment }}</ElDescriptionsItem>
       </ElDescriptions>
 
+      <details v-if="businessView"><summary>{{ t('accessControl.change.requestId') }}</summary><CopyableValue :value="change.requestId" /></details>
       <ElAlert v-if="reviewError" :title="reviewError" type="error" show-icon :closable="false" />
       <div v-if="change.status === 'PENDING_REVIEW'" class="review">
         <ElInput v-model="reviewComment" type="textarea" :rows="3" :maxlength="500" show-word-limit :placeholder="t('accessControl.change.reviewCommentPlaceholder')" />

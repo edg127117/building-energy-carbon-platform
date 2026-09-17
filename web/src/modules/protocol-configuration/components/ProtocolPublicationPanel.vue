@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import {
   ChangeRequestControl,
   newIdempotencyKey,
@@ -8,7 +8,7 @@ import {
 } from '@/modules/access-control/public'
 import { listDeviceProducts, type DeviceProductListItem } from '@/modules/device-onboarding/public'
 import {
-  ElAlert, ElButton, ElCard, ElCheckbox, ElCheckboxGroup, ElDescriptions, ElDescriptionsItem, ElDialog,
+  CopyableValue, ElAlert, ElButton, ElCard, ElCheckbox, ElCheckboxGroup, ElDescriptions, ElDescriptionsItem, ElDialog,
   ElEmpty, ElForm, ElFormItem, ElInput, ElMessage, ElOption, ElSelect, ElTable, ElTableColumn, ElTag,
   RefreshCw,
 } from '@/shared/ui'
@@ -16,6 +16,7 @@ import { t } from '@/locales'
 import { formatDateTime } from '@/shared/utils/format'
 import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
 import {
+  previewProtocolPublication, previewProtocolRollback, getProtocolDeploymentDetail,
   freezeProtocolVersion,
   importProtocolVersions,
   listProtocolDeploymentHistory,
@@ -26,6 +27,7 @@ import {
   requestProtocolRollback,
 } from '../api/protocol-configuration'
 import type {
+  ProtocolPublicationPreview, ProtocolDeploymentDetail,
   ParsedProtocolImport,
   ProtocolDeployment,
   ProtocolFrozenVersion,
@@ -35,18 +37,83 @@ import type {
 import { parseProtocolExportPackage } from '../models/protocol-configuration'
 
 const props = defineProps<{
+  active?: boolean
+  freezeReady?: boolean
   draftId: string | null
   draftRevision: number | null
   productEnabled: boolean
   selectedProduct: DeviceProductListItem | null
 }>()
 
+watch(() => props.active, active => { if (active === false) stopPolling(); else void refresh().catch(stopPolling) })
 const changes = useSensitiveChange()
+const confirmation = ref<ProtocolPublicationPreview | null>(null)
+const detail = ref<ProtocolDeploymentDetail | null>(null)
+const confirmOpen = ref(false)
+const detailOpen = ref(false)
+const rollbackSequence = ref<number | null>(null)
+let confirmationGeneration = 0
+let detailGeneration = 0
+const lastRefresh = ref<number | null>(null)
+const pollExpired = ref(false)
+let pollStarted = 0
+let pollKey = ''
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let disposed = false
+function stopPolling() { if (pollTimer) clearTimeout(pollTimer); pollTimer = undefined }
+function schedulePolling() {
+  stopPolling()
+  const target = selectedTarget.value
+  if (disposed || props.active === false || document.hidden || !target || target.status !== 'PENDING_SYNC') return
+  const key = target.targetId + ':' + target.currentSequence
+  if (key !== pollKey) { pollKey = key; pollStarted = Date.now(); pollExpired.value = false }
+  if (Date.now() - pollStarted >= 120000) { pollExpired.value = true; return }
+  pollTimer = setTimeout(() => { void refresh().catch(stopPolling) }, 5000)
+}
+function visibilityChanged() { if (props.active === false || document.hidden) stopPolling(); else void refresh().catch(stopPolling) }
+onMounted(() => document.addEventListener('visibilitychange', visibilityChanged))
+onBeforeUnmount(() => { disposed = true; ++refreshGeneration; ++historyGeneration; stopPolling(); ++confirmationGeneration; ++detailGeneration; document.removeEventListener('visibilitychange', visibilityChanged) })
+
+async function inspectPublication(historicalSequence: number | null = null) {
+  const target = selectedTarget.value
+  if (!target || actionBusy.value) return
+  const owner = ++confirmationGeneration
+  const ids = [...versionIds.value]
+  actionBusy.value = true
+  error.value = null
+  try {
+    const result = historicalSequence === null
+      ? await previewProtocolPublication({ targetId: target.targetId, expectedSequence: target.currentSequence, versionIds: ids })
+      : await previewProtocolRollback({ targetId: target.targetId, expectedSequence: target.currentSequence, historicalSequence })
+    if (owner !== confirmationGeneration || targetId.value !== result.targetId || selectedTarget.value?.currentSequence !== result.expectedSequence) return
+    confirmation.value = result
+    rollbackSequence.value = historicalSequence
+    confirmOpen.value = true
+  } catch (reason) { error.value = publicationError(reason) }
+  finally { actionBusy.value = false }
+}
+async function confirmPublication() {
+  const value = confirmation.value
+  if (!value || value.targetId !== targetId.value || value.expectedSequence !== selectedTarget.value?.currentSequence) { confirmOpen.value = false; return }
+  confirmOpen.value = false
+  if (rollbackSequence.value === null) await publish()
+  else await rollback(value.targetId, rollbackSequence.value)
+  confirmation.value = null
+}
+async function showDetail(sequence: number) {
+  const owner = ++detailGeneration
+  const selected = targetId.value
+  detail.value = null
+  try { const result = await getProtocolDeploymentDetail(selected, sequence); if (owner === detailGeneration && selected === targetId.value) { detail.value = result; detailOpen.value = true } }
+  catch (reason) { error.value = publicationError(reason) }
+}
+
 const targets = ref<ProtocolPublicationTarget[]>([])
 const versions = ref<ProtocolFrozenVersion[]>([])
 const history = ref<ProtocolDeployment[]>([])
 const targetId = ref('')
 const versionIds = ref<string[]>([])
+watch([targetId, versionIds], () => { confirmation.value = null; confirmOpen.value = false; ++confirmationGeneration }, { deep: true })
 const loading = ref(false)
 const actionBusy = ref(false)
 const error = ref<string | null>(null)
@@ -72,11 +139,12 @@ const productPage = ref({ page: 1, size: 20, total: 0 })
 const productKeyword = ref('')
 const productsLoading = ref(false)
 let historyGeneration = 0
+let refreshGeneration = 0
 
 const selectedTarget = computed(() => targets.value.find(item => item.targetId === targetId.value) ?? null)
 const targetSelectable = computed(() => selectedTarget.value !== null && selectedTarget.value.status !== 'UNKNOWN')
 const approvalBusy = computed(() => changes.pending.value.size > 0)
-const freezeAllowed = computed(() => Boolean(props.draftId && props.draftRevision && props.productEnabled))
+const freezeAllowed = computed(() => Boolean(props.freezeReady !== false && props.draftId && props.draftRevision && props.productEnabled))
 const importProfiles = computed(() => importPackage.value?.profiles ?? [])
 const importReady = computed(() => importProfiles.value.length > 0 && importProfiles.value.every(item => Boolean(productBindings.value[item.profileId])))
 
@@ -101,30 +169,38 @@ async function loadEnabledProducts(page = 1, keyword = productKeyword.value) {
 }
 
 async function refresh() {
+  const owner = ++refreshGeneration
   ++historyGeneration
   history.value = []
   loading.value = true
   error.value = null
   try {
     const [nextTargets, nextVersions] = await Promise.all([listProtocolPublicationTargets(), listProtocolVersions()])
+    if (owner !== refreshGeneration) return
     targets.value = nextTargets
     versions.value = nextVersions
+    lastRefresh.value = Date.now()
+    if (confirmation.value && nextTargets.find(item => item.targetId === confirmation.value?.targetId)?.currentSequence !== confirmation.value.expectedSequence) { confirmation.value = null; confirmOpen.value = false; ++confirmationGeneration }
     if (targetId.value && !nextTargets.some(item => item.targetId === targetId.value)) targetId.value = ''
     if (targetId.value) await loadHistory(targetId.value)
+    schedulePolling()
   } catch (reason) {
     error.value = publicationError(reason)
     throw reason
   } finally {
-    loading.value = false
+    if (owner === refreshGeneration) loading.value = false
   }
 }
 
 async function selectTarget(value: string) {
+  stopPolling()
   targetId.value = value
+  detailOpen.value = false
+  ++detailGeneration
   history.value = []
   ++historyGeneration
   if (!value) return
-  await loadHistory(value)
+  try { await loadHistory(value); schedulePolling() } catch { stopPolling() }
 }
 
 async function loadHistory(value: string) {
@@ -139,7 +215,9 @@ async function loadHistory(value: string) {
 }
 
 async function freezeCurrentDraft() {
-  if (!props.draftId || !props.draftRevision || !props.productEnabled) return
+  if (!freezeAllowed.value || !props.draftId || !props.draftRevision || actionBusy.value) return
+  ++refreshGeneration
+  loading.value = false
   actionBusy.value = true
   error.value = null
   try {
@@ -308,6 +386,7 @@ function versionLabel(version: ProtocolFrozenVersion) {
 function productPageLabel() {
   return t('protocolConfiguration.publication.productPage', { current: productPage.value.page, total: Math.max(1, Math.ceil(productPage.value.total / productPage.value.size)) })
 }
+defineExpose({ freezeCurrentDraft })
 </script>
 
 <template>
@@ -315,10 +394,11 @@ function productPageLabel() {
     <template #header>
       <div class="panel-heading">
         <div><h2>{{ t('protocolConfiguration.publication.title') }}</h2><p>{{ t('protocolConfiguration.publication.description') }}</p></div>
-        <div class="actions"><ElButton :icon="RefreshCw" :loading="loading" @click="refresh">{{ t('protocolConfiguration.publication.actions.refresh') }}</ElButton><ElButton @click="openImport">{{ t('protocolConfiguration.publication.actions.import') }}</ElButton><ElButton @click="registerOpen = true">{{ t('protocolConfiguration.publication.actions.register') }}</ElButton></div>
+        <div class="actions"><ElButton :icon="RefreshCw" :loading="loading" @click="refresh">{{ t('protocolConfiguration.publication.actions.refresh') }}</ElButton><details><summary>{{ t('protocolConfiguration.flow.more') }}</summary><ElButton @click="openImport">{{ t('protocolConfiguration.publication.actions.import') }}</ElButton><ElButton @click="registerOpen = true">{{ t('protocolConfiguration.publication.actions.register') }}</ElButton></details></div>
       </div>
     </template>
 
+    <p v-if="lastRefresh">{{ t('protocolConfiguration.flow.lastRefresh') }} {{ formatDateTime(lastRefresh) }}</p><ElAlert v-if="pollExpired" :title="t('protocolConfiguration.flow.pollExpired')" type="info" :closable="false" />
     <ElAlert :title="t('protocolConfiguration.publication.localBoundary')" type="info" show-icon :closable="false" />
     <ElAlert v-if="error || changes.error.value" :title="error || changes.error.value || ''" type="error" show-icon :closable="false" />
 
@@ -347,7 +427,7 @@ function productPageLabel() {
           <ElDescriptionsItem :label="t('protocolConfiguration.publication.labels.topics')">{{ selectedTarget.allowedTopics.join('、') }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('protocolConfiguration.publication.labels.error')">{{ selectedTarget.errorCode || '—' }}</ElDescriptionsItem>
         </ElDescriptions>
-        <ElButton type="primary" :disabled="!targetSelectable || !versionIds.length" :loading="actionBusy" @click="publish">{{ t('protocolConfiguration.publication.actions.publish') }}</ElButton>
+        <ElButton type="primary" :disabled="!targetSelectable || !versionIds.length" :loading="actionBusy" @click="inspectPublication()">{{ t('protocolConfiguration.flow.confirmPublication') }}</ElButton>
       </section>
     </div>
 
@@ -356,17 +436,18 @@ function productPageLabel() {
       <ElEmpty v-if="!targetId || !history.length" :description="t('protocolConfiguration.publication.empty.history')" />
       <ElTable v-else :data="history" row-key="sequence">
         <ElTableColumn :label="t('protocolConfiguration.publication.labels.sequence')" prop="sequence" width="90" />
-        <ElTableColumn :label="t('protocolConfiguration.publication.labels.digest')" prop="digest" min-width="180" show-overflow-tooltip />
-        <ElTableColumn :label="t('protocolConfiguration.publication.labels.approval')" prop="approvalId" min-width="150" show-overflow-tooltip />
+        <ElTableColumn :label="t('protocolConfiguration.flow.content')" min-width="180"><template #default="{ row }"><ElButton link @click="showDetail(row.sequence)">{{ t('protocolConfiguration.flow.viewContent') }}</ElButton></template></ElTableColumn>
+
         <ElTableColumn :label="t('protocolConfiguration.publication.labels.status')" min-width="110"><template #default="{ row }"><ElTag :type="statusType(row.status)">{{ t(`protocolConfiguration.publication.status.${row.status}`) }}</ElTag></template></ElTableColumn>
         <ElTableColumn :label="t('protocolConfiguration.publication.labels.createdAt')" min-width="170"><template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template></ElTableColumn>
         <ElTableColumn :label="t('protocolConfiguration.publication.labels.loadedAt')" min-width="170"><template #default="{ row }">{{ row.loadedAt ? formatDateTime(row.loadedAt) : '—' }}</template></ElTableColumn>
         <ElTableColumn :label="t('protocolConfiguration.publication.labels.error')" prop="errorCode" min-width="120" />
-        <ElTableColumn width="100" fixed="right"><template #default="{ row }"><ElButton v-if="row.status === 'LOADED' && row.targetId === selectedTarget?.targetId" link type="primary" :disabled="!targetSelectable" :loading="actionBusy" @click="rollback(row.targetId, row.sequence)">{{ t('protocolConfiguration.publication.actions.rollback') }}</ElButton></template></ElTableColumn>
+        <ElTableColumn width="100" fixed="right"><template #default="{ row }"><ElButton v-if="row.status === 'LOADED' && row.targetId === selectedTarget?.targetId" link type="primary" :disabled="!targetSelectable" :loading="actionBusy" @click="inspectPublication(row.sequence)">{{ t('protocolConfiguration.publication.actions.rollback') }}</ElButton></template></ElTableColumn>
       </ElTable>
     </section>
 
     <ChangeRequestControl
+      business-view
       :change="changes.current.value"
       :busy="approvalBusy"
       @lookup="id => afterApprovalAction(() => changes.load(id))"
@@ -405,10 +486,29 @@ function productPageLabel() {
       <ElInput :model-value="oneTimeKey || ''" readonly :aria-label="t('protocolConfiguration.publication.key.title')" />
       <template #footer><ElButton type="primary" @click="closeOneTimeKey">{{ t('protocolConfiguration.publication.key.confirm') }}</ElButton></template>
     </ElDialog>
+    <ElDialog v-model="confirmOpen" :title="t('protocolConfiguration.flow.confirmPublication')" width="min(900px, 95vw)">
+      <template v-if="confirmation">
+        <ElAlert :title="t(rollbackSequence === null ? 'protocolConfiguration.flow.mergeBoundary' : 'protocolConfiguration.flow.rollbackBoundary')" type="warning" :closable="false" />
+        <p>{{ selectedTarget?.name }}{{ "·" }}{{ t('protocolConfiguration.publication.labels.sequence') }} {{ confirmation.expectedSequence }}</p>
+        <ElTable :data="confirmation.changes" row-key="profileCode">
+          <ElTableColumn :label="t('protocolConfiguration.flow.rule')"><template #default="{ row }">{{ row.afterVersion?.name || row.beforeVersion?.name || row.profileCode }}</template></ElTableColumn>
+          <ElTableColumn :label="t('protocolConfiguration.flow.change')"><template #default="{ row }">{{ t('protocolConfiguration.flow.' + row.changeType) }}</template></ElTableColumn>
+          <ElTableColumn :label="t('protocolConfiguration.flow.before')"><template #default="{ row }">{{ row.beforeVersion ? t('protocolConfiguration.flow.versionSummary', { revision: row.beforeVersion.revision, count: row.beforeVersion.mappingCount }) : '—' }}</template></ElTableColumn>
+          <ElTableColumn :label="t('protocolConfiguration.flow.after')"><template #default="{ row }">{{ row.afterVersion ? t('protocolConfiguration.flow.versionSummary', { revision: row.afterVersion.revision, count: row.afterVersion.mappingCount }) : '—' }}</template></ElTableColumn>
+        </ElTable>
+        <details><summary>{{ t('protocolConfiguration.flow.technical') }}</summary><CopyableValue :value="confirmation.digest" /><p v-for="item in confirmation.targetVersions" :key="item.versionId" class="technical-value">{{ item.profileCode }}{{ "·" }}{{ item.versionId }}</p></details>
+      </template>
+      <template #footer><ElButton @click="confirmOpen = false">{{ t('protocolConfiguration.publication.actions.cancel') }}</ElButton><ElButton data-testid="confirm-publication" type="primary" :disabled="!confirmation" :loading="actionBusy" @click="confirmPublication">{{ t('protocolConfiguration.publication.actions.publish') }}</ElButton></template>
+    </ElDialog>
+    <ElDialog v-model="detailOpen" :title="t('protocolConfiguration.flow.content')" width="min(800px, 95vw)">
+      <template v-if="detail"><p>{{ t('protocolConfiguration.publication.status.' + detail.status) }}{{ "·" }}{{ detail.sequence }}</p><ul><li v-for="version in detail.versions" :key="version.versionId">{{ version.name }}{{ "·" }}{{ t('protocolConfiguration.flow.versionSummary', { revision: version.revision, count: version.mappingCount }) }}</li></ul><details><summary>{{ t('protocolConfiguration.flow.technical') }}</summary><CopyableValue :value="detail.digest" /><CopyableValue :value="detail.approvalId" /></details><ElButton @click="afterApprovalAction(() => changes.load(detail!.approvalId)); detailOpen = false">{{ t('protocolConfiguration.flow.viewApproval') }}</ElButton></template>
+    </ElDialog>
   </ElCard>
 </template>
 
 <style scoped>
+summary { cursor: pointer; padding-block: var(--bec-space-tight); }
+.technical-value { overflow-wrap: anywhere; user-select: all; }
 .publication-panel, .section-block { display: grid; gap: var(--bec-space-group); }
 .panel-heading, .section-heading, .actions { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-group); flex-wrap: wrap; }
 .panel-heading { align-items: flex-start; }

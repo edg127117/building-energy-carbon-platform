@@ -1,6 +1,7 @@
 export default {
   select: '选择工作区', selectHint: '请选择要进入的工作系统', switch: '切换系统',
   companyLogo: '腾芯筑能科技', enter: '进入系统',
+  openMenu: '打开系统菜单', moreActions: '更多操作',
   monitor: '孪生大屏系统', operations: '智慧运维平台', configuration: '能碳配置管理平台',
   monitorHint: '查看建筑场景与能碳运行情况', operationsHint: '监测运行、查询分析与设备维护', configurationHint: '维护数据接入、计算口径与权限配置',
   search: '全局搜索', messages: '消息', user: '当前用户', logout: '退出登录', login: '登录',
@@ -12,7 +13,7 @@ export default {
   carbon: '碳排放管理', carbonOverview: '排放总览', carbonDetails: '排放明细', reduction: '减排管理', assets: '碳资产管理',
   devices: '设备管理', businessDevices: '设备台账', meters: '监测采集设备', alarms: '报警管理', liveAlarms: '实时报警', historyAlarms: '历史报警',
   maintenance: '运维管理', plans: '维保计划', orders: '工单管理', faults: '故障记录', reports: '报表中心', energyReports: '能耗报表', carbonReports: '碳排报表',
-  ingestion: '数据接入', pendingDevices: '待接入设备', points: '设备与测点', products: '产品与测点模板', protocols: '协议配置与预览', collection: '采集配置', interfaces: '接口配置',
+  ingestion: '数据接入', pendingDevices: '待接入设备', points: '设备与测点', products: '产品与测点模板', protocols: '设备报文接入', collection: '采集配置', interfaces: '接口配置',
   space: '空间与系统', buildings: '建筑管理', spaces: '空间管理', systemGroups: '系统分组', equipmentSpaces: '设备与空间关联', indicators: '指标与公式', indicatorList: '指标管理', formulas: '公式管理',
   factors: '因子管理', emissionFactors: '排放因子', factorVersions: '版本与应用记录', rules: '策略与规则', baselines: '基准与定额', alarmRules: '报警规则',
   access: '用户与权限', users: '用户管理', roles: '角色与菜单授权', buildingAccess: '建筑访问审核', settings: '系统设置', menus: '菜单管理',

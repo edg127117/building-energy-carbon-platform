@@ -1,4 +1,5 @@
 // 项目界面统一从此入口复用 Element Plus 与图标，避免页面各自引入形成重复实现。
+export { default as CopyableValue } from './CopyableValue.vue'
 export {
   ElAlert, ElAside, ElBadge, ElButton, ElCard, ElCheckbox, ElCheckboxGroup,
   ElConfigProvider, ElContainer, ElDatePicker, ElDescriptions, ElDescriptionsItem,
