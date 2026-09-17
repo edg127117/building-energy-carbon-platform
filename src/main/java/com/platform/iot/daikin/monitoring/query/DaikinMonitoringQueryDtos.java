@@ -13,7 +13,7 @@ public final class DaikinMonitoringQueryDtos {
                                  String deviceKind, int mappingVersion, boolean active,
                                  boolean stale, Long lastValidAt, StateSummaryView onOff,
                                  StateSummaryView mode, StateSummaryView unitStatus,
-                                 boolean hasActiveException) { }
+                                 boolean hasActiveException, String equipmentCode, String equipmentName) { }
 
     public record StateSummaryView(String value, String status, Long lastValidAt, boolean stale) { }
 

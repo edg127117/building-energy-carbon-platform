@@ -82,7 +82,7 @@ public class DaikinMonitoringQueryService {
         pageParameters.add(offset);
         List<DeviceListItem> items = jdbc.query("""
                 SELECT t.identity_id,t.equipment_id,t.pending_id,e.building_id,e.space_id,e.system_group_id,
-                       d.device_kind,t.mapping_version,t.active,i.status AS identity_status,
+                       d.device_kind,t.mapping_version,t.active,i.status AS identity_status,e.equip_code,e.equip_name,
                        t.first_planned_at_ms,
                        (SELECT MAX(runtime.last_valid_at_ms) FROM biz_daikin_current_state runtime
                          WHERE runtime.identity_id=t.identity_id AND runtime.building_id=e.building_id
@@ -134,7 +134,8 @@ public class DaikinMonitoringQueryService {
                             rs.getInt("mapping_version"), rs.getInt("active") == 1
                                     && rs.getInt("identity_status") == 1,
                             freshness < clock.millis() - STALE_AFTER_MS, lastValid,
-                            onOff, mode, unitStatus, rs.getInt("has_exception") == 1);
+                            onOff, mode, unitStatus, rs.getInt("has_exception") == 1,
+                            rs.getString("equip_code"), rs.getString("equip_name"));
                 }, pageParameters.toArray());
         return new PageResponse<>(page, size, total == null ? 0 : total, items);
     }
@@ -235,7 +236,14 @@ public class DaikinMonitoringQueryService {
 
     private CursorPage<ExceptionView> exceptions(Long userId, Set<String> roles, String buildingId,
                                                   String cursor, int limit, boolean active) {
-        requireBuilding(userId, roles, buildingId);
+        // 报警叶子只授权对应异常列表，不扩展为设备状态、温度或运行统计权限。
+        if (userId == null || roles == null) throw forbidden();
+        String alarmMenu = active ? "/operations/alarms/liveAlarms" : "/operations/alarms/historyAlarms";
+        if (!roles.contains("PLATFORM_ADMIN") && menus.selectVisibleMenusByUserId(userId).stream()
+                .noneMatch(menu -> "C".equals(menu.getMenuType())
+                        && (alarmMenu.equals(menu.getPath()) || HVAC_MENUS.contains(menu.getPath())))) throw forbidden();
+        requireId(buildingId, "buildingId");
+        buildings.checkAccess(userId, roles, buildingId);
         requireLimit(limit);
         Cursor after = decodeCursor(cursor);
         String timeColumn = active ? "x.last_detected_at_ms" : "x.recovered_at_ms";

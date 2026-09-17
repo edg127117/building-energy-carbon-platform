@@ -54,6 +54,7 @@ class DaikinOnboardingIntegrationTest {
     @Autowired ObjectMapper mapper;
     @Autowired MockMvc mvc;
     private String source;
+    private String numericSource;
 
     @BeforeEach
     void setup() {
@@ -74,6 +75,7 @@ class DaikinOnboardingIntegrationTest {
 
     @AfterEach
     void cleanup() {
+        if (numericSource != null) jdbc.update("DELETE FROM biz_data_source WHERE source_id=?", numericSource);
         var pending = jdbc.queryForList("SELECT pending_id FROM biz_daikin_directory WHERE source_id=?", String.class, source);
         var identityIds = pending.stream().map(id -> pendingMapper.selectById(id).getBoundIdentityId()).filter(java.util.Objects::nonNull).toList();
         var auditTargets = new java.util.ArrayList<>(pending);
@@ -117,9 +119,17 @@ class DaikinOnboardingIntegrationTest {
         assertThat(connection.configEffective()).isTrue();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(before);
         assertThatThrownBy(() -> directory.mapProject(source, "site1", "BLD002", 1L, ADMIN)).isInstanceOf(BusinessException.class);
-        execute("ACTIVATE_DEVICE_IDENTITY", Map.of("identityId", connection.identityId()), "DTEST-activate");
+        var activation = scoped.requestIdentityStatus(4242L, OPS, pending, "ACTIVE", "DTEST-activate");
+        assertThat(activation.status()).isEqualTo("PENDING_REVIEW");
+        assertThat(scoped.requestIdentityStatus(4242L, OPS, pending, "ACTIVE", "DTEST-activate").requestId())
+                .isEqualTo(activation.requestId());
+        assertThat(onboarding.connection(pending, ADMIN).identityStatus()).isEqualTo("INACTIVE");
+        changes.approve(1L, activation.requestId(), "隔离测试审核");
+        changes.execute(1L, activation.requestId());
         assertThat(onboarding.connection(pending, ADMIN).identityStatus()).isEqualTo("ACTIVE");
         assertThat(onboarding.connection(pending, ADMIN).configEffective()).isTrue();
+        assertThatThrownBy(() -> scoped.requestIdentityStatus(4242L, OPS, pending, "ON", "DTEST-invalid"))
+                .isInstanceOf(BusinessException.class);
     }
 
     @Test
@@ -168,7 +178,22 @@ class DaikinOnboardingIntegrationTest {
         assertThat(page.total()).isEqualTo(1);
         assertThat(page.items()).extracting(DeviceOnboardingContracts.PendingListItemView::pendingId).containsExactly(visible);
         assertThat(scoped.directoryDetail(4242L, OPS, visible).directory().buildingId()).isEqualTo("BLD001");
+        String product = enabledProduct();
+        assertThat(scoped.product(4242L, OPS, visible, product).productId()).isEqualTo(product);
+        numericSource = "DHT" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
+        jdbc.update("INSERT INTO biz_data_source(source_id,source_code,source_name,building_id,source_category,transport_type,status) "
+                + "VALUES (?,?,'测试HTTP来源','BLD001','DEVICE_ACCESS','HTTP','ENABLED')", numericSource,
+                "DTEST_HTTP_" + numericSource.substring(3));
+        assertThat(scoped.numericSources(4242L, OPS, visible))
+                .extracting(ScopedDeviceOnboardingService.NumericSource::sourceId).contains(numericSource);
+        assertThat(scoped.bindingOptions(4242L, OPS, visible, 1, 20, "SPACE001", "GROUP001").buildingId())
+                .isEqualTo("BLD001");
         for (String denied : List.of(other, unknown, "not-existing")) {
+            assertThatThrownBy(() -> scoped.product(4242L, OPS, denied, product)).isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> scoped.numericSources(4242L, OPS, denied)).isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> scoped.bindingOptions(4242L, OPS, denied, 1, 20, null, null)).isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> scoped.requestIdentityStatus(4242L, OPS, denied, "ACTIVE", "DTEST-denied"))
+                    .isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> scoped.detail(4242L, OPS, denied)).isInstanceOfSatisfying(BusinessException.class,
                     e -> assertThat(e.getCode()).isEqualTo(403));
         }

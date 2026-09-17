@@ -20,11 +20,11 @@ export const pages: PageEntry[] = [
   ...group('operations', 'realtime', ['hvac', 'power', 'lighting', 'renewable']),
   ...group('operations', 'energy', ['energyItems', 'energyZones', 'trend', 'baselineAnalysis', 'diagnosis']),
   ...group('operations', 'carbon', ['carbonOverview', 'carbonDetails', 'trend', 'reduction', 'assets']),
-  ...group('operations', 'devices', [['businessDevices', '/system/devices'], 'meters']),
+  ...group('operations', 'devices', [['businessDevices', '/system/devices'], ['pendingDevices', '/system/device-onboarding'], 'meters']),
   ...group('operations', 'alarms', ['liveAlarms', 'historyAlarms']),
   ...group('operations', 'maintenance', ['plans', 'orders', 'faults']),
   ...group('operations', 'reports', ['energyReports', 'carbonReports']),
-  ...group('configuration', 'ingestion', [['pendingDevices', '/system/device-onboarding'], ['products', '/system/device-products'], ['protocols', '/system/protocol-configurations'], 'collection', 'interfaces']),
+  ...group('configuration', 'ingestion', [['products', '/system/device-products'], ['protocols', '/system/protocol-configurations'], 'collection', 'interfaces']),
   ...group('configuration', 'space', [['buildings', '/system/buildings'], 'spaces', 'systemGroups', 'equipmentSpaces']),
   ...group('configuration', 'indicators', ['indicatorList', 'formulas']),
   ...group('configuration', 'factors', ['emissionFactors', 'factorVersions']),
@@ -36,6 +36,7 @@ export const pages: PageEntry[] = [
 /** 只迁移既有设备页面的授权和深链接，不扩展为关联配置权限。 */
 export const relocatedPages: Record<string, string> = {
   '/configuration/ingestion/points': '/operations/devices/businessDevices',
+  '/configuration/ingestion/pendingDevices': '/operations/devices/pendingDevices',
 }
 
 /** 旧路径仅一对一映射同职责入口；不将旧 HVAC 页面授权扩展成五类大屏或整个运维系统。 */

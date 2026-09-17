@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   ElAlert,
   ElButton,
@@ -36,6 +37,7 @@ import { useAssetManagement } from '../composables/use-asset-management'
 import { canRunAssetAction, flattenSpaces, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint } from '../models/assets'
 
 const management = useAssetManagement()
+const router = useRouter()
 // 筛选范围与编辑弹窗独立，编辑其他建筑的设备不能替换筛选选项。
 const filterScope = useAssetManagement()
 const filters = reactive<Partial<AssetEquipmentQuery>>({})
@@ -274,6 +276,7 @@ onMounted(() => {
         </ElTabPane>
         <ElTabPane name="connection" :label="t('assetManagement.equipment.connectionTab')">
           <div class="detail-content">
+            <ElButton v-if="selectedEquipment.identities.some(identity => identity.identityType === 'DAIKIN_UNIT')" @click="router.push({ path: '/operations/realtime/hvac', query: { equipmentId: selectedEquipment.equipmentId, buildingId: selectedEquipment.buildingId } })">{{ t('dashboard.daikin.detail') }}</ElButton>
             <section class="detail-section"><h3>{{ t('assetManagement.equipment.protocolInformation') }}</h3><dl class="detail-fields"><div><dt>{{ t('assetManagement.labels.expectedProfile') }}</dt><dd>{{ selectedEquipment.expectedProfileCode || t('common.missing') }}</dd></div></dl></section>
             <section class="drawer-section"><h3>{{ t('assetManagement.equipment.identities') }}</h3><ElTable :data="selectedEquipment.identities" row-key="identityId"><ElTableColumn :label="t('assetManagement.labels.identityType')" prop="identityType" min-width="130" /><ElTableColumn :label="t('assetManagement.labels.identity')" prop="identityValue" min-width="180" /><ElTableColumn :label="t('assetManagement.labels.expectedProfile')" prop="expectedProfileCode" min-width="140" /><ElTableColumn :label="t('assetManagement.labels.status')" min-width="100"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.identities')" /></template></ElTable></section>
           </div>

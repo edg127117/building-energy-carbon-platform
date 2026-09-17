@@ -5,11 +5,24 @@ import {
   getDeviceProduct,
   getPendingDevice,
   getPendingDeviceConnection,
+  getOperationsPendingConnection,
+  getOperationsPendingDevice,
+  getOperationsCompatibleProduct,
+  getOperationsBindingOptions,
+  getDaikinDirectorySync,
   listDeviceProducts,
   listEquipmentTypes,
   listPendingDevices,
+  listOperationsCompatibleProducts,
+  listOperationsPendingDevices,
+  listOperationsNumericSources,
   listPointNamingRules,
+  requestDaikinDirectorySync,
+  submitOperationsBinding,
+  submitOperationsBindingBatch,
+  submitOperationsIdentityStatus,
   updateDeviceProduct,
+  updateOperationsPendingStatus,
   updatePendingStatus,
 } from '../api/onboarding'
 import type {
@@ -23,10 +36,17 @@ import type {
   PendingDeviceConnection,
   PendingStatus,
   PointNamingRule,
+  BindingProduct,
+  DaikinDirectoryDetail,
+  DaikinSyncJob,
+  OperationsBindingApplication,
+  PendingBindRequest,
+  NumericSourceOption,
+  OperationsBindingOptions,
 } from '../models/onboarding'
-import { requestErrorMessage } from '@/shared/utils/request-error'
+import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
 
-type RequestState = { message: string } | null
+type RequestState = { message: string; code: string | null } | null
 const emptyPage = <T>(size = 20): OnboardingPage<T> => ({ page: 1, size, total: 0, items: [] })
 
 /**
@@ -34,7 +54,8 @@ const emptyPage = <T>(size = 20): OnboardingPage<T> => ({ page: 1, size, total: 
  *
  * 列表与详情用代次隔离迟到响应，草稿保存和待处理状态变更按对象加锁；敏感变更申请由权限模块单独编排。
  */
-export function useDeviceOnboarding() {
+export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
+  const operations = options.operations === true
   const equipmentTypes = ref<EquipmentTypeOption[]>([])
   const equipmentTypesError = ref<RequestState>(null)
   const equipmentTypesLoading = ref(false)
@@ -73,6 +94,14 @@ export function useDeviceOnboarding() {
   const pendingLoading = ref(false)
   const pendingError = ref<RequestState>(null)
   const selectedPending = ref<PendingDeviceDetail | null>(null)
+  const selectedDirectory = ref<DaikinDirectoryDetail | null>(null)
+  const selectedBindingProduct = ref<BindingProduct | null>(null)
+  const syncJob = ref<DaikinSyncJob | null>(null)
+  const bindingApplications = ref<OperationsBindingApplication[]>([])
+  const numericSources = ref<NumericSourceOption[]>([])
+  const numericSourcesLoading = ref(false)
+  const numericSourcesError = ref<RequestState>(null)
+  const bindingOptions = ref<OperationsBindingOptions | null>(null)
   const pendingDetailLoading = ref(false)
   const pendingDetailError = ref<RequestState>(null)
   const pendingConnection = ref<PendingDeviceConnection | null>(null)
@@ -96,14 +125,19 @@ export function useDeviceOnboarding() {
     productsLoading.value = true
     productsError.value = null
     try {
-      const page = await listDeviceProducts({
-        page: productQuery.value.page,
-        size: productQuery.value.size,
-        status: productQuery.value.status,
-        keyword: trimmed(productQuery.value.keyword),
-        expectedProfileCode: trimmed(productQuery.value.expectedProfileCode),
-        identityType: trimmed(productQuery.value.identityType),
-      })
+      const pendingId = selectedPending.value?.pendingId
+      const page = operations
+        ? await listOperationsCompatibleProducts(requiredPendingId(pendingId), {
+            page: productQuery.value.page, size: productQuery.value.size,
+          })
+        : await listDeviceProducts({
+            page: productQuery.value.page,
+            size: productQuery.value.size,
+            status: productQuery.value.status,
+            keyword: trimmed(productQuery.value.keyword),
+            expectedProfileCode: trimmed(productQuery.value.expectedProfileCode),
+            identityType: trimmed(productQuery.value.identityType),
+          })
       if (owner === productGeneration) products.value = page
       return page
     } catch (reason) {
@@ -139,18 +173,57 @@ export function useDeviceOnboarding() {
     }
   }
 
+  async function selectBindingProduct(productId: string | null) {
+    if (!operations) return selectProduct(productId)
+    if (!productId) {
+      selectedBindingProduct.value = null
+      return null
+    }
+    const pendingId = requiredPendingId(selectedPending.value?.pendingId)
+    selectedBindingProduct.value = await getOperationsCompatibleProduct(pendingId, productId)
+    return selectedBindingProduct.value
+  }
+
+  async function loadNumericSources() {
+    if (!operations) return []
+    numericSourcesLoading.value = true
+    numericSourcesError.value = null
+    try {
+      numericSources.value = await listOperationsNumericSources(requiredPendingId(selectedPending.value?.pendingId))
+      return numericSources.value
+    } catch (reason) {
+      numericSourcesError.value = requestState(reason)
+      throw reason
+    } finally {
+      numericSourcesLoading.value = false
+    }
+  }
+
+  async function loadBindingOptions(params: { page?: number; size?: number; spaceId?: string; systemGroupId?: string } = {}) {
+    if (!operations) return null
+    bindingOptions.value = await getOperationsBindingOptions(requiredPendingId(selectedPending.value?.pendingId), {
+      page: params.page ?? 1, size: params.size ?? 20,
+      spaceId: params.spaceId, systemGroupId: params.systemGroupId,
+    })
+    return bindingOptions.value
+  }
+
   async function loadPendingDevices() {
     const owner = ++pendingGeneration
     pendingLoading.value = true
     pendingError.value = null
     try {
-      const page = await listPendingDevices({
-        page: pendingQuery.value.page,
-        size: pendingQuery.value.size,
-        status: pendingQuery.value.status,
-        identity: trimmed(pendingQuery.value.identity),
-        profileCode: trimmed(pendingQuery.value.profileCode),
-      })
+      const page = operations
+        ? await listOperationsPendingDevices({
+            page: pendingQuery.value.page, size: pendingQuery.value.size, status: pendingQuery.value.status,
+          })
+        : await listPendingDevices({
+            page: pendingQuery.value.page,
+            size: pendingQuery.value.size,
+            status: pendingQuery.value.status,
+            identity: trimmed(pendingQuery.value.identity),
+            profileCode: trimmed(pendingQuery.value.profileCode),
+          })
       if (owner === pendingGeneration) pendingDevices.value = page
       return page
     } catch (reason) {
@@ -170,12 +243,25 @@ export function useDeviceOnboarding() {
     const owner = ++pendingDetailGeneration
     if (!pendingId) {
       selectedPending.value = null
+      selectedDirectory.value = null
+      selectedBindingProduct.value = null
+      syncJob.value = null
       clearPendingConnection()
       return
     }
     pendingDetailLoading.value = true
     pendingDetailError.value = null
     try {
+      if (operations) {
+        const detail = await getOperationsPendingDevice(pendingId)
+        if (owner === pendingDetailGeneration) {
+          selectedPending.value = detail.pending
+          selectedDirectory.value = detail.directory
+          selectedBindingProduct.value = null
+          syncJob.value = null
+        }
+        return detail.pending
+      }
       const detail = await getPendingDevice(pendingId)
       if (owner === pendingDetailGeneration) selectedPending.value = detail
       return detail
@@ -192,7 +278,11 @@ export function useDeviceOnboarding() {
     pendingConnectionLoading.value = true
     pendingConnectionError.value = null
     try {
-      const value = await getPendingDeviceConnection(pendingId)
+      const response = operations
+        ? await getOperationsPendingConnection(pendingId)
+        : await getPendingDeviceConnection(pendingId)
+      // 运维读数进入暖通监测页；旧资产读数接口仅管理员可用，因此此处不暴露其入口。
+      const value = operations ? { ...response, equipmentId: null } : response
       if (owner === pendingConnectionGeneration) pendingConnection.value = value
       return value
     } catch (reason) {
@@ -211,6 +301,10 @@ export function useDeviceOnboarding() {
   }
 
   async function loadNamingRules() {
+    if (operations) {
+      namingRules.value = []
+      return namingRules.value
+    }
     const owner = ++namingRulesGeneration
     namingRulesLoading.value = true
     namingRulesError.value = null
@@ -263,10 +357,56 @@ export function useDeviceOnboarding() {
 
   function changePendingStatus(pendingId: string, status: PendingStatus, reason?: string) {
     return run(`pending:status:${pendingId}`, async () => {
-      const detail = await updatePendingStatus(pendingId, { status, reason: trimmed(reason) ?? null })
+      const detail = operations
+        ? await updateOperationsPendingStatus(pendingId, { status, reason: trimmed(reason) ?? null })
+        : await updatePendingStatus(pendingId, { status, reason: trimmed(reason) ?? null })
       selectedPending.value = detail
       await loadPendingDevices()
       return detail
+    })
+  }
+
+  function submitBindingRequest(pendingId: string, binding: PendingBindRequest, idempotencyKey: string) {
+    return run(`pending:binding:${pendingId}`, async () => {
+      const application = await submitOperationsBinding(pendingId, binding, idempotencyKey)
+      bindingApplications.value = [application]
+      await loadPendingDevices()
+      return application
+    })
+  }
+
+  function submitBindingBatch(pendingIds: string[], binding: PendingBindRequest, idempotencyKeys: Map<string, string>) {
+    return run('pending:binding:batch', async () => {
+      const applications = await submitOperationsBindingBatch(pendingIds.map(pendingId => ({
+        pendingId, binding, idempotencyKey: requiredIdempotencyKey(idempotencyKeys.get(pendingId)),
+      })))
+      bindingApplications.value = applications
+      await loadPendingDevices()
+      return applications
+    })
+  }
+
+  function startDirectorySync(sourceId: string) {
+    return run(`daikin:sync:${sourceId}`, async () => {
+      syncJob.value = await requestDaikinDirectorySync(sourceId)
+      return syncJob.value
+    })
+  }
+
+  function submitIdentityStatus(pendingId: string, targetStatus: 'ACTIVE' | 'INACTIVE', idempotencyKey: string) {
+    return run(`pending:identity:${pendingId}:${targetStatus}`, async () => {
+      const application = await submitOperationsIdentityStatus(pendingId, targetStatus, idempotencyKey)
+      bindingApplications.value = [application]
+      return application
+    })
+  }
+
+  function refreshDirectorySync() {
+    const job = syncJob.value
+    if (!job) return Promise.resolve(undefined)
+    return run(`daikin:sync:status:${job.jobId}`, async () => {
+      syncJob.value = await getDaikinDirectorySync(job.sourceId, job.jobId)
+      return syncJob.value
     })
   }
 
@@ -284,6 +424,14 @@ export function useDeviceOnboarding() {
     pendingLoading,
     pendingError,
     selectedPending,
+    selectedDirectory,
+    selectedBindingProduct,
+    syncJob,
+    bindingApplications,
+    numericSources,
+    numericSourcesLoading,
+    numericSourcesError,
+    bindingOptions,
     pendingDetailLoading,
     pendingDetailError,
     pendingConnection,
@@ -297,6 +445,9 @@ export function useDeviceOnboarding() {
     loadProducts,
     setProductQuery,
     selectProduct,
+    selectBindingProduct,
+    loadNumericSources,
+    loadBindingOptions,
     saveProduct,
     copyProduct,
     loadPendingDevices,
@@ -306,6 +457,11 @@ export function useDeviceOnboarding() {
     clearPendingConnection,
     loadNamingRules,
     changePendingStatus,
+    submitBindingRequest,
+    submitBindingBatch,
+    startDirectorySync,
+    refreshDirectorySync,
+    submitIdentityStatus,
   }
 }
 
@@ -327,5 +483,15 @@ function trimmed(value: string | undefined): string | undefined {
 }
 
 function requestState(reason: unknown): RequestState {
-  return { message: requestErrorMessage(reason) }
+  return { message: requestErrorMessage(reason), code: requestErrorCode(reason) }
+}
+
+function requiredPendingId(value: string | undefined): string {
+  if (!value) throw new Error('PENDING_DEVICE_REQUIRED')
+  return value
+}
+
+function requiredIdempotencyKey(value: string | undefined): string {
+  if (!value) throw new Error('IDEMPOTENCY_KEY_REQUIRED')
+  return value
 }

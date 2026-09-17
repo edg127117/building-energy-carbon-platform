@@ -5,6 +5,11 @@ const menu = (path: string, overrides: Partial<GrantedMenu> = {}): GrantedMenu =
   id: 1, menuName: '', menuType: 'C', path, visible: 1, status: 1, sortOrder: 0, ...overrides,
 })
 describe('navigation authorization mapping', () => {
+  it('relocates pending-device grants without granting other operations pages', () => {
+    for (const path of ['/system/device-onboarding', '/configuration/ingestion/pendingDevices', '/operations/devices/pendingDevices']) {
+      expect(authorizedPages([menu(path)]).map(page => page.path)).toEqual(['/operations/devices/pendingDevices'])
+    }
+  })
   it('moves either old equipment grant only to the operations archive', () => {
     for (const path of ['/system/devices', '/configuration/ingestion/points']) {
       expect(authorizedPages([menu(path)]).map(page => page.path)).toEqual(['/operations/devices/businessDevices'])

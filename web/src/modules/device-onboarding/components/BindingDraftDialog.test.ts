@@ -57,4 +57,23 @@ describe('绑定准备弹窗', () => {
     expect(wrapper.findAll('input').some(input => input.element.value === '有功功率')).toBe(true)
     expect(wrapper.findAllComponents(ElSelect).some(select => select.props('modelValue') === 'ANALOG')).toBe(true)
   })
+
+  it('区分零测点状态产品和需要HTTP数值来源的温度模板', async () => {
+    const stateProduct = { ...product, pointCount: 0, points: [] }
+    const stateWrapper = mount(BindingDraftDialog, {
+      props: { open: true, pending, product: stateProduct, products: [stateProduct], allowEmptyPoints: true },
+    })
+    await flushPromises()
+    expect(stateWrapper.text()).toContain('该厂家状态型产品不创建数值测点')
+    expect(stateWrapper.text()).not.toContain('温度数值来源')
+
+    const temperatureWrapper = mount(BindingDraftDialog, {
+      props: {
+        open: true, pending, product, products: [product], allowEmptyPoints: true,
+        numericSources: [{ sourceId: 'HTTP-1', sourceCode: 'DAIKIN_TEMP', sourceName: '厂家温度来源' }],
+      },
+    })
+    await flushPromises()
+    expect(temperatureWrapper.text()).toContain('温度数值来源')
+  })
 })

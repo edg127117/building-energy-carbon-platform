@@ -1,6 +1,24 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
-import { copyDeviceProduct, getPendingDeviceConnection, listDeviceProducts, listPendingDevices, listPointNamingRules, updatePendingStatus } from './onboarding'
+import {
+  copyDeviceProduct,
+  getDaikinDirectorySync,
+  getOperationsPendingDevice,
+  getOperationsCompatibleProduct,
+  getOperationsBindingOptions,
+  getPendingDeviceConnection,
+  listDeviceProducts,
+  listOperationsCompatibleProducts,
+  listOperationsPendingDevices,
+  listOperationsNumericSources,
+  listPendingDevices,
+  listPointNamingRules,
+  requestDaikinDirectorySync,
+  submitOperationsBinding,
+  submitOperationsBindingBatch,
+  submitOperationsIdentityStatus,
+  updatePendingStatus,
+} from './onboarding'
 
 vi.mock('@/infrastructure/http/public', () => ({ requestApi: vi.fn() }))
 
@@ -50,5 +68,39 @@ describe('设备接入接口契约', () => {
       data: { status: 'IGNORED', reason: null },
     })
     expect(urls.some(url => url?.includes('/bind') || url?.includes('/activate') || url?.includes('/deactivate'))).toBe(false)
+  })
+
+  it('使用范围受控运维接口读取厂家目录和提交绑定申请', async () => {
+    const binding = {
+      productId: 'P-01', buildingId: 'B-01', spaceId: 'S-01', systemGroupId: 'G-01',
+      existingEquipmentId: 'E-01', newEquipment: null, pointBindings: [],
+    }
+    await listOperationsPendingDevices({ page: 1, size: 20, status: 'DISCOVERED' })
+    await getOperationsPendingDevice('D/01')
+    await listOperationsCompatibleProducts('D/01', { page: 2, size: 20 })
+    await getOperationsCompatibleProduct('D/01', 'P/01')
+    await listOperationsNumericSources('D/01')
+    await getOperationsBindingOptions('D/01', { page: 2, size: 20, spaceId: 'S-01', systemGroupId: 'G-01' })
+    await submitOperationsBinding('D/01', binding, 'stable-1')
+    await submitOperationsBindingBatch([{ pendingId: 'D/01', binding, idempotencyKey: 'stable-1' }])
+    await submitOperationsIdentityStatus('D/01', 'ACTIVE', 'stable-enable')
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, { method: 'get', url: '/v1/operations/device-onboarding/pending', params: { page: 1, size: 20, status: 'DISCOVERED' } })
+    expect(requestApi).toHaveBeenNthCalledWith(2, { method: 'get', url: '/v1/operations/device-onboarding/pending/D%2F01' })
+    expect(requestApi).toHaveBeenNthCalledWith(3, { method: 'get', url: '/v1/operations/device-onboarding/pending/D%2F01/products', params: { page: 2, size: 20 } })
+    expect(requestApi).toHaveBeenNthCalledWith(4, { method: 'get', url: '/v1/operations/device-onboarding/pending/D%2F01/products/P%2F01' })
+    expect(requestApi).toHaveBeenNthCalledWith(5, { method: 'get', url: '/v1/operations/device-onboarding/pending/D%2F01/numeric-sources' })
+    expect(requestApi).toHaveBeenNthCalledWith(6, { method: 'get', url: '/v1/operations/device-onboarding/pending/D%2F01/binding-options', params: { page: 2, size: 20, spaceId: 'S-01', systemGroupId: 'G-01' } })
+    expect(requestApi).toHaveBeenNthCalledWith(7, { method: 'post', url: '/v1/operations/device-onboarding/pending/D%2F01/binding-requests', data: { binding, idempotencyKey: 'stable-1' } })
+    expect(requestApi).toHaveBeenNthCalledWith(8, { method: 'post', url: '/v1/operations/device-onboarding/binding-requests/batch', data: { items: [{ pendingId: 'D/01', binding, idempotencyKey: 'stable-1' }] } })
+    expect(requestApi).toHaveBeenNthCalledWith(9, { method: 'post', url: '/v1/operations/device-onboarding/pending/D%2F01/identity-status-requests', data: { targetStatus: 'ACTIVE', idempotencyKey: 'stable-enable' } })
+  })
+
+  it('提交并查询厂家异步同步任务，不发送凭据或清单', async () => {
+    await requestDaikinDirectorySync('source/A')
+    await getDaikinDirectorySync('source/A', 'job/1')
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, { method: 'post', url: '/v1/daikin/sources/source%2FA/sync-jobs' })
+    expect(requestApi).toHaveBeenNthCalledWith(2, { method: 'get', url: '/v1/daikin/sources/source%2FA/sync-jobs/job%2F1' })
   })
 })
