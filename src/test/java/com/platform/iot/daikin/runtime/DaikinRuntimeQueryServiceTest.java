@@ -44,12 +44,12 @@ class DaikinRuntimeQueryServiceTest {
         new ResourceDatabasePopulator(new ClassPathResource("daikin-runtime-test.sql"),
                 new ClassPathResource("daikin-monitoring-state-test.sql")).execute(ds);
         jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32),building_id VARCHAR(32),del_flag INT)");
+        jdbc.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32),building_id VARCHAR(32),del_flag INT,equip_name VARCHAR(100),equip_code VARCHAR(50))");
         jdbc.execute("CREATE TABLE biz_device_identity(identity_id VARCHAR(32),equip_id VARCHAR(32),building_id VARCHAR(32),identity_type VARCHAR(32),status INT)");
         jdbc.execute("CREATE TABLE biz_pending_device(pending_id VARCHAR(32),bound_identity_id VARCHAR(32),status VARCHAR(32))");
         jdbc.execute("CREATE TABLE biz_daikin_directory(pending_id VARCHAR(32),source_id VARCHAR(200),site_id VARCHAR(32),device_kind VARCHAR(32))");
         jdbc.execute("CREATE TABLE biz_daikin_project_mapping(source_id VARCHAR(200),site_id VARCHAR(32),building_id VARCHAR(32),mapping_version INT)");
-        jdbc.update("INSERT INTO biz_equipment VALUES ('equipment','building',0)");
+        jdbc.update("INSERT INTO biz_equipment(equip_id,building_id,del_flag) VALUES ('equipment','building',0)");
         jdbc.update("INSERT INTO biz_device_identity VALUES ('identity','equipment','building','DAIKIN_UNIT',0)");
         jdbc.update("INSERT INTO biz_pending_device VALUES ('pending','identity','BOUND')");
         jdbc.update("INSERT INTO biz_daikin_directory VALUES ('pending','source','site','INDOOR')");

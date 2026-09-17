@@ -50,6 +50,12 @@ public class DaikinMonitoringQueryService {
         this.clock = Objects.requireNonNull(clock);
     }
 
+    public List<SpaceOption> spaces(Long userId, Set<String> roles, String buildingId) {
+        requireBuilding(userId, roles, buildingId);
+        return jdbc.query("SELECT space_id,space_name FROM biz_space WHERE building_id=? AND del_flag=0 ORDER BY space_name,space_id",
+                (rs, row) -> new SpaceOption(rs.getString(1), rs.getString(2)), buildingId);
+    }
+
     public PageResponse<DeviceListItem> devices(Long userId, Set<String> roles, String buildingId,
                                                  int page, int size, String spaceId, String kind) {
         return devices(userId, roles, buildingId, page, size, spaceId, kind, null);
@@ -57,6 +63,11 @@ public class DaikinMonitoringQueryService {
 
     public PageResponse<DeviceListItem> devices(Long userId, Set<String> roles, String buildingId,
                                                  int page, int size, String spaceId, String kind, String keyword) {
+        return devices(userId, roles, buildingId, page, size, spaceId, kind, keyword, null, null);
+    }
+
+    public PageResponse<DeviceListItem> devices(Long userId, Set<String> roles, String buildingId,
+            int page, int size, String spaceId, String kind, String keyword, String state, Boolean hasException) {
         requireBuilding(userId, roles, buildingId);
         requirePage(page, size);
         String validSpace = optionalId(spaceId, "spaceId");
@@ -78,6 +89,31 @@ public class DaikinMonitoringQueryService {
             filters.append(" AND (LOCATE(?, e.equip_name)>0 OR LOCATE(?, e.equip_code)>0)");
             parameters.add(search);
             parameters.add(search);
+        }
+        String observedTime = """
+                (SELECT MAX(runtime.last_valid_at_ms) FROM biz_daikin_current_state runtime
+                         WHERE runtime.identity_id=t.identity_id AND runtime.building_id=e.building_id
+                           AND runtime.mapping_version=t.mapping_version
+                           AND runtime.field_name IN ('onOff','mode','unitStatus','fanSpeed','airflowDirection',
+                             'roomTemp','temperature','errorType','errorCode','inCommunicationError',
+                             'inEquipmentError','inMantenanceMode','isFilterDirty',
+                             'controller.isConnectionUp','controller.inForcedStop','compressorOnOff'))
+                """;
+        String enabled = "(t.active=1 AND i.status=1)";
+        // 与列表展示共用优先级：停用、尚无观测，再判断五分钟新鲜度。
+        if (state != null && !state.isBlank()) {
+            String condition = switch (state) {
+                case "INACTIVE" -> "NOT " + enabled;
+                case "NO_OBSERVATION" -> enabled + " AND " + observedTime + " IS NULL";
+                case "FRESH", "STALE" -> enabled + " AND " + observedTime + " IS NOT NULL AND GREATEST(t.first_planned_at_ms," + observedTime + ")" + (state.equals("STALE") ? "<?" : ">=?");
+                default -> throw error(400, "DAIKIN_MONITORING_INVALID_REQUEST", "state无效");
+            };
+            filters.append(" AND (").append(condition).append(")");
+            if (state.equals("FRESH") || state.equals("STALE")) parameters.add(clock.millis() - STALE_AFTER_MS);
+        }
+        if (hasException != null) {
+            filters.append(hasException ? " AND EXISTS (" : " AND NOT EXISTS (");
+            filters.append("SELECT 1 FROM biz_daikin_exception_instance x WHERE x.identity_id=t.identity_id AND x.building_id=e.building_id AND x.active_key IS NOT NULL)");
         }
         String joins = """
                  FROM biz_daikin_monitoring_target t
@@ -276,8 +312,10 @@ public class DaikinMonitoringQueryService {
         String sql = """
                 SELECT x.exception_id,x.exception_type,x.scope_type,x.source_id,x.identity_id,
                        x.equipment_id,x.building_id,x.field_name,x.first_detected_at_ms,
-                       x.last_detected_at_ms,x.recovered_at_ms,x.last_round_id
+                       x.last_detected_at_ms,x.recovered_at_ms,x.last_round_id,
+                       e.equip_name,e.equip_code
                 FROM biz_daikin_exception_instance x
+                LEFT JOIN biz_equipment e ON e.equip_id=x.equipment_id AND e.building_id=x.building_id AND e.del_flag=0
                 WHERE
                 """ + activity + """
                   AND (x.building_id=? OR (x.scope_type='SOURCE' AND EXISTS (
@@ -299,7 +337,7 @@ public class DaikinMonitoringQueryService {
                 (rs, row) -> new ExceptionView(rs.getLong(1), rs.getString(2), rs.getString(3),
                         rs.getString(4), rs.getString(5), rs.getString(6),
                         "SOURCE".equals(rs.getString(3)) ? buildingId : rs.getString(7), rs.getString(8),
-                        rs.getLong(9), rs.getLong(10), nullableLong(rs, 11), nullableLong(rs, 12)),
+                        rs.getLong(9), rs.getLong(10), nullableLong(rs, 11), nullableLong(rs, 12), rs.getString(13), rs.getString(14)),
                 parameters.toArray());
         return exceptionPage(rows, limit);
     }

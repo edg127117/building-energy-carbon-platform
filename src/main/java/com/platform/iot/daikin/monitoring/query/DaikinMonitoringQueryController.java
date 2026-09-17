@@ -27,14 +27,20 @@ import static com.platform.iot.daikin.monitoring.query.DaikinMonitoringQueryDtos
 public class DaikinMonitoringQueryController {
     private final DaikinMonitoringQueryService service;
 
+    @GetMapping("/buildings/{buildingId}/spaces")
+    public Result<java.util.List<SpaceOption>> spaces(Authentication authentication, @PathVariable String buildingId) {
+        return Result.success(service.spaces(SecurityUser.userId(authentication), SecurityUser.roles(authentication), buildingId));
+    }
+
     @GetMapping("/buildings/{buildingId}/devices")
     public Result<PageResponse<DeviceListItem>> devices(Authentication authentication,
             @PathVariable String buildingId, @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String spaceId,
-            @RequestParam(required = false) String kind, @RequestParam(required = false) String keyword) {
+            @RequestParam(required = false) String kind, @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String state, @RequestParam(required = false) Boolean hasException) {
         return Result.success(service.devices(SecurityUser.userId(authentication),
-                SecurityUser.roles(authentication), buildingId, page, size, spaceId, kind, keyword));
+                SecurityUser.roles(authentication), buildingId, page, size, spaceId, kind, keyword, state, hasException));
     }
 
     @Operation(summary = "查询设备非温度当前状态；温度由独立temperatures/current接口返回")

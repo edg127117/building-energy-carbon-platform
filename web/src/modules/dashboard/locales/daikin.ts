@@ -1,6 +1,6 @@
 export default {
   title: '厂家空调监测', inherited: '冷站监测', notice: '每分钟刷新平台状态；未接入或尚未采集时显示无数据。',
-  searchDevice: '设备搜索', searchPlaceholder: '输入设备名称或编号', building: '建筑', equipment: '设备标识', kind: '设备种类', all: '全部', INDOOR: '内机', OUTDOOR: '外机',
+  space: '空间', FRESH: '有效', STALE: '数据过期', NO_OBSERVATION: '尚无观测', INACTIVE: '接入停用', exceptionFilter: '异常', withException: '有异常', withoutException: '无异常', sourceException: '来源级异常', searchDevice: '设备搜索', searchPlaceholder: '输入设备名称或编号', building: '建筑', equipment: '设备标识', kind: '设备种类', all: '全部', INDOOR: '内机', OUTDOOR: '外机',
   state: '当前状态', mode: '运行模式', onOff: '启停状态', fresh: '最近有效观测', stale: '数据过期', normal: '有效',
   exception: '存在异常', none: '暂无已接入的厂家设备', detail: '查看监测', field: '字段', value: '最近有效值',
   status: '本次取数状态', attempt: '最近尝试', events: '状态变化', before: '变化前', after: '变化后',
@@ -20,5 +20,5 @@ export default {
   qualityBlocked: '质量策略已屏蔽数值',
   currentAlarms: '厂家设备实时异常', historyAlarms: '厂家设备历史异常',
   fieldNames: { onOff: '启停', mode: '模式', fanSpeed: '风速档位', airflowDirection: '风向', unitStatus: '机组状态', errorCode: '故障代码', errorType: '故障类型', roomTemp: '室温', temperature: '设定温度', inCommunicationError: '通信故障', inEquipmentError: '设备故障', inMantenanceMode: '维护模式', isFilterDirty: '滤网脏污', 'controller.isConnectionUp': '控制器连接', 'controller.inForcedStop': '控制器强制停止', compressorOnOff: '压缩机启停' },
-  statusNames: { SOURCE_FETCH: '来源取数异常', RUNTIME_FETCH: '运行统计取数异常', DEVICE_STALE: '设备数据过期', totalRuntime: '累计运行时长', PRESENT: '有结果', MISSING: '缺失', INVALID: '无效', UNKNOWN: '未知', UNSUPPORTED: '不支持', FAILED: '失败', on: '开', off: '关', cooling: '制冷', heating: '制热', fan: '送风', dry: '除湿', low: '低档', middle: '中档', high: '高档', automatic: '自动', operating: '运行', stopped: '停止' },
+  statusNames: { VENDOR_COMMUNICATION: '设备通信故障', VENDOR_EQUIPMENT: '设备故障', VENDOR_MAINTENANCE: '设备维护', FILTER_MAINTENANCE: '滤网维护', CONTROLLER_COMMUNICATION: '控制器通信故障', SOURCE_FETCH: '来源取数异常', RUNTIME_FETCH: '运行统计取数异常', DEVICE_STALE: '设备数据过期', totalRuntime: '累计运行时长', PRESENT: '有结果', MISSING: '缺失', INVALID: '无效', UNKNOWN: '未知', UNSUPPORTED: '不支持', FAILED: '失败', on: '开', off: '关', cooling: '制冷', heating: '制热', fan: '送风', dry: '除湿', low: '低档', middle: '中档', high: '高档', automatic: '自动', operating: '运行', stopped: '停止' },
 } as const

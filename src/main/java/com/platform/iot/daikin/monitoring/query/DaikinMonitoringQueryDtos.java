@@ -34,10 +34,12 @@ public final class DaikinMonitoringQueryDtos {
                                  String buildingId, String spaceId, String systemGroupId,
                                  int mappingVersion) { }
 
+    public record SpaceOption(String spaceId, String spaceName) { }
+
     public record ExceptionView(long exceptionId, String type, String scopeType,
                                 String sourceId, String identityId, String equipmentId,
                                 String buildingId, String fieldName, long firstDetectedAt,
-                                long lastDetectedAt, Long recoveredAt, Long lastRoundId) { }
+                                long lastDetectedAt, Long recoveredAt, Long lastRoundId, String equipmentName, String equipmentCode) { }
 
     public record CursorPage<T>(List<T> items, String nextCursor) {
         public CursorPage { items = List.copyOf(items); }
