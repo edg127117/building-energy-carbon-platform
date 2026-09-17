@@ -66,6 +66,30 @@ class DaikinMonitoringQueryServiceTest {
     }
 
     @Test
+    void filtersStateExceptionAndSpaceBeforePaginationAndProtectsMovedNames() {
+        jdbc.execute("CREATE TABLE biz_space(space_id VARCHAR(32),space_name VARCHAR(100),building_id VARCHAR(32),del_flag INT)");
+        jdbc.update("INSERT INTO biz_space VALUES ('space','Room A','BLD-A',0),('other','Room B','BLD-B',0)");
+        assertThat(service.spaces(7L, OPS, "BLD-A")).extracting(DaikinMonitoringQueryDtos.SpaceOption::spaceName).containsExactly("Room A");
+        insertTarget("identity-A", "equipment-A", "BLD-A", "source-A", 1);
+        insertTarget("identity-B", "equipment-B", "BLD-A", "source-A", 1);
+        insertCurrent("identity-A", "onOff", "BLD-A", 1, "BLD-A", 1, "true", "on");
+        insertException("VENDOR_EQUIPMENT", "DEVICE", "source-A", "identity-A", "equipment-A", "BLD-A", NOW - 1000, null);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 1, "space", null, null, "FRESH", true).total()).isEqualTo(1);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 1, null, null, null, "NO_OBSERVATION", false).total()).isEqualTo(1);
+        jdbc.update("UPDATE biz_daikin_monitoring_target SET first_planned_at_ms=? WHERE identity_id='identity-A'", NOW - 400000);
+        jdbc.update("UPDATE biz_daikin_current_state SET last_valid_at_ms=? WHERE identity_id='identity-A'", NOW - 400000);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, null, "STALE", null).total()).isEqualTo(1);
+        jdbc.update("UPDATE biz_device_identity SET status=0 WHERE identity_id='identity-A'");
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, null, "INACTIVE", null).total()).isEqualTo(1);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, null, "STALE", null).total()).isZero();
+        assertThatThrownBy(() -> service.devices(7L, OPS, "BLD-A", 1, 20, null, null, null, "invalid", null)).isInstanceOf(BusinessException.class);
+        jdbc.update("UPDATE biz_equipment SET equip_name='Readable',equip_code='AC-1' WHERE equip_id='equipment-A'");
+        assertThat(service.currentExceptions(7L, OPS, "BLD-A", null, 20).items().get(0).equipmentName()).isEqualTo("Readable");
+        jdbc.update("UPDATE biz_equipment SET building_id='BLD-B',equip_name='Private name' WHERE equip_id='equipment-A'");
+        assertThat(service.currentExceptions(7L, OPS, "BLD-A", null, 20).items().get(0).equipmentName()).isNull();
+    }
+
+    @Test
     void searchesBeforePaginationWithinBuildingAndTreatsWildcardsLiterally() {
         insertTarget("identity-A1", "equipment-A1", "BLD-A", "source-A", 1);
         insertTarget("identity-A2", "equipment-A2", "BLD-A", "source-A", 1);

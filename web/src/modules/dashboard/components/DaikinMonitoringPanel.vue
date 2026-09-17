@@ -18,6 +18,10 @@ const devices = useDaikinResource<Awaited<ReturnType<typeof daikinApi.devices>>>
 const exceptions = useDaikinResource<Awaited<ReturnType<typeof daikinApi.exceptions>>>()
 const building = ref('')
 const kind = ref('')
+const space = ref('')
+const state = ref('')
+const exceptionFilter = ref('')
+const spaces = useDaikinResource<Awaited<ReturnType<typeof daikinApi.spaces>>>()
 const searchInput = ref('')
 const keyword = ref('')
 function search() { keyword.value = searchInput.value.trim(); selected.value = null; if (page.value === 1) load(); else page.value = 1 }
@@ -30,11 +34,11 @@ let disposed = false
 function load(cursor?: string) {
   if (!building.value) return
   if (props.alarms) void exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor))
-  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value))
+  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, space.value, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'))
 }
 function refresh() { load(); refreshTick.value++ }
-watch(building, () => { selected.value = null; page.value = 1; devices.clear(); exceptions.clear(); load() })
-watch(kind, () => { page.value = 1; selected.value = null; load() })
+watch(building, () => { space.value = ''; spaces.clear(); if (!props.alarms && building.value) void spaces.run(() => daikinApi.spaces(building.value)); selected.value = null; page.value = 1; devices.clear(); exceptions.clear(); load() })
+watch([kind, space, state, exceptionFilter], () => { page.value = 1; selected.value = null; load() })
 watch(page, () => { selected.value = null; load() })
 onMounted(async () => {
   await buildings.run(listAccessibleBuildings)
@@ -59,10 +63,14 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
       <div class="filters">
         <label class="filter-field"><span>{{ text('building') }}</span><ElSelect filterable v-model="building" :placeholder="text('building')" :aria-label="text('building')"><ElOption v-for="item in buildings.data.value ?? []" :key="item.buildingId" :value="item.buildingId" :label="item.buildingName" /></ElSelect></label>
         <label v-if="!alarms" class="filter-field"><span>{{ text('kind') }}</span><ElSelect v-model="kind" :placeholder="text('all')" :aria-label="text('kind')"><ElOption value="" :label="text('all')" /><ElOption v-for="key in ['INDOOR', 'OUTDOOR']" :key="key" :value="key" :label="text(key)" /></ElSelect></label>
+        <label v-if="!alarms" class="filter-field"><span>{{ text('space') }}</span><ElSelect v-model="space" :placeholder="text('all')" filterable :aria-label="text('space')"><ElOption value="" :label="text('all')" /><ElOption v-for="item in spaces.data.value ?? []" :key="item.spaceId" :value="item.spaceId" :label="item.spaceName" /></ElSelect></label>
+        <label v-if="!alarms" class="filter-field"><span>{{ text('state') }}</span><ElSelect v-model="state" :placeholder="text('all')" :aria-label="text('state')"><ElOption value="" :label="text('all')" /><ElOption v-for="key in ['FRESH','STALE','NO_OBSERVATION','INACTIVE']" :key="key" :value="key" :label="text(key)" /></ElSelect></label>
+        <label v-if="!alarms" class="filter-field"><span>{{ text('exceptionFilter') }}</span><ElSelect v-model="exceptionFilter" :placeholder="text('all')" :aria-label="text('exceptionFilter')"><ElOption value="" :label="text('all')" /><ElOption value="yes" :label="text('withException')" /><ElOption value="no" :label="text('withoutException')" /></ElSelect></label>
         <label v-if="!alarms" class="filter-field"><span>{{ text('searchDevice') }}</span><ElInput v-model="searchInput" clearable :placeholder="text('searchPlaceholder')" :aria-label="text('searchDevice')" @keyup.enter="search" @clear="search" /></label><ElButton v-if="!alarms" :disabled="!building" @click="search">{{ text('query') }}</ElButton>
         <ElButton :disabled="!building" :loading="devices.loading.value || exceptions.loading.value" @click="refresh">{{ text('refresh') }}</ElButton>
       </div>
     </header>
+    <ElAlert v-if="spaces.error.value" :title="spaces.error.value" type="error" :closable="false" />
     <ElAlert v-if="buildings.error.value" :title="buildings.error.value" type="error" :closable="false" />
     <ElSkeleton v-if="buildings.loading.value" :rows="5" animated />
     <ElEmpty v-else-if="!building && !buildings.error.value" :description="t('dashboard.noBuilding')" />
@@ -86,16 +94,17 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
       <ElSkeleton v-if="exceptions.loading.value" :rows="5" animated />
       <ElTable v-else :data="exceptions.data.value?.items ?? []" :empty-text="text('empty')">
         <ElTableColumn :label="text('type')"><template #default="{ row }">{{ daikinLabel(row.type) }}</template></ElTableColumn><ElTableColumn prop="sourceId" :label="text('source')" />
-        <ElTableColumn :label="text('equipment')"><template #default="{ row }">{{ row.equipmentId ?? t('common.missing') }}</template></ElTableColumn>
+        <ElTableColumn :label="text('equipment')"><template #default="{ row }">{{ row.equipmentId ? (row.equipmentName || text('unnamed')) : text('sourceException') }}<br><span v-if="row.equipmentCode">{{ row.equipmentCode }}</span></template></ElTableColumn>
         <ElTableColumn :label="text('detected')" min-width="175"><template #default="{ row }">{{ formatDateTime(row.firstDetectedAt) }}</template></ElTableColumn>
         <ElTableColumn v-if="history" :label="text('recovered')" min-width="175"><template #default="{ row }">{{ row.recoveredAt == null ? t('common.missing') : formatDateTime(row.recoveredAt) }}</template></ElTableColumn>
       </ElTable>
-      <ElButton @click="load()">{{ text('first') }}</ElButton><ElButton :disabled="!exceptions.data.value?.nextCursor" @click="load(exceptions.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
+      <div class="exception-pagination"><ElButton @click="load()">{{ text('first') }}</ElButton><ElButton :disabled="!exceptions.data.value?.nextCursor" @click="load(exceptions.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton></div>
     </template>
   </section>
 </template>
 
 <style scoped>
+.exception-pagination { display: flex; gap: var(--bec-space-tight); justify-content: flex-start; }
 .device-list { min-width: 0; padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); } .device-list .el-pagination { margin-top: var(--bec-space-group); }
 .daikin-panel { display: grid; gap: var(--bec-space-section); min-width: 0; }
 header { display: flex; flex-direction: column; align-items: flex-start; gap: var(--bec-space-tight); } h1 { margin: 0; font-size: var(--bec-font-size-system); }

@@ -10,6 +10,8 @@ describe('manufacturer display boundaries', () => {
     ])).toEqual([[1, 0], [600000, null], [600001, 22], [660001, null]])
   })
   it('does not invent semantics for new manufacturer values', () => {
+    expect(daikinLabel('VENDOR_EQUIPMENT')).toBe('设备故障')
+    expect(daikinLabel('CONTROLLER_COMMUNICATION')).toBe('控制器通信故障')
     expect(daikinLabel('on')).toBe('开')
     expect(daikinLabel('vendor-future-mode')).toBe('vendor-future-mode')
     expect(daikinLabel('constructor')).toBe('constructor')

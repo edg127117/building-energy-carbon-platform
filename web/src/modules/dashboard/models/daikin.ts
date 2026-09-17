@@ -19,7 +19,7 @@ export interface StateEvent {
   previousObservedAt: number; observedAt: number; afterGap: boolean
 }
 export interface DaikinException {
-  exceptionId: number; type: string; scopeType: string; sourceId: string; equipmentId: string | null
+  equipmentName?: string | null; equipmentCode?: string | null; exceptionId: number; type: string; scopeType: string; sourceId: string; equipmentId: string | null
   fieldName: string | null; firstDetectedAt: number; lastDetectedAt: number; recoveredAt: number | null
 }
 export interface TemperatureReading { observedAt: number; value: number | null; dataQuality: number; gapBefore: boolean; stale: boolean; quality?: { decision: string; reason: string } }
