@@ -5,6 +5,7 @@ import com.platform.adapter.publication.ProtocolSnapshotContracts.Receipt;
 import com.platform.audit.sensitive.*;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.protocol.api.ProtocolContracts.*;
+import com.platform.iot.protocol.api.ProtocolPublicationContracts;
 import com.platform.iot.protocol.api.ProtocolPublicationContracts.*;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,13 +36,15 @@ class ProtocolPublicationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired MockMvc mvc;
     String product;
-    @BeforeEach void setup() {
-        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("test-admin",null,List.of(new SimpleGrantedAuthority("ROLE_PLATFORM_ADMIN"))));
+    String adminToken;
+    @BeforeEach void setup() throws Exception {
         product=UUID.randomUUID().toString().replace("-","");
         jdbc.update("INSERT INTO biz_device_product(product_id,product_code,product_name,equipment_type_code,expected_profile_code,identity_type,status) VALUES(?,?,?,'WCR','TEST_PUBLICATION','SN','ENABLED')",product,product,"测试发布");
         jdbc.update("INSERT INTO biz_product_point_template(template_point_id,product_id,metric_code,point_name_template,suffix_code,unit,required_flag,status) VALUES(?,?, 'POWER','功率','P','kW',1,1)",UUID.randomUUID().toString().replace("-",""),product);
         jdbc.update("DELETE FROM sys_user_backend_duty WHERE user_id IN (1,2)");
         grant(1,"BACKOFFICE_CHANGE_SUBMITTER");grant(1,"BACKOFFICE_CHANGE_REVIEWER");grant(2,"BACKOFFICE_CHANGE_REVIEWER");
+        adminToken=login("admin","123456");
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("test-admin",null,List.of(new SimpleGrantedAuthority("ROLE_PLATFORM_ADMIN"))));
     }
     @AfterEach void clear(){SecurityContextHolder.clearContext();}
     private void grant(long user,String duty){jdbc.update("INSERT INTO sys_user_backend_duty(assignment_id,user_id,duty_key,status,effective_at,created_by,created_at) VALUES(?,?,?,'ACTIVE',?,1,?)",UUID.randomUUID().toString().replace("-",""),user,duty,Timestamp.valueOf(LocalDateTime.now().minusMinutes(1)),Timestamp.valueOf(LocalDateTime.now()));}
@@ -98,6 +101,78 @@ class ProtocolPublicationTest {
         assertThatThrownBy(()->service.validateCommand(forged)).isInstanceOf(BusinessException.class);
         approve(service.rollback(new RollbackRequest(targetId,1,2,"explicit"),ProtocolPublicationService.ADMIN));
         assertThat(service.pull(targetId,1,"V1").digest()).isEqualTo(first.digest());
+    }
+    @Test void previewsCompleteCollectionAndChangesWithoutWritingPublicationState() {
+        var t=target();String targetId=t.target().targetId();service.pull(targetId,1,"V1");
+        var indoor=version("1039");var first=command(t,indoor,0);approve(first);
+        service.receipt(targetId,new Receipt(1,first.digest(),"LOADED",null));
+        var replacement=version("1040");
+        product=UUID.randomUUID().toString().replace("-","");
+        jdbc.update("INSERT INTO biz_device_product(product_id,product_code,product_name,equipment_type_code,expected_profile_code,identity_type,status) VALUES(?,?,?,'WCR','OUTDOOR','SN','ENABLED')",product,product,"外机规则");
+        jdbc.update("INSERT INTO biz_product_point_template(template_point_id,product_id,metric_code,point_name_template,suffix_code,unit,required_flag,status) VALUES(?,?, 'POWER','功率','P','kW',1,1)",UUID.randomUUID().toString().replace("-",""),product);
+        var outdoorConfig=new Configuration("外机规则",product,"OUTDOOR","device/raw/publication","SN","/SN","/kind","OUTDOOR",null,config("OUTDOOR").mappings());
+        var outdoorDraft=drafts.create(outdoorConfig,1L,ProtocolPublicationService.ADMIN);
+        var outdoor=service.freeze(outdoorDraft.id(),outdoorDraft.revision(),1,ProtocolPublicationService.ADMIN);
+        int deploymentsBefore=jdbc.queryForObject("SELECT COUNT(*) FROM biz_protocol_deployment WHERE target_id=?",Integer.class,targetId);
+        int requestsBefore=jdbc.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request",Integer.class);
+
+        var preview=service.preview(new ProtocolPublicationContracts.PreviewRequest(targetId,1,List.of(replacement.versionId(),outdoor.versionId())),ProtocolPublicationService.ADMIN);
+
+        assertThat(preview.targetId()).isEqualTo(targetId);
+        assertThat(preview.expectedSequence()).isEqualTo(1);
+        assertThat(preview.digest()).hasSize(64);
+        assertThat(preview.currentVersions()).extracting(VersionSummary::versionId).containsExactly(indoor.versionId());
+        assertThat(preview.targetVersions()).extracting(VersionSummary::profileCode).containsExactly("OUTDOOR","TEST_PUBLICATION");
+        assertThat(preview.targetVersions()).allSatisfy(item->assertThat(item.mappingCount()).isEqualTo(1));
+        assertThat(preview.changes()).extracting(ProfileChange::profileCode,ProfileChange::changeType)
+                .containsExactly(tuple("OUTDOOR",ChangeType.ADDED),tuple("TEST_PUBLICATION",ChangeType.REPLACED));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_protocol_deployment WHERE target_id=?",Integer.class,targetId)).isEqualTo(deploymentsBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request",Integer.class)).isEqualTo(requestsBefore);
+    }
+    @Test void previewsRollbackRemovalAndReadsImmutableHistoryDetail() throws Exception {
+        var t=target();String targetId=t.target().targetId();service.pull(targetId,1,"V1");
+        var indoor=version("1039");var first=command(t,indoor,0);approve(first);
+        service.receipt(targetId,new Receipt(1,first.digest(),"LOADED",null));
+        product=UUID.randomUUID().toString().replace("-","");
+        jdbc.update("INSERT INTO biz_device_product(product_id,product_code,product_name,equipment_type_code,expected_profile_code,identity_type,status) VALUES(?,?,?,'WCR','OUTDOOR','SN','ENABLED')",product,product,"外机规则");
+        jdbc.update("INSERT INTO biz_product_point_template(template_point_id,product_id,metric_code,point_name_template,suffix_code,unit,required_flag,status) VALUES(?,?, 'POWER','功率','P','kW',1,1)",UUID.randomUUID().toString().replace("-",""),product);
+        var outdoorConfig=new Configuration("外机规则",product,"OUTDOOR","device/raw/publication","SN","/SN","/kind","OUTDOOR",null,config("OUTDOOR").mappings());
+        var outdoorDraft=drafts.create(outdoorConfig,1L,ProtocolPublicationService.ADMIN);
+        var outdoor=service.freeze(outdoorDraft.id(),outdoorDraft.revision(),1,ProtocolPublicationService.ADMIN);
+        var second=command(t,outdoor,1);approve(second);service.receipt(targetId,new Receipt(2,second.digest(),"LOADED",null));
+
+        var preview=service.rollbackPreview(new RollbackPreviewRequest(targetId,2,1),ProtocolPublicationService.ADMIN);
+
+        assertThat(preview.digest()).isEqualTo(first.digest());
+        assertThat(preview.targetVersions()).extracting(VersionSummary::versionId).containsExactly(indoor.versionId());
+        assertThat(preview.changes()).extracting(ProfileChange::profileCode,ProfileChange::changeType)
+                .containsExactly(tuple("OUTDOOR",ChangeType.REMOVED),tuple("TEST_PUBLICATION",ChangeType.RETAINED));
+        var detail=service.deployment(targetId,1,ProtocolPublicationService.ADMIN);
+        assertThat(detail.digest()).isEqualTo(first.digest());
+        assertThat(detail.status()).isEqualTo("LOADED");
+        assertThat(detail.versions()).extracting(VersionSummary::name,VersionSummary::revision,VersionSummary::mappingCount)
+                .containsExactly(tuple("测试发布",1L,1));
+        mvc.perform(get("/v1/protocol-deployments/targets/{targetId}/history/{sequence}",targetId,1)
+                        .header("Authorization","Bearer "+adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.targetId").value(targetId))
+                .andExpect(jsonPath("$.data.versions[0].profileCode").value("TEST_PUBLICATION"));
+    }
+    @Test void readOnlyPublicationContractsKeepAdminAndSequenceValidation() throws Exception {
+        var t=target();String targetId=t.target().targetId();service.pull(targetId,1,"V1");var v=version("A");
+        assertThatThrownBy(()->service.preview(new ProtocolPublicationContracts.PreviewRequest(targetId,1,List.of(v.versionId())),ProtocolPublicationService.ADMIN))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(()->service.preview(new ProtocolPublicationContracts.PreviewRequest(targetId,0,List.of(v.versionId())),Set.of("DEVICE_OPERATOR")))
+                .isInstanceOf(BusinessException.class);
+        mvc.perform(post("/v1/protocol-deployments/preview").header("Authorization","Bearer "+adminToken).contentType("application/json")
+                        .content("{\"targetId\":\""+targetId+"\",\"expectedSequence\":0,\"versionIds\":[]}"))
+                .andExpect(status().isBadRequest());
+    }
+    private String login(String username,String password) throws Exception {
+        var result=mvc.perform(post("/auth/login").contentType("application/json")
+                        .content("{\"username\":\""+username+"\",\"password\":\""+password+"\"}"))
+                .andExpect(status().isOk()).andReturn();
+        return mapper.readTree(result.getResponse().getContentAsString()).path("data").path("token").asText();
     }
     @Test void preventsSelfApprovalAndPayloadTampering() {
         var t=target();service.pull(t.target().targetId(),1,"V1");var c=command(t,version("A"),0);

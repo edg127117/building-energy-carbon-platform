@@ -39,6 +39,12 @@ public class ProtocolPublicationController {
     public Result<List<VersionView>> importLegacy(@Valid @RequestBody ImportRequest request,Authentication auth){return Result.success(service.importLegacy(request,SecurityUser.userId(auth),SecurityUser.roles(auth)));}
     @GetMapping("/targets/{targetId}/history") @Operation(summary="读取目标发布与加载记录")
     public Result<List<DeploymentView>> history(@PathVariable String targetId,Authentication auth){return Result.success(service.deployments(targetId,SecurityUser.roles(auth)));}
+    @GetMapping("/targets/{targetId}/history/{sequence}") @Operation(summary="读取单次不可变发布完整集合")
+    public Result<DeploymentDetail> historyDetail(@PathVariable String targetId,@PathVariable long sequence,Authentication auth){return Result.success(service.deployment(targetId,sequence,SecurityUser.roles(auth)));}
+    @PostMapping("/preview") @Operation(summary="只读计算普通发布后的完整集合及变化")
+    public Result<PublicationPreview> preview(@Valid @RequestBody PreviewRequest request,Authentication auth){return Result.success(service.preview(request,SecurityUser.roles(auth)));}
+    @PostMapping("/rollback-preview") @Operation(summary="只读计算历史回退后的完整集合及变化")
+    public Result<PublicationPreview> rollbackPreview(@Valid @RequestBody RollbackPreviewRequest request,Authentication auth){return Result.success(service.rollbackPreview(request,SecurityUser.roles(auth)));}
     @PostMapping("/requests") @Operation(summary="为完整目标集合建立审批申请")
     public Result<SensitiveChangeRecord> publish(@Valid @RequestBody PublishRequest request,Authentication auth){
         var command=service.prepare(request,SecurityUser.roles(auth));

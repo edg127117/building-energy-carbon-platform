@@ -106,6 +106,14 @@ export type ProtocolDeployment = {
   loadedAt: number
 }
 
+export type ProtocolVersionSummary = { versionId: string; name: string; profileCode: string; revision: number; mappingCount: number }
+export type ProtocolPublicationPreview = {
+  targetId: string; expectedSequence: number; digest: string
+  currentVersions: ProtocolVersionSummary[]; targetVersions: ProtocolVersionSummary[]
+  changes: { profileCode: string; changeType: 'ADDED' | 'REPLACED' | 'RETAINED' | 'REMOVED'; beforeVersion: ProtocolVersionSummary | null; afterVersion: ProtocolVersionSummary | null }[]
+}
+export type ProtocolDeploymentDetail = ProtocolDeployment & { versions: ProtocolVersionSummary[] }
+
 export type ProtocolImportProfile = { profileId: string; profileCode: string; archived: boolean }
 export type ParsedProtocolImport = { snapshotJson: string; archiveJson: string | null; profiles: ProtocolImportProfile[] }
 

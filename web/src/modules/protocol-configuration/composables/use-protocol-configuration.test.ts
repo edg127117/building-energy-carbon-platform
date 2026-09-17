@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProtocolConfiguration } from './use-protocol-configuration'
 import { emptyProtocolConfiguration } from '../models/protocol-configuration'
-import { createProtocolConfiguration, getProtocolConfiguration, inspectProtocolSample, previewProtocolConfiguration } from '../api/protocol-configuration'
+import { createProtocolConfiguration, getProtocolConfiguration, inspectProtocolSample, listProtocolConfigurations, previewProtocolConfiguration } from '../api/protocol-configuration'
 import { TransportError } from '@/infrastructure/http/public'
 
 vi.mock('../api/protocol-configuration', () => ({
@@ -13,6 +13,19 @@ const deferred = <T>() => { let resolve!: (value: T) => void; const promise = ne
 
 describe('协议配置异步状态', () => {
   beforeEach(() => vi.clearAllMocks())
+  it('通过深链接加载详情时保留并行返回的草稿名称列表', async () => {
+    const detail = { id: 'D1', revision: 1, status: 'DRAFT' as const, configuration: { ...emptyProtocolConfiguration(), name: '外机电表接入' }, updatedAt: 1 }
+    const pending = deferred<{ page: number; size: number; total: number; items: typeof detail[] }>()
+    vi.mocked(listProtocolConfigurations).mockReturnValueOnce(pending.promise)
+    vi.mocked(getProtocolConfiguration).mockResolvedValueOnce(detail)
+    const state = useProtocolConfiguration()
+    const listing = state.loadDrafts()
+    await state.selectDraft('D1')
+    pending.resolve({ page: 1, size: 20, total: 1, items: [detail] })
+    await listing
+    expect(state.draft.value?.id).toBe('D1')
+    expect(state.drafts.value.items[0]?.configuration.name).toBe('外机电表接入')
+  })
   it('忽略迟到的字段识别响应', async () => {
     const first = deferred<{ fields: Array<{ path: string; type: 'NUMBER'; value: string }> }>()
     vi.mocked(inspectProtocolSample).mockReturnValueOnce(first.promise).mockResolvedValueOnce({ fields: [{ path: '/new', type: 'NUMBER', value: '2' }] })

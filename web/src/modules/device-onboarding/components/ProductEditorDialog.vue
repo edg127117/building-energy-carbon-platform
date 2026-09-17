@@ -4,7 +4,7 @@ import { ElAlert, ElButton, ElCheckbox, ElDialog, ElEmpty, ElForm, ElFormItem, E
 import { t } from '@/locales'
 import type { DeviceProductDetail, DeviceProductForm, ProductPointTemplate, EquipmentTypeOption } from '../models/onboarding'
 
-const props = withDefaults(defineProps<{ open: boolean; product?: DeviceProductDetail | null; submitting?: boolean; equipmentTypes?: EquipmentTypeOption[]; equipmentTypesLoading?: boolean; equipmentTypesError?: string }>(), { product: null, submitting: false, equipmentTypes: () => [], equipmentTypesLoading: false, equipmentTypesError: undefined })
+const props = withDefaults(defineProps<{ open: boolean; embedded?: boolean; product?: DeviceProductDetail | null; submitting?: boolean; equipmentTypes?: EquipmentTypeOption[]; equipmentTypesLoading?: boolean; equipmentTypesError?: string }>(), { product: null, submitting: false, equipmentTypes: () => [], equipmentTypesLoading: false, equipmentTypesError: undefined })
 const emit = defineEmits<{ close: []; save: [value: DeviceProductForm] }>()
 const validationKey = ref<string | null>(null)
 const form = reactive<Omit<DeviceProductForm, 'points'> & { points: ProductPointTemplate[] }>({
@@ -75,7 +75,7 @@ function nullable(value: string): string | null { return value.trim() || null }
 </script>
 
 <template>
-  <ElDialog :model-value="open" :title="title" width="70%" @update:model-value="emit('close')">
+  <component :is="embedded ? 'section' : ElDialog" :model-value="open" :title="title" width="70%" @update:model-value="emit('close')">
     <ElAlert :title="t('deviceOnboarding.forms.productDraftOnly')" type="info" :closable="false" />
     <ElAlert v-if="equipmentTypesError" :title="equipmentTypesError" type="error" :closable="false" /><ElForm label-position="top" class="editor-form" @submit.prevent="submit">
       <div class="form-grid">
@@ -106,8 +106,9 @@ function nullable(value: string): string | null { return value.trim() || null }
       </section>
       <ElAlert v-if="validationKey" :title="t(`deviceOnboarding.${validationKey}`)" type="error" show-icon :closable="false" />
     </ElForm>
-    <template #footer><ElButton @click="emit('close')">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="submitting" @click="submit">{{ t('deviceOnboarding.actions.save') }}</ElButton></template>
-  </ElDialog>
+    <div v-if="embedded" class="editor-actions"><ElButton @click="emit('close')">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="submitting" @click="submit">{{ t('deviceOnboarding.actions.save') }}</ElButton></div>
+    <template v-if="!embedded" #footer><ElButton @click="emit('close')">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="submitting" @click="submit">{{ t('deviceOnboarding.actions.save') }}</ElButton></template>
+  </component>
 </template>
 
 <style scoped>

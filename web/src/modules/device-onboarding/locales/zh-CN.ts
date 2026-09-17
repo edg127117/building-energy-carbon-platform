@@ -18,6 +18,7 @@ export default {
     readings: '设备最近读数',
   },
   actions: {
+    showAll: '查看全部设备', returnToDraft: '返回接入草稿',
     query: '查询',
     reset: '清除筛选',
     createProduct: '新建产品草稿',
@@ -41,7 +42,7 @@ export default {
   labels: {
     readingPointName: '测点名称',
     readingPointCode: '测点编码',
-    keyword: '编码、名称或型号',
+    protocolScope: '当前协议范围：', unknownType: '未知类型（{code}）', keyword: '搜索产品名称、型号或编码',
     productCode: '产品编码',
     productName: '产品名称',
     manufacturer: '制造商',

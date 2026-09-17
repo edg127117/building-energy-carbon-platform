@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
 import {
+  previewProtocolPublication, previewProtocolRollback, getProtocolDeploymentDetail,
   createProtocolConfiguration,
   freezeProtocolVersion,
   importProtocolVersions,
@@ -21,6 +22,17 @@ vi.mock('@/infrastructure/http/public', () => ({ requestApi: vi.fn() }))
 
 describe('协议配置接口契约', () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(requestApi).mockResolvedValue({} as never) })
+
+  it('只读发布预览与历史详情不调用创建审批接口', async () => {
+    await previewProtocolPublication({ targetId: 'T1', expectedSequence: 3, versionIds: ['V1'] })
+    await previewProtocolRollback({ targetId: 'T1', expectedSequence: 3, historicalSequence: 1 })
+    await getProtocolDeploymentDetail('target/1', 2)
+    expect(vi.mocked(requestApi).mock.calls).toEqual([
+      [{ method: 'post', url: '/v1/protocol-deployments/preview', data: { targetId: 'T1', expectedSequence: 3, versionIds: ['V1'] } }],
+      [{ method: 'post', url: '/v1/protocol-deployments/rollback-preview', data: { targetId: 'T1', expectedSequence: 3, historicalSequence: 1 } }],
+      [{ method: 'get', url: '/v1/protocol-deployments/targets/target%2F1/history/2' }],
+    ])
+  })
 
   it('使用 items 分页契约并编码草稿标识', async () => {
     await listProtocolConfigurations({ page: 2, size: 20 })

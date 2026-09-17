@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -9,6 +9,7 @@ import { useSession } from '@/modules/auth/public'
 import { pages, authorizedPages } from '@/app/navigation/catalog'
 
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
+afterEach(() => vi.unstubAllGlobals())
 function authorize() {
   const session = useSession()
   session.user = { id: 1, username: 'test-user', roles: [] }
@@ -42,6 +43,7 @@ describe('office and monitor composition', () => {
     expect(router.currentRoute.value.path).toBe('/configuration/space/equipmentSpaces')
   })
   it('keeps office content alive after a lazy route failure and recovers', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })))
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const pinia = createPinia()
     setActivePinia(pinia)

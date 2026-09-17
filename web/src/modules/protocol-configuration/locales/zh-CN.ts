@@ -1,9 +1,21 @@
 export default {
-  title: '协议配置与预览',
+  title: '设备报文接入',
   description: '复用产品测点模板，将 JSON 字段映射为标准指标并由后端验证解析结果。',
   draftNotice: '当前仅保存草稿，不会发布到适配器，也不会使配置生效。',
+  flow: {
+    serialNumber: '设备序列号',
+    more: '更多操作', content: '发布内容', viewContent: '查看规则清单', viewApproval: '查看审批', lastRefresh: '最后查询', pollExpired: '尚未确认加载，已停止自动查询。可手动刷新状态。',
+    confirmPublication: '确认发布内容', mergeBoundary: '以下以目标最新期望配置为基准，尚未代表运行中已加载集合。普通发布保留其他协议。', rollbackBoundary: '历史回退将恢复完整集合，请核对被移除或替换的规则。',
+    rule: '规则名称', change: '本次变化', before: '变更前', after: '变更后', ADDED: '新增', REPLACED: '替换版本', RETAINED: '保留', REMOVED: '移除', versionSummary: '修订 {revision} · {count} 项映射',
+
+    steps: '接入步骤', product: '产品与测点', mapping: '报文与映射', preview: '解析检查', publication: '发布与加载', device: '设备接入',
+    enableProduct: '申请启用产品', confirm: '确认切换', leaveWarning: '切换或离开将丢失未保存的修改和当前报文样例，是否继续？',
+    saving: '正在保存', unsaved: '有未保存的修改', saved: '与已保存内容一致', remaining: '还缺 {count} 项必填映射',
+    technical: '技术详情', advanced: '换算与高级设置', disabledMapping: '映射已停用', requiredMissing: '必填未配置', optionalMissing: '可选未配置', unitMissing: '请确认来源单位', numberRequired: '请选择有效数字字段', mapped: '已配置',
+    results: '查看 {count} 项测点结果', fixMapping: '返回修改映射', prepare: '保存并确认发布版本', deviceBoundary: '规则加载、设备绑定和正式数据到达分别确认；暂无设备时请检查是否已发送匹配报文。',
+  },
   actions: {
-    newDraft: '新建草稿', loadDraft: '加载草稿', saveDraft: '保存草稿', inspect: '识别字段', preview: '后端解析预览',
+    newDraft: '新建草稿', loadDraft: '加载草稿', saveDraft: '保存草稿', inspect: '识别字段', preview: '检查解析',
     useIdentity: '设为身份路径', useDiscriminator: '设为判别路径', useTimestamp: '设为时间路径', addMapping: '添加测点映射',
     clearOptionalPath: '清除', removeMapping: '移除', openProducts: '管理产品模板', openPendingDevices: '查看匹配待接入设备',
   },
@@ -20,12 +32,15 @@ export default {
     sample: '粘贴一条 JSON 报文，样例只用于当前页面，不随草稿保存。', discriminatorValue: '与判别路径配套填写', sourceUnit: '按设备协议确认',
   },
   states: { draft: '草稿未生效', fieldEmpty: '粘贴样例并识别后显示字段', mappingEmpty: '从数字字段添加测点映射', previewEmpty: '完成映射后由后端执行真实解析预览', present: '已解析', missingOptional: '未提供', success: '样例解析成功', failed: '样例解析失败' },
+  fieldTypes: { NUMBER: '数字', STRING: '文字', BOOLEAN: '是/否', NULL: '空值' },
+  timeSources: { DEVICE_REPORTED: '设备上报时间', ADAPTER_RECEIVED: '适配器接收时间', DEVICE: '设备上报时间', PLATFORM: '平台接收时间', RECEIVED: '接收时间', DEVICE_TIME: '设备上报时间', RECEIVE_TIME: '接收时间' },
   fieldRoot: '报文根节点',
   productStatus: { draft: '产品草稿', enabled: '已启用产品' },
   messages: { saved: '草稿已保存并重新读取服务端版本。', inspected: '字段识别完成，请选择身份、时间和测点路径。' },
   errors: { conflict: '草稿已被其他操作更新，请重新加载草稿后再编辑。', validation: '配置或样例校验失败，请检查必填项、字段格式和限制。', rateLimited: '预览操作过于频繁，请稍后重试。' },
   counters: { sampleBytes: '{count} / 65536 B', mappings: '{count} / 128' },
   validation: {
+    productDisabled: '产品尚未启用，请返回产品步骤完成启用审批后发布。',
     sampleRequired: '请先粘贴 JSON 报文。', sampleTooLarge: '样例不能超过 64 KiB。', selectedField: '请先在字段树中选择叶节点。', numericMapping: '只有数字字段可以添加测点映射。',
     required: '请填写配置名称、原始 Topic 和身份路径。', product: '请选择产品模板。', productContract: '协议标识或身份类型与产品模板不一致。', discriminator: '设置判别路径后必须填写判别值。',
     mappingLimit: '测点映射不能超过 128 项。', mappingRequired: '请至少启用一项测点映射。', duplicateMetric: '同一指标只能启用一次。', mappingContract: '映射的指标、必需性或标准单位与产品模板不一致。',
@@ -36,7 +51,7 @@ export default {
     description: '选择需要新增或更新的协议版本。发布会自动保留目标已有的其他协议；同一协议的新版本替换旧版本。回退会恢复所选历史完整配置。',
     localBoundary: '当前先完成隔离环境闭环。平台仍在本地，目标状态仅采用后端回执；未连接云端时不代表云端已部署。',
     freezeHint: '先保存当前草稿并选择已启用产品，才能冻结为不可变版本。',
-    versionLabel: '{name} · r{revision} · {digest}',
+    versionLabel: '{name} · 修订 {revision}',
     productPage: '{current} / {total}',
     sections: { versions: '不可变版本集合', target: '发布目标', history: '发布与加载历史' },
     actions: {
@@ -45,7 +60,7 @@ export default {
     },
     labels: {
       targetName: '目标名称', outputVersion: '输出版本', topics: '允许的 Topic（每行一个）', status: '运行状态', sequence: '当前序号',
-      lastSeen: '最后联系', error: '错误码', digest: '内容摘要', approval: '审批编号', createdAt: '创建时间', loadedAt: '加载时间',
+      lastSeen: '最后联系', error: '错误码', digest: '配置校验值', approval: '审批编号', createdAt: '创建时间', loadedAt: '加载时间',
       profileId: '规则标识', profileCode: '协议标识', importKind: '规则类型', boundProduct: '绑定已启用产品',
     },
     placeholders: { target: '选择联系状态正常的目标', topics: 'building/+/meter/up' },

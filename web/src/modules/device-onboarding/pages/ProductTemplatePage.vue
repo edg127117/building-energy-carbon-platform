@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
-  ElAlert,
+  CopyableValue, ElAlert,
   ElButton,
   ElCard,
   ElDescriptions,
@@ -151,7 +151,8 @@ function can(value: unknown, action: string) {
   return canRunOnboardingAction(value as { allowedActions?: string[] }, action)
 }
 
-onMounted(() => { void management.loadProducts().catch(() => undefined) })
+function equipmentTypeName(code: string) { return management.equipmentTypes.value.find(item => item.typeCode === code)?.typeName ?? t('deviceOnboarding.labels.unknownType', { code }) }
+onMounted(() => { void management.loadProducts().catch(() => undefined); void management.loadEquipmentTypes() })
 </script>
 
 <template>
@@ -161,12 +162,11 @@ onMounted(() => { void management.loadProducts().catch(() => undefined) })
     <ElAlert v-if="management.operationError.value" :title="management.operationError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="sensitiveError" :title="sensitiveError" type="error" show-icon :closable="false" />
     <ElCard shadow="never">
-      <div class="filter-bar"><ElSelect v-model="management.productQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')"><ElOption value="DRAFT" :label="t('deviceOnboarding.status.draft')" /><ElOption value="ENABLED" :label="t('deviceOnboarding.status.enabled')" /><ElOption value="DISABLED" :label="t('deviceOnboarding.status.disabled')" /></ElSelect><ElInput v-model="management.productQuery.value.keyword" :placeholder="t('deviceOnboarding.labels.keyword')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton></div>
+      <div class="filter-bar"><ElSelect v-model="management.productQuery.value.status" class="status-filter" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DRAFT" :label="t('deviceOnboarding.status.draft')" /><ElOption value="ENABLED" :label="t('deviceOnboarding.status.enabled')" /><ElOption value="DISABLED" :label="t('deviceOnboarding.status.disabled')" /></ElSelect><ElInput v-model="management.productQuery.value.keyword" :placeholder="t('deviceOnboarding.labels.keyword')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton></div>
       <ElSkeleton v-if="management.productsLoading.value && !management.products.value.items.length" animated :rows="5" />
       <ElTable v-else :data="management.products.value.items" row-key="productId">
         <ElTableColumn :label="t('deviceOnboarding.labels.productName')" min-width="180"><template #default="{ row }"><ElButton link @click="openDetail(row.productId)">{{ row.productName }}</ElButton></template></ElTableColumn>
-        <ElTableColumn :label="t('deviceOnboarding.labels.productCode')" prop="productCode" min-width="140" />
-        <ElTableColumn :label="t('deviceOnboarding.labels.equipmentType')" prop="equipmentTypeCode" min-width="120" />
+        <ElTableColumn :label="t('deviceOnboarding.labels.equipmentType')" min-width="120"><template #default="{ row }">{{ equipmentTypeName(row.equipmentTypeCode) }}</template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.pointCount')" prop="pointCount" min-width="110" />
         <ElTableColumn :label="t('deviceOnboarding.labels.status')" min-width="100"><template #default="{ row }"><ProductStatusTag :status="row.status" /></template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.updateTime')" min-width="180"><template #default="{ row }">{{ formatDateTime(row.updateTime) }}</template></ElTableColumn>
@@ -180,13 +180,13 @@ onMounted(() => { void management.loadProducts().catch(() => undefined) })
       <ElSkeleton v-if="management.productDetailLoading.value" animated :rows="8" />
       <ElAlert v-else-if="management.productDetailError.value" :title="management.productDetailError.value.message" type="error" show-icon :closable="false" />
       <template v-else-if="selectedProduct">
-        <div class="drawer-heading"><div><h2>{{ selectedProduct.productName }}</h2><p>{{ selectedProduct.productCode }}</p></div><ProductStatusTag :status="selectedProduct.status" /></div><ElDescriptions :column="2" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.manufacturer')">{{ selectedProduct.manufacturer || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.model')">{{ selectedProduct.model || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.equipmentType')">{{ selectedProduct.equipmentTypeCode }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.expectedProfile')">{{ selectedProduct.expectedProfileCode }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.identityType')">{{ selectedProduct.identityType }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.updateTime')">{{ formatDateTime(selectedProduct.updateTime) }}</ElDescriptionsItem></ElDescriptions>
+        <div class="drawer-heading"><div><h2>{{ selectedProduct.productName }}</h2><details><summary>{{ t('deviceOnboarding.labels.productCode') }}</summary><CopyableValue :value="selectedProduct.productCode" /></details></div><ProductStatusTag :status="selectedProduct.status" /></div><ElDescriptions :column="2" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.manufacturer')">{{ selectedProduct.manufacturer || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.model')">{{ selectedProduct.model || t('common.missing') }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.equipmentType')">{{ equipmentTypeName(selectedProduct.equipmentTypeCode) }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.expectedProfile')">{{ selectedProduct.expectedProfileCode }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.identityType')">{{ selectedProduct.identityType }}</ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.updateTime')">{{ formatDateTime(selectedProduct.updateTime) }}</ElDescriptionsItem></ElDescriptions>
         <section class="drawer-section"><h3>{{ t('deviceOnboarding.products.points') }}</h3><ElTable :data="selectedProduct.points" row-key="templatePointId"><ElTableColumn :label="t('deviceOnboarding.labels.metricCode')" prop="metricCode" min-width="150" /><ElTableColumn :label="t('deviceOnboarding.labels.pointNameTemplate')" prop="pointNameTemplate" min-width="170" /><ElTableColumn :label="t('deviceOnboarding.labels.unit')" prop="unit" min-width="90" /><ElTableColumn :label="t('deviceOnboarding.labels.minValue')" min-width="100"><template #default="{ row }">{{ formatNumber(row.minValue) }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.maxValue')" min-width="100"><template #default="{ row }">{{ formatNumber(row.maxValue) }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.required')" min-width="100"><template #default="{ row }"><ElTag :type="row.required ? 'success' : 'info'">{{ row.required ? t('deviceOnboarding.labels.required') : t('common.missing') }}</ElTag></template></ElTableColumn><template #empty><ElEmpty :description="t('deviceOnboarding.empty.points')" /></template></ElTable></section>
         <div class="drawer-actions"><ElButton v-if="can(selectedProduct, 'COPY')" @click="openCopy">{{ t('deviceOnboarding.actions.copyProduct') }}</ElButton><ElButton v-if="can(selectedProduct, 'UPDATE')" :icon="Pencil" @click="openEdit(selectedProduct)">{{ t('deviceOnboarding.actions.editProduct') }}</ElButton><ElButton v-if="can(selectedProduct, 'ENABLE')" type="primary" :loading="productChangeSubmitting('ENABLE_DEVICE_PRODUCT', selectedProduct.productId)" @click="submitProductChange('ENABLE_DEVICE_PRODUCT')">{{ t('deviceOnboarding.actions.enableProduct') }}</ElButton><ElButton v-if="can(selectedProduct, 'DISABLE')" type="warning" :loading="productChangeSubmitting('DISABLE_DEVICE_PRODUCT', selectedProduct.productId)" @click="submitProductChange('DISABLE_DEVICE_PRODUCT')">{{ t('deviceOnboarding.actions.disableProduct') }}</ElButton></div>
       </template>
     </ElDrawer>
 
-    <ChangeRequestControl :change="sensitiveChange.current.value" :busy="sensitiveChange.pending.value.size > 0" @lookup="id => afterApprovalAction(() => sensitiveChange.load(id))" @submit="id => afterApprovalAction(() => sensitiveChange.submit(id))" @withdraw="id => afterApprovalAction(() => sensitiveChange.withdraw(id))" @approve="(id, comment) => afterApprovalAction(() => sensitiveChange.approve(id, comment))" @reject="(id, comment) => afterApprovalAction(() => sensitiveChange.reject(id, comment))" @execute="id => afterApprovalAction(() => sensitiveChange.execute(id), true)" />
+    <ChangeRequestControl business-view :change="sensitiveChange.current.value" :busy="sensitiveChange.pending.value.size > 0" @lookup="id => afterApprovalAction(() => sensitiveChange.load(id))" @submit="id => afterApprovalAction(() => sensitiveChange.submit(id))" @withdraw="id => afterApprovalAction(() => sensitiveChange.withdraw(id))" @approve="(id, comment) => afterApprovalAction(() => sensitiveChange.approve(id, comment))" @reject="(id, comment) => afterApprovalAction(() => sensitiveChange.reject(id, comment))" @execute="id => afterApprovalAction(() => sensitiveChange.execute(id), true)" />
     <ProductEditorDialog :equipment-types="management.equipmentTypes.value" :equipment-types-loading="management.equipmentTypesLoading.value" :equipment-types-error="management.equipmentTypesError.value?.message" :open="editorOpen" :product="editingProduct" :submitting="editorSubmitting" @close="editorOpen = false" @save="save" />
     <ElDialog :model-value="copyOpen" :title="t('deviceOnboarding.forms.copyProduct')" @update:model-value="copyOpen = false"><ElForm label-position="top"><ElFormItem :label="t('deviceOnboarding.labels.productCode')" required><ElInput v-model="copyCode" maxlength="50" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.productName')" required><ElInput v-model="copyName" maxlength="100" /></ElFormItem><ElAlert v-if="copyError" :title="copyError" type="error" show-icon :closable="false" /></ElForm><template #footer><ElButton @click="copyOpen = false">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="copySubmitting" @click="copy">{{ t('deviceOnboarding.actions.copyProduct') }}</ElButton></template></ElDialog>
   </section>
@@ -203,8 +203,11 @@ h2 { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-wei
 h3 { font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-heading); }
 p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); }
 .filter-bar { align-items: stretch; }
-.filter-bar :deep(.el-input) { flex: 1; }
-.filter-bar :deep(.el-select) { min-width: var(--bec-navigation-width); }
+.filter-bar { flex-wrap: wrap; }
+.filter-bar > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); order: -1; }
+.filter-bar :deep(.el-input__prefix svg) { width: var(--bec-icon-small); height: var(--bec-icon-small); }
+.filter-bar > :deep(.el-select) { flex: 0 0 calc(var(--bec-navigation-width) * 0.75); width: calc(var(--bec-navigation-width) * 0.75); min-width: 0; }
+@media (max-width: 640px) { .filter-bar > :deep(.el-input) { flex-basis: 100%; min-width: 0; } }
 .pagination { display: flex; justify-content: flex-end; padding-top: var(--bec-space-group); }
 .drawer-heading { align-items: flex-start; margin-bottom: var(--bec-space-section); }
 .drawer-section { display: grid; gap: var(--bec-space-group); margin-top: var(--bec-space-section); }
