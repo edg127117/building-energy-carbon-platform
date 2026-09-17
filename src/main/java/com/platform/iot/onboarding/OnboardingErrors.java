@@ -11,6 +11,8 @@ public final class OnboardingErrors {
     public static final String VALIDATION_FAILED = "ONBOARDING_VALIDATION_FAILED";
     public static final String DUPLICATE = "ONBOARDING_DUPLICATE";
     public static final String CONFIG_PENDING = "ONBOARDING_CONFIG_PENDING";
+    public static final String SOURCE_REQUIRED = "ONBOARDING_SOURCE_REQUIRED";
+    public static final String SOURCE_AMBIGUOUS = "ONBOARDING_SOURCE_AMBIGUOUS";
 
     private OnboardingErrors() {
     }
