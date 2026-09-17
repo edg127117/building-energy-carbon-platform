@@ -49,7 +49,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/Invoke-TaskPreflight
 
 ## 5. Skill 与验证
 
-- 仓库发生文件变化时使用 `iot-change-verification` Skill 选择验证范围；先做定向验证，最终交付前完成该风险级别要求的检查。
+- 仓库发生文件变化时使用 [`iot-change-verification`](.agents/skills/iot-change-verification/SKILL.md) Skill 选择验证范围。若它未出现在当前可用 Skill 清单，仍直接读取该文件并按其验证矩阵执行，不得以“未注册”为由跳过验证；先做定向验证，最终交付前完成该风险级别要求的检查。
 - 修改生产代码及注释时使用 `code-comment-quality` Skill，并遵守 [`code-comments.md`](docs/development/code-comments.md)。
 - 涉及写入、提交、推送、PR 或 worktree 时使用 `safe-pr-delivery` Skill。
 - 纯文档只检查链接、术语、状态边界和 `git diff --check`；生产 Java 或 Vue/TypeScript 按仓库验证矩阵执行。已经通过的检查只有在代码变化、失败或风险未解决时才重复。

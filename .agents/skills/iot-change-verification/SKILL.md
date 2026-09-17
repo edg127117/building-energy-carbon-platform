@@ -1,6 +1,6 @@
 ---
 name: iot-change-verification
-description: Verify changes in iot-platform-demo, including Java and Spring Boot backend code, Vue and TypeScript frontend code, tests, configuration, APIs, cross-layer contracts, IoT data flows, repository process files, and documentation. Use whenever a task changes this repository and the required validation must be selected, executed, and reported.
+description: Select, run, and report scope-matched verification for changes in building-energy-carbon-platform. Use when this repository changes and validation is needed for Java, Vue, contracts, IoT data paths, configuration, scripts, or documentation.
 ---
 
 # IoT Change Verification
