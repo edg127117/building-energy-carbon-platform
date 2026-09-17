@@ -16,11 +16,12 @@ import { screens } from '@/modules/large-screen/public'
 import { t } from '@/locales'
 
 // 页面能力按职责落位；既有资产权限保持不变，菜单迁移不授予额外业务角色。
-const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes]
+const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes]
 function businessRoute(page: (typeof pages)[number]) {
   if (page.path === '/operations/realtime/hvac') return dashboardRoutes[0]
   if (page.path === '/operations/energy/trend') return trendRoutes[0]
-  return migratedRoutes.find(route => route.path === (page.legacyPath ?? page.path))
+  return migratedRoutes.find(route => route.path === page.path)
+    ?? migratedRoutes.find(route => route.path === page.legacyPath)
 }
 
 export const routes: RouteRecordRaw[] = [
@@ -31,6 +32,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/systems', component: WorkspaceSelection },
   ...Object.entries(relocatedPages).map(([path, redirect]) => ({ path, redirect })),
   { path: '/system/devices', redirect: '/operations/devices/businessDevices' },
+  { path: '/system/device-onboarding', redirect: '/operations/devices/pendingDevices' },
   ...(['monitor', 'operations', 'configuration'] as const).map(system => ({
     path: '/' + system, component: system === 'monitor' ? MonitorLayout : OfficeLayout,
     meta: { system, mode: system === 'monitor' ? 'monitor' : 'office' },

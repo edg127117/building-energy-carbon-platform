@@ -152,7 +152,7 @@ async function newDraft() {
 
 function openMatchingPendingDevices() {
   const profileCode = management.form.value.profileCode.trim()
-  if (profileCode) void router.push({ path: '/configuration/ingestion/pendingDevices', query: { profileCode, draftId: management.draft.value?.id ?? undefined } })
+  if (profileCode) void router.push({ path: '/operations/devices/pendingDevices', query: { view: 'general', profileCode, draftId: management.draft.value?.id ?? undefined } })
 }
 
 async function inspect() {

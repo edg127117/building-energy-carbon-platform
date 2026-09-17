@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OnboardingPage, PendingDevice } from '../models/onboarding'
-import { listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
+import { getOperationsPendingDevice, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -9,14 +9,27 @@ vi.mock('../api/onboarding', () => ({
   getDeviceProduct: vi.fn(),
   getPendingDevice: vi.fn(),
   getPendingDeviceConnection: vi.fn(),
+  getOperationsPendingConnection: vi.fn(),
+  getOperationsPendingDevice: vi.fn(),
+  getOperationsCompatibleProduct: vi.fn(),
+  getOperationsBindingOptions: vi.fn(),
+  getDaikinDirectorySync: vi.fn(),
   listDeviceProducts: vi.fn(),
   listEquipmentTypes: vi.fn(),
   listPendingDevices: vi.fn(),
+  listOperationsCompatibleProducts: vi.fn(),
+  listOperationsPendingDevices: vi.fn(),
+  listOperationsNumericSources: vi.fn(),
   listPointNamingRules: vi.fn(),
   updateDeviceProduct: vi.fn(),
   updatePendingStatus: vi.fn(),
+  requestDaikinDirectorySync: vi.fn(),
+  submitOperationsBinding: vi.fn(),
+  submitOperationsBindingBatch: vi.fn(),
+  submitOperationsIdentityStatus: vi.fn(),
+  updateOperationsPendingStatus: vi.fn(),
 }))
-vi.mock('@/shared/utils/request-error', () => ({ requestErrorMessage: () => '请求失败' }))
+vi.mock('@/shared/utils/request-error', () => ({ requestErrorMessage: () => '请求失败', requestErrorCode: () => null }))
 
 const emptyPending: OnboardingPage<PendingDevice> = { page: 1, size: 20, total: 0, items: [] }
 
@@ -75,7 +88,7 @@ describe('设备接入异步状态', () => {
 
     await expect(management.changePendingStatus('D-01', 'IGNORED')).rejects.toThrow('transport')
 
-    expect(management.operationError.value).toEqual({ message: '请求失败' })
+    expect(management.operationError.value).toEqual({ message: '请求失败', code: null })
   })
 
   it('按待接入协议和身份精确过滤产品', async () => {
@@ -93,6 +106,29 @@ describe('设备接入异步状态', () => {
     stale.resolve({ pendingId: 'old', identityId: null, identityStatus: 'UNBOUND', equipmentId: null, buildingId: null, productId: null, configEffective: false })
     await first
     expect(management.pendingConnection.value?.pendingId).toBe('new')
+  })
+
+  it('运维模式只使用范围受控列表并拆分厂家目录详情', async () => {
+    vi.mocked(listOperationsPendingDevices).mockResolvedValueOnce(page('DAIKIN-01'))
+    vi.mocked(getOperationsPendingDevice).mockResolvedValueOnce({
+      pending: {
+        ...page('DAIKIN-01').items[0]!, identityValue: 'unit-01', boundIdentityId: null,
+        latestEventTime: 0, latestTimeSource: null, latestMetrics: null, allowedActions: ['BIND'],
+      },
+      directory: {
+        pendingId: 'DAIKIN-01', sourceId: 'source-1', siteId: 'site-1', controllerId: 'controller-1',
+        kind: 'INDOOR', unitId: 'unit-01', siteName: '项目', deviceName: '内机', equipmentId: null,
+        buildingId: 'B-01', missing: false, observedAt: '2026-09-17T00:00:00Z',
+      },
+    })
+    const management = useDeviceOnboarding({ operations: true })
+
+    await management.loadPendingDevices()
+    await management.selectPending('DAIKIN-01')
+
+    expect(listPendingDevices).not.toHaveBeenCalled()
+    expect(management.selectedPending.value?.identityValue).toBe('unit-01')
+    expect(management.selectedDirectory.value?.sourceId).toBe('source-1')
   })
 })
 

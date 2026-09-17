@@ -97,6 +97,6 @@ describe('协议配置页面', () => {
     wrapper.findAllComponents(ElSelect)[2].vm.$emit('change', 'P1')
     await flushPromises()
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看匹配待接入设备')!.trigger('click')
-    expect(routerPush).toHaveBeenCalledWith({ path: '/configuration/ingestion/pendingDevices', query: { profileCode: 'V1', draftId: undefined } })
+    expect(routerPush).toHaveBeenCalledWith({ path: '/operations/devices/pendingDevices', query: { view: 'general', profileCode: 'V1', draftId: undefined } })
   })
 })

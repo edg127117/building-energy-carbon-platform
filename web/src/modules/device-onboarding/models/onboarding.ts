@@ -68,13 +68,71 @@ export type PendingDevice = {
   sampleTruncated: boolean
 }
 
-export type PendingDeviceDetail = PendingDevice & {
+export type PendingDeviceDetail = Omit<PendingDevice, 'maskedIdentityValue'> & {
   identityValue: string
   boundIdentityId: string | null
   latestEventTime: number
   latestTimeSource: string | null
   latestMetrics: unknown
   allowedActions: string[]
+}
+
+export type DaikinDirectoryDetail = {
+  pendingId: string
+  sourceId: string
+  siteId: string
+  controllerId: string
+  kind: 'INDOOR' | 'OUTDOOR'
+  unitId: string
+  siteName: string | null
+  deviceName: string | null
+  equipmentId: string | null
+  buildingId: string | null
+  missing: boolean
+  observedAt: string
+}
+
+export type OperationsPendingDetail = {
+  pending: PendingDeviceDetail
+  directory: DaikinDirectoryDetail
+}
+
+export type DaikinSyncJob = {
+  jobId: string
+  sourceId: string
+  status: string
+  attempts: number
+  errorCode: string | null
+}
+
+export type OperationsBindingApplication = {
+  pendingId: string
+  requestId: string | null
+  status: string
+  errorCode: string | null
+}
+
+export type NumericSourceOption = {
+  sourceId: string
+  sourceCode: string
+  sourceName: string
+}
+
+export type OperationsBindingOptions = {
+  buildingId: string
+  buildingName: string
+  spaces: Array<{ spaceId: string; parentSpaceId: string | null; spaceName: string }>
+  systems: Array<{ systemGroupId: string; systemName: string }>
+  equipmentPage: number
+  equipmentSize: number
+  equipmentTotal: number
+  equipment: Array<{
+    equipmentId: string
+    equipmentName: string
+    spaceId: string | null
+    systemGroupId: string | null
+    points: Array<{ pointId: string; pointCode: string; pointName: string }>
+  }>
 }
 
 export type PendingDeviceConnection = {
@@ -121,6 +179,13 @@ export type PendingBindRequest = {
   existingEquipmentId?: string | null
   newEquipment?: { equipmentName: string; manufacturer: string | null } | null
   pointBindings: PointBinding[]
+  numericSourceId?: string | null
+}
+
+/** 运维接口返回兼容产品摘要；大金状态型设备允许没有数值测点模板。 */
+export type BindingProduct = Pick<DeviceProductListItem,
+  'productId' | 'productCode' | 'productName' | 'status' | 'expectedProfileCode' | 'identityType'> & {
+  points: ProductPointTemplate[]
 }
 
 export type ProductStatusKey = 'draft' | 'enabled' | 'disabled' | 'unknown'

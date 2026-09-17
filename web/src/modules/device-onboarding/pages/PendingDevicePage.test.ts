@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
 import { listPendingDevices } from '../api/onboarding'
 import PendingDevicePage from './PendingDevicePage.vue'
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: { profileCode: 'INDOOR', draftId: 'draft-1' } }), useRouter: () => ({ push: vi.fn() }) }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: { view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' } }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
+vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { roles: ['PLATFORM_ADMIN'] } }) }))
 vi.mock('../api/onboarding', async original => ({ ...(await original()), listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }) }))
 vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }) }))
 describe('待接入范围筛选', () => {

@@ -32,9 +32,9 @@ public class DaikinMonitoringQueryController {
             @PathVariable String buildingId, @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String spaceId,
-            @RequestParam(required = false) String kind) {
+            @RequestParam(required = false) String kind, @RequestParam(required = false) String keyword) {
         return Result.success(service.devices(SecurityUser.userId(authentication),
-                SecurityUser.roles(authentication), buildingId, page, size, spaceId, kind));
+                SecurityUser.roles(authentication), buildingId, page, size, spaceId, kind, keyword));
     }
 
     @Operation(summary = "查询设备非温度当前状态；温度由独立temperatures/current接口返回")

@@ -40,7 +40,8 @@ class DaikinMonitoringQueryServiceTest {
         jdbc.execute("""
                 CREATE TABLE biz_equipment(
                   equip_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32) NOT NULL,
-                  space_id VARCHAR(32),system_group_id VARCHAR(32),del_flag TINYINT NOT NULL)
+                  space_id VARCHAR(32),system_group_id VARCHAR(32),del_flag TINYINT NOT NULL,
+                  equip_code VARCHAR(50),equip_name VARCHAR(100))
                 """);
         jdbc.execute("""
                 CREATE TABLE biz_device_identity(
@@ -62,6 +63,37 @@ class DaikinMonitoringQueryServiceTest {
         when(menus.selectVisibleMenusByUserId(7L)).thenReturn(List.of(menu));
         service = new DaikinMonitoringQueryService(jdbc, buildings, menus,
                 Clock.fixed(Instant.ofEpochMilli(NOW), ZoneOffset.UTC));
+    }
+
+    @Test
+    void searchesBeforePaginationWithinBuildingAndTreatsWildcardsLiterally() {
+        insertTarget("identity-A1", "equipment-A1", "BLD-A", "source-A", 1);
+        insertTarget("identity-A2", "equipment-A2", "BLD-A", "source-A", 1);
+        insertTarget("identity-B", "equipment-B", "BLD-B", "source-B", 1);
+        jdbc.update("UPDATE biz_equipment SET equip_name='Room 301' WHERE equip_id IN ('equipment-A2','equipment-B')");
+        var result = service.devices(7L, OPS, "BLD-A", 1, 1, null, null, " 301 ");
+        assertThat(result.total()).isEqualTo(1);
+        assertThat(result.items()).extracting(DaikinMonitoringQueryDtos.DeviceListItem::equipmentId)
+                .containsExactly("equipment-A2");
+        String code = jdbc.queryForObject("SELECT equip_code FROM biz_equipment WHERE equip_id='equipment-A2'", String.class);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, code).total()).isEqualTo(1);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, "%").total()).isZero();
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, " ").total()).isEqualTo(2);
+    }
+
+    @Test
+    void alarmGrantOnlyAllowsItsOwnListAndStillChecksBuildingScope() {
+        SysMenu alarm = new SysMenu();
+        alarm.setMenuType("C");
+        alarm.setPath("/operations/alarms/liveAlarms");
+        when(menus.selectVisibleMenusByUserId(7L)).thenReturn(List.of(alarm));
+        assertThat(service.currentExceptions(7L, OPS, "BLD-A", null, 50).items()).isEmpty();
+        verify(buildings).checkAccess(7L, OPS, "BLD-A");
+        assertThatThrownBy(() -> service.exceptionHistory(7L, OPS, "BLD-A", null, 50)).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> service.devices(7L, OPS, "BLD-A", 1, 20, null, null)).isInstanceOf(BusinessException.class);
+        alarm.setPath("/operations/alarms/historyAlarms");
+        assertThat(service.exceptionHistory(7L, OPS, "BLD-A", null, 50).items()).isEmpty();
+        assertThatThrownBy(() -> service.currentExceptions(7L, OPS, "BLD-A", null, 50)).isInstanceOf(BusinessException.class);
     }
 
     @Test
@@ -235,7 +267,7 @@ class DaikinMonitoringQueryServiceTest {
 
     private void insertTarget(String identity, String equipment, String building, String source, int mapping) {
         String pending = "pending-" + identity;
-        jdbc.update("INSERT INTO biz_equipment VALUES (?,?,'space','system',0)", equipment, building);
+        jdbc.update("INSERT INTO biz_equipment VALUES (?,?,'space','system',0,?,?)", equipment, building, equipment, "Room unit");
         jdbc.update("INSERT INTO biz_device_identity VALUES (?,?,?,'DAIKIN_UNIT',1)",
                 identity, equipment, building);
         jdbc.update("INSERT INTO biz_daikin_directory(pending_id,source_id,device_kind) VALUES (?,?,'INDOOR')", pending, source);

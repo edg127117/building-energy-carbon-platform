@@ -14,6 +14,17 @@ import com.platform.iot.daikin.onboarding.DaikinDirectoryService;
 import com.platform.iot.onboarding.api.DeviceOnboardingContracts;
 import com.platform.iot.onboarding.mapper.BizPendingDeviceMapper;
 import com.platform.iot.onboarding.model.entity.BizPendingDevice;
+import com.platform.iot.collection.mapper.BizDataSourceMapper;
+import com.platform.iot.collection.model.entity.BizDataSource;
+import com.platform.hvac.mapper.BuildingMapper;
+import com.platform.hvac.mapper.BizDataPointMapper;
+import com.platform.hvac.mapper.BizEquipmentMapper;
+import com.platform.hvac.mapper.BizSpaceMapper;
+import com.platform.hvac.mapper.BizSystemGroupMapper;
+import com.platform.hvac.model.entity.BizDataPoint;
+import com.platform.hvac.model.entity.BizEquipment;
+import com.platform.hvac.model.entity.BizSpace;
+import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.system.mapper.SysMenuMapper;
 import com.platform.system.service.BuildingScopeService;
 import lombok.RequiredArgsConstructor;
@@ -23,7 +34,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.platform.iot.onboarding.OnboardingErrors.*;
 
@@ -40,6 +53,12 @@ public class ScopedDeviceOnboardingService {
     private final BizPendingDeviceMapper pendingMapper;
     private final DeviceOnboardingService onboarding;
     private final DeviceProductService products;
+    private final BizDataSourceMapper dataSources;
+    private final BuildingMapper buildings;
+    private final BizSpaceMapper spaces;
+    private final BizSystemGroupMapper systemGroups;
+    private final BizEquipmentMapper equipment;
+    private final BizDataPointMapper points;
     private final BackendDutyService duties;
     private final SensitiveChangeService changes;
     private final ObjectMapper mapper;
@@ -88,6 +107,73 @@ public class ScopedDeviceOnboardingService {
             Long userId, Set<String> roles, String pendingId, int page, int size) {
         var pending = detail(userId, roles, pendingId);
         return products.list(page, size, "ENABLED", null, pending.profileCode(), pending.identityType(), ADMIN);
+    }
+
+    /** 先校验待接入设备的厂家项目范围，再只返回状态、协议和身份类型均兼容的产品详情。 */
+    @Transactional
+    public com.platform.iot.onboarding.api.DeviceProductContracts.DetailView product(
+            Long userId, Set<String> roles, String pendingId, String productId) {
+        var pending = detail(userId, roles, pendingId);
+        var product = products.detail(productId, ADMIN);
+        if (!"ENABLED".equals(product.status()) || !pending.profileCode().equals(product.expectedProfileCode())
+                || !pending.identityType().equals(product.identityType())) {
+            throw error(404, NOT_FOUND, "兼容产品不存在");
+        }
+        return product;
+    }
+
+    /** 仅列出映射建筑内已启用的 HTTP 数值来源供温度绑定选择，不返回厂家连接设置或凭据。 */
+    @Transactional
+    public List<NumericSource> numericSources(Long userId, Set<String> roles, String pendingId) {
+        requirePendingAccess(userId, roles, pendingId);
+        String buildingId = directory.requireMappedBuilding(pendingId);
+        return dataSources.selectList(new LambdaQueryWrapper<BizDataSource>()
+                        .eq(BizDataSource::getBuildingId, buildingId)
+                        .eq(BizDataSource::getTransportType, "HTTP")
+                        .eq(BizDataSource::getStatus, "ENABLED")
+                        .orderByAsc(BizDataSource::getSourceName)
+                        .orderByAsc(BizDataSource::getSourceId))
+                .stream().map(source -> new NumericSource(source.getSourceId(), source.getSourceCode(),
+                        source.getSourceName())).toList();
+    }
+
+    /** 返回厂家映射建筑内的绑定候选，不调用管理员资产 API，也不包含其他建筑档案。 */
+    @Transactional
+    public BindingOptions bindingOptions(Long userId, Set<String> roles, String pendingId,
+            int page, int size, String spaceId, String systemGroupId) {
+        requirePendingAccess(userId, roles, pendingId);
+        if (page < 1 || size < 1 || size > 100) throw error(400, VALIDATION_FAILED, "设备候选分页参数无效");
+        String buildingId = directory.requireMappedBuilding(pendingId);
+        var building = buildings.selectById(buildingId);
+        if (building == null) throw error(404, NOT_FOUND, "厂家项目映射建筑不存在");
+        var spaceViews = spaces.selectList(new LambdaQueryWrapper<BizSpace>()
+                        .eq(BizSpace::getBuildingId, buildingId).orderByAsc(BizSpace::getFloorLevel)
+                        .orderByAsc(BizSpace::getSpaceId)).stream()
+                .map(value -> new SpaceOption(value.getSpaceId(), value.getParentSpaceId(), value.getSpaceName())).toList();
+        var systemViews = systemGroups.selectList(new LambdaQueryWrapper<BizSystemGroup>()
+                        .eq(BizSystemGroup::getBuildingId, buildingId).orderByAsc(BizSystemGroup::getSystemGroupName)
+                        .orderByAsc(BizSystemGroup::getSystemGroupId)).stream()
+                .map(value -> new SystemOption(value.getSystemGroupId(), value.getSystemGroupName())).toList();
+        var equipmentQuery = new LambdaQueryWrapper<BizEquipment>().eq(BizEquipment::getBuildingId, buildingId);
+        if (spaceId != null && !spaceId.isBlank()) equipmentQuery.eq(BizEquipment::getSpaceId, spaceId);
+        if (systemGroupId != null && !systemGroupId.isBlank()) {
+            equipmentQuery.eq(BizEquipment::getSystemGroupId, systemGroupId);
+        }
+        var equipmentPage = equipment.selectPage(new Page<BizEquipment>(page, size), equipmentQuery
+                .orderByAsc(BizEquipment::getEquipName).orderByAsc(BizEquipment::getEquipId));
+        var equipmentRows = equipmentPage.getRecords();
+        List<String> equipmentIds = equipmentRows.stream().map(BizEquipment::getEquipId).toList();
+        Map<String, List<PointOption>> pointViews = equipmentIds.isEmpty() ? Map.of()
+                : points.selectList(new LambdaQueryWrapper<BizDataPoint>().in(BizDataPoint::getEquipId, equipmentIds)
+                        .orderByAsc(BizDataPoint::getPointName).orderByAsc(BizDataPoint::getPointId)).stream()
+                .collect(Collectors.groupingBy(BizDataPoint::getEquipId,
+                        Collectors.mapping(point -> new PointOption(point.getPointId(), point.getPointCode(),
+                                point.getPointName()), Collectors.toList())));
+        var equipmentViews = equipmentRows.stream().map(value -> new EquipmentOption(value.getEquipId(),
+                value.getEquipName(), value.getSpaceId(), value.getSystemGroupId(),
+                pointViews.getOrDefault(value.getEquipId(), List.of()))).toList();
+        return new BindingOptions(buildingId, building.getBuildingName(), spaceViews, systemViews,
+                equipmentPage.getCurrent(), equipmentPage.getSize(), equipmentPage.getTotal(), equipmentViews);
     }
 
     @Transactional
@@ -144,6 +230,26 @@ public class ScopedDeviceOnboardingService {
         }).toList();
     }
 
+    /** 运维只提交既有身份启停审批；身份归属和建筑范围从当前待接入记录及连接关系解析。 */
+    @Transactional
+    public BindingApplication requestIdentityStatus(Long userId, Set<String> roles, String pendingId,
+            String targetStatus, String idempotencyKey) {
+        requirePendingAccess(userId, roles, pendingId);
+        duties.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        var connection = onboarding.connection(pendingId, ADMIN);
+        if (connection.identityId() == null) throw error(409, STATE_CONFLICT, "待接入设备尚未生成身份");
+        buildingScope.checkAccess(userId, roles, connection.buildingId());
+        String operation = switch (targetStatus) {
+            case "ACTIVE" -> "ACTIVATE_DEVICE_IDENTITY";
+            case "INACTIVE" -> "DEACTIVATE_DEVICE_IDENTITY";
+            default -> throw error(400, VALIDATION_FAILED, "无效身份目标状态");
+        };
+        var draft = changes.createDraft(userId, operation,
+                mapper.valueToTree(java.util.Map.of("identityId", connection.identityId())), idempotencyKey);
+        var submitted = draft.status() == SensitiveChangeStatus.DRAFT ? changes.submit(userId, draft.requestId()) : draft;
+        return new BindingApplication(pendingId, submitted.requestId(), submitted.status().name(), null);
+    }
+
     private void requirePendingAccess(Long userId, Set<String> roles, String pendingId) {
         requireMenu(userId, roles);
         if (roles.contains("PLATFORM_ADMIN")) {
@@ -188,4 +294,13 @@ public class ScopedDeviceOnboardingService {
     public record DirectoryDetail(DeviceOnboardingContracts.PendingDetailView pending,
                                   DaikinDirectoryService.DirectoryView directory) { }
     public record BindingItem(String pendingId, DeviceOnboardingContracts.TypedBindRequest binding, String idempotencyKey) { }
+    public record NumericSource(String sourceId, String sourceCode, String sourceName) { }
+    public record BindingOptions(String buildingId, String buildingName, List<SpaceOption> spaces,
+                                 List<SystemOption> systems, long equipmentPage, long equipmentSize,
+                                 long equipmentTotal, List<EquipmentOption> equipment) { }
+    public record SpaceOption(String spaceId, String parentSpaceId, String spaceName) { }
+    public record SystemOption(String systemGroupId, String systemName) { }
+    public record EquipmentOption(String equipmentId, String equipmentName, String spaceId,
+                                  String systemGroupId, List<PointOption> points) { }
+    public record PointOption(String pointId, String pointCode, String pointName) { }
 }

@@ -1,4 +1,6 @@
+import daikin from './daikin'
 export default {
+  daikin,
   title: '暖通空调监控',
   compatibilityNotice: '当前展示继承的中央空调数据能力，测点和指标可随后续业务配置调整。',
   building: '授权建筑',
