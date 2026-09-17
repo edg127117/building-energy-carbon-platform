@@ -63,8 +63,16 @@ $previousMysqlPassword = $env:MYSQL_PWD
 $env:MYSQL_PWD = $mysqlPassword
 try {
     while ([DateTime]::UtcNow -lt $deadline) {
-        & $DockerPath exec -e MYSQL_PWD $mysqlContainer mysql -uroot -N -e 'SELECT 1' 2>$null | Out-Null
-        $mysqlReady = $LASTEXITCODE -eq 0
+        # Windows PowerShell 5 turns native stderr into errors even when redirected.
+        # A not-yet-ready MySQL is an expected probe result, not a provisioning failure.
+        $previousErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & $DockerPath exec -e MYSQL_PWD $mysqlContainer mysql -uroot -N -e 'SELECT 1' 2>$null | Out-Null
+            $mysqlReady = $LASTEXITCODE -eq 0
+        } finally {
+            $ErrorActionPreference = $previousErrorAction
+        }
         try {
             $authorization = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes('root:taosdata'))
             $response = Invoke-RestMethod -Uri "http://127.0.0.1:$tdPort/rest/sql" -Method Post `

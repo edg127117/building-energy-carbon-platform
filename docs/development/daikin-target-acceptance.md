@@ -10,6 +10,8 @@
 | 普通大金与测试 Redis 回归 | `Daikin*,TestRedisIsolationTest`：135 项中 133 项通过、0 失败；专用双库 2 项因未显式启用而跳过 |
 | 真实浏览器完整流程 | `Verify-DaikinTargetBrowser.cjs` 从 reset 开始运行，`resumed=false`，6 组断言通过，无页面脚本错误 |
 | 专用双库存储专项 | 显式启用 `DaikinTargetStorageVerificationTest`：2 项通过，0 失败、0 跳过 |
+| 同步主分支后的接入与双库复验 | `DaikinTargetStorageVerificationTest,DaikinOnboardingIntegrationTest,DaikinTemperatureBindingIntegrationTest,DeviceOnboardingServiceIntegrationTest`：22 项通过，0 失败、0 跳过 |
+| 环境创建脚本 | 在独立临时目录实际创建全新双库，输出 `DAIKIN_TARGET_ENGINES_READY`；就绪探测兼容 Windows PowerShell 5 |
 | 脚本与差异检查 | PowerShell 解析、Node 语法检查、`git diff --check` 通过 |
 
 浏览器覆盖真实账号登录与菜单、页面触发目录同步、生产服务审批绑定、分钟采集、设备搜索、0℃／36℃／24.5℃ 历史曲线、温度与状态时间戳一致、运行统计、故障出现与恢复、状态事件、业主建筑范围、匿名拒绝及 91 天查询拒绝。绑定和激活复用生产审批服务，由测试控制面推进；不是逐按钮验收审批页面。运行统计由测试驱动唤醒生产调度，不代表已守候真实凌晨 03:00 或完成长期运行。
