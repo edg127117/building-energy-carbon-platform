@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElAlert, ElButton, ElEmpty, ElOption, ElPagination, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag } from '@/shared/ui'
 import { t } from '@/locales'
@@ -20,6 +20,7 @@ const building = ref('')
 const kind = ref('')
 const page = ref(1)
 const selected = ref<string | null>(null)
+const selectedDevice = computed(() => devices.data.value?.items.find(item => item.equipmentId === selected.value))
 const refreshTick = ref(0)
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
@@ -61,11 +62,11 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
     <ElAlert v-if="buildings.error.value" :title="buildings.error.value" type="error" :closable="false" />
     <ElSkeleton v-if="buildings.loading.value" :rows="5" animated />
     <ElEmpty v-else-if="!building && !buildings.error.value" :description="t('dashboard.noBuilding')" />
-    <template v-if="building && !alarms">
+    <template v-if="building && !alarms"><div class="device-list">
       <ElAlert v-if="devices.error.value" :title="devices.error.value" type="error" :closable="false" />
       <ElSkeleton v-if="devices.loading.value" :rows="5" animated />
-      <ElTable v-else :data="devices.data.value?.items ?? []" :empty-text="text('none')">
-        <ElTableColumn :label="text('equipment')" min-width="180"><template #default="{ row }">{{ row.equipmentName }}<br>{{ row.equipmentCode || row.equipmentId }}</template></ElTableColumn>
+      <ElTable v-else row-key="equipmentId" highlight-current-row :current-row-key="selected ?? undefined" :data="devices.data.value?.items ?? []" :empty-text="text('none')">
+        <ElTableColumn :label="text('equipment')" min-width="180"><template #default="{ row }">{{ row.equipmentName || text('unnamed') }}<br>{{ row.equipmentCode || row.equipmentId }}</template></ElTableColumn>
         <ElTableColumn :label="text('kind')"><template #default="{ row }">{{ ['INDOOR', 'OUTDOOR'].includes(row.deviceKind) ? text(row.deviceKind) : row.deviceKind }}</template></ElTableColumn>
         <ElTableColumn :label="text('onOff')"><template #default="{ row }">{{ daikinLabel(row.onOff?.value) }}</template></ElTableColumn>
         <ElTableColumn :label="text('mode')"><template #default="{ row }">{{ daikinLabel(row.mode?.value) }}</template></ElTableColumn>
@@ -74,13 +75,13 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
         <ElTableColumn :label="text('detail')"><template #default="{ row }"><ElButton text @click="selected = row.equipmentId">{{ text('detail') }}</ElButton></template></ElTableColumn>
       </ElTable>
       <ElPagination v-if="devices.data.value" v-model:current-page="page" :page-size="20" :total="devices.data.value.total" layout="prev, pager, next, total" />
-      <template v-if="selected"><ElButton class="close-detail" @click="selected = null">{{ text('close') }}</ElButton><DaikinDeviceDetail :key="selected" :equipment-id="selected" :refresh-tick="refreshTick" /></template>
+      </div><DaikinDeviceDetail v-if="selected" :key="selected" :equipment-id="selected" :equipment-name="selectedDevice?.equipmentName" :equipment-code="selectedDevice?.equipmentCode" :refresh-tick="refreshTick" @close="selected = null" />
     </template>
     <template v-if="building && alarms">
       <ElAlert v-if="exceptions.error.value" :title="exceptions.error.value" type="error" :closable="false" />
       <ElSkeleton v-if="exceptions.loading.value" :rows="5" animated />
       <ElTable v-else :data="exceptions.data.value?.items ?? []" :empty-text="text('empty')">
-        <ElTableColumn prop="type" :label="text('type')" /><ElTableColumn prop="sourceId" :label="text('source')" />
+        <ElTableColumn :label="text('type')"><template #default="{ row }">{{ daikinLabel(row.type) }}</template></ElTableColumn><ElTableColumn prop="sourceId" :label="text('source')" />
         <ElTableColumn :label="text('equipment')"><template #default="{ row }">{{ row.equipmentId ?? t('common.missing') }}</template></ElTableColumn>
         <ElTableColumn :label="text('detected')" min-width="175"><template #default="{ row }">{{ formatDateTime(row.firstDetectedAt) }}</template></ElTableColumn>
         <ElTableColumn v-if="history" :label="text('recovered')" min-width="175"><template #default="{ row }">{{ row.recoveredAt == null ? t('common.missing') : formatDateTime(row.recoveredAt) }}</template></ElTableColumn>
@@ -91,7 +92,7 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
 </template>
 
 <style scoped>
-.close-detail { justify-self: start; }
+.device-list { min-width: 0; padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); } .device-list .el-pagination { margin-top: var(--bec-space-group); }
 .daikin-panel { display: grid; gap: var(--bec-space-section); min-width: 0; }
 header { display: flex; justify-content: space-between; gap: var(--bec-space-section); flex-wrap: wrap; } h1 { margin: 0; font-size: var(--bec-font-size-system); }
 p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); } .filters { display: flex; gap: var(--bec-space-tight); flex-wrap: wrap; align-items: center; }

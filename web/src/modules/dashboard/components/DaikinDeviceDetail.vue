@@ -10,7 +10,8 @@ import { daikinApi } from '../api/daikin'
 import { daikinLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 
-const props = defineProps<{ equipmentId: string; refreshTick: number }>()
+const props = defineProps<{ equipmentId: string; equipmentName?: string | null; equipmentCode?: string | null; refreshTick: number }>()
+defineEmits<{ close: [] }>()
 const text = (key: string) => t(`dashboard.daikin.${key}`)
 const date = (value: number | null) => value == null ? t('common.missing') : formatDateTime(value)
 const current = useDaikinResource<Awaited<ReturnType<typeof daikinApi.current>>>()
@@ -61,7 +62,7 @@ onMounted(loadCurrent)
 
 <template>
   <section class="detail">
-    <h2>{{ equipmentId }}</h2>
+    <header class="detail-heading"><div><h2>{{ equipmentName || text('unnamed') }}</h2><p v-if="equipmentCode" class="device-code">{{ text('code') }}{{ ': ' }}{{ equipmentCode }}</p></div><ElButton @click="$emit('close')">{{ text('close') }}</ElButton></header>
     <ElTabs v-model="tab">
       <ElTabPane :label="text('state')" name="state">
         <ElAlert v-if="current.error.value" :title="current.error.value" type="error" :closable="false" />
@@ -79,8 +80,8 @@ onMounted(loadCurrent)
         <ElAlert v-if="events.error.value" :title="events.error.value" type="error" :closable="false" />
         <ElTable :data="events.data.value?.items ?? []">
           <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinLabel(row.fieldName) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('before')"><template #default="{ row }">{{ row.beforeNormalizedValue ?? t('common.missing') }}{{ ' · ' }}{{ date(row.previousObservedAt) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('after')"><template #default="{ row }">{{ row.afterNormalizedValue ?? t('common.missing') }}{{ ' · ' }}{{ date(row.observedAt) }} <ElTag v-if="row.afterGap" type="warning">{{ text('gap') }}</ElTag></template></ElTableColumn>
+          <ElTableColumn :label="text('before')"><template #default="{ row }">{{ daikinLabel(row.beforeNormalizedValue) }}{{ ' · ' }}{{ date(row.previousObservedAt) }}</template></ElTableColumn>
+          <ElTableColumn :label="text('after')"><template #default="{ row }">{{ daikinLabel(row.afterNormalizedValue) }}{{ ' · ' }}{{ date(row.observedAt) }} <ElTag v-if="row.afterGap" type="warning">{{ text('gap') }}</ElTag></template></ElTableColumn>
         </ElTable>
         <ElButton :loading="events.loading.value" @click="loadEvents()">{{ text('first') }}</ElButton>
         <ElButton :disabled="!events.data.value?.nextCursor" @click="loadEvents(events.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
@@ -89,7 +90,7 @@ onMounted(loadCurrent)
         <p>{{ text('temperatureNotice') }}</p>
         <div class="controls">
           <ElSelect v-model="field" :aria-label="text('temperature')"><ElOption value="roomTemp" :label="text('roomTemp')" /><ElOption value="temperature" :label="text('setpoint')" /></ElSelect>
-          <ElDatePicker v-model="range" type="datetimerange" value-format="x" :aria-label="text('fromTo')" @change="range = range?.map(Number) as [number, number]" />
+          <ElDatePicker class="temperature-range" v-model="range" type="datetimerange" format="YYYY-MM-DD HH:mm" value-format="x" :aria-label="text('fromTo')" @change="range = range?.map(Number) as [number, number]" />
           <ElButton :loading="history.loading.value" @click="loadTemperature()">{{ text('query') }}</ElButton>
         </div>
         <ElAlert v-if="rangeError" :title="text('invalidRange')" type="warning" :closable="false" />
@@ -103,10 +104,10 @@ onMounted(loadCurrent)
         <p>{{ text('runtimeNotice') }}</p>
         <ElSelect v-model="granularity" :aria-label="text('runtime')"><ElOption v-for="key in ['DAY', 'MONTH', 'YEAR']" :key="key" :value="key" :label="text(key)" /></ElSelect>
         <ElAlert v-if="runtime.error.value" :title="runtime.error.value" type="error" :closable="false" />
-        <p v-for="count in runtime.data.value?.synchronization ?? []" :key="count.status">{{ count.status }}{{ ': ' }}{{ count.periods }}</p>
+        <p v-for="count in runtime.data.value?.synchronization ?? []" :key="count.status">{{ daikinLabel(count.status) }}{{ ': ' }}{{ count.periods }}</p>
         <ElTable :data="runtimeRows">
           <ElTableColumn :label="text('period')" min-width="220"><template #default="{ row }">{{ runtimePeriodTime(row.periodStart, row.statisticsZone) }}{{ ' — ' }}{{ runtimePeriodTime(row.periodEnd, row.statisticsZone) }}<br>{{ row.statisticsZone }}</template></ElTableColumn>
-          <ElTableColumn :label="text('value')" min-width="150"><template #default="{ row }"><span v-if="row.metrics == null">{{ t('common.missing') }}</span><div v-for="(value, name) in row.metrics" :key="name">{{ name }}{{ ': ' }}{{ value }} {{ row.unit }}</div></template></ElTableColumn>
+          <ElTableColumn :label="text('value')" min-width="150"><template #default="{ row }"><span v-if="row.metrics == null">{{ t('common.missing') }}</span><div v-for="(value, name) in row.metrics" :key="name">{{ daikinLabel(String(name)) }}{{ ': ' }}{{ value }} {{ row.unit }}</div></template></ElTableColumn>
           <ElTableColumn :label="text('status')" min-width="180"><template #default="{ row }">{{ daikinLabel(row.lastAttemptStatus) }}<br><ElTag v-if="!row.periodComplete" type="warning">{{ text('incomplete') }}</ElTag><ElTag v-if="!row.ownershipVerified" type="info">{{ text('unverified') }}</ElTag></template></ElTableColumn>
           <ElTableColumn :label="text('success')" min-width="160"><template #default="{ row }">{{ date(row.lastSuccessAt) }}</template></ElTableColumn>
           <ElTableColumn :label="text('revisions')"><template #default="{ row }"><ElButton text @click="loadRevisions(row.valueId)">{{ text('revision') }} {{ row.revision }}</ElButton></template></ElTableColumn>
@@ -115,7 +116,7 @@ onMounted(loadCurrent)
         <template v-if="revisionId">
           <h3>{{ text('revisions') }}</h3>
           <ElAlert v-if="revisions.error.value" :title="revisions.error.value" type="error" :closable="false" />
-          <ElTable :data="revisions.data.value?.items ?? []"><ElTableColumn prop="revision" :label="text('revision')" /><ElTableColumn :label="text('value')"><template #default="{ row }"><div v-for="(value, name) in row.metrics" :key="name">{{ name }}{{ ': ' }}{{ value }} {{ row.unit }}</div></template></ElTableColumn><ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.observedAt) }}</template></ElTableColumn></ElTable>
+          <ElTable :data="revisions.data.value?.items ?? []"><ElTableColumn prop="revision" :label="text('revision')" /><ElTableColumn :label="text('value')"><template #default="{ row }"><div v-for="(value, name) in row.metrics" :key="name">{{ daikinLabel(String(name)) }}{{ ': ' }}{{ value }} {{ row.unit }}</div></template></ElTableColumn><ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.observedAt) }}</template></ElTableColumn></ElTable>
           <ElButton :loading="revisions.loading.value" :disabled="revisions.data.value?.nextCursor == null" @click="loadRevisions(revisionId, revisions.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
         </template>
       </ElTabPane>
@@ -125,7 +126,12 @@ onMounted(loadCurrent)
 </template>
 
 <style scoped>
-.detail { min-width: 0; } .detail p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); }
+.detail { min-width: 0; padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); } .detail p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); }
+.detail-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-group); padding-bottom: var(--bec-space-group); }
+.detail-heading h2 { margin: 0; font-size: var(--bec-font-size-title); }
+.device-code { margin: var(--bec-space-tight) 0 0; }
+.controls :deep(.temperature-range) { flex: 0 1 calc(var(--bec-control-height) * 12); width: calc(var(--bec-control-height) * 12); max-width: 100%; box-sizing: border-box; }
+.controls { align-items: center; }
 .controls { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); margin-block: var(--bec-space-group); } .el-select { width: calc(var(--bec-control-height) * 5); }
 .chart { height: var(--bec-chart-height); min-height: var(--bec-chart-height); } .el-alert { margin-block: var(--bec-space-tight); }
 </style>
