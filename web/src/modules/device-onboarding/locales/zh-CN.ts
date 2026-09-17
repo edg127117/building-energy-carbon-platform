@@ -21,7 +21,7 @@ export default {
     daikinDevice: '厂家设备',
     directorySync: '厂家目录同步',
     directorySyncDescription: '从已登记的数据源获取最新设备目录。同步在后台执行，不影响当前页面操作。',
-    latestSync: '最近一次同步',
+    latestSync: '最新同步结果',
     daikinTabDescription: '同步并接入大金厂家目录中的空调设备。',
     generalTabDescription: '处理通过标准报文发现的其他待接入设备。',
     bindingResults: '绑定申请结果',

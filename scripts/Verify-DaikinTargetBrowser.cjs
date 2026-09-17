@@ -78,7 +78,7 @@ async function business(page, route) {
     const job = await (await refreshed).json();
     assert.equal(job.data.status, 'SUCCEEDED');
     await page.getByText('已完成', { exact: true }).waitFor();
-    await page.getByText('最近一次同步', { exact: true }).waitFor();
+    await page.getByText('最新同步结果', { exact: true }).waitFor();
     await page.getByText('未发现异常', { exact: true }).waitFor();
     assert.equal(await page.getByText('SUCCEEDED', { exact: true }).count(), 0, 'Directory status must not expose the backend enum.');
     assert.equal(await page.getByText(state.sourceId, { exact: true }).isVisible(), false,

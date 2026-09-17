@@ -433,12 +433,12 @@ onMounted(() => {
         <p class="field-hint">{{ t('deviceOnboarding.messages.syncSourceBoundary') }}</p>
       </div>
       <section v-if="management.syncJob.value" class="sync-result">
-        <h3>{{ t('deviceOnboarding.pending.latestSync') }}</h3>
-        <ElDescriptions :column="3" border>
-          <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncStatus')">{{ syncJobStatusText(management.syncJob.value.status) }}</ElDescriptionsItem>
-          <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncAttempts')">{{ formatNumber(management.syncJob.value.attempts) }}</ElDescriptionsItem>
-          <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncResult')">{{ syncJobResultText(management.syncJob.value.errorCode) }}</ElDescriptionsItem>
-        </ElDescriptions>
+        <div class="sync-result-line" role="status">
+          <strong>{{ t('deviceOnboarding.pending.latestSync') }}</strong>
+          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncStatus') }}</span><ElTag>{{ syncJobStatusText(management.syncJob.value.status) }}</ElTag></span>
+          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncAttempts') }}</span><b>{{ formatNumber(management.syncJob.value.attempts) }}</b></span>
+          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncResult') }}</span><b>{{ syncJobResultText(management.syncJob.value.errorCode) }}</b></span>
+        </div>
         <details class="technical-details"><summary>{{ t('deviceOnboarding.operationsTechnicalDetails') }}</summary><ElDescriptions :column="1" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="management.syncJob.value.sourceId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobTechnicalId')"><CopyableValue :value="management.syncJob.value.jobId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncErrorCode')"><CopyableValue :value="management.syncJob.value.errorCode || t('common.missing')" /></ElDescriptionsItem></ElDescriptions></details>
       </section>
     </ElCard>
@@ -515,13 +515,16 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .sync-card :deep(.el-card__body) { display: grid; gap: var(--bec-space-section); }
 .section-heading { align-items: flex-start; justify-content: space-between; }
 .section-heading p { margin-top: var(--bec-space-tight); }
-.sync-form, .sync-result { display: grid; gap: var(--bec-space-group); }
+.sync-form, .sync-result { display: grid; gap: var(--bec-space-tight); }
 .sync-form { gap: var(--bec-space-tight); }
 .sync-form label { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); }
 .sync-actions { align-items: stretch; flex-wrap: wrap; gap: var(--bec-space-tight); }
 .sync-actions > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); }
 .field-hint { font-size: var(--bec-font-size-small); }
-.sync-result { padding-top: var(--bec-space-section); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
+.sync-result { padding-top: var(--bec-space-group); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
+.sync-result-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bec-space-tight) var(--bec-space-group); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
+.sync-result-item { display: inline-flex; align-items: center; gap: var(--bec-space-tight); color: var(--bec-color-text-secondary); }
+.sync-result-item b { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-normal); }
 .filter-bar { align-items: stretch; }
 .filter-bar { flex-wrap: wrap; }
 .filter-bar > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); order: -1; }
