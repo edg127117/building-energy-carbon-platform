@@ -1,0 +1,12 @@
+services:
+  mysql:
+    restart: "no"
+
+  emqx:
+    restart: "no"
+
+  tdengine:
+    restart: "no"
+
+  redis:
+    restart: "no"
