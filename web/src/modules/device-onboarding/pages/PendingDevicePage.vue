@@ -21,6 +21,8 @@ import {
   ElTable,
   ElTableColumn,
   ElTag,
+  ElTabPane,
+  ElTabs,
   Eye,
   RefreshCw,
   Search,
@@ -46,6 +48,7 @@ function returnToDraft() { void router.push({ path: '/configuration/ingestion/pr
 function clearProtocolScope() { protocolScope.value = ''; management.pendingQuery.value.profileCode = ''; void query() }
 const administrator = computed(() => session.user?.roles.includes('PLATFORM_ADMIN') === true)
 const operationsMode = ref(!administrator.value || route.query.view !== 'general')
+const activeDeviceView = computed(() => operationsMode.value ? 'daikin' : 'general')
 const generalManagement = useDeviceOnboarding()
 const operationsManagement = useDeviceOnboarding({ operations: true })
 // 管理员切换视图时保留两套独立请求状态，避免厂家范围结果和旧全量结果相互覆盖。
@@ -288,7 +291,10 @@ function ensureBindingKeys(ids: string[]) {
 
 async function requestSync() {
   const sourceId = syncSourceId.value.trim()
-  if (!sourceId) return
+  if (!sourceId) {
+    ElMessage.warning(t('deviceOnboarding.messages.syncSourceRequired'))
+    return
+  }
   try {
     await management.startDirectorySync(sourceId)
     syncSourceId.value = ''
@@ -328,6 +334,10 @@ async function switchDeviceView(nextOperationsMode: boolean) {
   batchPendingIds.value = []
   await router.replace({ query: { ...route.query, view: nextOperationsMode ? undefined : 'general' } })
   await management.loadPendingDevices().catch(() => undefined)
+}
+
+function changeDeviceView(value: string | number) {
+  void switchDeviceView(value === 'daikin')
 }
 
 async function submitIdentityChange(operation: 'ACTIVATE_DEVICE_IDENTITY' | 'DEACTIVATE_DEVICE_IDENTITY') {
@@ -399,7 +409,7 @@ onMounted(() => {
 
 <template>
   <section class="pending-page">
-    <header class="page-heading"><div><h1>{{ t('deviceOnboarding.pending.title') }}</h1><p>{{ t(operationsMode ? 'deviceOnboarding.pending.operationsDescription' : 'deviceOnboarding.pending.description') }}</p></div><div class="view-actions"><template v-if="administrator"><ElButton :type="operationsMode ? 'primary' : 'default'" :disabled="viewSwitchDisabled" @click="switchDeviceView(true)">{{ t('deviceOnboarding.actions.daikinDevices') }}</ElButton><ElButton :type="operationsMode ? 'default' : 'primary'" :disabled="viewSwitchDisabled" @click="switchDeviceView(false)">{{ t('deviceOnboarding.actions.generalDevices') }}</ElButton></template><ElButton v-if="operationsMode" type="primary" :disabled="!selectedRows.length" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton></div></header>
+    <header class="page-heading"><div><h1>{{ t('deviceOnboarding.pending.title') }}</h1><p>{{ t(operationsMode ? 'deviceOnboarding.pending.operationsDescription' : 'deviceOnboarding.pending.description') }}</p></div></header>
     <ElAlert v-if="management.pendingError.value" :title="management.pendingError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="operationMessage" :title="operationMessage" type="error" show-icon :closable="false" />
     <ElAlert v-if="management.productsError.value" :title="management.productsError.value.message" type="error" show-icon :closable="false" />
@@ -408,21 +418,32 @@ onMounted(() => {
     <ElAlert v-if="bindingContractError" :title="bindingContractError" type="error" show-icon :closable="false" />
     <ElAlert v-if="sensitiveError" :title="sensitiveError" type="error" show-icon :closable="false" />
     <div v-if="!operationsMode && protocolScope" class="scope-bar"><ElTag>{{ t('deviceOnboarding.labels.protocolScope') }} {{ protocolScope }}</ElTag><ElButton link @click="clearProtocolScope">{{ t('deviceOnboarding.actions.showAll') }}</ElButton><ElButton v-if="route.query.draftId" link @click="returnToDraft">{{ t('deviceOnboarding.actions.returnToDraft') }}</ElButton></div>
-    <ElCard v-if="operationsMode" shadow="never">
-      <div class="filter-bar"><ElInput v-model="syncSourceId" maxlength="200" :placeholder="t('deviceOnboarding.labels.syncSourcePlaceholder')" /><ElButton type="primary" :disabled="!syncSourceId.trim()" :loading="management.running.value.has(`daikin:sync:${syncSourceId.trim()}`)" @click="requestSync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton></div>
-      <ElAlert :title="t('deviceOnboarding.messages.syncSourceBoundary')" type="info" show-icon :closable="false" />
-      <template v-if="management.syncJob.value">
-        <ElDescriptions :column="2" border>
-          <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobId')">{{ t('deviceOnboarding.currentSyncTask') }}</ElDescriptionsItem>
+    <div v-if="administrator" class="device-view-switch">
+      <ElTabs :model-value="activeDeviceView" :before-leave="() => !viewSwitchDisabled" @tab-change="changeDeviceView">
+        <ElTabPane name="daikin" :label="t('deviceOnboarding.actions.daikinDevices')" />
+        <ElTabPane name="general" :label="t('deviceOnboarding.actions.generalDevices')" />
+      </ElTabs>
+      <p>{{ t(operationsMode ? 'deviceOnboarding.pending.daikinTabDescription' : 'deviceOnboarding.pending.generalTabDescription') }}</p>
+    </div>
+    <ElCard v-if="operationsMode" class="sync-card" shadow="never">
+      <div class="section-heading"><div><h2>{{ t('deviceOnboarding.pending.directorySync') }}</h2><p>{{ t('deviceOnboarding.pending.directorySyncDescription') }}</p></div></div>
+      <div class="sync-form">
+        <label for="daikin-source-id">{{ t('deviceOnboarding.labels.syncSource') }}</label>
+        <div class="sync-actions"><ElInput v-model="syncSourceId" input-id="daikin-source-id" maxlength="200" :placeholder="t('deviceOnboarding.labels.syncSourcePlaceholder')" @keyup.enter="requestSync" /><ElButton type="primary" :loading="management.running.value.has(`daikin:sync:${syncSourceId.trim()}`)" @click="requestSync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" :icon="RefreshCw" :loading="management.running.value.has(`daikin:sync:status:${management.syncJob.value.jobId}`)" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton></div>
+        <p class="field-hint">{{ t('deviceOnboarding.messages.syncSourceBoundary') }}</p>
+      </div>
+      <section v-if="management.syncJob.value" class="sync-result">
+        <h3>{{ t('deviceOnboarding.pending.latestSync') }}</h3>
+        <ElDescriptions :column="3" border>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncStatus')">{{ syncJobStatusText(management.syncJob.value.status) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncAttempts')">{{ formatNumber(management.syncJob.value.attempts) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncResult')">{{ syncJobResultText(management.syncJob.value.errorCode) }}</ElDescriptionsItem>
         </ElDescriptions>
         <details class="technical-details"><summary>{{ t('deviceOnboarding.operationsTechnicalDetails') }}</summary><ElDescriptions :column="1" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="management.syncJob.value.sourceId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobTechnicalId')"><CopyableValue :value="management.syncJob.value.jobId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncErrorCode')"><CopyableValue :value="management.syncJob.value.errorCode || t('common.missing')" /></ElDescriptionsItem></ElDescriptions></details>
-      </template>
+      </section>
     </ElCard>
     <ElCard shadow="never">
-      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton></div>
+      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!selectedRows.length" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton></div>
       <ElSkeleton v-if="management.pendingLoading.value && !management.pendingDevices.value.items.length" animated :rows="5" />
       <ElTable v-else :data="management.pendingDevices.value.items" row-key="pendingId" @selection-change="changeSelection">
         <ElTableColumn v-if="operationsMode" type="selection" width="48" />
@@ -452,8 +473,7 @@ onMounted(() => {
         </ElDescriptions>
         <details class="technical-details"><summary>{{ t('deviceOnboarding.operationsTechnicalDetails') }}</summary><ElDescriptions :column="1" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="management.selectedDirectory.value.sourceId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.controllerId')"><CopyableValue :value="management.selectedDirectory.value.controllerId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.equipmentId')"><CopyableValue :value="management.selectedDirectory.value.equipmentId || t('common.missing')" /></ElDescriptionsItem></ElDescriptions></details>
         <div class="drawer-actions"><ElButton type="primary" :loading="management.running.value.has(`daikin:sync:${management.selectedDirectory.value.sourceId}`)" @click="requestDirectorySync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" :loading="management.running.value.has(`daikin:sync:status:${management.syncJob.value.jobId}`)" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton></div>
-        <ElDescriptions v-if="management.syncJob.value" :column="2" border>
-          <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobId')">{{ t('deviceOnboarding.currentSyncTask') }}</ElDescriptionsItem>
+        <ElDescriptions v-if="management.syncJob.value" :column="3" border>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncStatus')"><ElTag>{{ syncJobStatusText(management.syncJob.value.status) }}</ElTag></ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncAttempts')">{{ formatNumber(management.syncJob.value.attempts) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.syncResult')">{{ syncJobResultText(management.syncJob.value.errorCode) }}</ElDescriptionsItem>
@@ -481,8 +501,7 @@ onMounted(() => {
 
 <style scoped>
 .pending-page { display: grid; gap: var(--bec-space-section); min-width: 0; }
-.page-heading, .drawer-heading, .filter-bar, .row-actions, .drawer-actions, .view-actions { display: flex; align-items: center; gap: var(--bec-space-group); }
-.view-actions { flex-wrap: wrap; justify-content: flex-end; }
+.page-heading, .drawer-heading, .filter-bar, .row-actions, .drawer-actions, .section-heading, .sync-actions { display: flex; align-items: center; gap: var(--bec-space-group); }
 .page-heading, .drawer-heading { justify-content: space-between; }
 .page-heading { align-items: flex-start; }
 h1, h2, h3, p { margin: 0; }
@@ -490,12 +509,28 @@ h1 { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-
 h2 { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-weight-heading); }
 h3 { font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-heading); }
 p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); }
+.device-view-switch { display: grid; gap: var(--bec-space-tight); }
+.device-view-switch :deep(.el-tabs__header) { margin: 0; }
+.device-view-switch p { font-size: var(--bec-font-size-small); }
+.sync-card :deep(.el-card__body) { display: grid; gap: var(--bec-space-section); }
+.section-heading { align-items: flex-start; justify-content: space-between; }
+.section-heading p { margin-top: var(--bec-space-tight); }
+.sync-form, .sync-result { display: grid; gap: var(--bec-space-group); }
+.sync-form { gap: var(--bec-space-tight); }
+.sync-form label { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); }
+.sync-actions { align-items: stretch; flex-wrap: wrap; gap: var(--bec-space-tight); }
+.sync-actions > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); }
+.field-hint { font-size: var(--bec-font-size-small); }
+.sync-result { padding-top: var(--bec-space-section); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
 .filter-bar { align-items: stretch; }
 .filter-bar { flex-wrap: wrap; }
 .filter-bar > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); order: -1; }
 .filter-bar :deep(.el-input__prefix svg) { width: var(--bec-icon-small); height: var(--bec-icon-small); }
 .filter-bar > :deep(.el-select) { flex: 0 0 calc(var(--bec-navigation-width) * 0.75); width: calc(var(--bec-navigation-width) * 0.75); min-width: 0; }
-@media (max-width: 640px) { .filter-bar > :deep(.el-input) { flex-basis: 100%; min-width: 0; } }
+@media (max-width: 640px) {
+  .filter-bar > :deep(.el-input), .sync-actions > :deep(.el-input) { flex-basis: 100%; min-width: 0; }
+  .sync-actions > :deep(.el-button) { flex: 1 1 auto; margin-left: 0; }
+}
 .pagination { display: flex; justify-content: flex-end; padding-top: var(--bec-space-group); }
 .drawer-heading { align-items: flex-start; margin-bottom: var(--bec-space-section); }
 .drawer-actions { justify-content: flex-end; margin-top: var(--bec-space-section); }
