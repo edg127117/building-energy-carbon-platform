@@ -28,6 +28,17 @@ const pending = { pendingId: 'D1', identityType: 'SN', maskedIdentityValue: 'x',
 describe('绑定准备弹窗', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('在弹窗中展示前置配置步骤与提交错误', async () => {
+    const wrapper = mount(BindingDraftDialog, { props: { open: true, pending, product, products: [product], submitError: '请先启用数据源' } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('绑定前需要准备什么')
+    expect(wrapper.text()).toContain('仅保存草稿还不能绑定')
+    expect(wrapper.text()).toContain('请先启用数据源')
+    await wrapper.setProps({ allowEmptyPoints: true })
+    expect(wrapper.text()).not.toContain('绑定前需要准备什么')
+    wrapper.unmount()
+  })
+
   it('弹窗打开时按当前产品初始化模板，产品切换期间不保留旧模板', async () => {
     const wrapper = mount(BindingDraftDialog, { props: { open: false, pending, product, products: [product] } })
     await wrapper.setProps({ open: true })

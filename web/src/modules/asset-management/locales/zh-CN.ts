@@ -160,6 +160,8 @@ export default {
     identities: '暂无设备身份',
   },
   forms: {
+    systemCodeRequired: '请填写系统编码。',
+    systemNameRequired: '请填写系统名称。',
     parametersReadOnly: '技术参数为只读，请通过设备参数治理流程修改',
     createBuilding: '新建建筑',
     editBuilding: '编辑建筑',

@@ -198,6 +198,26 @@ class AssetManagementApiContractTest {
                 .andExpect(jsonPath("$.errorCode").value("ASSET_NOT_FOUND"));
     }
 
+    @Test
+    @org.springframework.transaction.annotation.Transactional
+    void requiresSystemCodeBeforeWritingSystemGroup() throws Exception {
+        String token = login("admin", "123456");
+        for (String code : new String[] { "null", "\"\"", "\"   \"" }) {
+            mockMvc.perform(post("/v1/assets/system-groups")
+                            .header("Authorization", "Bearer " + token)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"buildingId\":\"BLD001\",\"systemName\":\"校验测试\",\"systemCode\":" + code + "}"))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.errorCode").value("ASSET_VALIDATION_FAILED"));
+        }
+        mockMvc.perform(post("/v1/assets/system-groups")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"buildingId\":\"BLD001\",\"systemName\":\"校验测试\",\"systemCode\":\"VALIDATION_SYS\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.systemCode").value("VALIDATION_SYS"));
+    }
+
     private String login(String username, String password) throws Exception {
         MvcResult result = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
