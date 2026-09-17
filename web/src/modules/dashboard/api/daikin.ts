@@ -5,7 +5,7 @@ const root = '/v1/hvac-monitoring'
 const device = (id: string) => `${root}/devices/${encodeURIComponent(id)}`
 /** 只查询平台存储；刷新和翻页不触发厂家同步或控制。 */
 export const daikinApi = {
-  devices: (building: string, page: number, kind?: string) => requestApi<{ items: DaikinDevice[]; total: number }>({ method: 'GET', url: `${root}/buildings/${encodeURIComponent(building)}/devices`, params: { page, size: 20, kind: kind || undefined } }),
+  devices: (building: string, page: number, kind?: string, keyword?: string) => requestApi<{ items: DaikinDevice[]; total: number }>({ method: 'GET', url: `${root}/buildings/${encodeURIComponent(building)}/devices`, params: { page, size: 20, kind: kind || undefined, keyword: keyword || undefined } }),
   current: (id: string) => requestApi<DeviceCurrent>({ method: 'GET', url: `${device(id)}/current` }),
   events: (id: string, cursor?: string) => requestApi<CursorPage<StateEvent>>({ method: 'GET', url: `${device(id)}/state-events`, params: { cursor, limit: 50 } }),
   exceptions: (building: string, history: boolean, cursor?: string) => requestApi<CursorPage<DaikinException>>({ method: 'GET', url: `${root}/buildings/${encodeURIComponent(building)}/exceptions/${history ? 'history' : 'current'}`, params: { cursor, limit: 50 } }),

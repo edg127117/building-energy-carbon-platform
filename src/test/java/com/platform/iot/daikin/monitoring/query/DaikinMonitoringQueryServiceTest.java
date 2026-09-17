@@ -66,6 +66,22 @@ class DaikinMonitoringQueryServiceTest {
     }
 
     @Test
+    void searchesBeforePaginationWithinBuildingAndTreatsWildcardsLiterally() {
+        insertTarget("identity-A1", "equipment-A1", "BLD-A", "source-A", 1);
+        insertTarget("identity-A2", "equipment-A2", "BLD-A", "source-A", 1);
+        insertTarget("identity-B", "equipment-B", "BLD-B", "source-B", 1);
+        jdbc.update("UPDATE biz_equipment SET equip_name='Room 301' WHERE equip_id IN ('equipment-A2','equipment-B')");
+        var result = service.devices(7L, OPS, "BLD-A", 1, 1, null, null, " 301 ");
+        assertThat(result.total()).isEqualTo(1);
+        assertThat(result.items()).extracting(DaikinMonitoringQueryDtos.DeviceListItem::equipmentId)
+                .containsExactly("equipment-A2");
+        String code = jdbc.queryForObject("SELECT equip_code FROM biz_equipment WHERE equip_id='equipment-A2'", String.class);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, code).total()).isEqualTo(1);
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, "%").total()).isZero();
+        assertThat(service.devices(7L, OPS, "BLD-A", 1, 20, null, null, " ").total()).isEqualTo(2);
+    }
+
+    @Test
     void alarmGrantOnlyAllowsItsOwnListAndStillChecksBuildingScope() {
         SysMenu alarm = new SysMenu();
         alarm.setMenuType("C");

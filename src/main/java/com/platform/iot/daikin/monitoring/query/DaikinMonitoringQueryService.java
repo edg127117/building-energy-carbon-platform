@@ -52,6 +52,11 @@ public class DaikinMonitoringQueryService {
 
     public PageResponse<DeviceListItem> devices(Long userId, Set<String> roles, String buildingId,
                                                  int page, int size, String spaceId, String kind) {
+        return devices(userId, roles, buildingId, page, size, spaceId, kind, null);
+    }
+
+    public PageResponse<DeviceListItem> devices(Long userId, Set<String> roles, String buildingId,
+                                                 int page, int size, String spaceId, String kind, String keyword) {
         requireBuilding(userId, roles, buildingId);
         requirePage(page, size);
         String validSpace = optionalId(spaceId, "spaceId");
@@ -66,6 +71,13 @@ public class DaikinMonitoringQueryService {
         if (validKind != null) {
             filters.append(" AND d.device_kind=?");
             parameters.add(validKind);
+        }
+        String search = keyword == null ? "" : keyword.trim();
+        // 字面包含查询与总数、分页共用过滤条件；通配符不改变查询范围。
+        if (!search.isEmpty()) {
+            filters.append(" AND (LOCATE(?, e.equip_name)>0 OR LOCATE(?, e.equip_code)>0)");
+            parameters.add(search);
+            parameters.add(search);
         }
         String joins = """
                  FROM biz_daikin_monitoring_target t

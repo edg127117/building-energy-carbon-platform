@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElAlert, ElButton, ElEmpty, ElOption, ElPagination, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag } from '@/shared/ui'
+import { ElAlert, ElInput, ElButton, ElEmpty, ElOption, ElPagination, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag } from '@/shared/ui'
 import { t } from '@/locales'
 import { formatDateTime } from '@/shared/utils/format'
 import { listAccessibleBuildings } from '../api/hvac'
@@ -18,6 +18,9 @@ const devices = useDaikinResource<Awaited<ReturnType<typeof daikinApi.devices>>>
 const exceptions = useDaikinResource<Awaited<ReturnType<typeof daikinApi.exceptions>>>()
 const building = ref('')
 const kind = ref('')
+const searchInput = ref('')
+const keyword = ref('')
+function search() { keyword.value = searchInput.value.trim(); selected.value = null; if (page.value === 1) load(); else page.value = 1 }
 const page = ref(1)
 const selected = ref<string | null>(null)
 const selectedDevice = computed(() => devices.data.value?.items.find(item => item.equipmentId === selected.value))
@@ -27,7 +30,7 @@ let disposed = false
 function load(cursor?: string) {
   if (!building.value) return
   if (props.alarms) void exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor))
-  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value))
+  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value))
 }
 function refresh() { load(); refreshTick.value++ }
 watch(building, () => { selected.value = null; page.value = 1; devices.clear(); exceptions.clear(); load() })
@@ -54,8 +57,9 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
     <header>
       <div><h1>{{ text(alarms ? (history ? 'historyAlarms' : 'currentAlarms') : 'title') }}</h1><p>{{ text(alarms ? 'alarmNotice' : 'notice') }}</p></div>
       <div class="filters">
-        <ElSelect v-model="building" :placeholder="text('building')" :aria-label="text('building')"><ElOption v-for="item in buildings.data.value ?? []" :key="item.buildingId" :value="item.buildingId" :label="item.buildingName" /></ElSelect>
-        <ElSelect v-if="!alarms" v-model="kind" :placeholder="text('all')" :aria-label="text('kind')"><ElOption value="" :label="text('all')" /><ElOption v-for="key in ['INDOOR', 'OUTDOOR']" :key="key" :value="key" :label="text(key)" /></ElSelect>
+        <label class="filter-field"><span>{{ text('building') }}</span><ElSelect filterable v-model="building" :placeholder="text('building')" :aria-label="text('building')"><ElOption v-for="item in buildings.data.value ?? []" :key="item.buildingId" :value="item.buildingId" :label="item.buildingName" /></ElSelect></label>
+        <label v-if="!alarms" class="filter-field"><span>{{ text('kind') }}</span><ElSelect v-model="kind" :placeholder="text('all')" :aria-label="text('kind')"><ElOption value="" :label="text('all')" /><ElOption v-for="key in ['INDOOR', 'OUTDOOR']" :key="key" :value="key" :label="text(key)" /></ElSelect></label>
+        <label v-if="!alarms" class="filter-field"><span>{{ text('searchDevice') }}</span><ElInput v-model="searchInput" clearable :placeholder="text('searchPlaceholder')" :aria-label="text('searchDevice')" @keyup.enter="search" @clear="search" /></label><ElButton v-if="!alarms" :disabled="!building" @click="search">{{ text('query') }}</ElButton>
         <ElButton :disabled="!building" :loading="devices.loading.value || exceptions.loading.value" @click="refresh">{{ text('refresh') }}</ElButton>
       </div>
     </header>
@@ -95,7 +99,8 @@ onUnmounted(() => { disposed = true; clearInterval(timer) })
 .device-list { min-width: 0; padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); } .device-list .el-pagination { margin-top: var(--bec-space-group); }
 .daikin-panel { display: grid; gap: var(--bec-space-section); min-width: 0; }
 header { display: flex; justify-content: space-between; gap: var(--bec-space-section); flex-wrap: wrap; } h1 { margin: 0; font-size: var(--bec-font-size-system); }
-p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); } .filters { display: flex; gap: var(--bec-space-tight); flex-wrap: wrap; align-items: center; }
+p { color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); } .filters { display: flex; gap: var(--bec-space-tight); flex-wrap: wrap; align-items: flex-end; }
+.filter-field { display: grid; gap: var(--bec-space-tight); } .filter-field .el-input { width: calc(var(--bec-control-height) * 7); }
 .el-select { width: calc(var(--bec-control-height) * 6); } .el-pagination { max-width: 100%; overflow-x: auto; }
 @media (max-width: 600px) { .filters { width: 100%; } .el-select { flex: 1; min-width: calc(var(--bec-control-height) * 4); } }
 </style>
