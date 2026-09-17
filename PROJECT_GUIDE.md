@@ -249,6 +249,7 @@ V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执
 | 后端 | [`PlatformApplication.java`](src/main/java/com/platform/PlatformApplication.java)、[`pom.xml`](pom.xml) |
 | 前端 | [`web/src`](web/src)、[`web/package.json`](web/package.json) |
 | 本地基础设施 | [`src/env/docker-compose.yml`](src/env/docker-compose.yml) |
+| Windows 本地一键开发 | 双击 [`start-local-development.cmd`](start-local-development.cmd)；底层脚本使用开发覆盖文件关闭容器自动重启，开发进程结束后只停止容器，不删除命名卷 |
 | MySQL 迁移 | [`ADR-0001`](docs/adr/0001-flyway-mysql-schema-governance.md)、[`src/env/init`](src/env/init) |
 | MQTT 与南向适配 | [`MqttConfig.java`](src/main/java/com/platform/config/MqttConfig.java)、[`telemetry-adapter`](telemetry-adapter)、[`modbus-edge-adapter`](modbus-edge-adapter) |
 | 资产与设备接入 | [`com.platform.hvac.asset`](src/main/java/com/platform/hvac/asset)、[`com.platform.iot.onboarding`](src/main/java/com/platform/iot/onboarding) |
