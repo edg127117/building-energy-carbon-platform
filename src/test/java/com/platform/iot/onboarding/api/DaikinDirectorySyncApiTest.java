@@ -3,6 +3,7 @@ package com.platform.iot.onboarding.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.audit.BackendDuty;
 import com.platform.iot.onboarding.DaikinSyncAccessService;
+import com.platform.framework.web.PageResponse;
 import com.platform.security.JwtUserPrincipal;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,12 +44,15 @@ class DaikinDirectorySyncApiTest {
                 .andExpect(jsonPath("$.errorCode").value("ONBOARDING_UNAUTHORIZED"));
         mvc.perform(get("/v1/daikin/sources/source-a/sync-jobs/job-a"))
                 .andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/daikin/sync-jobs"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     void returnsAcceptedTaskWithoutWaitingForManufacturer() throws Exception {
         var access = mock(DaikinSyncAccessService.class);
-        var job = new DaikinSyncAccessService.SyncJobView("job-a", "source-a", "QUEUED", 0, null);
+        var job = new DaikinSyncAccessService.SyncJobView(
+                "job-a", "source-a", "QUEUED", 0, null, 1L, 1L, null);
         when(access.request(7L, Set.of("BUILDING_OWNER"), "source-a")).thenReturn(job);
         var auth = new UsernamePasswordAuthenticationToken(new JwtUserPrincipal(7L, "ops"), null,
                 List.of(new SimpleGrantedAuthority("ROLE_BUILDING_OWNER")));
@@ -58,6 +62,22 @@ class DaikinDirectorySyncApiTest {
                 .andExpect(jsonPath("$.data.jobId").value("job-a"))
                 .andExpect(jsonPath("$.data.status").value("QUEUED"));
         verify(access).request(7L, Set.of("BUILDING_OWNER"), "source-a");
+    }
+
+    @Test
+    void listsAuthorizedHistoryWithStablePageContract() throws Exception {
+        var access = mock(DaikinSyncAccessService.class);
+        var job = new DaikinSyncAccessService.SyncJobView(
+                "job-a", "source-a", "SUCCEEDED", 1, null, 10L, 20L, 20L);
+        when(access.list(7L, Set.of("BUILDING_OWNER"), 1, 10))
+                .thenReturn(new PageResponse<>(1, 10, 1, List.of(job)));
+        var auth = new UsernamePasswordAuthenticationToken(new JwtUserPrincipal(7L, "ops"), null,
+                List.of(new SimpleGrantedAuthority("ROLE_BUILDING_OWNER")));
+        MockMvcBuilders.standaloneSetup(new DaikinDirectorySyncController(access)).build()
+                .perform(get("/v1/daikin/sync-jobs").principal(auth))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].createdAt").value(10));
     }
 
     @Test
@@ -80,6 +100,7 @@ class DaikinDirectorySyncApiTest {
         var paths = mapper.readTree(spec).path("paths");
         assertThat(paths.has("/v1/daikin/sources/{sourceId}/sync-jobs")).isTrue();
         assertThat(paths.has("/v1/daikin/sources/{sourceId}/sync-jobs/{jobId}")).isTrue();
+        assertThat(paths.has("/v1/daikin/sync-jobs")).isTrue();
         assertThat(paths.path("/v1/daikin/sources/{sourceId}/sync-jobs").path("post")
                 .path("responses").has("202")).isTrue();
     }

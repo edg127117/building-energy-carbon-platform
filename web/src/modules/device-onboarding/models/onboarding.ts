@@ -103,6 +103,9 @@ export type DaikinSyncJob = {
   status: string
   attempts: number
   errorCode: string | null
+  createdAt: number
+  updatedAt: number
+  completedAt: number | null
 }
 
 export type OperationsBindingApplication = {

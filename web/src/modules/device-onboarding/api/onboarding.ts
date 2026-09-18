@@ -134,3 +134,7 @@ export function requestDaikinDirectorySync(sourceId: string) {
 export function getDaikinDirectorySync(sourceId: string, jobId: string) {
   return requestApi<DaikinSyncJob>({ method: 'get', url: `/v1/daikin/sources/${encoded(sourceId)}/sync-jobs/${encoded(jobId)}` })
 }
+
+export function listDaikinDirectorySyncJobs(params: { page: number; size: number }) {
+  return requestApi<OnboardingPage<DaikinSyncJob>>({ method: 'get', url: '/v1/daikin/sync-jobs', params })
+}

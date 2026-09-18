@@ -1,6 +1,7 @@
 package com.platform.iot.daikin.sync;
 
 import com.platform.framework.exception.BusinessException;
+import com.platform.framework.web.PageResponse;
 import com.platform.iot.daikin.catalog.DaikinCatalogClient;
 import com.platform.iot.daikin.client.DaikinClientException;
 import com.platform.iot.daikin.model.DaikinDeviceKey;
@@ -25,6 +26,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -86,14 +88,48 @@ public class DaikinDirectorySyncService {
         String validSource = requireId(sourceId, 200, "来源身份无效");
         String validJob = requireId(jobId, 32, "任务身份无效");
         List<JobView> jobs = jdbc.query("""
-                SELECT job_id,source_id,status,attempts,error_code
+                SELECT job_id,source_id,status,attempts,error_code,create_time,update_time,completed_at
                 FROM biz_daikin_directory_sync_job WHERE source_id=? AND job_id=?
-                """, (rs, row) -> new JobView(rs.getString(1), rs.getString(2), rs.getString(3),
-                rs.getInt(4), rs.getString(5)), validSource, validJob);
+                """, (rs, row) -> view(rs), validSource, validJob);
         if (jobs.size() != 1) {
             throw new BusinessException(404, "DAIKIN_SYNC_JOB_NOT_FOUND", "同步任务不存在");
         }
         return jobs.get(0);
+    }
+
+    public PageResponse<JobView> listAll(int page, int size) {
+        validatePage(page, size);
+        Long total = jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_directory_sync_job", Long.class);
+        List<JobView> items = jdbc.query("""
+                SELECT job_id,source_id,status,attempts,error_code,create_time,update_time,completed_at
+                FROM biz_daikin_directory_sync_job
+                ORDER BY create_time DESC,job_id DESC LIMIT ? OFFSET ?
+                """, (rs, row) -> view(rs), size, offset(page, size));
+        return new PageResponse<>(page, size, total == null ? 0 : total, items);
+    }
+
+    public PageResponse<JobView> listForBuildings(Set<String> buildingIds, int page, int size) {
+        validatePage(page, size);
+        if (buildingIds == null || buildingIds.isEmpty()) return new PageResponse<>(page, size, 0, List.of());
+        String placeholders = String.join(",", java.util.Collections.nCopies(buildingIds.size(), "?"));
+        Object[] scope = buildingIds.toArray();
+        Long total = jdbc.queryForObject("""
+                SELECT COUNT(DISTINCT j.job_id) FROM biz_daikin_directory_sync_job j
+                JOIN biz_daikin_project_mapping m ON m.source_id=j.source_id
+                WHERE m.building_id IN (%s)
+                """.formatted(placeholders), Long.class, scope);
+        Object[] arguments = java.util.Arrays.copyOf(scope, scope.length + 2);
+        arguments[scope.length] = size;
+        arguments[scope.length + 1] = offset(page, size);
+        List<JobView> items = jdbc.query("""
+                SELECT DISTINCT j.job_id,j.source_id,j.status,j.attempts,j.error_code,
+                       j.create_time,j.update_time,j.completed_at
+                FROM biz_daikin_directory_sync_job j
+                JOIN biz_daikin_project_mapping m ON m.source_id=j.source_id
+                WHERE m.building_id IN (%s)
+                ORDER BY j.create_time DESC,j.job_id DESC LIMIT ? OFFSET ?
+                """.formatted(placeholders), (rs, row) -> view(rs), arguments);
+        return new PageResponse<>(page, size, total == null ? 0 : total, items);
     }
 
     /** 未启用或没有可信 provider 时安静返回，避免测试和默认部署产生外部访问。 */
@@ -184,12 +220,11 @@ public class DaikinDirectorySyncService {
     private JobView enqueueLocked(String sourceId, Long requestedBy, boolean scheduled, Instant dueBefore) {
         lockSource(sourceId);
         List<JobView> active = jdbc.query("""
-                SELECT job_id,source_id,status,attempts,error_code
+                SELECT job_id,source_id,status,attempts,error_code,create_time,update_time,completed_at
                 FROM biz_daikin_directory_sync_job
                 WHERE source_id=? AND status IN ('QUEUED','RUNNING','RETRY_WAIT')
                 ORDER BY create_time LIMIT 1
-                """, (rs, row) -> view(rs.getString(1), rs.getString(2), rs.getString(3),
-                rs.getInt(4), rs.getString(5)), sourceId);
+                """, (rs, row) -> view(rs), sourceId);
         if (!active.isEmpty()) return active.get(0);
         if (scheduled) {
             Integer recent = jdbc.queryForObject("""
@@ -199,13 +234,16 @@ public class DaikinDirectorySyncService {
             if (recent != null && recent > 0) return null;
         }
         String jobId = UUID.randomUUID().toString().replace("-", "");
+        Instant createdAt = now();
         jdbc.update("""
                 INSERT INTO biz_daikin_directory_sync_job
                   (job_id,source_id,status,attempts,fence_token,lease_token,lease_until,
                    next_attempt_at,error_code,requested_by,create_time,update_time,completed_at)
                 VALUES (?,?,'QUEUED',0,0,NULL,NULL,?,NULL,?,?,?,NULL)
-                """, jobId, sourceId, timestamp(now()), requestedBy, timestamp(now()), timestamp(now()));
-        return new JobView(jobId, sourceId, QUEUED, 0, null);
+                """, jobId, sourceId, timestamp(createdAt), requestedBy,
+                timestamp(createdAt), timestamp(createdAt));
+        return new JobView(jobId, sourceId, QUEUED, 0, null,
+                createdAt.toEpochMilli(), createdAt.toEpochMilli(), null);
     }
 
     private Lease claim(String jobId) {
@@ -378,13 +416,26 @@ public class DaikinDirectorySyncService {
         return timestamp == null ? null : timestamp.toLocalDateTime().atZone(MYSQL_ZONE).toInstant();
     }
 
-    private static JobView view(String jobId, String sourceId, String status,
-            int attempts, String errorCode) {
-        return new JobView(jobId, sourceId, status, attempts, errorCode);
+    private static JobView view(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Instant createdAt = instant(rs.getTimestamp(6));
+        Instant updatedAt = instant(rs.getTimestamp(7));
+        Instant completedAt = instant(rs.getTimestamp(8));
+        return new JobView(rs.getString(1), rs.getString(2), rs.getString(3), rs.getInt(4),
+                rs.getString(5), createdAt.toEpochMilli(), updatedAt.toEpochMilli(),
+                completedAt == null ? null : completedAt.toEpochMilli());
+    }
+
+    private static void validatePage(int page, int size) {
+        if (page < 1 || size < 1 || size > 100) throw invalid();
+    }
+
+    private static long offset(int page, int size) {
+        return (page - 1L) * size;
     }
 
     public record JobView(String jobId, String sourceId, String status,
-                          int attempts, String errorCode) { }
+                          int attempts, String errorCode, long createdAt,
+                          long updatedAt, Long completedAt) { }
 
     private record ClaimRow(String sourceId, String status, int attempts, long fence,
                             Instant nextAttemptAt, Instant leaseUntil) { }

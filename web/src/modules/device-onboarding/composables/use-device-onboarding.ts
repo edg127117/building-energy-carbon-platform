@@ -10,6 +10,7 @@ import {
   getOperationsCompatibleProduct,
   getOperationsBindingOptions,
   getDaikinDirectorySync,
+  listDaikinDirectorySyncJobs,
   listDeviceProducts,
   listEquipmentTypes,
   listPendingDevices,
@@ -97,6 +98,9 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   const selectedDirectory = ref<DaikinDirectoryDetail | null>(null)
   const selectedBindingProduct = ref<BindingProduct | null>(null)
   const syncJob = ref<DaikinSyncJob | null>(null)
+  const syncJobs = ref<OnboardingPage<DaikinSyncJob>>(emptyPage(10))
+  const syncJobsLoading = ref(false)
+  const syncJobsError = ref<RequestState>(null)
   const bindingApplications = ref<OperationsBindingApplication[]>([])
   const numericSources = ref<NumericSourceOption[]>([])
   const numericSourcesLoading = ref(false)
@@ -119,6 +123,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   let pendingDetailGeneration = 0
   let pendingConnectionGeneration = 0
   let namingRulesGeneration = 0
+  let syncJobsGeneration = 0
 
   async function loadProducts() {
     const owner = ++productGeneration
@@ -389,6 +394,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   function startDirectorySync(sourceId: string) {
     return run(`daikin:sync:${sourceId}`, async () => {
       syncJob.value = await requestDaikinDirectorySync(sourceId)
+      await loadDirectorySyncJobs(1)
       return syncJob.value
     })
   }
@@ -406,8 +412,29 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     if (!job) return Promise.resolve(undefined)
     return run(`daikin:sync:status:${job.jobId}`, async () => {
       syncJob.value = await getDaikinDirectorySync(job.sourceId, job.jobId)
+      await loadDirectorySyncJobs(1)
       return syncJob.value
     })
+  }
+
+  async function loadDirectorySyncJobs(page = syncJobs.value.page) {
+    if (!operations) return syncJobs.value
+    const owner = ++syncJobsGeneration
+    syncJobsLoading.value = true
+    syncJobsError.value = null
+    try {
+      const result = await listDaikinDirectorySyncJobs({ page, size: syncJobs.value.size })
+      if (owner === syncJobsGeneration) {
+        syncJobs.value = result
+        if (page === 1) syncJob.value = result.items[0] ?? null
+      }
+      return result
+    } catch (reason) {
+      if (owner === syncJobsGeneration) syncJobsError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === syncJobsGeneration) syncJobsLoading.value = false
+    }
   }
 
   return {
@@ -427,6 +454,9 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     selectedDirectory,
     selectedBindingProduct,
     syncJob,
+    syncJobs,
+    syncJobsLoading,
+    syncJobsError,
     bindingApplications,
     numericSources,
     numericSourcesLoading,
@@ -461,6 +491,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     submitBindingBatch,
     startDirectorySync,
     refreshDirectorySync,
+    loadDirectorySyncJobs,
     submitIdentityStatus,
   }
 }

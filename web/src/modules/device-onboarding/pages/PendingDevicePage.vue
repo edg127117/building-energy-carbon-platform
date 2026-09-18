@@ -72,6 +72,7 @@ const bindingKeys = new Map<string, string>()
 const identityKeys = new Map<string, string>()
 const batchResultsOpen = ref(false)
 const syncSourceId = ref('')
+const syncHistoryOpen = ref(false)
 const selectedPending = computed(() => management.selectedPending.value)
 const bindingProduct = computed(() => operationsMode.value ? management.selectedBindingProduct.value : management.selectedProduct.value)
 const bindingSubmitting = computed(() => {
@@ -321,6 +322,23 @@ async function refreshSync() {
   }
 }
 
+async function openSyncHistory() {
+  syncHistoryOpen.value = true
+  try {
+    await operationsManagement.loadDirectorySyncJobs(1)
+  } catch {
+    // 授权分页错误由抽屉内受控状态展示。
+  }
+}
+
+async function changeSyncHistoryPage(page: number) {
+  try {
+    await operationsManagement.loadDirectorySyncJobs(page)
+  } catch {
+    // 保留上一页内容并展示查询错误。
+  }
+}
+
 function asBindingApplication(value: unknown): OperationsBindingApplication {
   return value as OperationsBindingApplication
 }
@@ -334,6 +352,7 @@ async function switchDeviceView(nextOperationsMode: boolean) {
   batchPendingIds.value = []
   await router.replace({ query: { ...route.query, view: nextOperationsMode ? undefined : 'general' } })
   await management.loadPendingDevices().catch(() => undefined)
+  if (nextOperationsMode) await operationsManagement.loadDirectorySyncJobs(1).catch(() => undefined)
 }
 
 function changeDeviceView(value: string | number) {
@@ -404,6 +423,7 @@ onMounted(() => {
   const profileCode = typeof route.query.profileCode === 'string' ? route.query.profileCode : ''
   management.pendingQuery.value.profileCode = profileCode
   void management.loadPendingDevices().catch(() => undefined)
+  if (operationsMode.value) void operationsManagement.loadDirectorySyncJobs(1).catch(() => undefined)
 })
 </script>
 
@@ -429,19 +449,34 @@ onMounted(() => {
       <div class="section-heading"><div><h2>{{ t('deviceOnboarding.pending.directorySync') }}</h2><p>{{ t('deviceOnboarding.pending.directorySyncDescription') }}</p></div></div>
       <div class="sync-form">
         <label for="daikin-source-id">{{ t('deviceOnboarding.labels.syncSource') }}</label>
-        <div class="sync-actions"><ElInput v-model="syncSourceId" input-id="daikin-source-id" maxlength="200" :placeholder="t('deviceOnboarding.labels.syncSourcePlaceholder')" @keyup.enter="requestSync" /><ElButton type="primary" :loading="management.running.value.has(`daikin:sync:${syncSourceId.trim()}`)" @click="requestSync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" :icon="RefreshCw" :loading="management.running.value.has(`daikin:sync:status:${management.syncJob.value.jobId}`)" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton></div>
+        <div class="sync-actions"><ElInput v-model="syncSourceId" input-id="daikin-source-id" maxlength="200" :placeholder="t('deviceOnboarding.labels.syncSourcePlaceholder')" @keyup.enter="requestSync" /><ElButton type="primary" :loading="management.running.value.has(`daikin:sync:${syncSourceId.trim()}`)" @click="requestSync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" :icon="RefreshCw" :loading="management.running.value.has(`daikin:sync:status:${management.syncJob.value.jobId}`)" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton><ElButton @click="openSyncHistory">{{ t('deviceOnboarding.actions.viewSyncHistory') }}</ElButton></div>
         <p class="field-hint">{{ t('deviceOnboarding.messages.syncSourceBoundary') }}</p>
       </div>
       <section v-if="management.syncJob.value" class="sync-result">
         <div class="sync-result-line" role="status">
-          <strong>{{ t('deviceOnboarding.pending.latestSync') }}</strong>
-          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncStatus') }}</span><ElTag>{{ syncJobStatusText(management.syncJob.value.status) }}</ElTag></span>
-          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncAttempts') }}</span><b>{{ formatNumber(management.syncJob.value.attempts) }}</b></span>
-          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncResult') }}</span><b>{{ syncJobResultText(management.syncJob.value.errorCode) }}</b></span>
+          <strong class="sync-result-heading">{{ t('deviceOnboarding.pending.latestSync') }}</strong>
+          <span class="sync-result-item sync-result-status"><span>{{ t('deviceOnboarding.labels.syncStatus') }}</span><ElTag>{{ syncJobStatusText(management.syncJob.value.status) }}</ElTag></span>
+          <span class="sync-result-item sync-result-attempts"><span>{{ t('deviceOnboarding.labels.syncAttempts') }}</span><b>{{ formatNumber(management.syncJob.value.attempts) }}</b></span>
+          <span class="sync-result-item sync-result-outcome" :class="{ 'is-warning': management.syncJob.value.errorCode }"><span>{{ t('deviceOnboarding.labels.syncResult') }}</span><b>{{ syncJobResultText(management.syncJob.value.errorCode) }}</b></span>
         </div>
         <details class="technical-details"><summary>{{ t('deviceOnboarding.operationsTechnicalDetails') }}</summary><ElDescriptions :column="1" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="management.syncJob.value.sourceId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobTechnicalId')"><CopyableValue :value="management.syncJob.value.jobId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncErrorCode')"><CopyableValue :value="management.syncJob.value.errorCode || t('common.missing')" /></ElDescriptionsItem></ElDescriptions></details>
       </section>
     </ElCard>
+    <ElDrawer v-model="syncHistoryOpen" size="min(900px, 94vw)" :title="t('deviceOnboarding.pending.syncHistory')">
+      <ElAlert :title="t('deviceOnboarding.messages.syncHistoryBoundary')" type="info" show-icon :closable="false" />
+      <ElSkeleton v-if="operationsManagement.syncJobsLoading.value && !operationsManagement.syncJobs.value.items.length" animated :rows="5" />
+      <ElAlert v-else-if="operationsManagement.syncJobsError.value" :title="operationsManagement.syncJobsError.value.message" type="error" show-icon :closable="false" />
+      <ElTable v-else :data="operationsManagement.syncJobs.value.items" row-key="jobId" class="sync-history-table">
+        <ElTableColumn :label="t('deviceOnboarding.labels.syncStartedAt')" min-width="170"><template #default="{ row }">{{ formatDateTime(row.createdAt) }}</template></ElTableColumn>
+        <ElTableColumn :label="t('deviceOnboarding.labels.syncCompletedAt')" min-width="170"><template #default="{ row }">{{ row.completedAt ? formatDateTime(row.completedAt) : t('common.missing') }}</template></ElTableColumn>
+        <ElTableColumn :label="t('deviceOnboarding.labels.syncStatus')" min-width="110"><template #default="{ row }"><ElTag>{{ syncJobStatusText(row.status) }}</ElTag></template></ElTableColumn>
+        <ElTableColumn :label="t('deviceOnboarding.labels.syncAttempts')" min-width="90"><template #default="{ row }">{{ formatNumber(row.attempts) }}</template></ElTableColumn>
+        <ElTableColumn :label="t('deviceOnboarding.labels.syncResult')" min-width="220"><template #default="{ row }">{{ syncJobResultText(row.errorCode) }}</template></ElTableColumn>
+        <ElTableColumn :label="t('deviceOnboarding.operationsTechnicalDetails')" min-width="120"><template #default="{ row }"><details class="technical-details"><summary>{{ t('deviceOnboarding.actions.viewDetail') }}</summary><ElDescriptions :column="1" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="row.sourceId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobTechnicalId')"><CopyableValue :value="row.jobId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncErrorCode')"><CopyableValue :value="row.errorCode || t('common.missing')" /></ElDescriptionsItem></ElDescriptions></details></template></ElTableColumn>
+        <template #empty><ElEmpty :description="t('deviceOnboarding.empty.syncHistory')" /></template>
+      </ElTable>
+      <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="operationsManagement.syncJobs.value.page" :page-size="operationsManagement.syncJobs.value.size" :total="operationsManagement.syncJobs.value.total" @current-change="changeSyncHistoryPage" /></div>
+    </ElDrawer>
     <ElCard shadow="never">
       <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!selectedRows.length" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton></div>
       <ElSkeleton v-if="management.pendingLoading.value && !management.pendingDevices.value.items.length" animated :rows="5" />
@@ -522,9 +557,15 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .sync-actions > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); }
 .field-hint { font-size: var(--bec-font-size-small); }
 .sync-result { padding-top: var(--bec-space-group); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
-.sync-result-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bec-space-tight) var(--bec-space-group); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
-.sync-result-item { display: inline-flex; align-items: center; gap: var(--bec-space-tight); color: var(--bec-color-text-secondary); }
-.sync-result-item b { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-normal); }
+.sync-result-line { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); align-items: stretch; gap: var(--bec-space-tight); padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
+.sync-result-heading { align-self: center; padding-inline: var(--bec-space-tight) var(--bec-space-group); white-space: nowrap; }
+.sync-result-item { display: grid; align-content: center; gap: calc(var(--bec-space-tight) / 2); min-height: var(--bec-ref-space-48); padding: var(--bec-space-tight) var(--bec-space-group); color: var(--bec-color-text-secondary); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-divider); border-radius: var(--bec-radius-control); }
+.sync-result-item > span { font-size: var(--bec-font-size-small); }
+.sync-result-item b { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); }
+.sync-result-status { background: color-mix(in srgb, var(--bec-color-action-primary) 5%, var(--bec-color-surface)); }
+.sync-result-attempts { background: color-mix(in srgb, var(--bec-color-action-primary) 3%, var(--bec-color-surface)); }
+.sync-result-outcome { background: color-mix(in srgb, var(--bec-color-success) 7%, var(--bec-color-surface)); }
+.sync-result-outcome.is-warning { background: color-mix(in srgb, var(--bec-color-warning) 9%, var(--bec-color-surface)); }
 .filter-bar { align-items: stretch; }
 .filter-bar { flex-wrap: wrap; }
 .filter-bar > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); order: -1; }
@@ -533,6 +574,8 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 @media (max-width: 640px) {
   .filter-bar > :deep(.el-input), .sync-actions > :deep(.el-input) { flex-basis: 100%; min-width: 0; }
   .sync-actions > :deep(.el-button) { flex: 1 1 auto; margin-left: 0; }
+  .sync-result-line { grid-template-columns: 1fr; }
+  .sync-result-heading { padding: 0 0 var(--bec-space-tight); }
 }
 .pagination { display: flex; justify-content: flex-end; padding-top: var(--bec-space-group); }
 .drawer-heading { align-items: flex-start; margin-bottom: var(--bec-space-section); }
@@ -542,5 +585,6 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .technical-details { margin-top: var(--bec-space-group); color: var(--bec-color-text-secondary); }
 .technical-details summary { width: fit-content; cursor: pointer; color: var(--bec-color-text-secondary); }
 .technical-details :deep(.el-descriptions) { margin-top: var(--bec-space-tight); }
+.sync-history-table { margin-top: var(--bec-space-section); }
 pre { margin: 0; padding: var(--bec-space-group); color: var(--bec-color-text-primary); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-divider); border-radius: var(--bec-radius-card); font-family: var(--bec-font-family-number); font-size: var(--bec-font-size-small); line-height: var(--bec-line-height); overflow: auto; }
 </style>

@@ -3,6 +3,7 @@ package com.platform.iot.onboarding;
 import com.platform.audit.BackendDuty;
 import com.platform.audit.BackendDutyService;
 import com.platform.framework.exception.BusinessException;
+import com.platform.framework.web.PageResponse;
 import com.platform.iot.daikin.sync.DaikinDirectorySyncService;
 import com.platform.system.mapper.SysMenuMapper;
 import com.platform.system.service.BuildingScopeService;
@@ -48,16 +49,21 @@ public class DaikinSyncAccessService {
         return view(sync.get(sourceId, jobId));
     }
 
+    public PageResponse<SyncJobView> list(Long userId, Set<String> roles, int page, int size) {
+        if (userId == null || roles == null) throw forbidden();
+        if (roles.contains("PLATFORM_ADMIN")) return map(sync.listAll(page, size));
+        requireVisibleMenu(userId);
+        Set<String> allowed = buildings.getAccessibleBuildingIds(userId, roles);
+        return map(sync.listForBuildings(allowed, page, size));
+    }
+
     private void requireAccess(Long userId, Set<String> roles, String sourceId) {
         if (userId == null || roles == null) throw forbidden();
         if (sourceId == null || sourceId.isBlank() || sourceId.length() > 200) {
             throw new BusinessException(400, "DAIKIN_SYNC_INVALID_REQUEST", "来源身份无效");
         }
         if (roles.contains("PLATFORM_ADMIN")) return;
-        if (menus.selectVisibleMenusByUserId(userId).stream()
-                .noneMatch(menu -> "C".equals(menu.getMenuType()) && MENUS.contains(menu.getPath()))) {
-            throw forbidden();
-        }
+        requireVisibleMenu(userId);
         Set<String> allowed = buildings.getAccessibleBuildingIds(userId, roles);
         // 每次读取当前映射和授权，不把创建任务时的权限当作永久查询凭证。
         if (allowed == null || allowed.isEmpty() || jdbc.queryForList(
@@ -66,12 +72,26 @@ public class DaikinSyncAccessService {
     }
 
     private static SyncJobView view(DaikinDirectorySyncService.JobView job) {
-        return new SyncJobView(job.jobId(), job.sourceId(), job.status(), job.attempts(), job.errorCode());
+        return new SyncJobView(job.jobId(), job.sourceId(), job.status(), job.attempts(), job.errorCode(),
+                job.createdAt(), job.updatedAt(), job.completedAt());
+    }
+
+    private void requireVisibleMenu(Long userId) {
+        if (menus.selectVisibleMenusByUserId(userId).stream()
+                .noneMatch(menu -> "C".equals(menu.getMenuType()) && MENUS.contains(menu.getPath()))) {
+            throw forbidden();
+        }
+    }
+
+    private static PageResponse<SyncJobView> map(PageResponse<DaikinDirectorySyncService.JobView> page) {
+        return new PageResponse<>(page.page(), page.size(), page.total(), page.items().stream()
+                .map(DaikinSyncAccessService::view).toList());
     }
 
     private static BusinessException forbidden() {
         return new BusinessException(403, "DAIKIN_SYNC_FORBIDDEN", "无权访问该来源同步任务");
     }
 
-    public record SyncJobView(String jobId, String sourceId, String status, int attempts, String errorCode) { }
+    public record SyncJobView(String jobId, String sourceId, String status, int attempts, String errorCode,
+                              long createdAt, long updatedAt, Long completedAt) { }
 }
