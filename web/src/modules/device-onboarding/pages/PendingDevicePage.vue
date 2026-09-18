@@ -291,14 +291,13 @@ function ensureBindingKeys(ids: string[]) {
 }
 
 async function requestSync() {
-  const sourceId = syncSourceId.value.trim()
+  const sourceId = syncSourceId.value
   if (!sourceId) {
     ElMessage.warning(t('deviceOnboarding.messages.syncSourceRequired'))
     return
   }
   try {
     await management.startDirectorySync(sourceId)
-    syncSourceId.value = ''
   } catch {
     // 后端明确返回权限、配置或任务失败；页面不回退到模拟目录。
   }
@@ -423,7 +422,14 @@ onMounted(() => {
   const profileCode = typeof route.query.profileCode === 'string' ? route.query.profileCode : ''
   management.pendingQuery.value.profileCode = profileCode
   void management.loadPendingDevices().catch(() => undefined)
-  if (operationsMode.value) void operationsManagement.loadDirectorySyncJobs(1).catch(() => undefined)
+  if (operationsMode.value) {
+    void Promise.all([
+      operationsManagement.loadDirectorySyncJobs(1),
+      operationsManagement.loadDaikinSources().then(sources => {
+        if (sources.length === 1) syncSourceId.value = sources[0]!.sourceId
+      }),
+    ]).catch(() => undefined)
+  }
 })
 </script>
 
@@ -447,9 +453,11 @@ onMounted(() => {
     </div>
     <ElCard v-if="operationsMode" class="sync-card" shadow="never">
       <div class="section-heading"><div><h2>{{ t('deviceOnboarding.pending.directorySync') }}</h2><p>{{ t('deviceOnboarding.pending.directorySyncDescription') }}</p></div></div>
+      <ElAlert v-if="operationsManagement.daikinSourcesError.value" :title="operationsManagement.daikinSourcesError.value.message" type="error" show-icon :closable="false" />
+      <ElAlert v-else-if="!operationsManagement.daikinSourcesLoading.value && !operationsManagement.daikinSources.value.length" :title="t('deviceOnboarding.empty.daikinSources')" type="info" show-icon :closable="false" />
       <div class="sync-form">
         <label for="daikin-source-id">{{ t('deviceOnboarding.labels.syncSource') }}</label>
-        <div class="sync-actions"><ElInput v-model="syncSourceId" input-id="daikin-source-id" maxlength="200" :placeholder="t('deviceOnboarding.labels.syncSourcePlaceholder')" @keyup.enter="requestSync" /><ElButton type="primary" :loading="management.running.value.has(`daikin:sync:${syncSourceId.trim()}`)" @click="requestSync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" :icon="RefreshCw" :loading="management.running.value.has(`daikin:sync:status:${management.syncJob.value.jobId}`)" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton><ElButton @click="openSyncHistory">{{ t('deviceOnboarding.actions.viewSyncHistory') }}</ElButton></div>
+        <div class="sync-actions"><ElSelect v-model="syncSourceId" input-id="daikin-source-id" :loading="operationsManagement.daikinSourcesLoading.value" :placeholder="t('deviceOnboarding.labels.syncSourcePlaceholder')"><ElOption v-for="source in operationsManagement.daikinSources.value" :key="source.sourceId" :label="source.sourceName" :value="source.sourceId" /></ElSelect><ElButton type="primary" :disabled="!syncSourceId" :loading="management.running.value.has(`daikin:sync:${syncSourceId}`)" @click="requestSync">{{ t('deviceOnboarding.actions.syncDirectory') }}</ElButton><ElButton v-if="management.syncJob.value" :icon="RefreshCw" :loading="management.running.value.has(`daikin:sync:status:${management.syncJob.value.jobId}`)" @click="refreshSync">{{ t('deviceOnboarding.actions.refreshSync') }}</ElButton><ElButton @click="openSyncHistory">{{ t('deviceOnboarding.actions.viewSyncHistory') }}</ElButton></div>
         <p class="field-hint">{{ t('deviceOnboarding.messages.syncSourceBoundary') }}</p>
       </div>
       <section v-if="management.syncJob.value" class="sync-result">
@@ -554,7 +562,7 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .sync-form { gap: var(--bec-space-tight); }
 .sync-form label { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); }
 .sync-actions { align-items: stretch; flex-wrap: wrap; gap: var(--bec-space-tight); }
-.sync-actions > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); }
+.sync-actions > :deep(.el-input), .sync-actions > :deep(.el-select) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); }
 .field-hint { font-size: var(--bec-font-size-small); }
 .sync-result { padding-top: var(--bec-space-group); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
 .sync-result-line { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); align-items: stretch; gap: var(--bec-space-tight); padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
@@ -572,7 +580,7 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .filter-bar :deep(.el-input__prefix svg) { width: var(--bec-icon-small); height: var(--bec-icon-small); }
 .filter-bar > :deep(.el-select) { flex: 0 0 calc(var(--bec-navigation-width) * 0.75); width: calc(var(--bec-navigation-width) * 0.75); min-width: 0; }
 @media (max-width: 640px) {
-  .filter-bar > :deep(.el-input), .sync-actions > :deep(.el-input) { flex-basis: 100%; min-width: 0; }
+  .filter-bar > :deep(.el-input), .sync-actions > :deep(.el-input), .sync-actions > :deep(.el-select) { flex-basis: 100%; min-width: 0; }
   .sync-actions > :deep(.el-button) { flex: 1 1 auto; margin-left: 0; }
   .sync-result-line { grid-template-columns: 1fr; }
   .sync-result-heading { padding: 0 0 var(--bec-space-tight); }

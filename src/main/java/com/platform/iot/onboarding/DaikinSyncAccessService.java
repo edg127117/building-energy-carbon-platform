@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -57,6 +58,29 @@ public class DaikinSyncAccessService {
         return map(sync.listForBuildings(allowed, page, size));
     }
 
+    public List<SourceOption> sources(Long userId, Set<String> roles) {
+        if (userId == null || roles == null) throw forbidden();
+        if (roles.contains("PLATFORM_ADMIN")) {
+            return availableSources("SELECT source_id,source_name FROM biz_daikin_source ORDER BY source_name,source_id",
+                    new Object[0]);
+        }
+        requireVisibleMenu(userId);
+        Set<String> allowed = buildings.getAccessibleBuildingIds(userId, roles);
+        if (allowed == null || allowed.isEmpty()) return List.of();
+        String placeholders = String.join(",", java.util.Collections.nCopies(allowed.size(), "?"));
+        return availableSources("""
+                SELECT DISTINCT s.source_id,s.source_name FROM biz_daikin_source s
+                JOIN biz_daikin_project_mapping m ON m.source_id=s.source_id
+                WHERE m.building_id IN (%s)
+                ORDER BY s.source_name,s.source_id
+                """.formatted(placeholders), allowed.toArray());
+    }
+
+    private List<SourceOption> availableSources(String sql, Object[] parameters) {
+        return jdbc.query(sql, (rs, row) -> new SourceOption(rs.getString(1), rs.getString(2)), parameters)
+                .stream().filter(source -> sync.isAvailable(source.sourceId())).toList();
+    }
+
     private void requireAccess(Long userId, Set<String> roles, String sourceId) {
         if (userId == null || roles == null) throw forbidden();
         if (sourceId == null || sourceId.isBlank() || sourceId.length() > 200) {
@@ -94,4 +118,5 @@ public class DaikinSyncAccessService {
 
     public record SyncJobView(String jobId, String sourceId, String status, int attempts, String errorCode,
                               long createdAt, long updatedAt, Long completedAt) { }
+    public record SourceOption(String sourceId, String sourceName) { }
 }

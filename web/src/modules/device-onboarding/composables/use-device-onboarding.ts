@@ -10,6 +10,7 @@ import {
   getOperationsCompatibleProduct,
   getOperationsBindingOptions,
   getDaikinDirectorySync,
+  listDaikinSources,
   listDaikinDirectorySyncJobs,
   listDeviceProducts,
   listEquipmentTypes,
@@ -40,6 +41,7 @@ import type {
   BindingProduct,
   DaikinDirectoryDetail,
   DaikinSyncJob,
+  DaikinSourceOption,
   OperationsBindingApplication,
   PendingBindRequest,
   NumericSourceOption,
@@ -101,6 +103,9 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   const syncJobs = ref<OnboardingPage<DaikinSyncJob>>(emptyPage(10))
   const syncJobsLoading = ref(false)
   const syncJobsError = ref<RequestState>(null)
+  const daikinSources = ref<DaikinSourceOption[]>([])
+  const daikinSourcesLoading = ref(false)
+  const daikinSourcesError = ref<RequestState>(null)
   const bindingApplications = ref<OperationsBindingApplication[]>([])
   const numericSources = ref<NumericSourceOption[]>([])
   const numericSourcesLoading = ref(false)
@@ -124,6 +129,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   let pendingConnectionGeneration = 0
   let namingRulesGeneration = 0
   let syncJobsGeneration = 0
+  let daikinSourcesGeneration = 0
 
   async function loadProducts() {
     const owner = ++productGeneration
@@ -437,6 +443,23 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     }
   }
 
+  async function loadDaikinSources() {
+    if (!operations) return daikinSources.value
+    const owner = ++daikinSourcesGeneration
+    daikinSourcesLoading.value = true
+    daikinSourcesError.value = null
+    try {
+      const result = await listDaikinSources()
+      if (owner === daikinSourcesGeneration) daikinSources.value = result
+      return result
+    } catch (reason) {
+      if (owner === daikinSourcesGeneration) daikinSourcesError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === daikinSourcesGeneration) daikinSourcesLoading.value = false
+    }
+  }
+
   return {
     equipmentTypes, equipmentTypesError, equipmentTypesLoading, loadEquipmentTypes,
     productQuery,
@@ -457,6 +480,9 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     syncJobs,
     syncJobsLoading,
     syncJobsError,
+    daikinSources,
+    daikinSourcesLoading,
+    daikinSourcesError,
     bindingApplications,
     numericSources,
     numericSourcesLoading,
@@ -492,6 +518,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     startDirectorySync,
     refreshDirectorySync,
     loadDirectorySyncJobs,
+    loadDaikinSources,
     submitIdentityStatus,
   }
 }

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DaikinSyncJob, OnboardingPage, PendingDevice } from '../models/onboarding'
-import { getOperationsPendingDevice, listDaikinDirectorySyncJobs, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
+import { getOperationsPendingDevice, listDaikinDirectorySyncJobs, listDaikinSources, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -16,6 +16,7 @@ vi.mock('../api/onboarding', () => ({
   getDaikinDirectorySync: vi.fn(),
   listDeviceProducts: vi.fn(),
   listDaikinDirectorySyncJobs: vi.fn(),
+  listDaikinSources: vi.fn(),
   listEquipmentTypes: vi.fn(),
   listPendingDevices: vi.fn(),
   listOperationsCompatibleProducts: vi.fn(),
@@ -54,6 +55,16 @@ describe('设备接入异步状态', () => {
     vi.mocked(getPendingDeviceConnection).mockResolvedValue({ pendingId: 'D-01', identityId: null, identityStatus: 'UNBOUND', equipmentId: null, buildingId: null, productId: null, configEffective: false })
     vi.mocked(listPointNamingRules).mockResolvedValue([])
     vi.mocked(listDaikinDirectorySyncJobs).mockResolvedValue({ page: 1, size: 10, total: 0, items: [] })
+    vi.mocked(listDaikinSources).mockResolvedValue([])
+  })
+
+  it('加载当前账号可用的大金数据源名称', async () => {
+    vi.mocked(listDaikinSources).mockResolvedValueOnce([{ sourceId: 'source-a', sourceName: '创新港大金空调' }])
+    const management = useDeviceOnboarding({ operations: true })
+
+    await management.loadDaikinSources()
+
+    expect(management.daikinSources.value).toEqual([{ sourceId: 'source-a', sourceName: '创新港大金空调' }])
   })
 
   it('忽略迟到的待处理列表响应，只保留最新条件结果', async () => {

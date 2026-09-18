@@ -14,6 +14,7 @@ import type {
   OperationsBindingApplication,
   OperationsPendingDetail,
   DaikinSyncJob,
+  DaikinSourceOption,
   NumericSourceOption,
   OperationsBindingOptions,
 } from '../models/onboarding'
@@ -129,6 +130,10 @@ export function submitOperationsIdentityStatus(pendingId: string, targetStatus: 
 
 export function requestDaikinDirectorySync(sourceId: string) {
   return requestApi<DaikinSyncJob>({ method: 'post', url: `/v1/daikin/sources/${encoded(sourceId)}/sync-jobs` })
+}
+
+export function listDaikinSources() {
+  return requestApi<DaikinSourceOption[]>({ method: 'get', url: '/v1/daikin/sources' })
 }
 
 export function getDaikinDirectorySync(sourceId: string, jobId: string) {
