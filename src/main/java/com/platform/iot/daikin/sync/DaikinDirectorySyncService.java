@@ -363,6 +363,10 @@ public class DaikinDirectorySyncService {
         }
     }
 
+    public boolean isAvailable(String sourceId) {
+        return properties.isEnabled() && provider.flatMap(value -> safeClient(value, sourceId)).isPresent();
+    }
+
     private Optional<DaikinCatalogClient> safeClient(DaikinCatalogClientProvider value, String sourceId) {
         try {
             Optional<DaikinCatalogClient> client = value.clientFor(sourceId);

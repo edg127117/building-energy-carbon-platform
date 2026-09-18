@@ -255,8 +255,8 @@ class DaikinDirectorySyncServiceTest {
         service = newService(Optional.of(source -> "source-E".equals(source)
                 ? Optional.of(client) : Optional.empty()));
         for (char suffix = 'A'; suffix <= 'E'; suffix++) {
-            jdbc.update("INSERT INTO biz_daikin_source(source_id,registered_by,create_time) VALUES (?,?,?)",
-                    "source-" + suffix, 7L, java.sql.Timestamp.from(NOW));
+            jdbc.update("INSERT INTO biz_daikin_source(source_id,source_name,registered_by,create_time) VALUES (?,?,?,?)",
+                    "source-" + suffix, "测试大金数据源 " + suffix, 7L, java.sql.Timestamp.from(NOW));
         }
 
         service.enqueueScheduledSources();
@@ -282,7 +282,7 @@ class DaikinDirectorySyncServiceTest {
     }
 
     private void insertSource() {
-        jdbc.update("INSERT INTO biz_daikin_source(source_id,registered_by,create_time) VALUES ('source-A',7,?)",
+        jdbc.update("INSERT INTO biz_daikin_source(source_id,source_name,registered_by,create_time) VALUES ('source-A','测试大金数据源',7,?)",
                 java.sql.Timestamp.from(NOW));
     }
 

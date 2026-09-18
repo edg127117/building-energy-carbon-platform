@@ -32,6 +32,8 @@ class DaikinSyncAccessServiceTest {
     void setup() {
         jdbc = new JdbcTemplate(new DriverManagerDataSource("jdbc:h2:mem:sync-access-" + System.nanoTime()
                 + ";DB_CLOSE_DELAY=-1", "sa", ""));
+        jdbc.execute("CREATE TABLE biz_daikin_source(source_id VARCHAR(200), source_name VARCHAR(200))");
+        jdbc.update("INSERT INTO biz_daikin_source VALUES ('source-a','创新港大金空调'),('source-b','其他建筑大金空调')");
         jdbc.execute("CREATE TABLE biz_daikin_project_mapping(source_id VARCHAR(200), building_id VARCHAR(32))");
         jdbc.update("INSERT INTO biz_daikin_project_mapping VALUES ('source-a','BLD001'),('source-b','BLD002')");
         service = new DaikinSyncAccessService(jdbc, buildings, menus, duties, sync);
@@ -90,6 +92,17 @@ class DaikinSyncAccessServiceTest {
         assertThat(service.list(1L, Set.of("PLATFORM_ADMIN"), 2, 10).items()).isEmpty();
         verify(sync).listAll(2, 10);
         verifyNoInteractions(menus, buildings, duties);
+    }
+
+    @Test
+    void listsOnlyConfiguredSourcesInCurrentBuildingScope() {
+        when(sync.isAvailable("source-a")).thenReturn(true);
+        when(sync.isAvailable("source-b")).thenReturn(false);
+
+        assertThat(service.sources(7L, OPS))
+                .containsExactly(new DaikinSyncAccessService.SourceOption("source-a", "创新港大金空调"));
+        assertThat(service.sources(1L, Set.of("PLATFORM_ADMIN")))
+                .containsExactly(new DaikinSyncAccessService.SourceOption("source-a", "创新港大金空调"));
     }
 
     @Test

@@ -108,6 +108,11 @@ export type DaikinSyncJob = {
   completedAt: number | null
 }
 
+export type DaikinSourceOption = {
+  sourceId: string
+  sourceName: string
+}
+
 export type OperationsBindingApplication = {
   pendingId: string
   requestId: string | null

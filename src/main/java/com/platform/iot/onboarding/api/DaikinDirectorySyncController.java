@@ -4,6 +4,7 @@ import com.platform.framework.common.Result;
 import com.platform.framework.web.PageResponse;
 import com.platform.iot.onboarding.DaikinSyncAccessService;
 import com.platform.iot.onboarding.DaikinSyncAccessService.SyncJobView;
+import com.platform.iot.onboarding.DaikinSyncAccessService.SourceOption;
 import com.platform.security.SecurityUser;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
@@ -13,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/v1/daikin")
@@ -47,5 +50,12 @@ public class DaikinDirectorySyncController {
             @RequestParam(defaultValue = "10") int size) {
         return Result.success(service.list(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), page, size));
+    }
+
+    @GetMapping("/sources")
+    @Operation(summary = "查询当前账号可用于目录同步的大金数据源")
+    public Result<List<SourceOption>> sources(Authentication authentication) {
+        return Result.success(service.sources(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication)));
     }
 }

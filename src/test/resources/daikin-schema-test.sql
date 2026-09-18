@@ -9,6 +9,7 @@ DROP TABLE IF EXISTS biz_daikin_source;
 
 CREATE TABLE biz_daikin_source (
   source_id VARCHAR(200) PRIMARY KEY,
+  source_name VARCHAR(200) NOT NULL,
   registered_by BIGINT NOT NULL,
   create_time TIMESTAMP(3) NOT NULL
 );

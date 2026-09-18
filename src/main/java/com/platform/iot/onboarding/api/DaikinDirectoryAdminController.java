@@ -28,7 +28,8 @@ public class DaikinDirectoryAdminController {
     @Operation(summary = "登记逻辑来源；不启用外部采集")
     @PostMapping("/sources")
     public Result<Void> source(Authentication authentication, @Valid @RequestBody SourceRequest request) {
-        service.registerSource(request.sourceId(), SecurityUser.userId(authentication), SecurityUser.roles(authentication));
+        service.registerSource(request.sourceId(), request.sourceName(), SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication));
         return Result.success();
     }
 
@@ -41,7 +42,8 @@ public class DaikinDirectoryAdminController {
     }
 
     @Schema(name = "DaikinDirectorySourceRequest")
-    public record SourceRequest(@NotBlank @Size(max = 200) String sourceId) { }
+    public record SourceRequest(@NotBlank @Size(max = 200) String sourceId,
+                                @NotBlank @Size(max = 200) String sourceName) { }
     @Schema(name = "DaikinDirectoryProjectRequest")
     public record ProjectRequest(@NotBlank @Size(max = 200) String sourceId,
                                  @NotBlank @Size(max = 200) String siteId,

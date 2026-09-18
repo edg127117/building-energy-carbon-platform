@@ -60,20 +60,32 @@ public class DaikinDirectoryService {
     }
 
     public void registerSource(String sourceId, Long operatorId, Set<String> roles) {
+        registerSource(sourceId, "大金空调数据源", operatorId, roles);
+    }
+
+    public void registerSource(String sourceId, String sourceName, Long operatorId, Set<String> roles) {
         requireAdmin(roles);
         sourceId = requireText(sourceId, 200, "大金来源身份无效");
+        sourceName = requireText(sourceName, 200, "大金来源名称无效");
         requireOperator(operatorId);
         String registeredSource = sourceId;
+        String registeredName = sourceName;
         transaction.executeWithoutResult(status -> {
-            Integer count = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM biz_daikin_source WHERE source_id=?", Integer.class,
-                    registeredSource);
-            if (count != null && count > 0) return;
+            List<String> names = jdbc.queryForList(
+                    "SELECT source_name FROM biz_daikin_source WHERE source_id=? FOR UPDATE",
+                    String.class, registeredSource);
+            if (!names.isEmpty()) {
+                if (!names.getFirst().equals(registeredName)) {
+                    jdbc.update("UPDATE biz_daikin_source SET source_name=? WHERE source_id=?",
+                            registeredName, registeredSource);
+                }
+                return;
+            }
             try {
                 jdbc.update("""
-                        INSERT INTO biz_daikin_source(source_id,registered_by,create_time)
-                        VALUES (?,?,CURRENT_TIMESTAMP)
-                        """, registeredSource, operatorId);
+                        INSERT INTO biz_daikin_source(source_id,source_name,registered_by,create_time)
+                        VALUES (?,?,?,CURRENT_TIMESTAMP)
+                        """, registeredSource, registeredName, operatorId);
             } catch (DuplicateKeyException ignored) {
                 // 并发注册同一稳定来源是幂等操作；来源行不包含任何凭据或可变配置。
             }

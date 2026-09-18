@@ -239,7 +239,7 @@ class DaikinOnboardingIntegrationTest {
                 .content("{\"username\":\"admin\",\"password\":\"123456\"}")).andReturn().getResponse().getContentAsString();
         String token = mapper.readTree(login).path("data").path("token").asText();
         mvc.perform(post("/v1/daikin/directory/sources").header("Authorization", "Bearer " + token)
-                .contentType("application/json").content("{\"sourceId\":\" invalid \"}"))
+                .contentType("application/json").content("{\"sourceId\":\" invalid \",\"sourceName\":\"创新港大金空调\"}"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errorCode").value("DAIKIN_DIRECTORY_VALIDATION_FAILED"));
         mvc.perform(post("/v1/operations/device-onboarding/pending/none/binding-requests")
                 .header("Authorization", "Bearer " + token).contentType("application/json").content("{}"))
