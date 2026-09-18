@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { OnboardingPage, PendingDevice } from '../models/onboarding'
-import { getOperationsPendingDevice, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
+import type { DaikinSyncJob, OnboardingPage, PendingDevice } from '../models/onboarding'
+import { getOperationsPendingDevice, listDaikinDirectorySyncJobs, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -15,6 +15,7 @@ vi.mock('../api/onboarding', () => ({
   getOperationsBindingOptions: vi.fn(),
   getDaikinDirectorySync: vi.fn(),
   listDeviceProducts: vi.fn(),
+  listDaikinDirectorySyncJobs: vi.fn(),
   listEquipmentTypes: vi.fn(),
   listPendingDevices: vi.fn(),
   listOperationsCompatibleProducts: vi.fn(),
@@ -52,6 +53,7 @@ describe('设备接入异步状态', () => {
     vi.mocked(listDeviceProducts).mockResolvedValue({ page: 1, size: 20, total: 0, items: [] })
     vi.mocked(getPendingDeviceConnection).mockResolvedValue({ pendingId: 'D-01', identityId: null, identityStatus: 'UNBOUND', equipmentId: null, buildingId: null, productId: null, configEffective: false })
     vi.mocked(listPointNamingRules).mockResolvedValue([])
+    vi.mocked(listDaikinDirectorySyncJobs).mockResolvedValue({ page: 1, size: 10, total: 0, items: [] })
   })
 
   it('忽略迟到的待处理列表响应，只保留最新条件结果', async () => {
@@ -129,6 +131,23 @@ describe('设备接入异步状态', () => {
     expect(listPendingDevices).not.toHaveBeenCalled()
     expect(management.selectedPending.value?.identityValue).toBe('unit-01')
     expect(management.selectedDirectory.value?.sourceId).toBe('source-1')
+  })
+
+  it('从持久化历史恢复最新同步任务并支持空历史', async () => {
+    const latest: DaikinSyncJob = {
+      jobId: 'job-2', sourceId: 'source-1', status: 'SUCCEEDED', attempts: 1, errorCode: null,
+      createdAt: 20, updatedAt: 30, completedAt: 30,
+    }
+    vi.mocked(listDaikinDirectorySyncJobs).mockResolvedValueOnce({ page: 1, size: 10, total: 1, items: [latest] })
+    const management = useDeviceOnboarding({ operations: true })
+
+    await management.loadDirectorySyncJobs(1)
+    expect(management.syncJob.value).toEqual(latest)
+    expect(management.syncJobs.value.total).toBe(1)
+
+    vi.mocked(listDaikinDirectorySyncJobs).mockResolvedValueOnce({ page: 1, size: 10, total: 0, items: [] })
+    await management.loadDirectorySyncJobs(1)
+    expect(management.syncJob.value).toBeNull()
   })
 })
 

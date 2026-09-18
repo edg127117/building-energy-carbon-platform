@@ -8,6 +8,7 @@ import {
   getOperationsBindingOptions,
   getPendingDeviceConnection,
   listDeviceProducts,
+  listDaikinDirectorySyncJobs,
   listOperationsCompatibleProducts,
   listOperationsPendingDevices,
   listOperationsNumericSources,
@@ -99,8 +100,10 @@ describe('设备接入接口契约', () => {
   it('提交并查询厂家异步同步任务，不发送凭据或清单', async () => {
     await requestDaikinDirectorySync('source/A')
     await getDaikinDirectorySync('source/A', 'job/1')
+    await listDaikinDirectorySyncJobs({ page: 2, size: 10 })
 
     expect(requestApi).toHaveBeenNthCalledWith(1, { method: 'post', url: '/v1/daikin/sources/source%2FA/sync-jobs' })
     expect(requestApi).toHaveBeenNthCalledWith(2, { method: 'get', url: '/v1/daikin/sources/source%2FA/sync-jobs/job%2F1' })
+    expect(requestApi).toHaveBeenNthCalledWith(3, { method: 'get', url: '/v1/daikin/sync-jobs', params: { page: 2, size: 10 } })
   })
 })

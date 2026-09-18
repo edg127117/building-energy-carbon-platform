@@ -113,6 +113,31 @@ class DaikinDirectorySyncServiceTest {
     }
 
     @Test
+    void historyIsNewestFirstPaginatedAndRestrictedByBuilding() {
+        insertSource();
+        jdbc.update("INSERT INTO building(building_id,del_flag) VALUES ('BLD001',0),('BLD002',0)");
+        jdbc.update("""
+                INSERT INTO biz_daikin_project_mapping
+                  (source_id,site_id,building_id,mapping_version,mapped_by,mapped_at)
+                VALUES ('source-A','site-1','BLD001',1,7,?)
+                """, java.sql.Timestamp.from(NOW));
+        service = newService(Optional.of(source -> Optional.of(client(indoor("in-1"), outdoor("out-1")))));
+        var first = service.request("source-A", 7L);
+        service.runOne(first.jobId());
+        clock.advanceSeconds(1);
+        var second = service.request("source-A", 7L);
+
+        assertThat(service.listAll(1, 1)).satisfies(page -> {
+            assertThat(page.total()).isEqualTo(2);
+            assertThat(page.items()).extracting(DaikinDirectorySyncService.JobView::jobId)
+                    .containsExactly(second.jobId());
+        });
+        assertThat(service.listForBuildings(Set.of("BLD001"), 1, 10).total()).isEqualTo(2);
+        assertThat(service.listForBuildings(Set.of("BLD002"), 1, 10).items()).isEmpty();
+        assertThat(second.createdAt()).isGreaterThan(first.createdAt());
+    }
+
+    @Test
     void secondCatalogFailureRollsBackFirstCatalogAndUsesOnlyFixedErrorCode() {
         insertSource();
         DaikinCatalogClient client = mock(DaikinCatalogClient.class);

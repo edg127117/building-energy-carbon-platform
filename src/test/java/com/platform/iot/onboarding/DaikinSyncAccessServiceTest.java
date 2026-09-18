@@ -3,6 +3,7 @@ package com.platform.iot.onboarding;
 import com.platform.audit.BackendDuty;
 import com.platform.audit.BackendDutyService;
 import com.platform.framework.exception.BusinessException;
+import com.platform.framework.web.PageResponse;
 import com.platform.iot.daikin.sync.DaikinDirectorySyncService;
 import com.platform.system.mapper.SysMenuMapper;
 import com.platform.system.model.entity.SysMenu;
@@ -56,14 +57,39 @@ class DaikinSyncAccessServiceTest {
         when(job.jobId()).thenReturn("job");
         when(job.sourceId()).thenReturn("source-a");
         when(job.status()).thenReturn("QUEUED");
+        when(job.completedAt()).thenReturn(null);
         when(sync.request("source-a", 7L)).thenReturn(job);
         assertThat(service.request(7L, OPS, "source-a"))
-                .isEqualTo(new DaikinSyncAccessService.SyncJobView("job", "source-a", "QUEUED", 0, null));
+                .isEqualTo(new DaikinSyncAccessService.SyncJobView(
+                        "job", "source-a", "QUEUED", 0, null, 0L, 0L, null));
         verify(duties).requireDuty(7L, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         doThrow(new BusinessException(403, "无提交职责")).when(duties)
                 .requireDuty(7L, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         assertThatThrownBy(() -> service.request(7L, OPS, "source-a")).isInstanceOf(BusinessException.class);
         verify(sync, times(1)).request(anyString(), anyLong());
+    }
+
+    @Test
+    void listsOnlyCurrentBuildingScopeWithoutSubmitDuty() {
+        var job = mock(DaikinDirectorySyncService.JobView.class);
+        when(job.jobId()).thenReturn("job");
+        when(job.sourceId()).thenReturn("source-a");
+        when(job.status()).thenReturn("SUCCEEDED");
+        when(sync.listForBuildings(Set.of("BLD001"), 1, 10))
+                .thenReturn(new PageResponse<>(1, 10, 1, List.of(job)));
+
+        assertThat(service.list(7L, OPS, 1, 10).items()).hasSize(1);
+        verify(sync).listForBuildings(Set.of("BLD001"), 1, 10);
+        verifyNoInteractions(duties);
+    }
+
+    @Test
+    void adminListsAllSourcesWithoutMenuLookup() {
+        when(sync.listAll(2, 10)).thenReturn(new PageResponse<>(2, 10, 0, List.of()));
+
+        assertThat(service.list(1L, Set.of("PLATFORM_ADMIN"), 2, 10).items()).isEmpty();
+        verify(sync).listAll(2, 10);
+        verifyNoInteractions(menus, buildings, duties);
     }
 
     @Test
