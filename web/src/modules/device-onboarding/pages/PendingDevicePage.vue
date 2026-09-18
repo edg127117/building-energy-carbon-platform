@@ -454,10 +454,10 @@ onMounted(() => {
       </div>
       <section v-if="management.syncJob.value" class="sync-result">
         <div class="sync-result-line" role="status">
-          <strong>{{ t('deviceOnboarding.pending.latestSync') }}</strong>
-          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncStatus') }}</span><ElTag>{{ syncJobStatusText(management.syncJob.value.status) }}</ElTag></span>
-          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncAttempts') }}</span><b>{{ formatNumber(management.syncJob.value.attempts) }}</b></span>
-          <span class="sync-result-item"><span>{{ t('deviceOnboarding.labels.syncResult') }}</span><b>{{ syncJobResultText(management.syncJob.value.errorCode) }}</b></span>
+          <strong class="sync-result-heading">{{ t('deviceOnboarding.pending.latestSync') }}</strong>
+          <span class="sync-result-item sync-result-status"><span>{{ t('deviceOnboarding.labels.syncStatus') }}</span><ElTag>{{ syncJobStatusText(management.syncJob.value.status) }}</ElTag></span>
+          <span class="sync-result-item sync-result-attempts"><span>{{ t('deviceOnboarding.labels.syncAttempts') }}</span><b>{{ formatNumber(management.syncJob.value.attempts) }}</b></span>
+          <span class="sync-result-item sync-result-outcome" :class="{ 'is-warning': management.syncJob.value.errorCode }"><span>{{ t('deviceOnboarding.labels.syncResult') }}</span><b>{{ syncJobResultText(management.syncJob.value.errorCode) }}</b></span>
         </div>
         <details class="technical-details"><summary>{{ t('deviceOnboarding.operationsTechnicalDetails') }}</summary><ElDescriptions :column="1" border><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="management.syncJob.value.sourceId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncJobTechnicalId')"><CopyableValue :value="management.syncJob.value.jobId" /></ElDescriptionsItem><ElDescriptionsItem :label="t('deviceOnboarding.labels.syncErrorCode')"><CopyableValue :value="management.syncJob.value.errorCode || t('common.missing')" /></ElDescriptionsItem></ElDescriptions></details>
       </section>
@@ -557,9 +557,15 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .sync-actions > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); }
 .field-hint { font-size: var(--bec-font-size-small); }
 .sync-result { padding-top: var(--bec-space-group); border-top: var(--bec-border-width) solid var(--bec-color-divider); }
-.sync-result-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bec-space-tight) var(--bec-space-group); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
-.sync-result-item { display: inline-flex; align-items: center; gap: var(--bec-space-tight); color: var(--bec-color-text-secondary); }
-.sync-result-item b { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-normal); }
+.sync-result-line { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); align-items: stretch; gap: var(--bec-space-tight); padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
+.sync-result-heading { align-self: center; padding-inline: var(--bec-space-tight) var(--bec-space-group); white-space: nowrap; }
+.sync-result-item { display: grid; align-content: center; gap: calc(var(--bec-space-tight) / 2); min-height: var(--bec-ref-space-48); padding: var(--bec-space-tight) var(--bec-space-group); color: var(--bec-color-text-secondary); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-divider); border-radius: var(--bec-radius-control); }
+.sync-result-item > span { font-size: var(--bec-font-size-small); }
+.sync-result-item b { color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); }
+.sync-result-status { background: color-mix(in srgb, var(--bec-color-action-primary) 5%, var(--bec-color-surface)); }
+.sync-result-attempts { background: color-mix(in srgb, var(--bec-color-action-primary) 3%, var(--bec-color-surface)); }
+.sync-result-outcome { background: color-mix(in srgb, var(--bec-color-success) 7%, var(--bec-color-surface)); }
+.sync-result-outcome.is-warning { background: color-mix(in srgb, var(--bec-color-warning) 9%, var(--bec-color-surface)); }
 .filter-bar { align-items: stretch; }
 .filter-bar { flex-wrap: wrap; }
 .filter-bar > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); order: -1; }
@@ -568,6 +574,8 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 @media (max-width: 640px) {
   .filter-bar > :deep(.el-input), .sync-actions > :deep(.el-input) { flex-basis: 100%; min-width: 0; }
   .sync-actions > :deep(.el-button) { flex: 1 1 auto; margin-left: 0; }
+  .sync-result-line { grid-template-columns: 1fr; }
+  .sync-result-heading { padding: 0 0 var(--bec-space-tight); }
 }
 .pagination { display: flex; justify-content: flex-end; padding-top: var(--bec-space-group); }
 .drawer-heading { align-items: flex-start; margin-bottom: var(--bec-space-section); }
