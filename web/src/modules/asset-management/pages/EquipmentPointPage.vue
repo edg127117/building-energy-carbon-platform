@@ -33,6 +33,8 @@ import { t } from '@/locales'
 import EquipmentEditorDialog from '../components/EquipmentEditorDialog.vue'
 import PointEditorDialog from '../components/PointEditorDialog.vue'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
+import MeterRealtimeBoard from '../components/meter/MeterRealtimeBoard.vue'
+import { isMeterEquipment } from '../components/meter/meter-display'
 import { useAssetManagement } from '../composables/use-asset-management'
 import { canRunAssetAction, flattenSpaces, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint } from '../models/assets'
 
@@ -232,7 +234,16 @@ onMounted(() => {
         <ElTableColumn :label="t('assetManagement.labels.equipmentType')" prop="typeCode" min-width="110" show-overflow-tooltip />
         <ElTableColumn :label="t('assetManagement.equipment.archiveStatus')" min-width="95"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.pointSummary')" min-width="150"><template #default="{ row }"><div class="point-summary"><span>{{ t('assetManagement.equipment.pointCount', { total: row.pointSummary.total }) }}</span><span class="secondary">{{ summary(row.pointSummary) }}</span></div></template></ElTableColumn>
-        <ElTableColumn :label="t('assetManagement.equipment.actions')" min-width="190" fixed="right"><template #default="{ row }"><div class="row-actions"><ElButton link type="primary" @click="openEquipment(row.equipmentId)">{{ t('assetManagement.equipment.viewArchive') }}</ElButton><ElButton link type="primary" @click="openEquipment(row.equipmentId, true)">{{ t('assetManagement.equipment.viewPoints') }}</ElButton></div></template></ElTableColumn>
+        <ElTableColumn :label="t('assetManagement.equipment.actions')" min-width="190" fixed="right">
+          <template #default="{ row }">
+            <div class="row-actions">
+              <ElButton link type="primary" @click="openEquipment(row.equipmentId)">{{ t('assetManagement.equipment.viewArchive') }}</ElButton>
+              <ElButton link type="primary" @click="openEquipment(row.equipmentId, true)">
+                {{ isMeterEquipment(row) ? t('assetManagement.meter.viewMeterPoints') : t('assetManagement.equipment.viewPoints') }}
+              </ElButton>
+            </div>
+          </template>
+        </ElTableColumn>
         <template #empty><ElEmpty :description="t('assetManagement.empty.equipment')" /></template>
       </ElTable>
       <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="management.equipment.value.page" :page-size="management.equipment.value.size" :total="management.equipment.value.total" @current-change="changePage" /></div>
@@ -271,8 +282,40 @@ onMounted(() => {
             </section>
           </div>
         </ElTabPane>
-        <ElTabPane name="points" :label="t('assetManagement.equipment.points')">
-          <div class="detail-content"><section class="drawer-section"><h3>{{ t('assetManagement.equipment.points') }}</h3><ElTable :data="management.points.value" row-key="pointId"><ElTableColumn :label="t('assetManagement.labels.pointName')" prop="pointName" min-width="160" /><ElTableColumn :label="t('assetManagement.labels.pointCode')" prop="pointCode" min-width="160" /><ElTableColumn :label="t('assetManagement.labels.unit')" prop="unit" min-width="90" /><ElTableColumn :label="t('assetManagement.labels.required')" min-width="90"><template #default="{ row }">{{ t(row.required ? 'assetManagement.equipment.yes' : 'assetManagement.equipment.no') }}</template></ElTableColumn><ElTableColumn :label="t('assetManagement.labels.calculation')" min-width="110"><template #default="{ row }"><ElTag :type="row.forCalculation ? 'success' : 'info'">{{ row.forCalculation ? t('assetManagement.labels.calculation') : t('common.missing') }}</ElTag></template></ElTableColumn><ElTableColumn :label="t('assetManagement.actions.viewDetail')" min-width="190"><template #default="{ row }"><div class="row-actions"><ElButton v-if="can(row, 'UPDATE')" :icon="Pencil" link @click="openEditPoint(asPoint(row))">{{ t('assetManagement.actions.editPoint') }}</ElButton><ElPopconfirm v-if="can(row, 'DELETE')" :title="t('assetManagement.messages.deleteConfirm')" :confirm-button-text="t('assetManagement.actions.confirmDelete')" :cancel-button-text="t('assetManagement.actions.cancel')" @confirm="deletePoint(asPoint(row))"><template #reference><ElButton :icon="Trash2" link type="danger">{{ t('assetManagement.actions.deletePoint') }}</ElButton></template></ElPopconfirm></div></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.points')" /></template></ElTable></section></div>
+        <ElTabPane name="points" :label="isMeterEquipment(selectedEquipment) ? t('assetManagement.meter.meterPointsTab') : t('assetManagement.equipment.points')">
+          <div class="detail-content">
+            <MeterRealtimeBoard
+              v-if="isMeterEquipment(selectedEquipment)"
+              :equipment="selectedEquipment"
+            />
+            <section v-else class="drawer-section">
+              <h3>{{ t('assetManagement.equipment.points') }}</h3>
+              <ElTable :data="management.points.value" row-key="pointId">
+                <ElTableColumn :label="t('assetManagement.labels.pointName')" prop="pointName" min-width="160" />
+                <ElTableColumn :label="t('assetManagement.labels.pointCode')" prop="pointCode" min-width="160" />
+                <ElTableColumn :label="t('assetManagement.labels.unit')" prop="unit" min-width="90" />
+                <ElTableColumn :label="t('assetManagement.labels.required')" min-width="90">
+                  <template #default="{ row }">{{ t(row.required ? 'assetManagement.equipment.yes' : 'assetManagement.equipment.no') }}</template>
+                </ElTableColumn>
+                <ElTableColumn :label="t('assetManagement.labels.calculation')" min-width="110">
+                  <template #default="{ row }">
+                    <ElTag :type="row.forCalculation ? 'success' : 'info'">{{ row.forCalculation ? t('assetManagement.labels.calculation') : t('common.missing') }}</ElTag>
+                  </template>
+                </ElTableColumn>
+                <ElTableColumn :label="t('assetManagement.actions.viewDetail')" min-width="190">
+                  <template #default="{ row }">
+                    <div class="row-actions">
+                      <ElButton v-if="can(row, 'UPDATE')" :icon="Pencil" link @click="openEditPoint(asPoint(row))">{{ t('assetManagement.actions.editPoint') }}</ElButton>
+                      <ElPopconfirm v-if="can(row, 'DELETE')" :title="t('assetManagement.messages.deleteConfirm')" :confirm-button-text="t('assetManagement.actions.confirmDelete')" :cancel-button-text="t('assetManagement.actions.cancel')" @confirm="deletePoint(asPoint(row))">
+                        <template #reference><ElButton :icon="Trash2" link type="danger">{{ t('assetManagement.actions.deletePoint') }}</ElButton></template>
+                      </ElPopconfirm>
+                    </div>
+                  </template>
+                </ElTableColumn>
+                <template #empty><ElEmpty :description="t('assetManagement.empty.points')" /></template>
+              </ElTable>
+            </section>
+          </div>
         </ElTabPane>
         <ElTabPane name="connection" :label="t('assetManagement.equipment.connectionTab')">
           <div class="detail-content">
