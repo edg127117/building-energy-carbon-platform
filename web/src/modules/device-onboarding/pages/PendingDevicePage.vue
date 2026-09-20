@@ -149,6 +149,10 @@ async function openBinding() {
   bindingSubmitError.value = null
   const pending = selectedPending.value
   if (!pending) return
+  batchPendingIds.value = [pending.pendingId]
+  ensureBindingKeys(batchPendingIds.value)
+  // 配置查询失败时仍保留表单，让用户看见可操作错误，而不是把一次失败表现为按钮无响应。
+  bindingOpen.value = true
   try {
     bindingContractError.value = null
     await loadBindingProducts({
@@ -161,11 +165,8 @@ async function openBinding() {
     })
     if (operationsMode.value) await Promise.all([management.loadNumericSources(), management.loadBindingOptions()])
     else await management.loadNamingRules()
-    batchPendingIds.value = [pending.pendingId]
-    ensureBindingKeys(batchPendingIds.value)
-    bindingOpen.value = true
   } catch {
-    // 页面已保留受控错误状态。
+    bindingSubmitError.value = t('deviceOnboarding.messages.bindingPreparationFailed')
   }
 }
 
