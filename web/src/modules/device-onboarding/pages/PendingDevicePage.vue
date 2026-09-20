@@ -32,7 +32,7 @@ import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import { t } from '@/locales'
 import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
 import { identityTypeText, profileText, readingReasonText, readingStatusText, syncJobResultText, syncJobStatusText } from '../models/reading-labels'
-import { ChangeRequestControl, useSensitiveChange } from '@/modules/access-control/public'
+import { ChangeRequestControl, newIdempotencyKey, useSensitiveChange } from '@/modules/access-control/public'
 import { useEquipmentReadings } from '@/modules/asset-management/public'
 import { useSession } from '@/modules/auth/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
@@ -287,7 +287,7 @@ function changeSelection(rows: PendingDevice[]) {
 }
 
 function ensureBindingKeys(ids: string[]) {
-  for (const id of ids) if (!bindingKeys.has(id)) bindingKeys.set(id, crypto.randomUUID())
+  for (const id of ids) if (!bindingKeys.has(id)) bindingKeys.set(id, newIdempotencyKey())
 }
 
 async function requestSync() {
@@ -366,7 +366,7 @@ async function submitIdentityChange(operation: 'ACTIVATE_DEVICE_IDENTITY' | 'DEA
     if (operationsMode.value) {
       const targetStatus = operation === 'ACTIVATE_DEVICE_IDENTITY' ? 'ACTIVE' : 'INACTIVE'
       const key = `${pendingId}:${targetStatus}`
-      if (!identityKeys.has(key)) identityKeys.set(key, crypto.randomUUID())
+      if (!identityKeys.has(key)) identityKeys.set(key, newIdempotencyKey())
       const application = await management.submitIdentityStatus(pendingId, targetStatus, identityKeys.get(key)!)
       if (application) ElMessage.success(t('deviceOnboarding.messages.changeSubmitted'))
       return
