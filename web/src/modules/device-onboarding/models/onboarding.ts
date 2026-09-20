@@ -187,6 +187,7 @@ export type PendingBindRequest = {
   existingEquipmentId?: string | null
   newEquipment?: { equipmentName: string; manufacturer: string | null } | null
   pointBindings: PointBinding[]
+  autoCreatePoints?: boolean
   numericSourceId?: string | null
 }
 

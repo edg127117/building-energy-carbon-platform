@@ -374,8 +374,11 @@ public class DeviceOnboardingService {
                             && Integer.valueOf(1).equals(template.getRequiredFlag()))) {
                 throw error(400, VALIDATION_FAILED, "缺少产品必填温度测点映射");
             }
-        } else if ("DAIKIN_UNIT".equals(pending.getIdentityType()) || request.pointBindings() == null
-                || request.pointBindings().isEmpty()) {
+        } else if (request.autoCreatePoints()) {
+            if (request.newEquipment() == null || !request.pointBindings().isEmpty()) {
+                throw error(400, VALIDATION_FAILED, "自动建点只能用于新建设备，且不能混用人工测点映射");
+            }
+        } else if ("DAIKIN_UNIT".equals(pending.getIdentityType()) || request.pointBindings().isEmpty()) {
             throw error(400, VALIDATION_FAILED, "数值绑定必须提供测点；厂家目录使用类型化绑定入口");
         }
         BizEquipment equipment = resolveEquipment(request, product, typed);
@@ -392,6 +395,8 @@ public class DeviceOnboardingService {
             BizDataSource source = requireTypedNumericDataSource(numericSourceId, equipment.getBuildingId());
             pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()),
                     request.pointBindings(), source, DAIKIN_SOURCE_SYSTEM);
+        } else if (request.autoCreatePoints()) {
+            pointResult = bindAutomaticPoints(pending, equipment, enabledTemplates(product.getProductId()));
         } else {
             pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()), request.pointBindings());
         }
@@ -560,6 +565,31 @@ public class DeviceOnboardingService {
             List<DeviceOnboardingContracts.PointBindingRequest> requests) {
         BizDataSource dataSource = requireOnboardingDataSource(equipment.getBuildingId());
         return bindPoints(pending, equipment, templates, requests, dataSource, standardSourceSystem);
+    }
+
+    /**
+     * 新设备先由台账分配资产编码，再从已启用规则中确定唯一匹配项；规则缺失或歧义时拒绝，
+     * 不能由浏览器猜测现场测点编码。
+     */
+    private PointBindingResult bindAutomaticPoints(BizPendingDevice pending, BizEquipment equipment,
+            List<BizProductPointTemplate> templates) {
+        List<DeviceOnboardingContracts.PointBindingRequest> requests = new ArrayList<>();
+        for (BizProductPointTemplate template : templates) {
+            String pointCode = equipment.getEquipCode() + "_" + template.getSuffixCode();
+            List<BizPointNamingRule> matches = namingRuleMapper.selectList(
+                    new LambdaQueryWrapper<BizPointNamingRule>().eq(BizPointNamingRule::getStatus, 1)).stream()
+                    .filter(rule -> namingValidator.matches(rule, pointCode))
+                    .toList();
+            if (matches.size() != 1) {
+                throw error(409, VALIDATION_FAILED,
+                        "设备编码没有唯一可用的测点命名规则，请由配置管理员核对设备类型和命名规则");
+            }
+            BizPointNamingRule rule = matches.getFirst();
+            requests.add(new DeviceOnboardingContracts.PointBindingRequest(
+                    template.getMetricCode(), null, pointCode, template.getPointNameTemplate(),
+                    rule.getRuleId(), rule.getFamilyCode(), rule.getComponentCode(), "ANALOG"));
+        }
+        return bindPoints(pending, equipment, templates, requests);
     }
 
     private PointBindingResult bindPoints(BizPendingDevice pending, BizEquipment equipment,

@@ -71,7 +71,18 @@ public final class DeviceOnboardingContracts {
             @NotBlank String systemGroupId,
             String existingEquipmentId,
             @Valid NewEquipmentRequest newEquipment,
-            @NotEmpty List<@Valid PointBindingRequest> pointBindings) {
+            List<@Valid PointBindingRequest> pointBindings,
+            boolean autoCreatePoints) {
+        public BindRequest {
+            pointBindings = pointBindings == null ? List.of() : List.copyOf(pointBindings);
+        }
+
+        public BindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
+                String existingEquipmentId, NewEquipmentRequest newEquipment,
+                List<PointBindingRequest> pointBindings) {
+            this(productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment,
+                    pointBindings, false);
+        }
     }
 
     @Schema(description = "类型化厂家绑定；可显式绑定内机温度测点，归属由空间和厂家项目映射校验")
@@ -90,7 +101,7 @@ public final class DeviceOnboardingContracts {
 
         public BindRequest asBinding() {
             return new BindRequest(productId, buildingId, spaceId, systemGroupId,
-                    existingEquipmentId, newEquipment, pointBindings);
+                    existingEquipmentId, newEquipment, pointBindings, false);
         }
     }
 

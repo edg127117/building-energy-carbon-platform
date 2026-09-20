@@ -251,6 +251,7 @@ async function submitBindingDraft(request: PendingBindRequest) {
         existingEquipmentId: request.existingEquipmentId,
         newEquipment: request.newEquipment,
         pointBindings: request.pointBindings,
+        autoCreatePoints: request.autoCreatePoints,
       },
       `BIND_PENDING_DEVICE:${pending.pendingId}`,
     )
