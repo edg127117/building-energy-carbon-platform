@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
 import { getDeviceProduct, listDeviceProducts, listPendingDevices, listPointNamingRules } from '../api/onboarding'
 import { createChangeRequest } from '@/modules/access-control/api/access-control'
@@ -19,6 +19,11 @@ vi.mock('../api/onboarding', async original => ({
 }))
 vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
 describe('待接入范围筛选', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(listPointNamingRules).mockResolvedValue([])
+  })
+
   it('产品模板加载完成后显示实际绑定表单', async () => {
     vi.mocked(listPendingDevices).mockResolvedValueOnce({
       page: 1, size: 20, total: 1,
