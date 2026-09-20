@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
-import { listDeviceProducts, listPendingDevices } from '../api/onboarding'
+import { getDeviceProduct, listDeviceProducts, listPendingDevices, listPointNamingRules } from '../api/onboarding'
 import { createChangeRequest } from '@/modules/access-control/api/access-control'
 import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
@@ -12,12 +12,39 @@ vi.mock('../api/onboarding', async original => ({
   ...(await original()),
   listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
   listDeviceProducts: vi.fn(),
+  getDeviceProduct: vi.fn(),
+  listPointNamingRules: vi.fn().mockResolvedValue([]),
   getPendingDevice: vi.fn().mockResolvedValue({ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }),
   getPendingDeviceConnection: vi.fn().mockResolvedValue(null),
 }))
 vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
 describe('待接入范围筛选', () => {
-  it('点击准备绑定后立即打开弹窗，并在前置数据加载失败时保留错误反馈', async () => {
+  it('产品模板加载完成后显示实际绑定表单', async () => {
+    vi.mocked(listPendingDevices).mockResolvedValueOnce({
+      page: 1, size: 20, total: 1,
+      items: [{ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }],
+    } as never)
+    vi.mocked(listDeviceProducts).mockResolvedValueOnce({
+      page: 1, size: 20, total: 1,
+      items: [{ productId: 'P1', productName: '测试电表', productCode: 'METER_V1', status: 'ENABLED', expectedProfileCode: 'V1', identityType: 'SN' }],
+    } as never)
+    vi.mocked(getDeviceProduct).mockResolvedValueOnce({
+      productId: 'P1', productName: '测试电表', productCode: 'METER_V1', status: 'ENABLED', expectedProfileCode: 'V1', identityType: 'SN', points: [],
+    } as never)
+
+    const wrapper = mount(PendingDevicePage)
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).filter(button => button.text() === '准备绑定').at(-1)!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(BindingDraftDialog).props('open')).toBe(true)
+    expect(wrapper.text()).toContain('绑定前需要准备什么')
+    wrapper.unmount()
+  })
+
+  it('前置配置加载失败时留在详情中显示错误，不渲染未完成的绑定表单', async () => {
     vi.mocked(listPendingDevices).mockResolvedValueOnce({
       page: 1, size: 20, total: 1,
       items: [{ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }],
@@ -32,8 +59,8 @@ describe('待接入范围筛选', () => {
     await flushPromises()
 
     const form = wrapper.findComponent(BindingDraftDialog)
-    expect(form.props('open')).toBe(true)
-    expect(form.props('submitError')).toBeTruthy()
+    expect(form.props('open')).toBe(false)
+    expect(wrapper.text()).toContain('无法加载绑定所需配置')
     wrapper.unmount()
   })
 
