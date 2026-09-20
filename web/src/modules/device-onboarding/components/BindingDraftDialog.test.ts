@@ -54,7 +54,7 @@ describe('绑定准备弹窗', () => {
     expect(wrapper.emitted('product-change')?.at(-1)).toEqual(['P2'])
   })
 
-  it('新建设备默认使用ANALOG，并按前缀和模板后缀生成可编辑编码', async () => {
+  it('新建设备展示自动建点摘要，不要求逐项填写测点编码', async () => {
     const wrapper = mount(BindingDraftDialog, { props: { open: true, pending, product, products: [product], namingRules: [] } })
     await flushPromises()
     const targetMode = wrapper.findAllComponents(ElRadioGroup)[0]
@@ -62,18 +62,15 @@ describe('绑定准备弹窗', () => {
     targetMode.vm.$emit('change', 'new')
     await nextTick()
 
-    const prefix = wrapper.find('input[placeholder="填写前缀后按产品模板后缀生成，可继续编辑。"]')
-    await prefix.setValue('METER_01')
-    await prefix.trigger('change')
-    expect(wrapper.findAll('input').some(input => input.element.value === 'METER_01_P')).toBe(true)
-    expect(wrapper.findAll('input').some(input => input.element.value === '有功功率')).toBe(true)
-    expect(wrapper.findAllComponents(ElSelect).some(select => select.props('modelValue') === 'ANALOG')).toBe(true)
+    expect(wrapper.text()).toContain('自动创建测点')
+    expect(wrapper.text()).toContain('系统将按产品模板自动创建 1 个测点')
+    expect(wrapper.find('input[placeholder="填写前缀后按产品模板后缀生成，可继续编辑。"]').exists()).toBe(false)
   })
 
   it('区分零测点状态产品和需要HTTP数值来源的温度模板', async () => {
     const stateProduct = { ...product, pointCount: 0, points: [] }
     const stateWrapper = mount(BindingDraftDialog, {
-      props: { open: true, pending, product: stateProduct, products: [stateProduct], allowEmptyPoints: true },
+      props: { open: true, pending: { ...pending, identityType: 'DAIKIN_UNIT' }, product: stateProduct, products: [stateProduct], allowEmptyPoints: true },
     })
     await flushPromises()
     expect(stateWrapper.text()).toContain('该厂家状态型产品不创建数值测点')
@@ -81,7 +78,7 @@ describe('绑定准备弹窗', () => {
 
     const temperatureWrapper = mount(BindingDraftDialog, {
       props: {
-        open: true, pending, product, products: [product], allowEmptyPoints: true,
+        open: true, pending: { ...pending, identityType: 'DAIKIN_UNIT' }, product, products: [product], allowEmptyPoints: true,
         numericSources: [{ sourceId: 'HTTP-1', sourceCode: 'DAIKIN_TEMP', sourceName: '厂家温度来源' }],
       },
     })

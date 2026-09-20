@@ -217,6 +217,34 @@ class DeviceOnboardingServiceIntegrationTest {
     }
 
     @Test
+    void automaticallyCreatesTemplatePointsForNewEquipmentOnly() {
+        DeviceProductContracts.DetailView product = createEnabledProduct("BTEST_PRODUCT_AUTO");
+        insertPending("BTEST-PENDING-AUTO", PREFIX + "DEVICE-AUTO", "DISCOVERED");
+
+        DeviceOnboardingContracts.BindResultView bound = onboardingService.bind(
+                "BTEST-PENDING-AUTO",
+                new DeviceOnboardingContracts.BindRequest(
+                        product.productId(), "BLD001", "SPACE001", "GROUP001", null,
+                        new DeviceOnboardingContracts.NewEquipmentRequest("BTEST-自动建点设备", null),
+                        List.of(), true),
+                1L, ADMIN);
+
+        assertThat(bound.pointIds()).hasSize(1);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT equip_code FROM biz_equipment WHERE equip_id=?", String.class, bound.equipmentId()))
+                .isEqualTo("WCR2");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT point_code FROM biz_data_point WHERE point_id=?", String.class, bound.pointIds().getFirst()))
+                .isEqualTo("WCR2_TWin");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT naming_rule_id FROM biz_data_point WHERE point_id=?", String.class, bound.pointIds().getFirst()))
+                .isEqualTo("RULE_WCR_MAIN");
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM biz_point_alias WHERE source_point_code=?", Long.class,
+                "MAC:" + PREFIX + "DEVICE-AUTO:temperature")).isEqualTo(1L);
+    }
+
+    @Test
     void crossBuildingValidationRollsBackEntireBinding() {
         DeviceProductContracts.DetailView product = createEnabledProduct("BTEST_PRODUCT_2");
         insertPending("BTEST-PENDING-2", PREFIX + "DEVICE-002", "DISCOVERED");

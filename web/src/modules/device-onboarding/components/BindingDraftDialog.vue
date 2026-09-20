@@ -69,7 +69,7 @@ const form = reactive({
   buildingId: undefined as string | undefined,
   spaceId: undefined as string | undefined,
   systemGroupId: undefined as string | undefined,
-  mode: 'existing' as BindingMode,
+  mode: defaultEquipmentMode(),
   existingEquipmentId: undefined as string | undefined,
   equipmentName: '',
   manufacturer: '',
@@ -79,6 +79,8 @@ const form = reactive({
 })
 const productPoints = computed(() => props.product?.productId === form.productId ? props.product.points.filter(point => point.enabled) : [])
 const hasIncludedPoints = computed(() => productPoints.value.some(point => form.bindings[point.metricCode]?.include))
+const automaticPointCreation = computed(() => form.mode === 'new'
+  && props.pending?.identityType !== 'DAIKIN_UNIT' && productPoints.value.length > 0)
 const buildingOptions = computed(() => props.bindingOptions
   ? [{ label: props.bindingOptions.buildingName, value: props.bindingOptions.buildingId }]
   : assets.buildingOptions.value)
@@ -119,7 +121,7 @@ function syncProduct(product: BindingProduct | null | undefined) {
 function reset() {
   Object.assign(form, {
     productId: '', buildingId: props.bindingOptions?.buildingId, spaceId: undefined, systemGroupId: undefined,
-    mode: 'existing', existingEquipmentId: undefined, equipmentName: '', manufacturer: '', pointCodePrefix: '', numericSourceId: undefined, bindings: {},
+    mode: defaultEquipmentMode(), existingEquipmentId: undefined, equipmentName: '', manufacturer: '', pointCodePrefix: '', numericSourceId: undefined, bindings: {},
   })
   validationKey.value = null
   if (!props.bindingOptions) {
@@ -136,6 +138,10 @@ function changeProduct(productId: string) {
   clearExistingPointSelections()
   if (!props.bindingOptions) void assets.selectEquipment(null)
   emit('product-change', productId)
+}
+
+function defaultEquipmentMode(): BindingMode {
+  return props.pending?.identityType === 'DAIKIN_UNIT' ? 'existing' : 'new'
 }
 
 function applyPointCodePrefix() {
@@ -216,7 +222,9 @@ function clearExistingPointSelections() {
 function submit() {
   validationKey.value = validate()
   if (validationKey.value || !form.productId || !form.buildingId || !form.spaceId || !form.systemGroupId || !props.pending) return
-  const pointBindings = productPoints.value.filter(point => form.bindings[point.metricCode]?.include).map(point => toBinding(point.metricCode, form.bindings[point.metricCode]))
+  const pointBindings = automaticPointCreation.value
+    ? []
+    : productPoints.value.filter(point => form.bindings[point.metricCode]?.include).map(point => toBinding(point.metricCode, form.bindings[point.metricCode]))
   emit('submit', {
     productId: form.productId,
     buildingId: form.buildingId,
@@ -225,6 +233,7 @@ function submit() {
     existingEquipmentId: form.mode === 'existing' ? form.existingEquipmentId ?? null : null,
     newEquipment: form.mode === 'new' ? { equipmentName: form.equipmentName.trim(), manufacturer: nullable(form.manufacturer) } : null,
     pointBindings,
+    autoCreatePoints: automaticPointCreation.value,
     numericSourceId: pointBindings.length ? form.numericSourceId ?? null : null,
   })
 }
@@ -234,6 +243,7 @@ function validate(): string | null {
   if (!form.buildingId || !form.spaceId || !form.systemGroupId) return 'validation.bindingScope'
   if (form.mode === 'existing' && !form.existingEquipmentId) return 'validation.bindingTarget'
   if (form.mode === 'new' && !form.equipmentName.trim()) return 'validation.bindingTarget'
+  if (automaticPointCreation.value) return null
   const included = productPoints.value.filter(point => form.bindings[point.metricCode]?.include)
   if (!included.length) return props.allowEmptyPoints ? null : 'validation.bindingPoints'
   if (props.allowEmptyPoints && !form.numericSourceId) return 'validation.bindingNumericSource'
@@ -292,11 +302,12 @@ function joinPointCode(prefix: string, suffix: string): string {
       <ElFormItem :label="t('deviceOnboarding.labels.targetEquipment')" required><ElRadioGroup v-model="form.mode" @change="changeEquipmentMode"><ElRadio value="existing">{{ t('deviceOnboarding.labels.existingEquipment') }}</ElRadio><ElRadio value="new">{{ t('deviceOnboarding.labels.newEquipment') }}</ElRadio></ElRadioGroup></ElFormItem>
       <template v-if="form.mode === 'existing'"><ElFormItem :label="t('deviceOnboarding.labels.existingEquipment')" required><ElSelect v-model="form.existingEquipmentId" class="wide-control" @change="changeEquipment"><ElOption v-for="item in equipmentOptions" :key="item.equipmentId" :label="item.equipmentName" :value="item.equipmentId" /></ElSelect><ElPagination v-if="bindingOptions" size="small" layout="total, prev, next" :current-page="bindingOptions.equipmentPage" :page-size="bindingOptions.equipmentSize" :total="bindingOptions.equipmentTotal" @current-change="page => emit('equipment-page-change', page, form.spaceId, form.systemGroupId)" /></ElFormItem></template>
       <template v-else><div class="form-grid"><ElFormItem :label="t('deviceOnboarding.labels.equipmentName')" required><ElInput v-model="form.equipmentName" maxlength="100" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem></div></template>
-      <ElFormItem v-if="allowEmptyPoints && hasIncludedPoints" :label="t('deviceOnboarding.labels.numericSource')" required><ElSelect v-model="form.numericSourceId" class="wide-control" :loading="numericSourcesLoading"><ElOption v-for="item in numericSources" :key="item.sourceId" :label="`${item.sourceName} · ${item.sourceCode}`" :value="item.sourceId" /></ElSelect></ElFormItem>
+      <ElFormItem v-if="allowEmptyPoints && hasIncludedPoints && !automaticPointCreation" :label="t('deviceOnboarding.labels.numericSource')" required><ElSelect v-model="form.numericSourceId" class="wide-control" :loading="numericSourcesLoading"><ElOption v-for="item in numericSources" :key="item.sourceId" :label="`${item.sourceName} · ${item.sourceCode}`" :value="item.sourceId" /></ElSelect></ElFormItem>
       <ElSkeleton v-if="productLoading || (!bindingOptions && assets.scopeLoading.value)" animated :rows="4" />
       <ElAlert v-else-if="!bindingOptions && assets.buildingsError.value" :title="assets.buildingsError.value.message" type="error" show-icon :closable="false" />
       <ElAlert v-else-if="!bindingOptions && assets.scopeError.value" :title="assets.scopeError.value.message" type="error" show-icon :closable="false" />
       <ElAlert v-else-if="!bindingOptions && assets.equipmentError.value" :title="assets.equipmentError.value.message" type="error" show-icon :closable="false" />
+      <section v-else-if="automaticPointCreation" class="automatic-points"><h2>{{ t('deviceOnboarding.labels.automaticPointCreation') }}</h2><p>{{ t('deviceOnboarding.messages.automaticPointCreation', { count: productPoints.length }) }}</p><ul><li v-for="point in productPoints" :key="point.metricCode"><strong>{{ point.pointNameTemplate }}</strong><span>{{ point.unit }}</span></li></ul></section>
       <section v-else-if="productPoints.length" class="binding-points"><h2>{{ t('deviceOnboarding.labels.pointBinding') }}</h2><ElFormItem :label="t('deviceOnboarding.labels.pointCodePrefix')"><ElInput v-model="form.pointCodePrefix" maxlength="60" :placeholder="t('deviceOnboarding.messages.pointCodePrefixHint')" @change="applyPointCodePrefix" /></ElFormItem><div v-for="point in productPoints" :key="point.metricCode" class="binding-row"><div class="point-summary"><ElCheckbox v-model="form.bindings[point.metricCode].include" :disabled="point.required">{{ t('deviceOnboarding.labels.includePoint') }}</ElCheckbox><strong>{{ point.pointNameTemplate }}</strong><span>{{ point.unit }}</span></div><div v-if="form.bindings[point.metricCode].include" class="binding-fields"><ElFormItem v-if="form.mode === 'existing'" :label="t('deviceOnboarding.labels.bindingPointMode')"><ElRadioGroup v-model="form.bindings[point.metricCode].mode"><ElRadio value="existing">{{ t('deviceOnboarding.labels.existingPoint') }}</ElRadio><ElRadio value="new">{{ t('deviceOnboarding.labels.newPoint') }}</ElRadio></ElRadioGroup></ElFormItem><ElFormItem v-if="bindingMode(form.bindings[point.metricCode]) === 'existing'" :label="t('deviceOnboarding.labels.existingPoint')"><ElSelect v-model="form.bindings[point.metricCode].existingPointId" clearable class="wide-control"><ElOption v-for="candidate in selectedPoints" :key="candidate.pointId" :label="candidate.pointName" :value="candidate.pointId" /></ElSelect></ElFormItem><template v-else><ElFormItem :label="t('deviceOnboarding.labels.pointCode')"><ElInput v-model="form.bindings[point.metricCode].pointCode" maxlength="100" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.pointName')"><ElInput v-model="form.bindings[point.metricCode].pointName" maxlength="100" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.namingRule')"><ElSelect v-model="form.bindings[point.metricCode].namingRuleId" class="wide-control" :loading="namingRulesLoading" @change="ruleId => changeNamingRule(point.metricCode, ruleId)"><ElOption v-for="rule in namingRules" :key="rule.ruleId" :value="rule.ruleId" :label="`${rule.ruleName} · ${rule.familyCode}/${rule.componentCode} · ${rule.pattern}`" /></ElSelect></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.family')"><ElInput v-model="form.bindings[point.metricCode].familyCode" maxlength="20" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.component')"><ElInput v-model="form.bindings[point.metricCode].componentCode" maxlength="20" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.dataType')"><ElSelect v-model="form.bindings[point.metricCode].dataType" class="wide-control"><ElOption value="ANALOG" :label="t('deviceOnboarding.dataType.analog')" /><ElOption value="ACCUMULATE" :label="t('deviceOnboarding.dataType.accumulate')" /></ElSelect></ElFormItem></template></div></div></section>
       <ElAlert v-else-if="allowEmptyPoints && product" :title="t('deviceOnboarding.messages.daikinStateOnlyBinding')" type="info" show-icon :closable="false" />
       <ElAlert v-if="submitError" :title="submitError" type="error" show-icon :closable="false" />
@@ -307,7 +318,11 @@ function joinPointCode(prefix: string, suffix: string): string {
 </template>
 
 <style scoped>
-.binding-form, .binding-points { display: grid; gap: var(--bec-space-section); }
+.binding-form, .binding-points, .automatic-points { display: grid; gap: var(--bec-space-section); }
+.automatic-points { padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
+.automatic-points p, .automatic-points ul { margin: 0; }
+.automatic-points li { display: flex; gap: var(--bec-space-tight); }
+.automatic-points span { color: var(--bec-color-text-secondary); }
 .binding-prerequisites { padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); }
 .binding-prerequisites li + li { margin-top: var(--bec-space-tight); }
 .binding-prerequisites p { margin-bottom: 0; color: var(--bec-color-text-secondary); }
