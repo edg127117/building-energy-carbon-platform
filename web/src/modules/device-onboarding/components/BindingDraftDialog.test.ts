@@ -43,6 +43,7 @@ describe('绑定准备弹窗', () => {
     const wrapper = mount(BindingDraftDialog, { props: { open: false, pending, product, products: [product] } })
     await wrapper.setProps({ open: true })
     await flushPromises()
+    expect(wrapper.emitted('close')).toBeUndefined()
     expect(wrapper.text()).toContain('有功功率')
 
     const productSelect = wrapper.findAllComponents(ElSelect)[0]

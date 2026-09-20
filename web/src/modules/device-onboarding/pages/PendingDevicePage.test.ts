@@ -1,16 +1,42 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
-import { listPendingDevices } from '../api/onboarding'
+import { listDeviceProducts, listPendingDevices } from '../api/onboarding'
 import { createChangeRequest } from '@/modules/access-control/api/access-control'
 import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
 import PendingDevicePage from './PendingDevicePage.vue'
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: { view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' } }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
 vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { roles: ['PLATFORM_ADMIN'] } }) }))
-vi.mock('../api/onboarding', async original => ({ ...(await original()), listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }), getPendingDevice: vi.fn().mockResolvedValue({ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', allowedActions: [] }), getPendingDeviceConnection: vi.fn().mockResolvedValue(null) }))
+vi.mock('../api/onboarding', async original => ({
+  ...(await original()),
+  listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
+  listDeviceProducts: vi.fn(),
+  getPendingDevice: vi.fn().mockResolvedValue({ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }),
+  getPendingDeviceConnection: vi.fn().mockResolvedValue(null),
+}))
 vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
 describe('待接入范围筛选', () => {
+  it('点击准备绑定后立即打开弹窗，并在前置数据加载失败时保留错误反馈', async () => {
+    vi.mocked(listPendingDevices).mockResolvedValueOnce({
+      page: 1, size: 20, total: 1,
+      items: [{ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }],
+    } as never)
+    vi.mocked(listDeviceProducts).mockRejectedValueOnce(new TransportError('request', 500))
+
+    const wrapper = mount(PendingDevicePage, { global: { stubs: { BindingDraftDialog: true } } })
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).filter(button => button.text() === '准备绑定').at(-1)!.trigger('click')
+    await flushPromises()
+
+    const form = wrapper.findComponent(BindingDraftDialog)
+    expect(form.props('open')).toBe(true)
+    expect(form.props('submitError')).toBeTruthy()
+    wrapper.unmount()
+  })
+
   it('一般绑定排除厂家专用字段，并将数据源前置错误保留在表单', async () => {
     vi.mocked(listPendingDevices).mockResolvedValueOnce({ page: 1, size: 20, total: 1, items: [{ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', allowedActions: [] }] } as never)
     vi.mocked(createChangeRequest).mockRejectedValueOnce(new TransportError('request', 409, undefined, 'ONBOARDING_SOURCE_REQUIRED'))
