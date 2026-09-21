@@ -110,11 +110,11 @@ function buildOption(isEnlarged: boolean): ChartOption {
   })
 
   const grid = isEnlarged
-    ? { left: 16, right: 16, top: 48, bottom: 58, containLabel: true }
+    ? { left: 20, right: 20, top: 64, bottom: 65, containLabel: true }
     : { left: 10, right: 10, top: 40, bottom: 32, containLabel: true }
 
   const legend = isEnlarged
-    ? { top: 8, right: 16 }
+    ? { top: 10, left: 'center', itemGap: 24 }
     : { bottom: '0%' }
 
   const splitNumber = isEnlarged ? 6 : 4
@@ -162,7 +162,7 @@ function buildOption(isEnlarged: boolean): ChartOption {
           type: 'value',
           name: t('assetManagement.meter.unitKwTotal'),
           nameLocation: 'end',
-          nameGap: 10,
+          nameGap: isEnlarged ? 14 : 10,
           scale: true,
           min: autoScalePowerMin,
           max: autoScalePowerMax,
@@ -176,7 +176,7 @@ function buildOption(isEnlarged: boolean): ChartOption {
           type: 'value',
           name: t('assetManagement.meter.unitA'),
           nameLocation: 'end',
-          nameGap: 10,
+          nameGap: isEnlarged ? 14 : 10,
           scale: true,
           min: autoScaleCurrentMin,
           max: autoScaleCurrentMax,
@@ -259,7 +259,7 @@ function buildOption(isEnlarged: boolean): ChartOption {
         type: 'value',
         name: t('assetManagement.meter.unitKw'),
         nameLocation: 'end',
-        nameGap: 10,
+        nameGap: isEnlarged ? 14 : 10,
         scale: true,
         min: autoScalePowerMin,
         max: autoScalePowerMax,
@@ -273,7 +273,7 @@ function buildOption(isEnlarged: boolean): ChartOption {
         type: 'value',
         name: t('assetManagement.meter.unitV'),
         nameLocation: 'end',
-        nameGap: 10,
+        nameGap: isEnlarged ? 14 : 10,
         scale: true,
         min: autoScaleVoltageMin,
         max: autoScaleVoltageMax,
@@ -394,7 +394,7 @@ const enlargedOption = computed<ChartOption>(() => buildOption(true))
 
     <ElDialog
       v-model="isZoomed"
-      width="min(1200px, 95vw)"
+      width="min(1440px, 96vw)"
       append-to-body
       destroy-on-close
       align-center
@@ -594,7 +594,7 @@ const enlargedOption = computed<ChartOption>(() => buildOption(true))
 }
 
 .enlarged-chart-wrapper {
-  height: calc(var(--bec-ref-space-64) * 7 + var(--bec-ref-space-32));
+  height: calc(var(--bec-ref-space-64) * 8 + var(--bec-ref-space-32));
   width: 100%;
   min-width: var(--bec-ref-space-0);
 }
