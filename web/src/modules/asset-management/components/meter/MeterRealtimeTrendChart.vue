@@ -22,6 +22,64 @@ const props = withDefaults(defineProps<{
   loading: false,
 })
 
+const latestRecord = computed(() => {
+  if (props.records.length === 0) return null
+  return props.records[props.records.length - 1]
+})
+
+function formatValueWithUnit(val: number | null | undefined, unit: string): string {
+  if (val == null || Number.isNaN(val)) return '--'
+  const numStr = Math.abs(val) >= 100 ? val.toFixed(1) : val.toFixed(2)
+  return `${numStr} ${unit}`
+}
+
+function autoScalePowerMin(value: { min: number; max: number }) {
+  if (!Number.isFinite(value.min) || !Number.isFinite(value.max)) return 0
+  const span = value.max - value.min
+  const padding = Math.max(span * 0.25, 0.04)
+  const calculated = value.min - padding
+  const minVal = (value.min >= 0 && calculated < 0 && value.min < 0.05) ? 0 : calculated
+  return Number(minVal.toFixed(2))
+}
+
+function autoScalePowerMax(value: { min: number; max: number }) {
+  if (!Number.isFinite(value.max)) return 1
+  const span = value.max - value.min
+  const padding = Math.max(span * 0.25, 0.04)
+  const calculated = value.max + padding
+  return Number(calculated.toFixed(2))
+}
+
+function autoScaleVoltageMin(value: { min: number; max: number }) {
+  if (!Number.isFinite(value.min)) return 180
+  const span = value.max - value.min
+  const padding = Math.max(span * 0.3, 5)
+  return Math.floor(Math.max(0, value.min - padding))
+}
+
+function autoScaleVoltageMax(value: { min: number; max: number }) {
+  if (!Number.isFinite(value.max)) return 260
+  const span = value.max - value.min
+  const padding = Math.max(span * 0.3, 5)
+  return Math.ceil(value.max + padding)
+}
+
+function autoScaleCurrentMin(value: { min: number; max: number }) {
+  if (!Number.isFinite(value.min)) return 0
+  const span = value.max - value.min
+  const padding = Math.max(span * 0.25, 0.2)
+  const minVal = Math.max(0, value.min - padding)
+  return Number(minVal.toFixed(2))
+}
+
+function autoScaleCurrentMax(value: { min: number; max: number }) {
+  if (!Number.isFinite(value.max)) return 10
+  const span = value.max - value.min
+  const padding = Math.max(span * 0.25, 0.2)
+  const maxVal = value.max + padding
+  return Number(maxVal.toFixed(2))
+}
+
 const option = computed<ChartOption>(() => {
   const is3P = props.phase === '3P'
   const timeLabels = props.records.map(r => {
@@ -36,15 +94,18 @@ const option = computed<ChartOption>(() => {
     return {
       tooltip: {
         trigger: 'axis',
+        axisPointer: {
+          type: 'cross',
+        },
       },
       legend: {
         bottom: '0%',
       },
       grid: {
-        left: 56,
-        right: 56,
-        top: 42,
-        bottom: 30,
+        left: 10,
+        right: 10,
+        top: 40,
+        bottom: 32,
         containLabel: true,
       },
       xAxis: {
@@ -52,7 +113,7 @@ const option = computed<ChartOption>(() => {
         boundaryGap: props.records.length <= 1,
         data: timeLabels,
         axisLabel: {
-          fontSize: 11,
+          margin: 12,
         },
       },
       yAxis: [
@@ -61,9 +122,13 @@ const option = computed<ChartOption>(() => {
           name: t('assetManagement.meter.unitKw'),
           nameLocation: 'end',
           nameGap: 10,
+          scale: true,
+          min: autoScalePowerMin,
+          max: autoScalePowerMax,
+          splitNumber: 4,
           nameTextStyle: {
             align: 'left',
-            fontSize: 11,
+            fontWeight: 600,
           },
         },
         {
@@ -71,9 +136,13 @@ const option = computed<ChartOption>(() => {
           name: t('assetManagement.meter.unitA'),
           nameLocation: 'end',
           nameGap: 10,
+          scale: true,
+          min: autoScaleCurrentMin,
+          max: autoScaleCurrentMax,
+          splitNumber: 4,
           nameTextStyle: {
             align: 'right',
-            fontSize: 11,
+            fontWeight: 600,
           },
           splitLine: { show: false },
         },
@@ -126,19 +195,21 @@ const option = computed<ChartOption>(() => {
     }
   }
 
-  // 1P 单相走势
   return {
     tooltip: {
       trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+      },
     },
     legend: {
       bottom: '0%',
     },
     grid: {
-      left: 56,
-      right: 56,
-      top: 42,
-      bottom: 30,
+      left: 10,
+      right: 10,
+      top: 40,
+      bottom: 32,
       containLabel: true,
     },
     xAxis: {
@@ -146,7 +217,7 @@ const option = computed<ChartOption>(() => {
       boundaryGap: props.records.length <= 1,
       data: timeLabels,
       axisLabel: {
-        fontSize: 11,
+        margin: 12,
       },
     },
     yAxis: [
@@ -155,9 +226,13 @@ const option = computed<ChartOption>(() => {
         name: t('assetManagement.meter.unitKw'),
         nameLocation: 'end',
         nameGap: 10,
+        scale: true,
+        min: autoScalePowerMin,
+        max: autoScalePowerMax,
+        splitNumber: 4,
         nameTextStyle: {
           align: 'left',
-          fontSize: 11,
+          fontWeight: 600,
         },
       },
       {
@@ -165,9 +240,13 @@ const option = computed<ChartOption>(() => {
         name: t('assetManagement.meter.unitV'),
         nameLocation: 'end',
         nameGap: 10,
+        scale: true,
+        min: autoScaleVoltageMin,
+        max: autoScaleVoltageMax,
+        splitNumber: 4,
         nameTextStyle: {
           align: 'right',
-          fontSize: 11,
+          fontWeight: 600,
         },
         splitLine: { show: false },
       },
@@ -210,6 +289,37 @@ const option = computed<ChartOption>(() => {
         </h4>
         <span class="live-pulse" :title="t('assetManagement.meter.realtimePulse')" />
       </div>
+
+      <div v-if="latestRecord" class="trend-chips">
+        <template v-if="props.phase === '3P'">
+          <div v-if="latestRecord.power != null" class="trend-chip">
+            <span class="chip-label">{{ t('assetManagement.meter.realtimePower') }}</span>
+            <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.power, 'kW') }}</span>
+          </div>
+          <div v-if="latestRecord.currentA != null" class="trend-chip">
+            <span class="chip-label">{{ t('assetManagement.meter.phaseA') }}</span>
+            <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.currentA, 'A') }}</span>
+          </div>
+          <div v-if="latestRecord.currentB != null" class="trend-chip">
+            <span class="chip-label">{{ t('assetManagement.meter.phaseB') }}</span>
+            <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.currentB, 'A') }}</span>
+          </div>
+          <div v-if="latestRecord.currentC != null" class="trend-chip">
+            <span class="chip-label">{{ t('assetManagement.meter.phaseC') }}</span>
+            <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.currentC, 'A') }}</span>
+          </div>
+        </template>
+        <template v-else>
+          <div v-if="latestRecord.power != null" class="trend-chip">
+            <span class="chip-label">{{ t('assetManagement.meter.singlePhasePower') }}</span>
+            <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.power, 'kW') }}</span>
+          </div>
+          <div v-if="latestRecord.voltage != null" class="trend-chip">
+            <span class="chip-label">{{ t('assetManagement.meter.voltage') }}</span>
+            <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.voltage, 'V') }}</span>
+          </div>
+        </template>
+      </div>
     </div>
 
     <div class="chart-wrapper">
@@ -230,7 +340,7 @@ const option = computed<ChartOption>(() => {
   background: var(--bec-color-surface-primary);
   border: var(--bec-border-width) solid var(--bec-color-divider);
   border-radius: var(--bec-management-radius);
-  padding: var(--bec-space-section);
+  padding: var(--bec-space-group) var(--bec-space-group) var(--bec-space-tight) var(--bec-space-group);
 }
 
 .trend-heading {
@@ -265,6 +375,35 @@ const option = computed<ChartOption>(() => {
 @keyframes pulse-ring {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(1.3); }
+}
+
+.trend-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--bec-space-tight);
+}
+
+.trend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bec-ref-space-4);
+  background: var(--bec-color-surface-secondary);
+  border: var(--bec-border-width) solid var(--bec-color-divider);
+  border-radius: var(--bec-radius-card);
+  padding: var(--bec-ref-space-4) var(--bec-ref-space-8);
+  font-size: var(--bec-font-size-small);
+  color: var(--bec-color-text-secondary);
+}
+
+.chip-label {
+  color: var(--bec-color-text-secondary);
+}
+
+.chip-val {
+  font-family: var(--bec-font-family-number);
+  font-weight: var(--bec-font-weight-heading);
+  color: var(--bec-color-text-primary);
 }
 
 .chart-wrapper {

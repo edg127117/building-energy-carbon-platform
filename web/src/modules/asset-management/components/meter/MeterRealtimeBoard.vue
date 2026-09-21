@@ -34,6 +34,11 @@ function appendTrendPoint(pts: AssetPointReading[], generatedAt: number) {
     dataQuality: q,
   }
 
+  const last = trendRecords.value[trendRecords.value.length - 1]
+  if (last && last.time === newRecord.time && last.power === newRecord.power) {
+    return
+  }
+
   // 维护滑动窗口，最大保留 30 个时间点
   trendRecords.value.push(newRecord)
   if (trendRecords.value.length > 30) {
@@ -43,7 +48,7 @@ function appendTrendPoint(pts: AssetPointReading[], generatedAt: number) {
 
 async function fetchReadingsSilently() {
   try {
-    const result = await load(props.equipment.equipmentId)
+    const result = await load(props.equipment.equipmentId, Boolean(readings.value))
     if (result && result.points) {
       appendTrendPoint(result.points, result.generatedAt)
     }
