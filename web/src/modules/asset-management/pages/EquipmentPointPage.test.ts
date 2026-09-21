@@ -121,4 +121,28 @@ describe('设备列表筛选', () => {
     expect(listEquipmentPoints).toHaveBeenCalledTimes(1)
   })
 
+  it('对于三相/单相电表设备，操作列展示“查看测点与走势”，抽屉呈现“实时测点与走势”并加载专业看板', async () => {
+    const meter = {
+      equipmentId: 'M1',
+      equipmentName: '变压器进线三相电表',
+      equipmentCode: 'MTR-01',
+      typeCode: '3P_METER',
+      status: 'ACTIVE',
+      identities: [],
+      pointSummary: { total: 12, required: 0, configuredRequired: 0 },
+      allowedActions: [],
+    }
+    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [meter as never] })
+    vi.mocked(getEquipment).mockResolvedValue(meter as never)
+    vi.mocked(listEquipmentPoints).mockResolvedValue([])
+
+    await submit()
+    const meterActionBtn = wrapper.findAllComponents(ElButton).find(button => button.text() === '查看测点与走势')
+    expect(meterActionBtn).toBeDefined()
+    await meterActionBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findComponent(ElTabs).props('modelValue')).toBe('points')
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toContain('实时测点与走势')
+  })
 })
