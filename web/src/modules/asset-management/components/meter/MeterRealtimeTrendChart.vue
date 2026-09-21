@@ -293,28 +293,34 @@ const option = computed<ChartOption>(() => {
       <div v-if="latestRecord" class="trend-chips">
         <template v-if="props.phase === '3P'">
           <div v-if="latestRecord.power != null" class="trend-chip">
+            <span class="chip-dot dot-blue" />
             <span class="chip-label">{{ t('assetManagement.meter.realtimePower') }}</span>
             <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.power, 'kW') }}</span>
           </div>
           <div v-if="latestRecord.currentA != null" class="trend-chip">
+            <span class="chip-dot dot-amber" />
             <span class="chip-label">{{ t('assetManagement.meter.phaseA') }}</span>
             <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.currentA, 'A') }}</span>
           </div>
           <div v-if="latestRecord.currentB != null" class="trend-chip">
+            <span class="chip-dot dot-green" />
             <span class="chip-label">{{ t('assetManagement.meter.phaseB') }}</span>
             <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.currentB, 'A') }}</span>
           </div>
           <div v-if="latestRecord.currentC != null" class="trend-chip">
+            <span class="chip-dot dot-red" />
             <span class="chip-label">{{ t('assetManagement.meter.phaseC') }}</span>
             <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.currentC, 'A') }}</span>
           </div>
         </template>
         <template v-else>
           <div v-if="latestRecord.power != null" class="trend-chip">
+            <span class="chip-dot dot-blue" />
             <span class="chip-label">{{ t('assetManagement.meter.singlePhasePower') }}</span>
             <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.power, 'kW') }}</span>
           </div>
           <div v-if="latestRecord.voltage != null" class="trend-chip">
+            <span class="chip-dot dot-amber" />
             <span class="chip-label">{{ t('assetManagement.meter.voltage') }}</span>
             <span class="chip-val font-mono">{{ formatValueWithUnit(latestRecord.voltage, 'V') }}</span>
           </div>
@@ -322,7 +328,10 @@ const option = computed<ChartOption>(() => {
       </div>
     </div>
 
-    <div class="chart-wrapper">
+    <div
+      class="chart-wrapper"
+      :class="props.phase === '3P' ? 'three-phase' : 'single-phase'"
+    >
       <ChartView
         :option="option"
         :loading="props.loading"
@@ -396,6 +405,19 @@ const option = computed<ChartOption>(() => {
   color: var(--bec-color-text-secondary);
 }
 
+.chip-dot {
+  width: var(--bec-ref-space-8);
+  height: var(--bec-ref-space-8);
+  border-radius: var(--bec-ref-radius-pill);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.dot-blue { background-color: var(--bec-ref-blue); }
+.dot-amber { background-color: var(--bec-ref-amber); }
+.dot-green { background-color: var(--bec-ref-green); }
+.dot-red { background-color: var(--bec-ref-red); }
+
 .chip-label {
   color: var(--bec-color-text-secondary);
 }
@@ -410,5 +432,19 @@ const option = computed<ChartOption>(() => {
   height: var(--bec-chart-height);
   width: 100%;
   min-width: 0;
+}
+
+/* 区分三相电表曲线与图例色彩：总功率=蓝，A相=黄/琥珀，B相=绿，C相=红 */
+.chart-wrapper.three-phase {
+  --bec-chart-series-1: var(--bec-ref-blue);
+  --bec-chart-series-2: var(--bec-ref-amber);
+  --bec-chart-series-3: var(--bec-ref-green);
+  --bec-chart-series-4: var(--bec-ref-red);
+}
+
+/* 单相电表曲线与图例色彩：功率=蓝，工作电压=黄/琥珀 */
+.chart-wrapper.single-phase {
+  --bec-chart-series-1: var(--bec-ref-blue);
+  --bec-chart-series-2: var(--bec-ref-amber);
 }
 </style>
