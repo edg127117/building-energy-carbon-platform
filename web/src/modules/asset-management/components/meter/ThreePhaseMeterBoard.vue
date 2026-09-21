@@ -5,7 +5,7 @@ import { t } from '@/locales'
 import type { AssetPointReading } from '../../models/assets'
 import MeterPointReadingTable from './MeterPointReadingTable.vue'
 import MeterRealtimeTrendChart, { type MeterTrendRecord } from './MeterRealtimeTrendChart.vue'
-import { calculateCurrentUnbalance } from './meter-display'
+import { calculateCurrentUnbalance, extractThreePhaseMetrics } from './meter-display'
 
 const props = defineProps<{
   points: AssetPointReading[]
@@ -13,30 +13,26 @@ const props = defineProps<{
   loading?: boolean
 }>()
 
-function findVal(code: string): number | null {
-  const p = props.points.find(x => (x.pointCode ?? '').toUpperCase() === code)
-  return p ? p.value : null
-}
+const metrics = computed(() => extractThreePhaseMetrics(props.points))
 
-const pTotal = computed(() => findVal('P_TOTAL'))
-const epp = computed(() => findVal('EPP'))
-const pfTotal = computed(() => findVal('PF_TOTAL'))
+const pTotal = computed(() => metrics.value.pTotal)
+const energy = computed(() => metrics.value.energy)
 
-const uA = computed(() => findVal('U_A'))
-const uB = computed(() => findVal('U_B'))
-const uC = computed(() => findVal('U_C'))
+const uA = computed(() => metrics.value.uA)
+const uB = computed(() => metrics.value.uB)
+const uC = computed(() => metrics.value.uC)
 
-const iA = computed(() => findVal('I_A'))
-const iB = computed(() => findVal('I_B'))
-const iC = computed(() => findVal('I_C'))
+const iA = computed(() => metrics.value.iA)
+const iB = computed(() => metrics.value.iB)
+const iC = computed(() => metrics.value.iC)
 
-const pA = computed(() => findVal('P_A'))
-const pB = computed(() => findVal('P_B'))
-const pC = computed(() => findVal('P_C'))
+const pA = computed(() => metrics.value.pA)
+const pB = computed(() => metrics.value.pB)
+const pC = computed(() => metrics.value.pC)
 
-const pfA = computed(() => findVal('PF_A'))
-const pfB = computed(() => findVal('PF_B'))
-const pfC = computed(() => findVal('PF_C'))
+const pfA = computed(() => metrics.value.pfA)
+const pfB = computed(() => metrics.value.pfB)
+const pfC = computed(() => metrics.value.pfC)
 
 const balanceInfo = computed(() => calculateCurrentUnbalance(iA.value, iB.value, iC.value))
 
@@ -53,11 +49,11 @@ function fmtMetric(val: number | null, unit: string): string {
 
 <template>
   <div class="three-phase-board">
-    <!-- 1. 顶部三大核心指标 (通俗中文大字) -->
+    <!-- 1. 顶部三大核心指标 (通俗中文大字，对齐效果图方案一) -->
     <div class="kpi-grid">
       <div class="kpi-card power">
         <span class="kpi-label">{{ t('assetManagement.meter.realtimePower') }}</span>
-        <div class="kpi-value font-mono">
+        <div class="kpi-value font-mono text-blue">
           <span>{{ fmt(pTotal, 2) }}</span>
           <span class="kpi-unit">{{ 'kW' }}</span>
         </div>
@@ -66,25 +62,24 @@ function fmtMetric(val: number | null, unit: string): string {
       <div class="kpi-card energy">
         <span class="kpi-label">{{ t('assetManagement.meter.positiveEnergy') }}</span>
         <div class="kpi-value font-mono text-emerald">
-          <span>{{ fmt(epp, 1) }}</span>
+          <span>{{ fmt(energy, 1) }}</span>
           <span class="kpi-unit">{{ 'kWh' }}</span>
         </div>
       </div>
 
-      <div class="kpi-card pf">
-        <div class="kpi-header">
-          <span class="kpi-label">{{ t('assetManagement.meter.powerFactor') }}</span>
-          <ElTag v-if="pfTotal != null" :type="pfTotal >= 0.9 ? 'success' : 'warning'" size="small">
-            {{ pfTotal >= 0.9 ? t('assetManagement.meter.pfGood') : t('assetManagement.meter.pfLow') }}
-          </ElTag>
-        </div>
-        <div class="kpi-value font-mono text-blue">
-          <span>{{ fmt(pfTotal, 2) }}</span>
+      <div class="kpi-card unbalance">
+        <span class="kpi-label">{{ t('assetManagement.meter.phaseCurrentUnbalance') }}</span>
+        <div class="kpi-value font-mono text-emerald">
+          <span>{{ balanceInfo.unbalanceRatio != null ? fmt(balanceInfo.unbalanceRatio, 1) : '--' }}</span>
+          <span class="kpi-unit">{{ `% (${balanceInfo.label})` }}</span>
         </div>
       </div>
     </div>
 
-    <!-- 2. A/B/C 三相负荷平衡对比卡 -->
+    <!-- 2. 动态走势图 (首屏核心视觉区，对齐效果图方案一) -->
+    <MeterRealtimeTrendChart phase="3P" :records="props.trendRecords" :loading="props.loading" />
+
+    <!-- 3. A/B/C 三相负荷平衡对比卡 -->
     <div class="phase-balance-card">
       <div class="phase-header">
         <span class="phase-title">{{ t('assetManagement.meter.threePhaseBalanceTitle') }}</span>
@@ -131,9 +126,6 @@ function fmtMetric(val: number | null, unit: string): string {
         </div>
       </div>
     </div>
-
-    <!-- 3. 动态走势图 -->
-    <MeterRealtimeTrendChart phase="3P" :records="props.trendRecords" :loading="props.loading" />
 
     <!-- 4. 全量测点清单 -->
     <MeterPointReadingTable :points="props.points" />

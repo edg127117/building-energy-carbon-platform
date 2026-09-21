@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { t } from '@/locales'
 import type { AssetPointReading } from '../../models/assets'
+import { extractSinglePhaseMetrics } from './meter-display'
 import MeterPointReadingTable from './MeterPointReadingTable.vue'
 import MeterRealtimeTrendChart, { type MeterTrendRecord } from './MeterRealtimeTrendChart.vue'
 
@@ -11,17 +12,14 @@ const props = defineProps<{
   loading?: boolean
 }>()
 
-function findVal(code: string): number | null {
-  const p = props.points.find(x => (x.pointCode ?? '').toUpperCase() === code)
-  return p ? p.value : null
-}
+const metrics = computed(() => extractSinglePhaseMetrics(props.points))
 
-const power = computed(() => findVal('POWER') ?? findVal('P_TOTAL'))
-const positiveEnergy = computed(() => findVal('POSITIVE_ENERGY') ?? findVal('EPP'))
-const voltage = computed(() => findVal('VOLTAGE') ?? findVal('U_A'))
-const current = computed(() => findVal('CURRENT') ?? findVal('I_A'))
-const powerFactor = computed(() => findVal('POWER_FACTOR') ?? findVal('PF_TOTAL'))
-const frequency = computed(() => findVal('FREQUENCY') ?? findVal('FREQ'))
+const power = computed(() => metrics.value.power)
+const energy = computed(() => metrics.value.energy)
+const voltage = computed(() => metrics.value.voltage)
+const current = computed(() => metrics.value.current)
+const powerFactor = computed(() => metrics.value.powerFactor)
+const frequency = computed(() => metrics.value.frequency)
 
 function fmt(val: number | null, decimals = 2): string {
   if (val == null || Number.isNaN(val)) return '--'
@@ -36,11 +34,11 @@ function fmtMetric(val: number | null, unit: string): string {
 
 <template>
   <div class="single-phase-board">
-    <!-- 1. 单相大字核心指标卡片 -->
+    <!-- 1. 单相大字核心指标卡片 (3卡并排对齐效果图) -->
     <div class="kpi-grid">
       <div class="kpi-card power">
         <span class="kpi-label">{{ t('assetManagement.meter.singlePhasePower') }}</span>
-        <div class="kpi-value font-mono">
+        <div class="kpi-value font-mono text-blue">
           <span>{{ fmt(power, 2) }}</span>
           <span class="kpi-unit">{{ 'kW' }}</span>
         </div>
@@ -49,13 +47,24 @@ function fmtMetric(val: number | null, unit: string): string {
       <div class="kpi-card energy">
         <span class="kpi-label">{{ t('assetManagement.meter.positiveEnergy') }}</span>
         <div class="kpi-value font-mono text-emerald">
-          <span>{{ fmt(positiveEnergy, 2) }}</span>
+          <span>{{ fmt(energy, 2) }}</span>
           <span class="kpi-unit">{{ 'kWh' }}</span>
+        </div>
+      </div>
+
+      <div class="kpi-card pf">
+        <span class="kpi-label">{{ t('assetManagement.meter.powerFactor') }}</span>
+        <div class="kpi-value font-mono">
+          <span>{{ fmt(powerFactor, 2) }}</span>
+          <span class="kpi-unit">{{ 'cosφ' }}</span>
         </div>
       </div>
     </div>
 
-    <!-- 2. 单相电气参数 4 格网格 -->
+    <!-- 2. 动态走势图 (首屏核心视觉区) -->
+    <MeterRealtimeTrendChart phase="1P" :records="props.trendRecords" :loading="props.loading" />
+
+    <!-- 3. 单相电气参数 4 格网格 -->
     <div class="param-grid">
       <div class="param-card">
         <span class="param-label">{{ t('assetManagement.meter.voltage') }}</span>
@@ -78,9 +87,6 @@ function fmtMetric(val: number | null, unit: string): string {
       </div>
     </div>
 
-    <!-- 3. 动态走势图 -->
-    <MeterRealtimeTrendChart phase="1P" :records="props.trendRecords" :loading="props.loading" />
-
     <!-- 4. 读数清单表 -->
     <MeterPointReadingTable :points="props.points" />
   </div>
@@ -94,7 +100,7 @@ function fmtMetric(val: number | null, unit: string): string {
 
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--bec-space-group);
 }
 

@@ -10,10 +10,12 @@ export function useEquipmentReadings() {
   const error = ref<string | null>(null)
   let generation = 0
 
-  async function load(equipmentId: string) {
+  async function load(equipmentId: string, silent = false) {
     const owner = ++generation
-    readings.value = null
-    loading.value = true
+    if (!silent) {
+      readings.value = null
+      loading.value = true
+    }
     error.value = null
     try {
       const result = await getEquipmentReadings(equipmentId)
@@ -23,7 +25,7 @@ export function useEquipmentReadings() {
       if (owner === generation) error.value = requestErrorMessage(reason)
       throw reason
     } finally {
-      if (owner === generation) loading.value = false
+      if (owner === generation && !silent) loading.value = false
     }
   }
 
