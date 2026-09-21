@@ -119,7 +119,7 @@ const option = computed<ChartOption>(() => {
       yAxis: [
         {
           type: 'value',
-          name: t('assetManagement.meter.unitKw'),
+          name: t('assetManagement.meter.unitKwTotal'),
           nameLocation: 'end',
           nameGap: 10,
           scale: true,

@@ -34,11 +34,11 @@ function fmtMetric(val: number | null, unit: string): string {
 
 <template>
   <div class="single-phase-board">
-    <!-- 1. 单相大字核心指标卡片 -->
+    <!-- 1. 单相大字核心指标卡片 (3卡并排对齐效果图) -->
     <div class="kpi-grid">
       <div class="kpi-card power">
         <span class="kpi-label">{{ t('assetManagement.meter.singlePhasePower') }}</span>
-        <div class="kpi-value font-mono">
+        <div class="kpi-value font-mono text-blue">
           <span>{{ fmt(power, 2) }}</span>
           <span class="kpi-unit">{{ 'kW' }}</span>
         </div>
@@ -51,9 +51,20 @@ function fmtMetric(val: number | null, unit: string): string {
           <span class="kpi-unit">{{ 'kWh' }}</span>
         </div>
       </div>
+
+      <div class="kpi-card pf">
+        <span class="kpi-label">{{ t('assetManagement.meter.powerFactor') }}</span>
+        <div class="kpi-value font-mono">
+          <span>{{ fmt(powerFactor, 2) }}</span>
+          <span class="kpi-unit">{{ 'cosφ' }}</span>
+        </div>
+      </div>
     </div>
 
-    <!-- 2. 单相电气参数 4 格网格 -->
+    <!-- 2. 动态走势图 (首屏核心视觉区) -->
+    <MeterRealtimeTrendChart phase="1P" :records="props.trendRecords" :loading="props.loading" />
+
+    <!-- 3. 单相电气参数 4 格网格 -->
     <div class="param-grid">
       <div class="param-card">
         <span class="param-label">{{ t('assetManagement.meter.voltage') }}</span>
@@ -76,9 +87,6 @@ function fmtMetric(val: number | null, unit: string): string {
       </div>
     </div>
 
-    <!-- 3. 动态走势图 -->
-    <MeterRealtimeTrendChart phase="1P" :records="props.trendRecords" :loading="props.loading" />
-
     <!-- 4. 读数清单表 -->
     <MeterPointReadingTable :points="props.points" />
   </div>
@@ -92,7 +100,7 @@ function fmtMetric(val: number | null, unit: string): string {
 
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--bec-space-group);
 }
 

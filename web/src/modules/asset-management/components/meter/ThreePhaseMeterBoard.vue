@@ -50,11 +50,11 @@ function fmtMetric(val: number | null, unit: string): string {
 
 <template>
   <div class="three-phase-board">
-    <!-- 1. 顶部三大核心指标 (通俗中文大字) -->
+    <!-- 1. 顶部三大核心指标 (通俗中文大字，对齐效果图方案一) -->
     <div class="kpi-grid">
       <div class="kpi-card power">
         <span class="kpi-label">{{ t('assetManagement.meter.realtimePower') }}</span>
-        <div class="kpi-value font-mono">
+        <div class="kpi-value font-mono text-blue">
           <span>{{ fmt(pTotal, 2) }}</span>
           <span class="kpi-unit">{{ 'kW' }}</span>
         </div>
@@ -68,20 +68,19 @@ function fmtMetric(val: number | null, unit: string): string {
         </div>
       </div>
 
-      <div class="kpi-card pf">
-        <div class="kpi-header">
-          <span class="kpi-label">{{ t('assetManagement.meter.powerFactor') }}</span>
-          <ElTag v-if="pfTotal != null" :type="pfTotal >= 0.9 ? 'success' : 'warning'" size="small">
-            {{ pfTotal >= 0.9 ? t('assetManagement.meter.pfGood') : t('assetManagement.meter.pfLow') }}
-          </ElTag>
-        </div>
-        <div class="kpi-value font-mono text-blue">
-          <span>{{ fmt(pfTotal, 2) }}</span>
+      <div class="kpi-card unbalance">
+        <span class="kpi-label">{{ t('assetManagement.meter.phaseCurrentUnbalance') }}</span>
+        <div class="kpi-value font-mono text-emerald">
+          <span>{{ balanceInfo.unbalanceRatio != null ? fmt(balanceInfo.unbalanceRatio, 1) : '--' }}</span>
+          <span class="kpi-unit">{{ `% (${balanceInfo.label})` }}</span>
         </div>
       </div>
     </div>
 
-    <!-- 2. A/B/C 三相负荷平衡对比卡 -->
+    <!-- 2. 动态走势图 (首屏核心视觉区，对齐效果图方案一) -->
+    <MeterRealtimeTrendChart phase="3P" :records="props.trendRecords" :loading="props.loading" />
+
+    <!-- 3. A/B/C 三相负荷平衡对比卡 -->
     <div class="phase-balance-card">
       <div class="phase-header">
         <span class="phase-title">{{ t('assetManagement.meter.threePhaseBalanceTitle') }}</span>
@@ -128,9 +127,6 @@ function fmtMetric(val: number | null, unit: string): string {
         </div>
       </div>
     </div>
-
-    <!-- 3. 动态走势图 -->
-    <MeterRealtimeTrendChart phase="3P" :records="props.trendRecords" :loading="props.loading" />
 
     <!-- 4. 全量测点清单 -->
     <MeterPointReadingTable :points="props.points" />
