@@ -17,7 +17,6 @@ const metrics = computed(() => extractThreePhaseMetrics(props.points))
 
 const pTotal = computed(() => metrics.value.pTotal)
 const energy = computed(() => metrics.value.energy)
-const pfTotal = computed(() => metrics.value.pfTotal)
 
 const uA = computed(() => metrics.value.uA)
 const uB = computed(() => metrics.value.uB)
