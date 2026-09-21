@@ -7,7 +7,7 @@ import { useEquipmentReadings } from '../../composables/use-equipment-readings'
 import SinglePhaseMeterBoard from './SinglePhaseMeterBoard.vue'
 import ThreePhaseMeterBoard from './ThreePhaseMeterBoard.vue'
 import type { MeterTrendRecord } from './MeterRealtimeTrendChart.vue'
-import { getMeterPhaseType } from './meter-display'
+import { extractTrendValues, getMeterPhaseType } from './meter-display'
 
 const props = defineProps<{
   equipment: AssetEquipmentDetail
@@ -20,25 +20,17 @@ let pollTimer: ReturnType<typeof setInterval> | null = null
 const phase = computed(() => getMeterPhaseType(props.equipment, readings.value?.points))
 
 function appendTrendPoint(pts: AssetPointReading[], generatedAt: number) {
-  function getVal(code: string): number | null {
-    const p = pts.find(x => (x.pointCode ?? '').toUpperCase() === code)
-    return p ? p.value : null
-  }
-
-  const pTotal = getVal('P_TOTAL') ?? getVal('POWER')
-  const ia = getVal('I_A') ?? getVal('CURRENT')
-  const ib = getVal('I_B')
-  const ic = getVal('I_C')
-  const u = getVal('VOLTAGE') ?? getVal('U_A')
+  const is3P = phase.value === '3P'
+  const trend = extractTrendValues(pts, is3P ? '3P' : '1P')
   const q = pts.length > 0 ? pts[0].dataQuality : 0
 
   const newRecord: MeterTrendRecord = {
     time: generatedAt || Date.now(),
-    power: pTotal,
-    currentA: ia,
-    currentB: ib,
-    currentC: ic,
-    voltage: u,
+    power: trend.power,
+    currentA: trend.currentA,
+    currentB: trend.currentB,
+    currentC: trend.currentC,
+    voltage: trend.voltage,
     dataQuality: q,
   }
 

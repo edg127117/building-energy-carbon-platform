@@ -100,7 +100,7 @@ describe('Meter Realtime Components', () => {
     })
 
     expect(wrapper.text()).toContain('实时总有功功率')
-    expect(wrapper.text()).toContain('正向累计用电量')
+    expect(wrapper.text()).toContain('累计用电量')
     expect(wrapper.text()).toContain('A / B / C 三相对称平衡负荷对比')
     wrapper.unmount()
   })

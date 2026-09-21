@@ -41,25 +41,40 @@ const option = computed<ChartOption>(() => {
         bottom: '0%',
       },
       grid: {
-        left: '2%',
-        right: '4%',
-        top: '12%',
-        bottom: '16%',
+        left: 56,
+        right: 56,
+        top: 42,
+        bottom: 30,
         containLabel: true,
       },
       xAxis: {
         type: 'category',
-        boundaryGap: false,
+        boundaryGap: props.records.length <= 1,
         data: timeLabels,
+        axisLabel: {
+          fontSize: 11,
+        },
       },
       yAxis: [
         {
           type: 'value',
           name: t('assetManagement.meter.unitKw'),
+          nameLocation: 'end',
+          nameGap: 10,
+          nameTextStyle: {
+            align: 'left',
+            fontSize: 11,
+          },
         },
         {
           type: 'value',
           name: t('assetManagement.meter.unitA'),
+          nameLocation: 'end',
+          nameGap: 10,
+          nameTextStyle: {
+            align: 'right',
+            fontSize: 11,
+          },
           splitLine: { show: false },
         },
       ],
@@ -69,7 +84,9 @@ const option = computed<ChartOption>(() => {
           type: 'line',
           yAxisIndex: 0,
           smooth: true,
-          showSymbol: false,
+          showSymbol: true,
+          symbol: 'circle',
+          symbolSize: 4,
           areaStyle: {
             opacity: 0.12,
           },
@@ -80,7 +97,9 @@ const option = computed<ChartOption>(() => {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          showSymbol: false,
+          showSymbol: true,
+          symbol: 'circle',
+          symbolSize: 4,
           data: props.records.map(r => r.currentA ?? null),
         },
         {
@@ -88,7 +107,9 @@ const option = computed<ChartOption>(() => {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          showSymbol: false,
+          showSymbol: true,
+          symbol: 'circle',
+          symbolSize: 4,
           data: props.records.map(r => r.currentB ?? null),
         },
         {
@@ -96,7 +117,9 @@ const option = computed<ChartOption>(() => {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          showSymbol: false,
+          showSymbol: true,
+          symbol: 'circle',
+          symbolSize: 4,
           data: props.records.map(r => r.currentC ?? null),
         },
       ],
@@ -112,25 +135,40 @@ const option = computed<ChartOption>(() => {
       bottom: '0%',
     },
     grid: {
-      left: '2%',
-      right: '4%',
-      top: '12%',
-      bottom: '16%',
+      left: 56,
+      right: 56,
+      top: 42,
+      bottom: 30,
       containLabel: true,
     },
     xAxis: {
       type: 'category',
-      boundaryGap: false,
+      boundaryGap: props.records.length <= 1,
       data: timeLabels,
+      axisLabel: {
+        fontSize: 11,
+      },
     },
     yAxis: [
       {
         type: 'value',
         name: t('assetManagement.meter.unitKw'),
+        nameLocation: 'end',
+        nameGap: 10,
+        nameTextStyle: {
+          align: 'left',
+          fontSize: 11,
+        },
       },
       {
         type: 'value',
         name: t('assetManagement.meter.unitV'),
+        nameLocation: 'end',
+        nameGap: 10,
+        nameTextStyle: {
+          align: 'right',
+          fontSize: 11,
+        },
         splitLine: { show: false },
       },
     ],
@@ -140,7 +178,9 @@ const option = computed<ChartOption>(() => {
         type: 'line',
         yAxisIndex: 0,
         smooth: true,
-        showSymbol: false,
+        showSymbol: true,
+        symbol: 'circle',
+        symbolSize: 4,
         areaStyle: {
           opacity: 0.12,
         },
@@ -151,7 +191,9 @@ const option = computed<ChartOption>(() => {
         type: 'line',
         yAxisIndex: 1,
         smooth: true,
-        showSymbol: false,
+        showSymbol: true,
+        symbol: 'circle',
+        symbolSize: 4,
         data: props.records.map(r => r.voltage ?? null),
       },
     ],
@@ -168,7 +210,6 @@ const option = computed<ChartOption>(() => {
         </h4>
         <span class="live-pulse" :title="t('assetManagement.meter.realtimePulse')" />
       </div>
-      <span class="trend-subtitle">{{ t('assetManagement.meter.trendSubtitle') }}</span>
     </div>
 
     <div class="chart-wrapper">
@@ -224,11 +265,6 @@ const option = computed<ChartOption>(() => {
 @keyframes pulse-ring {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(1.3); }
-}
-
-.trend-subtitle {
-  font-size: var(--bec-font-size-small);
-  color: var(--bec-color-text-secondary);
 }
 
 .chart-wrapper {

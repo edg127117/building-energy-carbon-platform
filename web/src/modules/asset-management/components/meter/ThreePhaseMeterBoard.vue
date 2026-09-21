@@ -5,7 +5,7 @@ import { t } from '@/locales'
 import type { AssetPointReading } from '../../models/assets'
 import MeterPointReadingTable from './MeterPointReadingTable.vue'
 import MeterRealtimeTrendChart, { type MeterTrendRecord } from './MeterRealtimeTrendChart.vue'
-import { calculateCurrentUnbalance } from './meter-display'
+import { calculateCurrentUnbalance, extractThreePhaseMetrics } from './meter-display'
 
 const props = defineProps<{
   points: AssetPointReading[]
@@ -13,30 +13,27 @@ const props = defineProps<{
   loading?: boolean
 }>()
 
-function findVal(code: string): number | null {
-  const p = props.points.find(x => (x.pointCode ?? '').toUpperCase() === code)
-  return p ? p.value : null
-}
+const metrics = computed(() => extractThreePhaseMetrics(props.points))
 
-const pTotal = computed(() => findVal('P_TOTAL'))
-const epp = computed(() => findVal('EPP'))
-const pfTotal = computed(() => findVal('PF_TOTAL'))
+const pTotal = computed(() => metrics.value.pTotal)
+const energy = computed(() => metrics.value.energy)
+const pfTotal = computed(() => metrics.value.pfTotal)
 
-const uA = computed(() => findVal('U_A'))
-const uB = computed(() => findVal('U_B'))
-const uC = computed(() => findVal('U_C'))
+const uA = computed(() => metrics.value.uA)
+const uB = computed(() => metrics.value.uB)
+const uC = computed(() => metrics.value.uC)
 
-const iA = computed(() => findVal('I_A'))
-const iB = computed(() => findVal('I_B'))
-const iC = computed(() => findVal('I_C'))
+const iA = computed(() => metrics.value.iA)
+const iB = computed(() => metrics.value.iB)
+const iC = computed(() => metrics.value.iC)
 
-const pA = computed(() => findVal('P_A'))
-const pB = computed(() => findVal('P_B'))
-const pC = computed(() => findVal('P_C'))
+const pA = computed(() => metrics.value.pA)
+const pB = computed(() => metrics.value.pB)
+const pC = computed(() => metrics.value.pC)
 
-const pfA = computed(() => findVal('PF_A'))
-const pfB = computed(() => findVal('PF_B'))
-const pfC = computed(() => findVal('PF_C'))
+const pfA = computed(() => metrics.value.pfA)
+const pfB = computed(() => metrics.value.pfB)
+const pfC = computed(() => metrics.value.pfC)
 
 const balanceInfo = computed(() => calculateCurrentUnbalance(iA.value, iB.value, iC.value))
 
@@ -66,7 +63,7 @@ function fmtMetric(val: number | null, unit: string): string {
       <div class="kpi-card energy">
         <span class="kpi-label">{{ t('assetManagement.meter.positiveEnergy') }}</span>
         <div class="kpi-value font-mono text-emerald">
-          <span>{{ fmt(epp, 1) }}</span>
+          <span>{{ fmt(energy, 1) }}</span>
           <span class="kpi-unit">{{ 'kWh' }}</span>
         </div>
       </div>
