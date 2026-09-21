@@ -6,6 +6,7 @@ import MeterPointReadingTable from './MeterPointReadingTable.vue'
 import ThreePhaseMeterBoard from './ThreePhaseMeterBoard.vue'
 import SinglePhaseMeterBoard from './SinglePhaseMeterBoard.vue'
 import MeterRealtimeBoard from './MeterRealtimeBoard.vue'
+import MeterRealtimeTrendChart from './MeterRealtimeTrendChart.vue'
 
 // Mock useEquipmentReadings composable
 vi.mock('../../composables/use-equipment-readings', () => {
@@ -199,6 +200,89 @@ describe('Meter Realtime Components', () => {
 
     expect(wrapper.find('.three-phase-view').exists()).toBe(true)
     expect(wrapper.find('.single-phase-view').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('supports zooming in and out of MeterRealtimeTrendChart', async () => {
+    const wrapper = mount(MeterRealtimeTrendChart, {
+      props: {
+        phase: '3P',
+        records: [
+          { time: 1700000000000, power: 12.5, currentA: 20.1, currentB: 19.8, currentC: 20.3 },
+          { time: 1700000010000, power: 13.2, currentA: 21.0, currentB: 20.5, currentC: 20.9 },
+        ],
+        loading: false,
+      },
+      global: {
+        stubs: {
+          ChartView: { template: '<div class="mock-chart-view" />' },
+          ElDialog: {
+            props: ['modelValue'],
+            template: '<div v-if="modelValue" class="mock-dialog"><slot name="header" /><slot /></div>',
+          },
+          ElTooltip: { template: '<div><slot /></div>' },
+          ElTag: { template: '<span class="mock-tag"><slot /></span>' },
+          ElButton: {
+            template: '<button type="button" @click="$emit(\'click\')"><slot /></button>',
+          },
+        },
+      },
+    })
+
+    expect(wrapper.find('.mock-dialog').exists()).toBe(false)
+    const zoomInBtn = wrapper.find('[data-test="btn-trend-zoom-in"]')
+    expect(zoomInBtn.exists()).toBe(true)
+    expect(zoomInBtn.text()).toContain('放大')
+
+    await zoomInBtn.trigger('click')
+
+    const dialog = wrapper.find('.mock-dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.text()).toContain('三相外机电表实时用电功率与三相电流走势大图')
+    expect(dialog.text()).toContain('全屏放大模式')
+    expect(dialog.text()).toContain('支持鼠标滚轮缩放与底部时间滑块自由拖拽')
+
+    const zoomOutBtn = wrapper.find('[data-test="btn-trend-zoom-out"]')
+    expect(zoomOutBtn.exists()).toBe(true)
+    expect(zoomOutBtn.text()).toContain('还原小图')
+    await zoomOutBtn.trigger('click')
+
+    expect(wrapper.find('.mock-dialog').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders single-phase title and enlarged title properly', async () => {
+    const wrapper = mount(MeterRealtimeTrendChart, {
+      props: {
+        phase: '1P',
+        records: [
+          { time: 1700000000000, power: 3.2, voltage: 220.5 },
+        ],
+        loading: false,
+      },
+      global: {
+        stubs: {
+          ChartView: { template: '<div class="mock-chart-view" />' },
+          ElDialog: {
+            props: ['modelValue'],
+            template: '<div v-if="modelValue" class="mock-dialog"><slot name="header" /><slot /></div>',
+          },
+          ElTooltip: { template: '<div><slot /></div>' },
+          ElTag: { template: '<span class="mock-tag"><slot /></span>' },
+          ElButton: {
+            template: '<button type="button" @click="$emit(\'click\')"><slot /></button>',
+          },
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('实时用电功率与电压走势')
+    const zoomInBtn = wrapper.find('[data-test="btn-trend-zoom-in"]')
+    await zoomInBtn.trigger('click')
+
+    const dialog = wrapper.find('.mock-dialog')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.text()).toContain('单相电表实时用电功率与电压走势大图')
     wrapper.unmount()
   })
 })
