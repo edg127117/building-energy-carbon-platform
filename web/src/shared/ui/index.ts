@@ -6,7 +6,7 @@ export {
   ElDialog, ElDivider, ElDrawer, ElDropdown, ElDropdownItem, ElDropdownMenu,
   ElEmpty, ElForm, ElFormItem, ElHeader, ElInput, ElInputNumber, ElMain, ElMenu,
   ElMenuItem, ElMessage, ElMessageBox, ElOption, ElPagination, ElPopconfirm,
-  ElProgress, ElRadio, ElRadioGroup, ElResult, ElSelect, ElSkeleton, ElSpace,
+  ElProgress, ElRadio, ElRadioButton, ElRadioGroup, ElResult, ElSelect, ElSkeleton, ElSpace,
   ElSubMenu, ElSwitch, ElTabPane, ElTable, ElTableColumn, ElTabs, ElTag, ElTooltip,
   ElTree, ElPopover,
 

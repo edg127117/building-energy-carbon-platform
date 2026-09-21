@@ -200,6 +200,27 @@ export type AssetEquipmentReadings = {
   points: AssetPointReading[]
 }
 
+export type AssetPointTrendSeries = {
+  pointCode: string
+  pointName: string
+  unit: string | null
+  data: [number, number | null][]
+}
+
+export type AssetEquipmentTrendHistory = {
+  equipmentId: string
+  buildingId?: string
+  startTime: string
+  endTime: string
+  series: AssetPointTrendSeries[]
+}
+
+export type AssetEquipmentTrendQuery = {
+  startTime: string
+  endTime: string
+  intervalSeconds?: number
+}
+
 export type AssetEquipmentQuery = {
   page: number
   size: number

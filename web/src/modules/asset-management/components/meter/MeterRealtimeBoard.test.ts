@@ -8,6 +8,16 @@ import SinglePhaseMeterBoard from './SinglePhaseMeterBoard.vue'
 import MeterRealtimeBoard from './MeterRealtimeBoard.vue'
 import MeterRealtimeTrendChart from './MeterRealtimeTrendChart.vue'
 
+// Mock getEquipmentTrendHistory
+vi.mock('../../api/assets', () => ({
+  getEquipmentTrendHistory: vi.fn().mockResolvedValue({
+    equipmentId: 'eq-3p-1',
+    startTime: '2026-09-21T10:00:00Z',
+    endTime: '2026-09-21T11:00:00Z',
+    series: [],
+  }),
+}))
+
 // Mock useEquipmentReadings composable
 vi.mock('../../composables/use-equipment-readings', () => {
   return {
@@ -282,7 +292,85 @@ describe('Meter Realtime Components', () => {
 
     const dialog = wrapper.find('.mock-dialog')
     expect(dialog.exists()).toBe(true)
-    expect(dialog.text()).toContain('单相电表实时用电功率与电压走势大图')
+    expect(wrapper.text()).toContain('单相电表实时用电功率与电压走势大图')
+    wrapper.unmount()
+  })
+
+  it('renders time range selector with presets and emits change-range', async () => {
+    const wrapper = mount(MeterRealtimeTrendChart, {
+      props: {
+        phase: '3P',
+        records: [],
+        rangeType: 'realtime',
+      },
+      global: {
+        stubs: {
+          ChartView: { template: '<div class="mock-chart-view" />' },
+          ElDialog: { template: '<div />' },
+          ElTooltip: { template: '<div><slot /></div>' },
+          ElTag: { template: '<span class="mock-tag"><slot /></span>' },
+          ElButton: { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' },
+          ElRadioGroup: {
+            props: ['modelValue'],
+            template: '<div class="mock-radio-group"><slot /></div>',
+          },
+          ElRadioButton: {
+            props: ['value'],
+            template: '<button class="mock-radio-btn" :data-val="value" @click="$parent.$emit(\'change\', value)"><slot /></button>',
+          },
+          ElDatePicker: { template: '<div class="mock-date-picker" />' },
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('时间范围')
+    expect(wrapper.text()).toContain('实时追踪')
+    expect(wrapper.text()).toContain('近6小时')
+    expect(wrapper.text()).toContain('今日')
+    expect(wrapper.text()).toContain('近24小时')
+    expect(wrapper.text()).toContain('自定义')
+
+    const radio6h = wrapper.find('[data-val="6h"]')
+    expect(radio6h.exists()).toBe(true)
+    await radio6h.trigger('click')
+
+    expect(wrapper.emitted('change-range')).toBeTruthy()
+    expect(wrapper.emitted('change-range')![0]).toEqual(['6h'])
+    wrapper.unmount()
+  })
+
+  it('displays api pending badge and handles refresh button', async () => {
+    const wrapper = mount(MeterRealtimeTrendChart, {
+      props: {
+        phase: '3P',
+        records: [
+          { time: 1700000000000, power: 10.5 },
+        ],
+        apiPending: true,
+        historyLoading: false,
+      },
+      global: {
+        stubs: {
+          ChartView: { template: '<div class="mock-chart-view" />' },
+          ElDialog: { template: '<div />' },
+          ElTooltip: { template: '<div><slot /></div>' },
+          ElTag: { template: '<span class="mock-tag"><slot /></span>' },
+          ElButton: { template: '<button type="button" @click="$emit(\'click\')"><slot /></button>' },
+          ElRadioGroup: { template: '<div class="mock-radio-group"><slot /></div>' },
+          ElRadioButton: { template: '<button><slot /></button>' },
+          ElDatePicker: { template: '<div />' },
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-test="badge-api-pending"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('后端历史时序接口建设中')
+
+    const refreshBtn = wrapper.find('[data-test="btn-refresh-history"]')
+    expect(refreshBtn.exists()).toBe(true)
+    await refreshBtn.trigger('click')
+
+    expect(wrapper.emitted('refresh-history')).toBeTruthy()
     wrapper.unmount()
   })
 })

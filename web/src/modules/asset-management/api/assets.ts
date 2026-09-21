@@ -7,6 +7,8 @@ import type {
   AssetEquipmentForm,
   AssetEquipmentQuery,
   AssetEquipmentReadings,
+  AssetEquipmentTrendHistory,
+  AssetEquipmentTrendQuery,
   AssetPage,
   AssetPoint,
   AssetPointUpdate,
@@ -81,6 +83,14 @@ export function getEquipment(equipmentId: string) {
 
 export function getEquipmentReadings(equipmentId: string) {
   return requestApi<AssetEquipmentReadings>({ method: 'get', url: `${basePath}/equipment/${encoded(equipmentId)}/readings` })
+}
+
+export function getEquipmentTrendHistory(equipmentId: string, params: AssetEquipmentTrendQuery) {
+  return requestApi<AssetEquipmentTrendHistory>({
+    method: 'get',
+    url: `${basePath}/equipment/${encoded(equipmentId)}/trend-history`,
+    params,
+  })
 }
 
 export function createEquipment(data: AssetEquipmentForm) {

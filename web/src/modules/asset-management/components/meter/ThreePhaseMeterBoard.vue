@@ -6,11 +6,23 @@ import type { AssetPointReading } from '../../models/assets'
 import MeterPointReadingTable from './MeterPointReadingTable.vue'
 import MeterRealtimeTrendChart, { type MeterTrendRecord } from './MeterRealtimeTrendChart.vue'
 import { calculateCurrentUnbalance, extractThreePhaseMetrics } from './meter-display'
+import type { TrendDateRange, TrendRangeType } from '../../composables/use-equipment-trend-history'
 
 const props = defineProps<{
   points: AssetPointReading[]
   trendRecords: MeterTrendRecord[]
   loading?: boolean
+  historyLoading?: boolean
+  apiPending?: boolean
+  rangeType?: TrendRangeType
+  customRange?: TrendDateRange
+  isLargeDataset?: boolean
+}>()
+
+const emit = defineEmits<{
+  (e: 'change-range', type: TrendRangeType): void
+  (e: 'change-custom-range', range: TrendDateRange): void
+  (e: 'refresh-history'): void
 }>()
 
 const metrics = computed(() => extractThreePhaseMetrics(props.points))
@@ -77,7 +89,19 @@ function fmtMetric(val: number | null, unit: string): string {
     </div>
 
     <!-- 2. 动态走势图 (首屏核心视觉区，对齐效果图方案一) -->
-    <MeterRealtimeTrendChart phase="3P" :records="props.trendRecords" :loading="props.loading" />
+    <MeterRealtimeTrendChart
+      phase="3P"
+      :records="props.trendRecords"
+      :loading="props.loading"
+      :history-loading="props.historyLoading"
+      :api-pending="props.apiPending"
+      :range-type="props.rangeType"
+      :custom-range="props.customRange"
+      :is-large-dataset="props.isLargeDataset"
+      @change-range="(type) => emit('change-range', type)"
+      @change-custom-range="(range) => emit('change-custom-range', range)"
+      @refresh-history="() => emit('refresh-history')"
+    />
 
     <!-- 3. A/B/C 三相负荷平衡对比卡 -->
     <div class="phase-balance-card">
