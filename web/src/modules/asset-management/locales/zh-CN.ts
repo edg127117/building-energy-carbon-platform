@@ -177,7 +177,7 @@ export default {
   meter: {
     viewMeterPoints: '查看测点与走势',
     meterPointsTab: '实时测点与走势',
-    liveStatus: '实时监测中 · 10秒自动更新',
+    liveStatus: '实时监测中 · 1分钟自动更新',
     offlineStatus: '离线 (未接收最新上报)',
     lastUpdate: '更新于 {time}',
     realtimePower: '实时总有功功率',

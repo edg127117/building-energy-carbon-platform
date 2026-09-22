@@ -15,6 +15,7 @@ const props = defineProps<{
 
 const { readings, loading, error, load, clear: clearReadings } = useEquipmentReadings()
 const trendHistory = useEquipmentTrendHistory()
+const POLL_INTERVAL_MS = 60_000 // 实时追踪静默轮询间隔：1分钟（适配电表3分钟上报周期，降低无效请求）
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const phase = computed(() => getMeterPhaseType(props.equipment, readings.value?.points))
@@ -34,7 +35,7 @@ function startPolling() {
   stopPolling()
   trendHistory.init(props.equipment.equipmentId, phase.value)
   fetchReadingsSilently()
-  pollTimer = setInterval(fetchReadingsSilently, 10000)
+  pollTimer = setInterval(fetchReadingsSilently, POLL_INTERVAL_MS)
 }
 
 function stopPolling() {
@@ -64,7 +65,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="meter-realtime-board">
-    <!-- 初次加载骨架屏（仅在无任何读数时展示，后续10秒静默轮询不闪屏） -->
+    <!-- 初次加载骨架屏（仅在无任何读数时展示，后续1分钟静默轮询不闪屏） -->
     <ElSkeleton v-if="loading && !readings" animated :rows="6" class="board-skeleton" />
 
     <ElAlert
