@@ -213,6 +213,80 @@ describe('Meter Realtime Components', () => {
     wrapper.unmount()
   })
 
+  it('initializes trend history and passes props down in MeterRealtimeBoard', async () => {
+    const apiAssets = await import('../../api/assets')
+    vi.mocked(apiAssets.getEquipmentTrendHistory).mockResolvedValueOnce({
+      equipmentId: 'eq-3p-1',
+      startTime: '2026-09-21T10:00:00Z',
+      endTime: '2026-09-21T11:00:00Z',
+      series: [
+        {
+          pointCode: 'P_TOTAL',
+          pointName: '总有功功率',
+          unit: 'kW',
+          data: [[1700000000000, 32.5]],
+        },
+      ],
+    })
+
+    const equipment3P: AssetEquipmentDetail = {
+      equipmentId: 'eq-3p-1',
+      equipmentCode: 'MTR_3P_01',
+      equipmentName: '进线三相电表',
+      typeCode: '3P_METER',
+      category: 'METER',
+      buildingId: 'b-1',
+      buildingName: '试点大楼',
+      spaceId: null,
+      spaceName: null,
+      systemGroupId: null,
+      systemGroupName: null,
+      productId: null,
+      productName: null,
+      status: 'ACTIVE',
+      expectedProfileCode: null,
+      lastDiscoveredTime: null,
+      pointSummary: { total: 5, required: 0, configuredRequired: 0 },
+      allowedActions: [],
+      updateTime: 0,
+      manufacturer: null,
+      ratedCapacity: null,
+      ratedPower: null,
+      designCop: null,
+      parameterGovernanceStatus: null,
+      identities: [],
+      references: { spaces: 0, systemGroups: 0, equipment: 0, points: 0, authorizations: 0, children: 0, aliases: 0, identities: 0 },
+    }
+
+    const wrapper = mount(MeterRealtimeBoard, {
+      props: { equipment: equipment3P },
+      global: {
+        stubs: {
+          ThreePhaseMeterBoard: {
+            props: ['points', 'trendRecords', 'historyLoading', 'apiPending', 'rangeType'],
+            template: '<div class="three-phase-view" :data-range="rangeType" :data-records-len="trendRecords?.length ?? 0">ThreePhaseBoard</div>',
+          },
+          SinglePhaseMeterBoard: { template: '<div class="single-phase-view" />' },
+          ElSkeleton: { template: '<div />' },
+          ElAlert: { template: '<div />' },
+          ElEmpty: { template: '<div />' },
+        },
+      },
+    })
+
+    await vi.waitFor(() => {
+      const board = wrapper.find('.three-phase-view')
+      expect(board.exists()).toBe(true)
+      expect(board.attributes('data-records-len')).toBe('1')
+    })
+
+    expect(apiAssets.getEquipmentTrendHistory).toHaveBeenCalledWith(
+      'eq-3p-1',
+      expect.objectContaining({ intervalSeconds: 10 }),
+    )
+    wrapper.unmount()
+  })
+
   it('supports zooming in and out of MeterRealtimeTrendChart', async () => {
     const wrapper = mount(MeterRealtimeTrendChart, {
       props: {

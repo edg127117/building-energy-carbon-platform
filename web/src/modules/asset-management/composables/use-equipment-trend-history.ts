@@ -8,7 +8,7 @@ import { extractTrendValues } from '../components/meter/meter-display'
 export type TrendRangeType = 'realtime' | '6h' | 'today' | '24h' | 'custom'
 export type TrendDateRange = [Date, Date] | null
 
-// 实时模式下最大保留点数（10秒上报一次，1小时保留 360 点，复用中央空调低内存实践）
+// 实时模式下最大保留点数（1分钟轮询一次，360点覆盖6小时波形，复用中央空调低内存实践）
 export const MAX_REALTIME_POINTS = 360
 
 // 大数据集分界线：>= 1000 时禁用补间动画与散点渲染，防止 Canvas/DOM 卡顿
@@ -291,6 +291,7 @@ export function useEquipmentTrendHistory() {
   }
 
   function setCustomRange(range: TrendDateRange, equipmentId: string, phase: '3P' | '1P'): void {
+    rangeType.value = 'custom'
     customRange.value = range
     if (range && range[0] && range[1]) {
       loadHistory(equipmentId, phase)

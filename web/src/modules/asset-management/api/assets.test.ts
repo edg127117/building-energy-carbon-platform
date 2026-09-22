@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
-import { createEquipment, getEquipmentReadings, listBuildings, updateEquipmentPoint } from './assets'
+import { createEquipment, getEquipmentReadings, getEquipmentTrendHistory, listBuildings, updateEquipmentPoint } from './assets'
 
 vi.mock('@/infrastructure/http/public', () => ({ requestApi: vi.fn() }))
 
@@ -57,5 +57,22 @@ describe('资产档案接口契约', () => {
   it('通过资产模块正式接口读取设备最近原始事件', async () => {
     await getEquipmentReadings('E/01')
     expect(requestApi).toHaveBeenCalledWith({ method: 'get', url: '/v1/assets/equipment/E%2F01/readings' })
+  })
+
+  it('通过资产模块正式接口读取设备历史时序走势', async () => {
+    await getEquipmentTrendHistory('EQUIP/01', {
+      startTime: '2026-09-21T10:00:00.000Z',
+      endTime: '2026-09-21T11:00:00.000Z',
+      intervalSeconds: 60,
+    })
+    expect(requestApi).toHaveBeenCalledWith({
+      method: 'get',
+      url: '/v1/assets/equipment/EQUIP%2F01/trend-history',
+      params: {
+        startTime: '2026-09-21T10:00:00.000Z',
+        endTime: '2026-09-21T11:00:00.000Z',
+        intervalSeconds: 60,
+      },
+    })
   })
 })
