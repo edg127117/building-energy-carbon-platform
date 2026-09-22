@@ -1,56 +1,29 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { ElAlert, ElEmpty, ElSkeleton } from '@/shared/ui'
 import { t } from '@/locales'
-import type { AssetEquipmentDetail, AssetPointReading } from '../../models/assets'
+import type { AssetEquipmentDetail } from '../../models/assets'
 import { useEquipmentReadings } from '../../composables/use-equipment-readings'
+import { useEquipmentTrendHistory } from '../../composables/use-equipment-trend-history'
 import SinglePhaseMeterBoard from './SinglePhaseMeterBoard.vue'
 import ThreePhaseMeterBoard from './ThreePhaseMeterBoard.vue'
-import type { MeterTrendRecord } from './MeterRealtimeTrendChart.vue'
-import { extractTrendValues, getMeterPhaseType } from './meter-display'
+import { getMeterPhaseType } from './meter-display'
 
 const props = defineProps<{
   equipment: AssetEquipmentDetail
 }>()
 
-const { readings, loading, error, load, clear } = useEquipmentReadings()
-const trendRecords = ref<MeterTrendRecord[]>([])
+const { readings, loading, error, load, clear: clearReadings } = useEquipmentReadings()
+const trendHistory = useEquipmentTrendHistory()
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const phase = computed(() => getMeterPhaseType(props.equipment, readings.value?.points))
-
-function appendTrendPoint(pts: AssetPointReading[], generatedAt: number) {
-  const is3P = phase.value === '3P'
-  const trend = extractTrendValues(pts, is3P ? '3P' : '1P')
-  const q = pts.length > 0 ? pts[0].dataQuality : 0
-
-  const newRecord: MeterTrendRecord = {
-    time: generatedAt || Date.now(),
-    power: trend.power,
-    currentA: trend.currentA,
-    currentB: trend.currentB,
-    currentC: trend.currentC,
-    voltage: trend.voltage,
-    dataQuality: q,
-  }
-
-  const last = trendRecords.value[trendRecords.value.length - 1]
-  if (last && last.time === newRecord.time && last.power === newRecord.power) {
-    return
-  }
-
-  // 维护滑动窗口，最大保留 30 个时间点
-  trendRecords.value.push(newRecord)
-  if (trendRecords.value.length > 30) {
-    trendRecords.value.shift()
-  }
-}
 
 async function fetchReadingsSilently() {
   try {
     const result = await load(props.equipment.equipmentId, Boolean(readings.value))
     if (result && result.points) {
-      appendTrendPoint(result.points, result.generatedAt)
+      trendHistory.appendRealtimeReading(result.points, result.generatedAt, props.equipment.equipmentId, phase.value)
     }
   } catch {
     // 静默轮询错误保留在 error 中，不中断前端交互
@@ -59,6 +32,7 @@ async function fetchReadingsSilently() {
 
 function startPolling() {
   stopPolling()
+  trendHistory.init(props.equipment.equipmentId, phase.value)
   fetchReadingsSilently()
   pollTimer = setInterval(fetchReadingsSilently, 10000)
 }
@@ -68,13 +42,13 @@ function stopPolling() {
     clearInterval(pollTimer)
     pollTimer = null
   }
-  clear()
+  clearReadings()
+  trendHistory.clear()
 }
 
 watch(
   () => props.equipment.equipmentId,
   () => {
-    trendRecords.value = []
     startPolling()
   },
 )
@@ -106,14 +80,30 @@ onBeforeUnmount(() => {
       <ThreePhaseMeterBoard
         v-if="phase === '3P'"
         :points="readings.points"
-        :trend-records="trendRecords"
+        :trend-records="trendHistory.records.value"
         :loading="loading"
+        :history-loading="trendHistory.loading.value"
+        :api-pending="trendHistory.apiPending.value"
+        :range-type="trendHistory.rangeType.value"
+        :custom-range="trendHistory.customRange.value"
+        :is-large-dataset="trendHistory.isLargeDataset.value"
+        @change-range="(type) => trendHistory.setRangeType(type, props.equipment.equipmentId, '3P')"
+        @change-custom-range="(range) => trendHistory.setCustomRange(range, props.equipment.equipmentId, '3P')"
+        @refresh-history="() => trendHistory.refresh(props.equipment.equipmentId, '3P')"
       />
       <SinglePhaseMeterBoard
         v-else
         :points="readings.points"
-        :trend-records="trendRecords"
+        :trend-records="trendHistory.records.value"
         :loading="loading"
+        :history-loading="trendHistory.loading.value"
+        :api-pending="trendHistory.apiPending.value"
+        :range-type="trendHistory.rangeType.value"
+        :custom-range="trendHistory.customRange.value"
+        :is-large-dataset="trendHistory.isLargeDataset.value"
+        @change-range="(type) => trendHistory.setRangeType(type, props.equipment.equipmentId, '1P')"
+        @change-custom-range="(range) => trendHistory.setCustomRange(range, props.equipment.equipmentId, '1P')"
+        @refresh-history="() => trendHistory.refresh(props.equipment.equipmentId, '1P')"
       />
     </template>
 

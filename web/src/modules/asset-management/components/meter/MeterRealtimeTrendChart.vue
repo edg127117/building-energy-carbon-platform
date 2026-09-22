@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ChartView from '@/shared/charts/ChartView.vue'
 import type { ChartOption } from '@/shared/charts/echarts'
 import {
   ElButton,
+  ElDatePicker,
   ElDialog,
+  ElRadioButton,
+  ElRadioGroup,
   ElTag,
   ElTooltip,
   Info,
   Maximize,
   Minimize,
+  RefreshCw,
 } from '@/shared/ui'
 import { t } from '@/locales'
+import type { TrendDateRange, TrendRangeType } from '../../composables/use-equipment-trend-history'
 
 export type MeterTrendRecord = {
   time: number
@@ -27,11 +32,37 @@ const props = withDefaults(defineProps<{
   phase: '3P' | '1P'
   records: MeterTrendRecord[]
   loading?: boolean
+  historyLoading?: boolean
+  apiPending?: boolean
+  rangeType?: TrendRangeType
+  customRange?: TrendDateRange
+  isLargeDataset?: boolean
 }>(), {
   loading: false,
+  historyLoading: false,
+  apiPending: false,
+  rangeType: 'realtime',
+  customRange: null,
+  isLargeDataset: false,
 })
 
+const emit = defineEmits<{
+  (e: 'change-range', type: TrendRangeType): void
+  (e: 'change-custom-range', range: TrendDateRange): void
+  (e: 'refresh-history'): void
+}>()
+
 const isZoomed = ref(false)
+
+const selectedRange = ref<TrendRangeType>(props.rangeType)
+watch(() => props.rangeType, (newVal) => {
+  if (newVal) selectedRange.value = newVal
+})
+
+const customDateRange = ref<TrendDateRange>(props.customRange)
+watch(() => props.customRange, (newVal) => {
+  customDateRange.value = newVal
+})
 
 function openZoom(): void {
   isZoomed.value = true
@@ -39,6 +70,25 @@ function openZoom(): void {
 
 function closeZoom(): void {
   isZoomed.value = false
+}
+
+function handleRangeChange(val: string | number | boolean | undefined): void {
+  const type = String(val) as TrendRangeType
+  selectedRange.value = type
+  emit('change-range', type)
+}
+
+function handleCustomDateChange(val: unknown): void {
+  const range = (val as TrendDateRange) ?? null
+  emit('change-custom-range', range)
+}
+
+function handleRefresh(): void {
+  emit('refresh-history')
+}
+
+function disableFutureDates(date: Date): boolean {
+  return date.getTime() > Date.now()
 }
 
 const latestRecord = computed(() => {
@@ -101,8 +151,22 @@ function autoScaleCurrentMax(value: { min: number; max: number }) {
 
 function buildOption(isEnlarged: boolean): ChartOption {
   const is3P = props.phase === '3P'
+  const isLarge = props.isLargeDataset || props.records.length >= 1000
+
+  const timeSpan = props.records.length > 1
+    ? props.records[props.records.length - 1].time - props.records[0].time
+    : 0
+  const isMultiDay = timeSpan > 24 * 3600 * 1000
+
   const timeLabels = props.records.map((r) => {
     const d = new Date(r.time)
+    if (isMultiDay) {
+      const MM = String(d.getMonth() + 1).padStart(2, '0')
+      const DD = String(d.getDate()).padStart(2, '0')
+      const hh = String(d.getHours()).padStart(2, '0')
+      const mm = String(d.getMinutes()).padStart(2, '0')
+      return `${MM}-${DD} ${hh}:${mm}`
+    }
     const hh = String(d.getHours()).padStart(2, '0')
     const mm = String(d.getMinutes()).padStart(2, '0')
     const ss = String(d.getSeconds()).padStart(2, '0')
@@ -118,7 +182,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
     : { bottom: '0%' }
 
   const splitNumber = isEnlarged ? 6 : 4
-  const symbolSize = isEnlarged ? 6 : 4
+  const symbolSize = isLarge ? 0 : (isEnlarged ? 6 : 4)
+  const showSymbol = !isLarge && props.records.length <= 100
 
   const dataZoom = isEnlarged
     ? [
@@ -140,6 +205,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
 
   if (is3P) {
     return {
+      animation: !isLarge,
+      animationDuration: isLarge ? 0 : 300,
       tooltip: {
         trigger: 'axis',
         axisPointer: {
@@ -194,9 +261,10 @@ function buildOption(isEnlarged: boolean): ChartOption {
           type: 'line',
           yAxisIndex: 0,
           smooth: true,
-          showSymbol: true,
+          showSymbol,
           symbol: 'circle',
           symbolSize,
+          sampling: isLarge ? 'lttb' : undefined,
           areaStyle: {
             opacity: 0.12,
           },
@@ -207,9 +275,10 @@ function buildOption(isEnlarged: boolean): ChartOption {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          showSymbol: true,
+          showSymbol,
           symbol: 'circle',
           symbolSize,
+          sampling: isLarge ? 'lttb' : undefined,
           data: props.records.map((r) => r.currentA ?? null),
         },
         {
@@ -217,9 +286,10 @@ function buildOption(isEnlarged: boolean): ChartOption {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          showSymbol: true,
+          showSymbol,
           symbol: 'circle',
           symbolSize,
+          sampling: isLarge ? 'lttb' : undefined,
           data: props.records.map((r) => r.currentB ?? null),
         },
         {
@@ -227,9 +297,10 @@ function buildOption(isEnlarged: boolean): ChartOption {
           type: 'line',
           yAxisIndex: 1,
           smooth: true,
-          showSymbol: true,
+          showSymbol,
           symbol: 'circle',
           symbolSize,
+          sampling: isLarge ? 'lttb' : undefined,
           data: props.records.map((r) => r.currentC ?? null),
         },
       ],
@@ -237,6 +308,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
   }
 
   return {
+    animation: !isLarge,
+    animationDuration: isLarge ? 0 : 300,
     tooltip: {
       trigger: 'axis',
       axisPointer: {
@@ -291,9 +364,10 @@ function buildOption(isEnlarged: boolean): ChartOption {
         type: 'line',
         yAxisIndex: 0,
         smooth: true,
-        showSymbol: true,
+        showSymbol,
         symbol: 'circle',
         symbolSize,
+        sampling: isLarge ? 'lttb' : undefined,
         areaStyle: {
           opacity: 0.12,
         },
@@ -304,9 +378,10 @@ function buildOption(isEnlarged: boolean): ChartOption {
         type: 'line',
         yAxisIndex: 1,
         smooth: true,
-        showSymbol: true,
+        showSymbol,
         symbol: 'circle',
         symbolSize,
+        sampling: isLarge ? 'lttb' : undefined,
         data: props.records.map((r) => r.voltage ?? null),
       },
     ],
@@ -380,13 +455,75 @@ const enlargedOption = computed<ChartOption>(() => buildOption(true))
       </div>
     </div>
 
+    <div class="trend-toolbar">
+      <div class="toolbar-left">
+        <span class="toolbar-label">{{ t('assetManagement.meter.timeRange') }}</span>
+        <ElRadioGroup
+          v-model="selectedRange"
+          size="small"
+          class="range-radio-group"
+          data-test="trend-range-selector"
+          @change="handleRangeChange"
+        >
+          <ElRadioButton value="realtime">{{ t('assetManagement.meter.rangeRealtimeShort') }}</ElRadioButton>
+          <ElRadioButton value="6h">{{ t('assetManagement.meter.range6h') }}</ElRadioButton>
+          <ElRadioButton value="today">{{ t('assetManagement.meter.rangeToday') }}</ElRadioButton>
+          <ElRadioButton value="24h">{{ t('assetManagement.meter.range24h') }}</ElRadioButton>
+          <ElRadioButton value="custom">{{ t('assetManagement.meter.rangeCustom') }}</ElRadioButton>
+        </ElRadioGroup>
+
+        <ElDatePicker
+          v-if="selectedRange === 'custom'"
+          v-model="customDateRange"
+          type="datetimerange"
+          size="small"
+          :range-separator="'-'"
+          :start-placeholder="t('assetManagement.meter.customRangeStart')"
+          :end-placeholder="t('assetManagement.meter.customRangeEnd')"
+          :disabled-date="disableFutureDates"
+          class="custom-range-picker"
+          data-test="trend-custom-date-picker"
+          @change="handleCustomDateChange"
+        />
+
+        <ElButton
+          size="small"
+          plain
+          :loading="props.historyLoading"
+          class="refresh-btn"
+          data-test="btn-refresh-history"
+          @click="handleRefresh"
+        >
+          <RefreshCw class="action-icon" />
+          <span>{{ t('assetManagement.meter.refreshNow') }}</span>
+        </ElButton>
+      </div>
+
+      <div class="toolbar-right">
+        <ElTag
+          v-if="props.apiPending"
+          size="small"
+          type="info"
+          effect="plain"
+          class="api-pending-badge"
+          data-test="badge-api-pending"
+        >
+          <Info class="tip-icon-inline" />
+          <span>{{ t('assetManagement.meter.historyPendingApi') }}</span>
+        </ElTag>
+        <span v-if="props.records.length > 0" class="points-count-badge font-mono">
+          {{ t('assetManagement.meter.pointsCount', { count: props.records.length }) }}
+        </span>
+      </div>
+    </div>
+
     <div
       class="chart-wrapper"
       :class="props.phase === '3P' ? 'three-phase' : 'single-phase'"
     >
       <ChartView
         :option="option"
-        :loading="props.loading"
+        :loading="props.loading || props.historyLoading"
         :empty="props.records.length === 0"
         :accessible-label="t('assetManagement.meter.chartAccessible')"
       />
@@ -463,13 +600,72 @@ const enlargedOption = computed<ChartOption>(() => buildOption(true))
         </div>
       </template>
 
+      <!-- 大图内时间范围筛选工具栏 -->
+      <div class="zoom-dialog-toolbar">
+        <div class="toolbar-left">
+          <span class="toolbar-label">{{ t('assetManagement.meter.timeRange') }}</span>
+          <ElRadioGroup
+            v-model="selectedRange"
+            size="small"
+            class="range-radio-group"
+            @change="handleRangeChange"
+          >
+            <ElRadioButton value="realtime">{{ t('assetManagement.meter.rangeRealtimeShort') }}</ElRadioButton>
+            <ElRadioButton value="6h">{{ t('assetManagement.meter.range6h') }}</ElRadioButton>
+            <ElRadioButton value="today">{{ t('assetManagement.meter.rangeToday') }}</ElRadioButton>
+            <ElRadioButton value="24h">{{ t('assetManagement.meter.range24h') }}</ElRadioButton>
+            <ElRadioButton value="custom">{{ t('assetManagement.meter.rangeCustom') }}</ElRadioButton>
+          </ElRadioGroup>
+
+          <ElDatePicker
+            v-if="selectedRange === 'custom'"
+            v-model="customDateRange"
+            type="datetimerange"
+            size="small"
+            :range-separator="'-'"
+            :start-placeholder="t('assetManagement.meter.customRangeStart')"
+            :end-placeholder="t('assetManagement.meter.customRangeEnd')"
+            :disabled-date="disableFutureDates"
+            class="custom-range-picker"
+            @change="handleCustomDateChange"
+          />
+
+          <ElButton
+            size="small"
+            plain
+            :loading="props.historyLoading"
+            class="refresh-btn"
+            @click="handleRefresh"
+          >
+            <RefreshCw class="action-icon" />
+            <span>{{ t('assetManagement.meter.refreshNow') }}</span>
+          </ElButton>
+        </div>
+
+        <div class="toolbar-right">
+          <ElTag
+            v-if="props.apiPending"
+            size="small"
+            type="info"
+            effect="plain"
+            class="api-pending-badge"
+          >
+            <Info class="tip-icon-inline" />
+            <span>{{ t('assetManagement.meter.historyPendingApi') }}</span>
+          </ElTag>
+          <span v-if="props.records.length > 0" class="points-count-badge font-mono">
+            {{ t('assetManagement.meter.pointsCount', { count: props.records.length }) }}
+          </span>
+        </div>
+      </div>
+
       <div
         class="chart-wrapper enlarged-chart-wrapper"
         :class="props.phase === '3P' ? 'three-phase' : 'single-phase'"
       >
         <ChartView
           :option="enlargedOption"
-          :loading="props.loading"
+          :loading="props.loading || props.historyLoading"
           :empty="props.records.length === 0"
           :accessible-label="t('assetManagement.meter.chartAccessible')"
         />
@@ -645,6 +841,79 @@ const enlargedOption = computed<ChartOption>(() => buildOption(true))
   height: var(--bec-icon-small);
   flex-shrink: 0;
   color: var(--bec-ref-blue);
+}
+
+.trend-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--bec-space-tight);
+  padding-block: var(--bec-ref-space-4);
+}
+
+.zoom-dialog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--bec-space-tight);
+  margin-bottom: var(--bec-space-tight);
+  padding-block: var(--bec-ref-space-4);
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--bec-ref-space-8);
+}
+
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--bec-ref-space-8);
+}
+
+.toolbar-label {
+  font-size: var(--bec-font-size-small);
+  color: var(--bec-color-text-secondary);
+  font-weight: var(--bec-font-weight-heading);
+}
+
+.range-radio-group {
+  display: inline-flex;
+}
+
+.custom-range-picker {
+  max-width: calc(var(--bec-ref-space-64) * 4);
+}
+
+.refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bec-ref-space-4);
+}
+
+.api-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--bec-ref-space-4);
+}
+
+.tip-icon-inline {
+  width: var(--bec-icon-small);
+  height: var(--bec-icon-small);
+}
+
+.points-count-badge {
+  font-size: var(--bec-font-size-small);
+  color: var(--bec-color-text-secondary);
+  background-color: var(--bec-color-surface-secondary);
+  border: var(--bec-border-width) solid var(--bec-color-divider);
+  border-radius: var(--bec-radius-card);
+  padding: var(--bec-ref-space-4) var(--bec-ref-space-8);
 }
 
 /* 区分三相电表曲线与图例色彩：总功率=蓝，A相=黄/琥珀，B相=绿，C相=红 */
