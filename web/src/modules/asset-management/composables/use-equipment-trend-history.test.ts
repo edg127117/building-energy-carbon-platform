@@ -226,5 +226,128 @@ describe('useEquipmentTrendHistory', () => {
       expect(instance2.records.value).toHaveLength(1)
       expect(instance2.records.value[0].power).toBe(12.0)
     })
+
+    it('processes PR 94 full three-phase backend series response accurately', async () => {
+      const pr94BackendResponse: AssetEquipmentTrendHistory = {
+        equipmentId: 'EQUIP_3P_B1',
+        buildingId: 'BLD001',
+        startTime: '2026-09-21T00:00:00.000Z',
+        endTime: '2026-09-21T06:00:00.000Z',
+        series: [
+          {
+            pointCode: 'P_TOTAL',
+            pointName: '总有功功率',
+            unit: 'kW',
+            data: [
+              [1700000000000, 35.5],
+              [1700000060000, 38.2],
+            ],
+          },
+          {
+            pointCode: 'I_A',
+            pointName: 'A相电流',
+            unit: 'A',
+            data: [
+              [1700000000000, 52.1],
+              [1700000060000, 55.4],
+            ],
+          },
+          {
+            pointCode: 'I_B',
+            pointName: 'B相电流',
+            unit: 'A',
+            data: [
+              [1700000000000, 51.8],
+              [1700000060000, 54.9],
+            ],
+          },
+          {
+            pointCode: 'I_C',
+            pointName: 'C相电流',
+            unit: 'A',
+            data: [
+              [1700000000000, 52.3],
+              [1700000060000, 55.1],
+            ],
+          },
+          {
+            pointCode: 'U_A',
+            pointName: 'A相电压',
+            unit: 'V',
+            data: [
+              [1700000000000, 220.8],
+              [1700000060000, 221.2],
+            ],
+          },
+        ],
+      }
+      vi.mocked(api.getEquipmentTrendHistory).mockResolvedValueOnce(pr94BackendResponse)
+
+      const { records, apiPending, loading, isLargeDataset, init } = useEquipmentTrendHistory()
+      init('EQUIP_3P_B1', '3P')
+
+      await vi.waitFor(() => expect(loading.value).toBe(false))
+      expect(apiPending.value).toBe(false)
+      expect(isLargeDataset.value).toBe(false)
+      expect(records.value).toHaveLength(2)
+
+      expect(records.value[0]).toEqual({
+        time: 1700000000000,
+        power: 35.5,
+        currentA: 52.1,
+        currentB: 51.8,
+        currentC: 52.3,
+        voltage: 220.8,
+      })
+      expect(records.value[1]).toEqual({
+        time: 1700000060000,
+        power: 38.2,
+        currentA: 55.4,
+        currentB: 54.9,
+        currentC: 55.1,
+        voltage: 221.2,
+      })
+    })
+
+    it('triggers loadHistory with valid query parameters when switching range types', async () => {
+      vi.mocked(api.getEquipmentTrendHistory).mockResolvedValue({
+        equipmentId: 'eq-switch',
+        startTime: '2026-09-21T00:00:00.000Z',
+        endTime: '2026-09-21T06:00:00.000Z',
+        series: [],
+      })
+
+      const { setRangeType, setCustomRange, rangeType, customRange } = useEquipmentTrendHistory()
+
+      setRangeType('6h', 'eq-switch', '3P')
+      expect(rangeType.value).toBe('6h')
+      expect(api.getEquipmentTrendHistory).toHaveBeenLastCalledWith(
+        'eq-switch',
+        expect.objectContaining({
+          intervalSeconds: 60,
+        }),
+      )
+
+      setRangeType('today', 'eq-switch', '3P')
+      expect(rangeType.value).toBe('today')
+      expect(api.getEquipmentTrendHistory).toHaveBeenLastCalledWith(
+        'eq-switch',
+        expect.objectContaining({
+          intervalSeconds: 120,
+        }),
+      )
+
+      const customStart = new Date('2026-09-18T00:00:00.000Z')
+      const customEnd = new Date('2026-09-20T00:00:00.000Z')
+      setCustomRange([customStart, customEnd], 'eq-switch', '3P')
+      expect(customRange.value).toEqual([customStart, customEnd])
+      expect(api.getEquipmentTrendHistory).toHaveBeenLastCalledWith(
+        'eq-switch',
+        expect.objectContaining({
+          startTime: customStart.toISOString(),
+          endTime: customEnd.toISOString(),
+        }),
+      )
+    })
   })
 })

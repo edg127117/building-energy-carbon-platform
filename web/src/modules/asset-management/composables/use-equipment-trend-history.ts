@@ -291,6 +291,7 @@ export function useEquipmentTrendHistory() {
   }
 
   function setCustomRange(range: TrendDateRange, equipmentId: string, phase: '3P' | '1P'): void {
+    rangeType.value = 'custom'
     customRange.value = range
     if (range && range[0] && range[1]) {
       loadHistory(equipmentId, phase)
