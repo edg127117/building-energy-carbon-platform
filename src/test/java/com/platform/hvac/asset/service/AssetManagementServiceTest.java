@@ -24,6 +24,7 @@ import com.platform.iot.qualityusage.QualityUsageModels;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LatestRawReading;
+import com.platform.iot.temporal.model.RawTrendBucket;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -32,6 +33,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.List;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -39,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 @ExtendWith(MockitoExtension.class)
 class AssetManagementServiceTest {
@@ -272,6 +275,88 @@ class AssetManagementServiceTest {
         assertThatThrownBy(() -> service.equipmentReadings("E1", List.of("PLATFORM_ADMIN")))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("POLICY_SNAPSHOT_UNAVAILABLE");
+    }
+
+    @Test
+    void returnsQualityAllowedTrendTuplesAndKeepsEmptyEnabledSeries() {
+        BizEquipment equipment = equipment("E1", "B1");
+        BizDataPoint power = point("P1", "P_TOTAL", "P", "kW", "ONLINE");
+        BizDataPoint current = point("P2", "I_A", "IA", "A", "ONLINE");
+        BizDataPoint disabled = point("P3", "U_A", "UA", "V", "OFFLINE");
+        when(equipmentService.getById("E1")).thenReturn(equipment);
+        when(dataPointService.listByEquip("E1"))
+                .thenReturn(Result.success(List.of(power, current, disabled)));
+        when(rawEventRepository.findEquipmentTrend(
+                "B1", "E1", List.of("P2", "P1"),
+                1_800_000_000_000L, 1_800_003_600_000L, 10))
+                .thenReturn(List.of(
+                        new RawTrendBucket("P1", 1_800_000_010_000L, 32.5, 0),
+                        new RawTrendBucket("P2", 1_800_000_010_000L, 48.2, 2)));
+        when(qualityUsageResolver.runtimeContext()).thenReturn(null);
+        when(qualityUsageResolver.resolve(
+                org.mockito.ArgumentMatchers.nullable(QualityUsageModels.ResolutionContext.class),
+                org.mockito.ArgumentMatchers.eq("P1"),
+                org.mockito.ArgumentMatchers.eq("POINT_HISTORY_VIEW"),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq(0)))
+                .thenReturn(new QualityUsageModels.Resolution(
+                        QualityUsageModels.Decision.ALLOW, 0, "POINT_HISTORY_VIEW",
+                        QualityUsageModels.PolicySource.SYSTEM_DEFAULT_Q0_ONLY,
+                        null, 1, "QUALITY_ALLOWED"));
+        when(qualityUsageResolver.resolve(
+                org.mockito.ArgumentMatchers.nullable(QualityUsageModels.ResolutionContext.class),
+                org.mockito.ArgumentMatchers.eq("P2"),
+                org.mockito.ArgumentMatchers.eq("POINT_HISTORY_VIEW"),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.eq(2)))
+                .thenReturn(new QualityUsageModels.Resolution(
+                        QualityUsageModels.Decision.BLOCK, 2, "POINT_HISTORY_VIEW",
+                        QualityUsageModels.PolicySource.SYSTEM_DEFAULT_Q0_ONLY,
+                        null, 1, "QUALITY_NOT_ALLOWED_BY_DEFAULT"));
+
+        var result = service.equipmentTrendHistory(
+                "E1", Instant.ofEpochMilli(1_800_000_000_000L),
+                Instant.ofEpochMilli(1_800_003_600_000L), 10,
+                List.of("PLATFORM_ADMIN"));
+
+        assertThat(result.buildingId()).isEqualTo("B1");
+        assertThat(result.series()).extracting(AssetManagementContracts.PointTrendSeriesView::pointCode)
+                .containsExactly("I_A", "P_TOTAL");
+        assertThat(result.series().getFirst().data()).isEmpty();
+        assertThat(result.series().get(1).data())
+                .containsExactly(List.of(1_800_000_010_000L, 32.5));
+    }
+
+    @Test
+    void rejectsInvalidTrendWindowBeforeReadingAssetsOrTdengine() {
+        Instant start = Instant.parse("2026-09-21T10:00:00Z");
+
+        assertThatThrownBy(() -> service.equipmentTrendHistory(
+                "E1", start, start, 10, List.of("PLATFORM_ADMIN")))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getCode()).isEqualTo(400);
+                    assertThat(exception.getErrorCode()).isEqualTo(AssetErrors.VALIDATION_FAILED);
+                });
+
+        verifyNoInteractions(equipmentService, dataPointService, rawEventRepository);
+    }
+
+    @Test
+    void raisesTooFineTrendIntervalToBoundResponseSize() {
+        BizEquipment equipment = equipment("E1", "B1");
+        BizDataPoint power = point("P1", "P_TOTAL", "P", "kW", "ONLINE");
+        Instant start = Instant.parse("2026-09-21T00:00:00Z");
+        Instant end = start.plusSeconds(86_400);
+        when(equipmentService.getById("E1")).thenReturn(equipment);
+        when(dataPointService.listByEquip("E1"))
+                .thenReturn(Result.success(List.of(power)));
+        when(rawEventRepository.findEquipmentTrend(
+                "B1", "E1", List.of("P1"), start.toEpochMilli(), end.toEpochMilli(), 87))
+                .thenReturn(List.of());
+
+        service.equipmentTrendHistory(
+                "E1", start, end, 10, List.of("PLATFORM_ADMIN"));
+
+        verify(rawEventRepository).findEquipmentTrend(
+                "B1", "E1", List.of("P1"), start.toEpochMilli(), end.toEpochMilli(), 87);
     }
 
     private static BizSpace space(String id, String buildingId, String parentId) {

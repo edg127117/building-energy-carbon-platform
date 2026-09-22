@@ -5,6 +5,7 @@ import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.temporal.model.LateRawMinuteEvidence;
 import com.platform.iot.temporal.model.PointMinuteKey;
 import com.platform.iot.temporal.model.LatestRawReading;
+import com.platform.iot.temporal.model.RawTrendBucket;
 
 import java.util.List;
 import java.util.Collection;
@@ -53,6 +54,20 @@ public interface HvacRawEventRepository {
      */
     List<LatestRawReading> findLatestByEquipmentPoints(
             String buildingId, String equipmentId, Collection<String> pointIds);
+
+    /**
+     * 按已确认的建筑、设备和测点集合在 TDengine 侧执行秒级分桶，返回原始事件趋势。
+     * 最差质量等级随桶返回，供调用方继续执行历史展示场景的质量使用策略。
+     */
+    default List<RawTrendBucket> findEquipmentTrend(
+            String buildingId,
+            String equipmentId,
+            Collection<String> pointIds,
+            long startInclusive,
+            long endExclusive,
+            int intervalSeconds) {
+        throw new UnsupportedOperationException("Equipment trend query is unavailable");
+    }
 
     /**
      * 在 TDengine 侧筛选迟到事件并按“测点 + 分钟”去重，供低频任务恢复遗漏通知。
