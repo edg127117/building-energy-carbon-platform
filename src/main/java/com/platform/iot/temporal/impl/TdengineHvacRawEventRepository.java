@@ -7,6 +7,7 @@ import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.iot.temporal.model.PointMinuteKey;
 import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
+import com.platform.iot.temporal.model.RawTrendBucket;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -195,6 +196,58 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                         timestamp(row, "event_time").getTime(),
                         timestamp(row, "latest_received_time").getTime(),
                         number(row, "latest_data_quality").intValue()))
+                .toList();
+    }
+
+    @Override
+    public List<RawTrendBucket> findEquipmentTrend(
+            String buildingId,
+            String equipmentId,
+            Collection<String> pointIds,
+            long startInclusive,
+            long endExclusive,
+            int intervalSeconds) {
+        if (pointIds.isEmpty()) {
+            return List.of();
+        }
+        if (pointIds.size() > 500 || startInclusive < 0 || startInclusive >= endExclusive
+                || intervalSeconds < 1 || intervalSeconds > 86_400) {
+            throw new IllegalArgumentException("Invalid bounded equipment trend query");
+        }
+        String stable = safeIdentifier(properties.getDatabase()) + "."
+                + safeIdentifier(properties.getStRawEvent());
+        String ids = pointIds.stream().distinct().map(this::quote)
+                .collect(java.util.stream.Collectors.joining(","));
+        // 聚合和质量收口必须在 TDengine 完成，避免大窗口原始事件进入 JVM；
+        // MAX(data_quality) 保留窗口内最差质量，防止平均值掩盖受限样本。
+        String sql = """
+                SELECT point_id,
+                       _wstart AS bucket_time,
+                       AVG(val) AS average_value,
+                       MAX(data_quality) AS data_quality
+                FROM %s
+                WHERE building_id=%s
+                  AND equip_id=%s
+                  AND point_id IN (%s)
+                  AND ts >= %s
+                  AND ts < %s
+                PARTITION BY point_id
+                INTERVAL(%ds)
+                ORDER BY point_id,_wstart
+                """.formatted(
+                stable,
+                quote(buildingId),
+                quote(equipmentId),
+                ids,
+                quote(new Timestamp(startInclusive).toString()),
+                quote(new Timestamp(endExclusive).toString()),
+                intervalSeconds);
+        return template.queryForList(sql).stream()
+                .map(row -> new RawTrendBucket(
+                        text(row, "point_id"),
+                        timestamp(row, "bucket_time").getTime(),
+                        number(row, "average_value").doubleValue(),
+                        number(row, "data_quality").intValue()))
                 .toList();
     }
 

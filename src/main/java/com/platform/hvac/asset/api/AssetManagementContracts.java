@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 
 /** 建筑、空间、系统、设备和测点管理 API 的稳定契约。 */
@@ -266,5 +267,22 @@ public final class AssetManagementContracts {
             String status,
             String usageStatus,
             String reason) {
+    }
+
+    @Schema(description = "设备历史时序；时间范围采用半开区间 [startTime, endTime)")
+    public record EquipmentTrendHistoryView(
+            String equipmentId,
+            String buildingId,
+            Instant startTime,
+            Instant endTime,
+            List<PointTrendSeriesView> series) {
+    }
+
+    public record PointTrendSeriesView(
+            String pointCode,
+            String pointName,
+            String unit,
+            @Schema(description = "[Unix 毫秒时间戳, 测量值] 二维元组列表")
+            List<List<Number>> data) {
     }
 }

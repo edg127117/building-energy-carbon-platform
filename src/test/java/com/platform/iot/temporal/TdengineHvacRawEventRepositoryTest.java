@@ -107,6 +107,38 @@ class TdengineHvacRawEventRepositoryTest {
     }
 
     @Test
+    void equipmentTrendIsScopedAndDownsampledInsideTdengine() {
+        when(template.queryForList(contains("AVG(val) AS average_value"))).thenReturn(List.of(Map.of(
+                "point_id", "POINT001",
+                "bucket_time", new Timestamp(1_700_000_000_000L),
+                "average_value", 12.5,
+                "data_quality", 1)));
+
+        var result = repository.findEquipmentTrend(
+                "BLD001", "EQUIP001", List.of("POINT001", "POINT002"),
+                1_700_000_000_000L, 1_700_003_600_000L, 60);
+
+        assertThat(result).hasSize(1);
+        assertThat(result.getFirst().average()).isEqualTo(12.5);
+        verify(template).queryForList(org.mockito.ArgumentMatchers.<String>argThat(sql ->
+                sql.contains("building_id='BLD001'")
+                        && sql.contains("equip_id='EQUIP001'")
+                        && sql.contains("point_id IN ('POINT001','POINT002')")
+                        && sql.contains("MAX(data_quality) AS data_quality")
+                        && sql.contains("PARTITION BY point_id")
+                        && sql.contains("INTERVAL(60s)")
+                        && sql.contains("ORDER BY point_id,_wstart")));
+    }
+
+    @Test
+    void emptyEquipmentTrendDoesNotTouchTdengine() {
+        assertThat(repository.findEquipmentTrend(
+                "BLD001", "EQUIP001", List.of(), 1L, 2L, 10)).isEmpty();
+
+        verifyNoInteractions(template);
+    }
+
+    @Test
     void createsChildBeforeFirstPointEventIsQueriedAndInserted() {
         when(template.queryForList(startsWith("SELECT val"))).thenReturn(List.of());
 

@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
+import java.time.Instant;
 
 import static com.platform.hvac.asset.api.AssetManagementContracts.*;
 
@@ -196,6 +197,19 @@ public class AssetManagementController {
             @PathVariable String equipmentId, Authentication authentication) {
         return Result.success(service.equipmentReadings(
                 equipmentId, SecurityUser.roles(authentication)));
+    }
+
+    @Operation(summary = "按时间范围查询设备测点历史时序")
+    @GetMapping("/equipment/{equipmentId}/trend-history")
+    public Result<EquipmentTrendHistoryView> equipmentTrendHistory(
+            @PathVariable String equipmentId,
+            @RequestParam Instant startTime,
+            @RequestParam Instant endTime,
+            @RequestParam(defaultValue = "10") int intervalSeconds,
+            Authentication authentication) {
+        return Result.success(service.equipmentTrendHistory(
+                equipmentId, startTime, endTime, intervalSeconds,
+                SecurityUser.roles(authentication)));
     }
 
     @Operation(summary = "创建设备档案")

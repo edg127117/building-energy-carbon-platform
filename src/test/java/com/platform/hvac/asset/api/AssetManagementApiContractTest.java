@@ -155,6 +155,8 @@ class AssetManagementApiContractTest {
                 .isTrue();
         assertThat(openApi.path("paths").has("/v1/assets/equipment/{equipmentId}/readings"))
                 .isTrue();
+        assertThat(openApi.path("paths").has("/v1/assets/equipment/{equipmentId}/trend-history"))
+                .isTrue();
         assertThat(openApi.path("components").path("schemas").has("AssetApiError")).isTrue();
     }
 
@@ -196,6 +198,13 @@ class AssetManagementApiContractTest {
                         .header("Authorization", "Bearer " + adminToken))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.errorCode").value("ASSET_NOT_FOUND"));
+
+        mockMvc.perform(get("/v1/assets/equipment/EQUIP_WCR_B1/trend-history")
+                        .param("startTime", "2026-09-21T11:00:00Z")
+                        .param("endTime", "2026-09-21T10:00:00Z")
+                        .header("Authorization", "Bearer " + adminToken))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("ASSET_VALIDATION_FAILED"));
     }
 
     @Test

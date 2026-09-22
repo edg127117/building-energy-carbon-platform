@@ -35,6 +35,7 @@ import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LatestRawReading;
+import com.platform.iot.temporal.model.RawTrendBucket;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import com.platform.system.model.entity.SysUserBuilding;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +43,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -58,6 +61,7 @@ import java.util.function.Supplier;
 
 import static com.platform.hvac.asset.api.AssetManagementContracts.*;
 import static com.platform.iot.qualityusage.QualityUsageModels.POINT_REALTIME_VIEW;
+import static com.platform.iot.qualityusage.QualityUsageModels.POINT_HISTORY_VIEW;
 
 @Service
 @RequiredArgsConstructor
@@ -73,6 +77,8 @@ import static com.platform.iot.qualityusage.QualityUsageModels.POINT_REALTIME_VI
 public class AssetManagementService {
     private static final List<String> EDIT_ACTIONS = List.of("UPDATE", "DELETE");
     private static final List<String> PARENT_EDIT_ACTIONS = List.of("CREATE", "UPDATE", "DELETE");
+    private static final long MAX_TREND_RANGE_MILLIS = Duration.ofDays(90).toMillis();
+    private static final long MAX_TREND_BUCKETS = 1_000;
 
     private final BuildingService buildingService;
     private final BizSpaceService spaceService;
@@ -346,6 +352,67 @@ public class AssetManagementService {
                 point.getUnit(), allowed ? latest.value() : null,
                 latest.eventTime(), latest.receivedTime(), latest.dataQuality(),
                 "HAS_DATA", resolution.usageStatus().name(), resolution.reason());
+    }
+
+    /**
+     * 返回当前启用测点的有界历史趋势，并对每个聚合桶执行历史展示质量门禁。
+     * 请求步长只是下限；跨度过大时服务会自动增大步长，保证单测点最多约一千个桶。
+     */
+    public EquipmentTrendHistoryView equipmentTrendHistory(
+            String equipmentId,
+            Instant startTime,
+            Instant endTime,
+            int intervalSeconds,
+            Collection<String> roles) {
+        requireAdmin(roles);
+        validateTrendRange(startTime, endTime, intervalSeconds);
+        BizEquipment equipment = requireEquipment(equipmentId);
+        List<BizDataPoint> points = dataPointService.listByEquip(equipmentId).getData().stream()
+                .filter(point -> "ONLINE".equalsIgnoreCase(point.getStatus()))
+                .sorted(Comparator.comparing(BizDataPoint::getPointCode)
+                        .thenComparing(BizDataPoint::getPointId))
+                .toList();
+        long spanMillis = endTime.toEpochMilli() - startTime.toEpochMilli();
+        int minimumInterval = (int) Math.max(1,
+                Math.ceil(spanMillis / 1_000.0 / MAX_TREND_BUCKETS));
+        int effectiveInterval = Math.max(intervalSeconds, minimumInterval);
+        List<String> pointIds = points.stream().map(BizDataPoint::getPointId).toList();
+        Set<String> pointIdSet = Set.copyOf(pointIds);
+        List<RawTrendBucket> buckets = rawEventRepository.findEquipmentTrend(
+                equipment.getBuildingId(), equipmentId, pointIds,
+                startTime.toEpochMilli(), endTime.toEpochMilli(), effectiveInterval);
+        ResolutionContext policyContext = buckets.isEmpty()
+                ? null : qualityUsageResolver.runtimeContext();
+        Map<String, List<List<Number>>> dataByPoint = new HashMap<>();
+        for (RawTrendBucket bucket : buckets) {
+            if (!pointIdSet.contains(bucket.pointId())) {
+                continue;
+            }
+            Resolution resolution = qualityUsageResolver.resolve(
+                    policyContext, bucket.pointId(), POINT_HISTORY_VIEW,
+                    QualityUsagePolicyResolver.alignMinute(bucket.time()), bucket.dataQuality());
+            if (resolution.decision() == Decision.ALLOW) {
+                dataByPoint.computeIfAbsent(bucket.pointId(), ignored -> new ArrayList<>())
+                        .add(List.of(bucket.time(), bucket.average()));
+            }
+        }
+        List<PointTrendSeriesView> series = points.stream()
+                .map(point -> new PointTrendSeriesView(
+                        point.getPointCode(), point.getPointName(), point.getUnit(),
+                        List.copyOf(dataByPoint.getOrDefault(point.getPointId(), List.of()))))
+                .toList();
+        return new EquipmentTrendHistoryView(
+                equipmentId, equipment.getBuildingId(), startTime, endTime, series);
+    }
+
+    private static void validateTrendRange(
+            Instant startTime, Instant endTime, int intervalSeconds) {
+        if (startTime == null || endTime == null || !startTime.isBefore(endTime)
+                || intervalSeconds < 1 || intervalSeconds > 86_400
+                || endTime.toEpochMilli() - startTime.toEpochMilli() > MAX_TREND_RANGE_MILLIS) {
+            throw AssetErrors.error(400, AssetErrors.VALIDATION_FAILED,
+                    "历史时序范围无效：跨度须在90天内，采样步长须在1至86400秒之间");
+        }
     }
 
     @Transactional
