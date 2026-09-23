@@ -2,6 +2,7 @@ DROP TABLE IF EXISTS biz_daikin_monitor_inbox;
 DROP TABLE IF EXISTS biz_daikin_monitor_round;
 DROP TABLE IF EXISTS biz_daikin_directory_sync_job;
 DROP TABLE IF EXISTS biz_daikin_catalog_sync;
+DROP TABLE IF EXISTS biz_daikin_pending_location;
 DROP TABLE IF EXISTS biz_daikin_directory;
 DROP TABLE IF EXISTS biz_daikin_project_mapping_version;
 DROP TABLE IF EXISTS biz_daikin_project_mapping;

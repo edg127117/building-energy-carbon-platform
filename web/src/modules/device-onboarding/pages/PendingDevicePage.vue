@@ -493,6 +493,9 @@ onMounted(() => {
         <ElTableColumn v-if="operationsMode" type="selection" width="48" />
         <ElTableColumn :label="t('deviceOnboarding.labels.identity')" prop="maskedIdentityValue" min-width="200" />
         <ElTableColumn :label="t('deviceOnboarding.labels.expectedProfile')" min-width="150"><template #default="{ row }">{{ operationsMode ? profileText(row.profileCode) : row.profileCode }}</template></ElTableColumn>
+        <ElTableColumn v-if="operationsMode" :label="t('deviceOnboarding.labels.roomCode')" min-width="110"><template #default="{ row }">{{ row.location?.roomCode || t('common.missing') }}</template></ElTableColumn>
+        <ElTableColumn v-if="operationsMode" :label="t('deviceOnboarding.labels.monitorAddress')" min-width="110"><template #default="{ row }">{{ row.location?.monitorAddress || t('common.missing') }}</template></ElTableColumn>
+        <ElTableColumn v-if="operationsMode" :label="t('deviceOnboarding.labels.assetReferenceCode')" min-width="150"><template #default="{ row }">{{ row.location?.assetReferenceCode || t('common.missing') }}</template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.reportCount')" min-width="110"><template #default="{ row }">{{ formatNumber(row.reportCount) }}</template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.lastSeen')" min-width="180"><template #default="{ row }">{{ formatDateTime(row.lastSeenTime) }}</template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.status')" min-width="100"><template #default="{ row }"><PendingStatusTag :status="row.status" /></template></ElTableColumn>
@@ -512,6 +515,9 @@ onMounted(() => {
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.daikinKind')">{{ t(`deviceOnboarding.daikinKind.${management.selectedDirectory.value.kind}`) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.siteName')">{{ management.selectedDirectory.value.siteName || management.selectedDirectory.value.siteId }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.deviceName')">{{ management.selectedDirectory.value.deviceName || management.selectedDirectory.value.unitId }}</ElDescriptionsItem>
+          <ElDescriptionsItem :label="t('deviceOnboarding.labels.roomCode')">{{ management.selectedDirectory.value.location?.roomCode || t('common.missing') }}</ElDescriptionsItem>
+          <ElDescriptionsItem :label="t('deviceOnboarding.labels.monitorAddress')">{{ management.selectedDirectory.value.location?.monitorAddress || t('common.missing') }}</ElDescriptionsItem>
+          <ElDescriptionsItem :label="t('deviceOnboarding.labels.assetReferenceCode')">{{ management.selectedDirectory.value.location?.assetReferenceCode || t('common.missing') }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.observedAt')">{{ formatDateTime(management.selectedDirectory.value.observedAt) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.directoryState')"><ElTag :type="management.selectedDirectory.value.missing ? 'warning' : 'success'">{{ t(management.selectedDirectory.value.missing ? 'deviceOnboarding.directory.missing' : 'deviceOnboarding.directory.present') }}</ElTag></ElDescriptionsItem>
         </ElDescriptions>

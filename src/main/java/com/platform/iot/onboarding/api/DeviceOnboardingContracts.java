@@ -35,7 +35,14 @@ public final class DeviceOnboardingContracts {
             long reportCount,
             long firstSeenTime,
             long lastSeenTime,
-            boolean sampleTruncated) {
+            boolean sampleTruncated,
+            com.platform.iot.daikin.onboarding.DaikinPendingLocationView location) {
+        public PendingListItemView(String pendingId, String identityType, String maskedIdentityValue,
+                                   String profileCode, int lastProfileVersion, String status, long reportCount,
+                                   long firstSeenTime, long lastSeenTime, boolean sampleTruncated) {
+            this(pendingId, identityType, maskedIdentityValue, profileCode, lastProfileVersion,
+                    status, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null);
+        }
     }
 
     @Schema(description = "授权管理员可读取的待绑定详情")

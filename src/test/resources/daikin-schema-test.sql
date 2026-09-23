@@ -2,6 +2,7 @@ DROP TABLE IF EXISTS biz_daikin_monitor_inbox;
 DROP TABLE IF EXISTS biz_daikin_monitor_round;
 DROP TABLE IF EXISTS biz_daikin_directory_sync_job;
 DROP TABLE IF EXISTS biz_daikin_catalog_sync;
+DROP TABLE IF EXISTS biz_daikin_pending_location;
 DROP TABLE IF EXISTS biz_daikin_directory;
 DROP TABLE IF EXISTS biz_daikin_project_mapping_version;
 DROP TABLE IF EXISTS biz_daikin_project_mapping;
@@ -65,6 +66,17 @@ CREATE TABLE biz_daikin_directory (
     REFERENCES biz_daikin_source(source_id),
   CONSTRAINT chk_daikin_directory_kind_test CHECK (device_kind IN ('INDOOR','OUTDOOR')),
   CONSTRAINT chk_daikin_directory_missing_test CHECK (missing IN (0,1))
+);
+
+CREATE TABLE biz_daikin_pending_location (
+  pending_id VARCHAR(32) PRIMARY KEY,
+  room_space_id VARCHAR(32) NOT NULL,
+  monitor_address VARCHAR(50) NOT NULL,
+  asset_reference_code VARCHAR(50) NOT NULL,
+  mapped_by BIGINT NOT NULL,
+  mapped_at TIMESTAMP(3) NOT NULL,
+  CONSTRAINT fk_daikin_pending_location_directory_test FOREIGN KEY (pending_id)
+    REFERENCES biz_daikin_directory(pending_id)
 );
 
 CREATE TABLE biz_daikin_catalog_sync (

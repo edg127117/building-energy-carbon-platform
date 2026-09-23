@@ -66,6 +66,14 @@ export type PendingDevice = {
   firstSeenTime: number
   lastSeenTime: number
   sampleTruncated: boolean
+  location?: DaikinPendingLocation | null
+}
+
+export type DaikinPendingLocation = {
+  roomSpaceId: string
+  roomCode: string
+  monitorAddress: string
+  assetReferenceCode: string
 }
 
 export type PendingDeviceDetail = Omit<PendingDevice, 'maskedIdentityValue'> & {
@@ -90,11 +98,13 @@ export type DaikinDirectoryDetail = {
   buildingId: string | null
   missing: boolean
   observedAt: string
+  location?: DaikinPendingLocation | null
 }
 
 export type OperationsPendingDetail = {
   pending: PendingDeviceDetail
   directory: DaikinDirectoryDetail
+  location?: DaikinPendingLocation | null
 }
 
 export type DaikinSyncJob = {
