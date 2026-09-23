@@ -163,6 +163,26 @@ export type SensitiveChange = {
   tokenExpiresAt: string | null
 }
 
+export type SensitiveChangeListItem = {
+  requestId: string
+  operationCode: string
+  status: SensitiveChangeStatus
+  targetType: string
+  targetId: string
+  impactSummary: string
+  submittedBy: number
+  submitterName: string | null
+  submittedAt: string | null
+  createTime: string
+}
+
+export type SensitiveChangeList = {
+  page: number
+  size: number
+  total: number
+  items: SensitiveChangeListItem[]
+}
+
 export type MenuRouteRegistration = {
   path: string
   routeName: string

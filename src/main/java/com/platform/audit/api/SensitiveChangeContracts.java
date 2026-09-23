@@ -3,6 +3,7 @@ package com.platform.audit.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.platform.audit.sensitive.SensitiveChangeRecord;
 import com.platform.audit.sensitive.SensitiveChangeExecutionResult;
+import com.platform.audit.sensitive.SensitiveChangeRepository;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -22,6 +23,17 @@ public final class SensitiveChangeContracts {
     }
 
     public record ReviewRequest(@NotBlank @Size(max = 500) String comment) {
+    }
+
+    public record ListItemView(String requestId, String operationCode, String status,
+                               String targetType, String targetId, String impactSummary,
+                               long submittedBy, String submitterName, LocalDateTime submittedAt,
+                               LocalDateTime createTime) {
+        public static ListItemView from(SensitiveChangeRepository.ListItem value) {
+            return new ListItemView(value.requestId(), value.operationCode(), value.status().name(),
+                    value.targetType(), value.targetId(), value.impactSummary(), value.submittedBy(),
+                    value.submitterName(), value.submittedAt(), value.createTime());
+        }
     }
 
     public record View(

@@ -5,7 +5,8 @@ import { listDeviceProducts, listEquipmentTypes } from '../api/onboarding'
 import ProductTemplatePage from './ProductTemplatePage.vue'
 
 vi.mock('../api/onboarding', async original => ({ ...(await original()), listDeviceProducts: vi.fn(), listEquipmentTypes: vi.fn() }))
-vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }) }))
+vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), listChangeRequests: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }) }))
+vi.mock('@/modules/auth/public', async importOriginal => ({ ...(await importOriginal<typeof import('@/modules/auth/public')>()), useSession: () => ({ user: { id: 1 } }) }))
 describe('产品筛选与客户名称', () => {
   beforeEach(() => {
     vi.clearAllMocks()

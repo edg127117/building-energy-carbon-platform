@@ -3,6 +3,7 @@ package com.platform.audit.api;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.audit.BackendDuty;
+import com.platform.audit.sensitive.SensitiveChangeRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,7 @@ class SensitiveChangeApiContractTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private ObjectMapper objectMapper;
     @Autowired private JdbcTemplate jdbcTemplate;
+    @Autowired private SensitiveChangeRepository changeRepository;
 
     @BeforeEach
     void prepareDuties() {
@@ -62,6 +64,53 @@ class SensitiveChangeApiContractTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.environmentMode").value("TEST"))
                 .andExpect(jsonPath("$.data.selfApprovalAllowed").value(true));
+    }
+
+    @Test
+    void listsOwnRequestsAndReviewerQueueWithoutRequiringAnIdOrExposingCommands() throws Exception {
+        String token = login();
+        MvcResult created = mockMvc.perform(post("/v1/backoffice/change-requests")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"operationCode":"GRANT_BACKEND_DUTY","idempotencyKey":"list-reviewer",
+                                 "command":{"userId":1,"dutyKey":"AUDIT_EVIDENCE_VIEWER"}}
+                                """))
+                .andExpect(status().isOk()).andReturn();
+        String requestId = json(created).path("data").path("requestId").asText();
+
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "MINE").param("page", "1").param("size", "10")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].requestId").value(requestId))
+                .andExpect(jsonPath("$.data.items[0].submitterName").value("admin"))
+                .andExpect(jsonPath("$.data.items[0].commandJson").doesNotExist())
+                .andExpect(jsonPath("$.data.items[0].oneTimeToken").doesNotExist());
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "REVIEW").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(0));
+
+        mockMvc.perform(post("/v1/backoffice/change-requests/{id}/submit", requestId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+        assertThat(changeRepository.list(userId("admin"), true, false, 1, 10).total()).isZero();
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "REVIEW").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].status").value("PENDING_REVIEW"))
+                .andExpect(jsonPath("$.data.items[0].submitterName").value("admin"));
+
+        jdbcTemplate.update("DELETE FROM sys_user_backend_duty WHERE duty_key=?",
+                BackendDuty.BACKOFFICE_CHANGE_REVIEWER.name());
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "REVIEW").header("Authorization", "Bearer " + token))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "MINE").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(1));
     }
 
     @Test

@@ -6,7 +6,8 @@ import { inspectProtocolSample } from '../api/protocol-configuration'
 import ProtocolConfigurationPage from './ProtocolConfigurationPage.vue'
 
 const routerPush = vi.fn()
-vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }) }))
+vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), listChangeRequests: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }) }))
+vi.mock('@/modules/auth/public', async importOriginal => ({ ...(await importOriginal<typeof import('@/modules/auth/public')>()), useSession: () => ({ user: { id: 1 } }) }))
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: routerPush }), useRoute: () => ({ query: {} }), onBeforeRouteLeave: vi.fn() }))
 vi.mock('@/modules/device-onboarding/public', async importOriginal => ({ ...(await importOriginal()), getDeviceProduct: vi.fn(), listDeviceProducts: vi.fn() }))
 vi.mock('../api/protocol-configuration', () => ({

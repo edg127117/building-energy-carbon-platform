@@ -7,10 +7,12 @@ import com.platform.audit.AuditEvidence;
 import com.platform.audit.AuditEvidenceWriter;
 import com.platform.audit.AuditGovernanceErrors;
 import com.platform.audit.AuditGovernanceProperties;
+import com.platform.audit.AuditEnvironmentMode;
 import com.platform.audit.BackendDuty;
 import com.platform.audit.BackendDutyService;
 import com.platform.audit.TraceContext;
 import com.platform.framework.exception.BusinessException;
+import com.platform.framework.web.PageResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -162,6 +164,20 @@ public class SensitiveChangeService {
             dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
         }
         return value;
+    }
+
+    public enum ListScope { MINE, REVIEW }
+
+    @Transactional(readOnly = true)
+    public PageResponse<SensitiveChangeRepository.ListItem> list(long userId, ListScope scope, int page, int size) {
+        if (page < 1 || size < 1 || size > 50) {
+            throw new BusinessException(400, AuditGovernanceErrors.REQUEST_CONFLICT, "申请列表分页参数无效");
+        }
+        boolean reviewQueue = scope == ListScope.REVIEW;
+        if (reviewQueue) dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
+        boolean allowSelfApproval = properties.isAllowSelfApproval()
+                && properties.getEnvironmentMode() != AuditEnvironmentMode.PRODUCTION;
+        return repository.list(userId, reviewQueue, allowSelfApproval, page, size);
     }
 
     private SensitiveChangeExecutionResult executeApproved(long reviewerId, String requestId) {
