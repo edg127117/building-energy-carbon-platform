@@ -137,6 +137,7 @@ export type SensitiveChangeOperation =
   | 'ENABLE_DEVICE_PRODUCT'
   | 'DISABLE_DEVICE_PRODUCT'
   | 'BIND_PENDING_DEVICE'
+  | 'BIND_TYPED_PENDING_DEVICE'
   | 'ACTIVATE_DEVICE_IDENTITY'
   | 'DEACTIVATE_DEVICE_IDENTITY'
   | 'PUBLISH_PROTOCOL_CONFIGURATION'
@@ -148,6 +149,7 @@ export type SensitiveChange = {
   buildingId: string | null
   targetType: string
   targetId: string
+  impactSummary?: string
   submittedBy: number
   submittedAt: string | null
   reviewerId: number | null

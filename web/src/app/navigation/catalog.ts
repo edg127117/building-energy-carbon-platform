@@ -26,7 +26,7 @@ export const pages: PageEntry[] = [
   ...group('configuration', 'indicators', ['indicatorList', 'formulas']),
   ...group('configuration', 'factors', ['emissionFactors', 'factorVersions']),
   ...group('configuration', 'rules', ['baselines', 'alarmRules']),
-  ...group('configuration', 'access', ['users', 'roles', 'buildingAccess']),
+  ...group('configuration', 'access', ['users', 'roles', 'buildingAccess', 'changeRequests']),
   ...group('configuration', 'settings', ['menus']),
 ]
 

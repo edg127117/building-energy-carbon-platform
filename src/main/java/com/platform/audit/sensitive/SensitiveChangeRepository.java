@@ -39,10 +39,20 @@ public class SensitiveChangeRepository {
 
     /** 审核待办还包括本人已批准但待执行的申请；列表仅返回摘要，不泄露命令原文及一次性凭据。 */
     public PageResponse<ListItem> list(long userId, boolean reviewQueue, boolean allowSelfApproval, int page, int size) {
+        return list(userId, reviewQueue, allowSelfApproval, SensitiveChangeService.ListView.ALL, page, size);
+    }
+
+    /** 我的申请按未完成与历史分组分页，申请和审计事件始终保存在原表。 */
+    public PageResponse<ListItem> list(long userId, boolean reviewQueue, boolean allowSelfApproval,
+            SensitiveChangeService.ListView view, int page, int size) {
         String where = reviewQueue
                 ? " WHERE (r.status='PENDING_REVIEW' AND (?=TRUE OR r.submitted_by<>?))"
                     + " OR (r.status='APPROVED' AND r.reviewer_id=?)"
-                : " WHERE r.submitted_by=?";
+                : " WHERE r.submitted_by=?" + switch (view) {
+                    case ALL -> "";
+                    case ACTIVE -> " AND r.status IN ('DRAFT','PENDING_REVIEW','APPROVED','EXECUTION_FAILED')";
+                    case HISTORY -> " AND r.status IN ('EXECUTED','REJECTED','WITHDRAWN')";
+                };
         Long total = reviewQueue
                 ? jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request r" + where,
                         Long.class, allowSelfApproval, userId, userId)

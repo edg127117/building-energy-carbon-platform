@@ -89,8 +89,9 @@ describe('office and monitor composition', () => {
     expect(router.currentRoute.value.path).toBe('/403')
   })
   it('registers all confirmed pages without granting them by role', () => {
-    expect(pages).toHaveLength(48)
+    expect(pages).toHaveLength(49)
     expect(pages.some(page => page.path === '/configuration/ingestion/protocols')).toBe(true)
+    expect(pages.some(page => page.path === '/configuration/access/changeRequests')).toBe(true)
     expect(new Set(pages.map(page => page.path)).size).toBe(pages.length)
     expect(authorizedPages([])).toEqual([])
     const session = authorize()
@@ -106,6 +107,16 @@ describe('office and monitor composition', () => {
     session.user!.roles = ['PLATFORM_ADMIN']
     await router.push('/configuration/access/users')
     expect(router.currentRoute.value.path).toBe('/configuration/access/users')
+  })
+  it('allows an authorized non-admin to see only the dedicated request page', async () => {
+    const router = createPlatformRouter(createMemoryHistory())
+    const session = authorize()
+    await router.push('/configuration/access/changeRequests')
+    expect(router.currentRoute.value.path).toBe('/configuration/access/changeRequests')
+    session.menus = []
+    await router.push('/systems')
+    await router.push('/configuration/access/changeRequests')
+    expect(router.currentRoute.value.path).toBe('/403')
   })
   it('applies the content panel only to management placeholders', () => {
     authorize()

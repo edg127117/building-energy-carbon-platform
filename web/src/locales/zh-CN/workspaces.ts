@@ -16,5 +16,5 @@ export default {
   ingestion: '数据接入', pendingDevices: '待接入设备', points: '设备与测点', products: '产品与测点模板', protocols: '设备报文接入', collection: '采集配置', interfaces: '接口配置',
   space: '空间与系统', buildings: '建筑管理', spaces: '空间管理', systemGroups: '系统分组', equipmentSpaces: '设备与空间关联', indicators: '指标与公式', indicatorList: '指标管理', formulas: '公式管理',
   factors: '因子管理', emissionFactors: '排放因子', factorVersions: '版本与应用记录', rules: '策略与规则', baselines: '基准与定额', alarmRules: '报警规则',
-  access: '用户与权限', users: '用户管理', roles: '角色与菜单授权', buildingAccess: '建筑访问审核', settings: '系统设置', menus: '菜单管理',
+  access: '用户与权限', users: '用户管理', roles: '角色与菜单授权', buildingAccess: '建筑访问审核', changeRequests: '敏感变更申请', settings: '系统设置', menus: '菜单管理',
 } as const
