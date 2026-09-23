@@ -106,7 +106,8 @@ public final class DaikinReadonlyClient {
         DaikinEndpoint endpoint = previous != null && !previous.refreshKey().isBlank()
                 ? DaikinEndpoint.TOKEN_REFRESH : DaikinEndpoint.TOKEN;
         Map<String, String> tokenParameters = endpoint == DaikinEndpoint.TOKEN_REFRESH
-                ? Map.of("refreshKey", previous.refreshKey()) : Map.of();
+                ? Map.of("refreshKey", previous.refreshKey())
+                : Map.of("pass", configuration.credentials().secret());
         String refreshAccessToken = endpoint == DaikinEndpoint.TOKEN_REFRESH ? previous.accessToken() : null;
         JsonNode envelope = requireSuccess(invoke(endpoint, endpoint.path(null), tokenParameters,
                 refreshAccessToken));
@@ -137,7 +138,7 @@ public final class DaikinReadonlyClient {
             } catch (RuntimeException ex) {
                 throw new DaikinClientException(DaikinClientException.Code.INVALID_REQUEST, ex);
             }
-            URI uri = buildUri(path, validateParameters(encoded.queryParameters()));
+            URI uri = buildUri(path, validateParameters(encoded.queryParameters()), encoded.encryptedQuery());
             DaikinHttpTransport.Response response = transport.execute(
                     new DaikinHttpTransport.Request(endpoint.method(), uri, encoded.headers(), encoded.body(),
                             configuration.requestTimeout()), configuration.maxResponseBytes());
@@ -191,10 +192,13 @@ public final class DaikinReadonlyClient {
         return requireSuccess(response);
     }
 
-    private URI buildUri(String path, Map<String, String> queryParameters) {
+    private URI buildUri(String path, Map<String, String> queryParameters, String encryptedQuery) {
         StringBuilder value = new StringBuilder(configuration.baseUri().toString().replaceAll("/$", ""))
                 .append(path);
-        if (!queryParameters.isEmpty()) {
+        if (encryptedQuery != null) {
+            // 厂家 GET 要求整个业务参数 JSON 加密后作为无键查询串，不能改写成 page=1。
+            value.append('?').append(urlEncode(encryptedQuery));
+        } else if (!queryParameters.isEmpty()) {
             Map<String, String> ordered = new LinkedHashMap<>();
             queryParameters.entrySet().stream().sorted(Map.Entry.comparingByKey())
                     .forEach(entry -> ordered.put(entry.getKey(), entry.getValue()));

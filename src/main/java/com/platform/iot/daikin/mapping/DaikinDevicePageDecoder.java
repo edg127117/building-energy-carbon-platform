@@ -31,7 +31,7 @@ public final class DaikinDevicePageDecoder {
                     "equipmentErrorStopped", "communicationError", "maintenanceMode", "forcedStop"),
             "masterSlaveFlag", Set.of("Master", "Slave"));
     private static final List<String> BOOLEAN_FIELDS = List.of("inCommunicationError", "inEquipmentError",
-            "inMantenanceMode", "isFilterDirty", "isGroupSlave");
+            "isFilterDirty", "isGroupSlave");
     private static final List<String> UNCONFIRMED_FIELDS = List.of("arth1", "rcProhibitOnOff",
             "rcProhibitOpMode", "rcProhibitSetpoint", "limitSettempHeat", "limitSettempCool",
             "coolLimitsettempU", "coolLimitsettempL", "heatLimitsettempU", "heatLimitsettempL",
@@ -122,6 +122,9 @@ public final class DaikinDevicePageDecoder {
         }
         ENUMS.forEach((name, allowed) -> fields.put(name, enumField(unit.get(name), allowed)));
         BOOLEAN_FIELDS.forEach(name -> fields.put(name, booleanField(unit.get(name))));
+        // 真实厂家字段为 inMaintenanceMode；沿用已落库的内部键，避免切断既有查询和异常投影。
+        fields.put("inMantenanceMode", booleanField(unit.has("inMaintenanceMode")
+                ? unit.get("inMaintenanceMode") : unit.get("inMantenanceMode")));
         fields.put("roomTemp", temperature(unit.get("roomTemp")));
         fields.put("temperature", temperature(unit.get("temperature")));
         fields.put("errorCode", textField(unit.get("errorCode")));
