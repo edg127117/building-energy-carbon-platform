@@ -8,13 +8,13 @@ export const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'assetManagement.associations.title', mode: 'office', requiresRelationManager: true },
   },
   {
-    path: '/system/buildings',
+    path: '/configuration/space/buildings',
     name: 'asset-archive',
     component: () => import('./pages/AssetArchivePage.vue'),
     meta: { titleKey: 'assetManagement.archive.title', mode: 'office', requiresPlatformAdmin: true },
   },
   {
-    path: '/system/devices',
+    path: '/operations/devices/businessDevices',
     name: 'equipment-points',
     component: () => import('./pages/EquipmentPointPage.vue'),
     meta: { titleKey: 'assetManagement.equipment.title', mode: 'office', requiresPlatformAdmin: true },

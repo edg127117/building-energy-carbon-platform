@@ -45,8 +45,7 @@ import static com.platform.iot.onboarding.OnboardingErrors.*;
 @RequiredArgsConstructor
 public class ScopedDeviceOnboardingService {
     private static final Set<String> ADMIN = Set.of("PLATFORM_ADMIN");
-    private static final Set<String> MENU_PATHS = Set.of("/system/device-onboarding",
-            "/configuration/ingestion/pendingDevices", "/operations/devices/pendingDevices");
+    private static final Set<String> MENU_PATHS = Set.of("/operations/devices/pendingDevices");
     private final BuildingScopeService buildingScope;
     private final SysMenuMapper menuMapper;
     private final DaikinDirectoryService directory;

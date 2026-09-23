@@ -18,8 +18,6 @@ import { useMenuManagement } from '../composables/use-menu-management'
 import type { MenuCommand, MenuNode, MenuType } from '../models/access-control'
 import { useSession } from '@/modules/auth/public'
 
-type MenuRow = MenuNode & { depth: number }
-
 const management = useMenuManagement()
 const currentMenu = useSession()
 const tree = management.tree
@@ -32,15 +30,7 @@ const editorVisible = ref(false)
 const editingMenu = ref<MenuNode | null>(null)
 const initialParentId = ref(0)
 
-const rows = computed<MenuRow[]>(() => flattenTree(tree.value))
 const parentOptions = computed(() => management.parentOptions(editingMenu.value?.id))
-
-function flattenTree(items: MenuNode[], depth = 0): MenuRow[] {
-  return items.flatMap(item => [
-    { ...item, depth },
-    ...flattenTree(item.children, depth + 1),
-  ])
-}
 
 function typeLabel(menuType: MenuType) {
   const keys: Record<MenuType, string> = { M: 'typeDirectory', C: 'typePage', F: 'typePermission' }
@@ -121,9 +111,9 @@ onMounted(() => { void management.load().catch(() => undefined) })
     </header>
 
     <ElAlert v-if="error" :title="error" type="error" show-icon :closable="false" />
-    <ElTable v-if="rows.length || loading" v-loading="loading" :data="rows" row-key="id">
+    <ElTable v-if="tree.length || loading" v-loading="loading" :data="tree" row-key="id" default-expand-all :tree-props="{ children: 'children' }">
       <ElTableColumn :label="t('accessControl.menu.nameColumn')" min-width="var(--bec-navigation-width)">
-        <template #default="{ row }"><span class="menu-name" :style="{ paddingInlineStart: `calc(${row.depth} * var(--bec-space-group))` }">{{ row.menuName }}</span></template>
+        <template #default="{ row }"><span class="menu-name">{{ row.menuName }}</span></template>
       </ElTableColumn>
       <ElTableColumn :label="t('accessControl.menu.typeColumn')"><template #default="{ row }"><ElTag>{{ typeLabel(row.menuType) }}</ElTag></template></ElTableColumn>
       <ElTableColumn :label="t('accessControl.menu.navigationColumn')"><template #default="{ row }"><ElTag :type="row.status === 1 && row.visible === 1 ? 'success' : 'info'">{{ navigationStatus(row as MenuNode) }}</ElTag></template></ElTableColumn>

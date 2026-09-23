@@ -22,7 +22,7 @@ class TelemetryQualityValidatorTest {
         configuredPoint = point("WCR1_TWin", "WCR1", "ONLINE");
         DataPointConfigProvider provider = aliasKey ->
                 aliasKey.equals(new PointAliasKey(
-                        "BLD001", "MQTT_FREEZE_V1", configuredPoint.pointCode()))
+                        "BLD001", "MQTT_STANDARD_V1", configuredPoint.pointCode()))
                         ? Optional.of(configuredPoint) : Optional.empty();
         validator = new TelemetryQualityValidator(provider);
     }

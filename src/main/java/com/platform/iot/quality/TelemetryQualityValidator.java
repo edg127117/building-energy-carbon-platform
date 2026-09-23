@@ -126,7 +126,7 @@ public class TelemetryQualityValidator {
      * MQTT 主链路调用三参数重载，来源系统始终取服务端配置。
      */
     public TelemetryValidationResult validate(Map<String, Object> payload, long receivedTime) {
-        return validate(payload, receivedTime, "MQTT_FREEZE_V1");
+        return validate(payload, receivedTime, "MQTT_STANDARD_V1");
     }
 
     private TelemetryValidationResult reject(TelemetryRejectionReason reason, String detail) {

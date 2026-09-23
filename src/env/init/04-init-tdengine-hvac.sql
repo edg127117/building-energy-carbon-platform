@@ -1,5 +1,5 @@
 -- ============================================================================
--- TDengine HVAC 时序模型（工业身份版）
+-- TDengine 通用遥测与指标时序模型（工业身份版）
 -- 新子表以 point_id / indicator_id 命名；业务编码只作为可读标签。
 -- ============================================================================
 USE `iot_telemetry`;
@@ -54,7 +54,7 @@ CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_raw_minute` (
     `is_for_calc`    TINYINT
 );
 
--- 性能指标实例同样按内部 indicator_id 分子表，支持不同建筑重复使用 WCR_COP。
+-- 性能指标实例按内部 indicator_id 分子表，支持不同建筑复用指标编码。
 CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_indicator_minute` (
     `ts`              TIMESTAMP,
     `val`             DOUBLE,
@@ -84,19 +84,4 @@ CREATE STABLE IF NOT EXISTS `iot_telemetry`.`st_formula_calc_exception` (
     `equip_id`        NCHAR(32)
 );
 
--- 只有指标子表需要预建；原始/分钟测点子表由应用在首次数据到达时按 point_id 创建。
-CREATE TABLE IF NOT EXISTS `iot_telemetry`.`st_indicator_minute_INDICATOR_WCR_COP_B1`
-USING `iot_telemetry`.`st_indicator_minute`
-TAGS ('INDICATOR_WCR_COP_B1', 'WCR_COP', 'BLD001', 'GROUP001', 'EQUIP_WCR_B1');
-
-CREATE TABLE IF NOT EXISTS `iot_telemetry`.`st_indicator_minute_INDICATOR_TOWER_EFF_B1`
-USING `iot_telemetry`.`st_indicator_minute`
-TAGS ('INDICATOR_TOWER_EFF_B1', 'TOWER_EFF', 'BLD001', 'GROUP001', 'EQUIP_TOWER_B1');
-
-CREATE TABLE IF NOT EXISTS `iot_telemetry`.`st_indicator_minute_INDICATOR_PUMP_EFF_B1`
-USING `iot_telemetry`.`st_indicator_minute`
-TAGS ('INDICATOR_PUMP_EFF_B1', 'PUMP_EFF', 'BLD001', 'GROUP001', 'EQUIP_PUMP_B1');
-
-CREATE TABLE IF NOT EXISTS `iot_telemetry`.`st_indicator_minute_INDICATOR_AHU_EFF_B1`
-USING `iot_telemetry`.`st_indicator_minute`
-TAGS ('INDICATOR_AHU_EFF_B1', 'AHU_POW_EFF', 'BLD001', 'GROUP001', 'EQUIP_AHU_B1');
+-- 原始、分钟和指标子表均由应用在首次写入时按稳定业务 ID 创建。
