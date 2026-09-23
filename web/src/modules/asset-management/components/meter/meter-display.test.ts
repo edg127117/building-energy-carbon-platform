@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { AssetPointReading } from '../../models/assets'
 import {
+  METER_GAP_THRESHOLD_MS,
+  buildTimeSeriesData,
   calculateCurrentUnbalance,
   extractSinglePhaseMetrics,
   extractThreePhaseMetrics,
@@ -161,6 +163,54 @@ describe('meter-display helper utilities', () => {
       expect(trend.currentA).toBe(1.184)
       expect(trend.currentB).toBe(1.227)
       expect(trend.currentC).toBe(1.246)
+    })
+  })
+
+  describe('buildTimeSeriesData with 10-minute gap threshold', () => {
+    it('defines METER_GAP_THRESHOLD_MS as exactly 10 minutes (600,000 ms)', () => {
+      expect(METER_GAP_THRESHOLD_MS).toBe(10 * 60 * 1000)
+    })
+
+    it('returns empty array when records are empty', () => {
+      expect(buildTimeSeriesData([], (r) => r.power)).toEqual([])
+    })
+
+    it('keeps consecutive records continuous when gap is within 10 minutes (e.g. 3-minute normal reporting)', () => {
+      const records = [
+        { time: 1700000000000, power: 1.2 },
+        { time: 1700000180000, power: 1.5 }, // +3分钟
+        { time: 1700000360000, power: 1.3 }, // +3分钟
+      ]
+
+      const seriesData = buildTimeSeriesData(records, (r) => r.power)
+      expect(seriesData).toHaveLength(3)
+      expect(seriesData).toEqual([
+        [1700000000000, 1.2],
+        [1700000180000, 1.5],
+        [1700000360000, 1.3],
+      ])
+    })
+
+    it('inserts null gap points to break line when time gap exceeds 10 minutes (e.g. 62-minute outage from 08:51 to 09:53)', () => {
+      const t1 = new Date('2026-09-23T08:51:00Z').getTime()
+      const t2 = new Date('2026-09-23T09:53:00Z').getTime() // 62分钟间隔
+
+      const records = [
+        { time: t1 - 180000, power: 0.130 },
+        { time: t1, power: 0.131 },
+        { time: t2, power: 0.174 },
+        { time: t2 + 180000, power: 0.175 },
+      ]
+
+      const seriesData = buildTimeSeriesData(records, (r) => r.power)
+      // 原4个点，由于t1与t2间跨越62分钟（>10分钟），自动插入2个null占位点，共6个点
+      expect(seriesData).toHaveLength(6)
+      expect(seriesData[0]).toEqual([t1 - 180000, 0.130])
+      expect(seriesData[1]).toEqual([t1, 0.131])
+      expect(seriesData[2]).toEqual([t1 + 1000, null])
+      expect(seriesData[3]).toEqual([t2 - 1000, null])
+      expect(seriesData[4]).toEqual([t2, 0.174])
+      expect(seriesData[5]).toEqual([t2 + 180000, 0.175])
     })
   })
 })

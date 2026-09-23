@@ -447,4 +447,62 @@ describe('Meter Realtime Components', () => {
     expect(wrapper.emitted('refresh-history')).toBeTruthy()
     wrapper.unmount()
   })
+
+  it('configures continuous time axis and breaks lines when gap exceeds 10 minutes', () => {
+    interface CapturedChartOption {
+      xAxis: { type: string }
+      series: Array<{
+        connectNulls: boolean
+        data: Array<[number, number | null]>
+      }>
+    }
+    let capturedOption: CapturedChartOption | null = null
+    const t1 = 1700000000000
+    const t2 = t1 + 3600000 // 1小时之后，跨度远超 10 分钟
+
+    const wrapper = mount(MeterRealtimeTrendChart, {
+      props: {
+        phase: '1P',
+        records: [
+          { time: t1, power: 0.131, voltage: 226.2 },
+          { time: t2, power: 0.174, voltage: 226.6 },
+        ],
+        loading: false,
+      },
+      global: {
+        stubs: {
+          ChartView: {
+            props: ['option'],
+            setup(props: { option: unknown }) {
+              capturedOption = props.option as CapturedChartOption
+              return () => null
+            },
+          },
+          ElDialog: { template: '<div />' },
+          ElTooltip: { template: '<div><slot /></div>' },
+          ElTag: { template: '<span />' },
+          ElButton: { template: '<button />' },
+          ElRadioGroup: { template: '<div />' },
+          ElRadioButton: { template: '<button />' },
+          ElDatePicker: { template: '<div />' },
+        },
+      },
+    })
+
+    expect(capturedOption).toBeTruthy()
+    expect(capturedOption.xAxis.type).toBe('time')
+    expect(capturedOption.series).toHaveLength(2)
+    // 验证 connectNulls 显式为 false，确保掉线时段不画虚假跨越连线
+    expect(capturedOption.series[0].connectNulls).toBe(false)
+    expect(capturedOption.series[1].connectNulls).toBe(false)
+    // 验证 1 小时跨度插入了 null 占位点，data 长度由 2 扩充为 4 (包含 2 个 null 断点)
+    const powerData = capturedOption.series[0].data
+    expect(powerData).toHaveLength(4)
+    expect(powerData[0]).toEqual([t1, 0.131])
+    expect(powerData[1][1]).toBeNull()
+    expect(powerData[2][1]).toBeNull()
+    expect(powerData[3]).toEqual([t2, 0.174])
+
+    wrapper.unmount()
+  })
 })

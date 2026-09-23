@@ -17,16 +17,12 @@ import {
 } from '@/shared/ui'
 import { t } from '@/locales'
 import type { TrendDateRange, TrendRangeType } from '../../composables/use-equipment-trend-history'
+import {
+  buildTimeSeriesData,
+  type MeterTrendRecord,
+} from './meter-display'
 
-export type MeterTrendRecord = {
-  time: number
-  power: number | null
-  currentA?: number | null
-  currentB?: number | null
-  currentC?: number | null
-  voltage?: number | null
-  dataQuality?: number | null
-}
+export type { MeterTrendRecord }
 
 const props = withDefaults(defineProps<{
   phase: '3P' | '1P'
@@ -149,6 +145,7 @@ function autoScaleCurrentMax(value: { min: number; max: number }) {
   return Number(maxVal.toFixed(2))
 }
 
+
 function buildOption(isEnlarged: boolean): ChartOption {
   const is3P = props.phase === '3P'
   const isLarge = props.isLargeDataset || props.records.length >= 1000
@@ -158,8 +155,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
     : 0
   const isMultiDay = timeSpan > 24 * 3600 * 1000
 
-  const timeLabels = props.records.map((r) => {
-    const d = new Date(r.time)
+  const formatTimeTick = (val: number | string) => {
+    const d = new Date(Number(val))
     if (isMultiDay) {
       const MM = String(d.getMonth() + 1).padStart(2, '0')
       const DD = String(d.getDate()).padStart(2, '0')
@@ -171,7 +168,7 @@ function buildOption(isEnlarged: boolean): ChartOption {
     const mm = String(d.getMinutes()).padStart(2, '0')
     const ss = String(d.getSeconds()).padStart(2, '0')
     return `${hh}:${mm}:${ss}`
-  })
+  }
 
   const grid = isEnlarged
     ? { left: 20, right: 20, top: 64, bottom: 65, containLabel: true }
@@ -203,27 +200,34 @@ function buildOption(isEnlarged: boolean): ChartOption {
       ]
     : undefined
 
+  const minTime = props.records.length === 1 ? props.records[0].time - 1800_000 : undefined
+  const maxTime = props.records.length === 1 ? props.records[0].time + 1800_000 : undefined
+  const xAxis = {
+    type: 'time' as const,
+    min: minTime,
+    max: maxTime,
+    axisLabel: {
+      margin: 12,
+      formatter: formatTimeTick,
+    },
+  }
+
+  const tooltip = {
+    trigger: 'axis' as const,
+    axisPointer: {
+      type: 'cross' as const,
+    },
+  }
+
   if (is3P) {
     return {
       animation: !isLarge,
       animationDuration: isLarge ? 0 : 300,
-      tooltip: {
-        trigger: 'axis',
-        axisPointer: {
-          type: 'cross',
-        },
-      },
+      tooltip,
       legend,
       grid,
       dataZoom,
-      xAxis: {
-        type: 'category',
-        boundaryGap: props.records.length <= 1,
-        data: timeLabels,
-        axisLabel: {
-          margin: 12,
-        },
-      },
+      xAxis,
       yAxis: [
         {
           type: 'value',
@@ -265,10 +269,11 @@ function buildOption(isEnlarged: boolean): ChartOption {
           symbol: 'circle',
           symbolSize,
           sampling: isLarge ? 'lttb' : undefined,
+          connectNulls: false,
           areaStyle: {
             opacity: 0.12,
           },
-          data: props.records.map((r) => r.power),
+          data: buildTimeSeriesData(props.records, (r) => r.power),
         },
         {
           name: t('assetManagement.meter.phaseACurrent'),
@@ -279,7 +284,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
           symbol: 'circle',
           symbolSize,
           sampling: isLarge ? 'lttb' : undefined,
-          data: props.records.map((r) => r.currentA ?? null),
+          connectNulls: false,
+          data: buildTimeSeriesData(props.records, (r) => r.currentA),
         },
         {
           name: t('assetManagement.meter.phaseBCurrent'),
@@ -290,7 +296,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
           symbol: 'circle',
           symbolSize,
           sampling: isLarge ? 'lttb' : undefined,
-          data: props.records.map((r) => r.currentB ?? null),
+          connectNulls: false,
+          data: buildTimeSeriesData(props.records, (r) => r.currentB),
         },
         {
           name: t('assetManagement.meter.phaseCCurrent'),
@@ -301,7 +308,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
           symbol: 'circle',
           symbolSize,
           sampling: isLarge ? 'lttb' : undefined,
-          data: props.records.map((r) => r.currentC ?? null),
+          connectNulls: false,
+          data: buildTimeSeriesData(props.records, (r) => r.currentC),
         },
       ],
     }
@@ -310,23 +318,11 @@ function buildOption(isEnlarged: boolean): ChartOption {
   return {
     animation: !isLarge,
     animationDuration: isLarge ? 0 : 300,
-    tooltip: {
-      trigger: 'axis',
-      axisPointer: {
-        type: 'cross',
-      },
-    },
+    tooltip,
     legend,
     grid,
     dataZoom,
-    xAxis: {
-      type: 'category',
-      boundaryGap: props.records.length <= 1,
-      data: timeLabels,
-      axisLabel: {
-        margin: 12,
-      },
-    },
+    xAxis,
     yAxis: [
       {
         type: 'value',
@@ -368,10 +364,11 @@ function buildOption(isEnlarged: boolean): ChartOption {
         symbol: 'circle',
         symbolSize,
         sampling: isLarge ? 'lttb' : undefined,
+        connectNulls: false,
         areaStyle: {
           opacity: 0.12,
         },
-        data: props.records.map((r) => r.power),
+        data: buildTimeSeriesData(props.records, (r) => r.power),
       },
       {
         name: t('assetManagement.meter.voltage'),
@@ -382,7 +379,8 @@ function buildOption(isEnlarged: boolean): ChartOption {
         symbol: 'circle',
         symbolSize,
         sampling: isLarge ? 'lttb' : undefined,
-        data: props.records.map((r) => r.voltage ?? null),
+        connectNulls: false,
+        data: buildTimeSeriesData(props.records, (r) => r.voltage),
       },
     ],
   }
