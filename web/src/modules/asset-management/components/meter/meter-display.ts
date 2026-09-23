@@ -474,3 +474,51 @@ export function calculateCurrentUnbalance(
     tone: isBalanced ? 'success' : 'warning',
   }
 }
+
+export type MeterTrendRecord = {
+  time: number
+  power: number | null
+  currentA?: number | null
+  currentB?: number | null
+  currentC?: number | null
+  voltage?: number | null
+  dataQuality?: number | null
+}
+
+/**
+ * 掉线断点阈值：10 分钟（毫秒）。
+ * 电表正常按 3 分钟周期上报，若相邻两点间隔超过 10 分钟（即连续 3 次周期未上报），判定为掉线/断网。
+ */
+export const METER_GAP_THRESHOLD_MS = 10 * 60 * 1000
+
+/**
+ * 将离散记录转换为包含时序断点（null）的时序二维坐标点列表 [timestamp, value | null]。
+ * 当相邻采样点时间跨度 > 10 分钟时，在断口处插入 null 占位点，使 ECharts 自动打断折线与阴影。
+ */
+export function buildTimeSeriesData(
+  records: MeterTrendRecord[],
+  valueExtractor: (r: MeterTrendRecord) => number | null | undefined,
+  thresholdMs = METER_GAP_THRESHOLD_MS,
+): [number, number | null][] {
+  if (records.length === 0) return []
+  const result: [number, number | null][] = []
+
+  for (let i = 0; i < records.length; i++) {
+    const current = records[i]
+    const val = valueExtractor(current) ?? null
+
+    result.push([current.time, val])
+
+    if (i < records.length - 1) {
+      const next = records[i + 1]
+      const diff = next.time - current.time
+      if (diff > thresholdMs) {
+        // 在前点之后与后点之前分别插入 null 标记，确保折线在断档期完全悬空不连线
+        result.push([current.time + 1000, null])
+        result.push([next.time - 1000, null])
+      }
+    }
+  }
+
+  return result
+}
