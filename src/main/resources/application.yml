@@ -193,7 +193,7 @@ formula:
 
 # pointCode 是该来源系统下的别名；来源命名空间只由后端可信配置确定。
 ingestion:
-  source-system: ${INGESTION_SOURCE_SYSTEM:MQTT_FREEZE_V1}
+  source-system: ${INGESTION_SOURCE_SYSTEM:MQTT_STANDARD_V1}
   standard-source-system: ${INGESTION_STANDARD_SOURCE_SYSTEM:MQTT_STANDARD_V1}
   point-config-refresh-ms: ${POINT_CONFIG_REFRESH_MS:60000}
   device-identity-refresh-ms: ${DEVICE_IDENTITY_REFRESH_MS:60000}

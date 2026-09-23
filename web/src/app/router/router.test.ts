@@ -7,30 +7,44 @@ import App from '@/app/App.vue'
 import { useShellStore } from '@/app/providers/shell-store'
 import { useSession } from '@/modules/auth/public'
 import { pages, authorizedPages } from '@/app/navigation/catalog'
+import type { GrantedMenu } from '@/modules/auth/public'
 
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
 afterEach(() => vi.unstubAllGlobals())
+function menuTree(paths: string[]): GrantedMenu[] {
+  let id = 0
+  const roots = new Map<string, GrantedMenu>()
+  for (const path of paths) {
+    const parts = path.split('/').filter(Boolean)
+    const rootPath = `/${parts[0]}`
+    const root = roots.get(rootPath) ?? { id: ++id, menuName: '', path: rootPath, menuType: 'M', visible: 1, status: 1, sortOrder: id, children: [] }
+    roots.set(rootPath, root)
+    const groupPath = path.split('/').slice(0, -1).join('/')
+    const parent = groupPath === rootPath ? root : root.children!.find(menu => menu.path === groupPath)
+      ?? (() => { const group = { id: ++id, menuName: '', path: groupPath, menuType: 'M', visible: 1, status: 1, sortOrder: id, children: [] }; root.children!.push(group); return group })()
+    parent.children!.push({ id: ++id, menuName: '', path, menuType: 'C', visible: 1, status: 1, sortOrder: id })
+  }
+  return [...roots.values()]
+}
+
 function authorize() {
   const session = useSession()
   session.user = { id: 1, username: 'test-user', roles: [] }
   session.token = 'test-only'
-  session.menus = pages.map((page, index) => ({ id: index + 1, menuName: '', menuType: 'C', path: page.path, visible: 1, status: 1, sortOrder: index }))
+  session.menus = menuTree(pages.map(page => page.path))
   vi.spyOn(session, 'refresh').mockResolvedValue(undefined)
   return session
 }
 
 describe('office and monitor composition', () => {
-  it('redirects old equipment links while retaining admin and leaf authorization', async () => {
+  it('does not restore removed compatibility mappings', async () => {
     const router = createPlatformRouter(createMemoryHistory())
     const session = authorize()
-    session.menus = [{ id: 1, menuName: '', menuType: 'C', path: '/configuration/ingestion/points', visible: 1, status: 1, sortOrder: 1 }]
     await router.push('/configuration/ingestion/points')
-    expect(router.currentRoute.value.path).toBe('/403')
+    expect(router.currentRoute.value.matched.at(-1)?.path).toBe('/:pathMatch(.*)*')
     session.user!.roles = ['PLATFORM_ADMIN']
-    await router.push('/configuration/ingestion/points')
-    expect(router.currentRoute.value.path).toBe('/operations/devices/businessDevices')
-    await router.push('/configuration/space/equipmentSpaces')
-    expect(router.currentRoute.value.path).toBe('/403')
+    await router.push('/system/devices')
+    expect(router.currentRoute.value.matched.at(-1)?.path).toBe('/:pathMatch(.*)*')
   })
   it('permits an explicitly granted association page for energy managers but not building owners', async () => {
     const router = createPlatformRouter(createMemoryHistory())
@@ -81,7 +95,7 @@ describe('office and monitor composition', () => {
     expect(authorizedPages([])).toEqual([])
     const session = authorize()
     expect(authorizedPages(session.menus)).toHaveLength(pages.length)
-    session.menus[0].visible = 0
+    session.menus[0].children![0].visible = 0
     expect(authorizedPages(session.menus)).toHaveLength(pages.length - 1)
   })
   it('retains administrator checks for migrated management pages in addition to menu grants', async () => {

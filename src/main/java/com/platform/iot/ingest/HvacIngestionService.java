@@ -48,7 +48,7 @@ public class HvacIngestionService {
             MeterRegistry meterRegistry,
             ApplicationEventPublisher eventPublisher,
             @Value("${aggregation.finalization-delay-seconds:30}") int finalizationDelaySeconds,
-            @Value("${ingestion.source-system:MQTT_FREEZE_V1}") String sourceSystem) {
+            @Value("${ingestion.source-system:MQTT_STANDARD_V1}") String sourceSystem) {
         this.validator = validator;
         this.repository = repository;
         this.meterRegistry = meterRegistry;

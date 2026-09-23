@@ -16,7 +16,11 @@ async function render(narrow: boolean) {
   setActivePinia(pinia)
   const session = useSession()
   session.user = { id: 1, username: '窄屏验收用户', roles: ['PLATFORM_ADMIN'] }
-  session.menus = [{ id: 1, menuName: '', path: '/configuration/ingestion/products', menuType: 'C', status: 1, visible: 1, sortOrder: 1 }]
+  session.menus = [{ id: 1, menuName: '', path: '/configuration', menuType: 'M', status: 1, visible: 1, sortOrder: 1, children: [
+    { id: 2, menuName: '', path: '/configuration/ingestion', menuType: 'M', status: 1, visible: 1, sortOrder: 1, children: [
+      { id: 3, menuName: '', path: '/configuration/ingestion/products', menuType: 'C', status: 1, visible: 1, sortOrder: 1 },
+    ] },
+  ] }]
   const router = createRouter({ history: createMemoryHistory(), routes: [
     { path: '/configuration/ingestion/products', component: { template: '<div />' }, meta: { system: 'configuration' } },
     { path: '/systems', component: { template: '<div />' } },

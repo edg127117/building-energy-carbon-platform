@@ -2,16 +2,13 @@ import { screens } from '@/modules/large-screen/public'
 import type { GrantedMenu } from '@/modules/auth/public'
 export type WorkspaceId = 'monitor' | 'operations' | 'configuration'
 export interface Workspace { id: WorkspaceId; titleKey: string; hintKey: string }
-export interface PageEntry { id: string; system: WorkspaceId; groupKey: string; titleKey: string; path: string; legacyPath?: string; title?: string }
+export interface PageEntry { id: string; system: WorkspaceId; groupKey: string; titleKey: string; path: string; title?: string }
 export const workspaces: Workspace[] = ['monitor', 'operations', 'configuration'].map(id => ({
   id: id as WorkspaceId, titleKey: `workspaces.${id}`, hintKey: `workspaces.${id}Hint`,
 }))
-function group(system: WorkspaceId, groupId: string, children: Array<string | [string, string]>): PageEntry[] {
-  return children.map(item => {
-    const [key, legacyPath] = typeof item === 'string' ? [item, undefined] : item
-    return { id: `${system}-${groupId}-${key}`, system, groupKey: `workspaces.${groupId}`,
-      titleKey: `workspaces.${key}`, path: `/${system}/${groupId}/${key}`, legacyPath }
-  })
+function group(system: WorkspaceId, groupId: string, children: string[]): PageEntry[] {
+  return children.map(key => ({ id: `${system}-${groupId}-${key}`, system, groupKey: `workspaces.${groupId}`,
+    titleKey: `workspaces.${key}`, path: `/${system}/${groupId}/${key}` }))
 }
 /** 注册合法页面能力；只有后端明确返回的叶子授权才能启用，目录授权不会扩展为子页面授权。 */
 export const pages: PageEntry[] = [
@@ -20,49 +17,47 @@ export const pages: PageEntry[] = [
   ...group('operations', 'realtime', ['hvac', 'power', 'lighting', 'renewable']),
   ...group('operations', 'energy', ['energyItems', 'energyZones', 'trend', 'baselineAnalysis', 'diagnosis']),
   ...group('operations', 'carbon', ['carbonOverview', 'carbonDetails', 'trend', 'reduction', 'assets']),
-  ...group('operations', 'devices', [['businessDevices', '/system/devices'], ['pendingDevices', '/system/device-onboarding'], 'meters']),
+  ...group('operations', 'devices', ['businessDevices', 'pendingDevices', 'meters']),
   ...group('operations', 'alarms', ['liveAlarms', 'historyAlarms']),
   ...group('operations', 'maintenance', ['plans', 'orders', 'faults']),
   ...group('operations', 'reports', ['energyReports', 'carbonReports']),
-  ...group('configuration', 'ingestion', [['products', '/system/device-products'], ['protocols', '/system/protocol-configurations'], 'collection', 'interfaces']),
-  ...group('configuration', 'space', [['buildings', '/system/buildings'], 'spaces', 'systemGroups', 'equipmentSpaces']),
+  ...group('configuration', 'ingestion', ['products', 'protocols', 'collection', 'interfaces']),
+  ...group('configuration', 'space', ['buildings', 'spaces', 'systemGroups', 'equipmentSpaces']),
   ...group('configuration', 'indicators', ['indicatorList', 'formulas']),
   ...group('configuration', 'factors', ['emissionFactors', 'factorVersions']),
   ...group('configuration', 'rules', ['baselines', 'alarmRules']),
-  ...group('configuration', 'access', [['users', '/system/users'], ['roles', '/system/roles'], ['buildingAccess', '/system/building-access']]),
-  ...group('configuration', 'settings', [['menus', '/system/menus']]),
+  ...group('configuration', 'access', ['users', 'roles', 'buildingAccess']),
+  ...group('configuration', 'settings', ['menus']),
 ]
 
-/** 只迁移既有设备页面的授权和深链接，不扩展为关联配置权限。 */
-export const relocatedPages: Record<string, string> = {
-  '/configuration/ingestion/points': '/operations/devices/businessDevices',
-  '/configuration/ingestion/pendingDevices': '/operations/devices/pendingDevices',
-}
-
-/** 旧路径仅一对一映射同职责入口；不将旧 HVAC 页面授权扩展成五类大屏或整个运维系统。 */
+/** 数据库树决定授权、分组和顺序；页面注册表只负责校验规范路径及提供前端组件元数据。 */
 export function authorizedPages(menus: GrantedMenu[]): PageEntry[] {
-  const granted = new Map<string, GrantedMenu>()
-  function visit(nodes: GrantedMenu[]) {
+  const registry = new Map(pages.map(page => [page.path, page]))
+  const matched: PageEntry[] = []
+  const grantedPaths = new Set<string>()
+  function visit(nodes: GrantedMenu[], workspace?: WorkspaceId, groupPath?: string) {
     for (const node of nodes) {
       if (node.status !== 1 || node.visible !== 1) continue
+      const root = node.menuType === 'M' && /^\/(monitor|operations|configuration)$/.exec(node.path ?? '')
+      const currentWorkspace = root ? root[1] as WorkspaceId : workspace
+      const directory = node.menuType === 'M' && currentWorkspace
+        && new RegExp(`^/${currentWorkspace}/[^/]+$`).test(node.path ?? '')
+      const currentGroupPath = root ? node.path! : directory ? node.path! : groupPath
       if (node.menuType === 'C' && node.path) {
-        if (granted.has(node.path)) throw new Error('DUPLICATE_MENU_PATH')
-        if (/^\/(monitor|operations|configuration)\//.test(node.path) && !relocatedPages[node.path] && !pages.some(page => page.path === node.path)) throw new Error('UNREGISTERED_MENU_PATH')
-        granted.set(node.path, node)
+        if (grantedPaths.has(node.path)) throw new Error('DUPLICATE_MENU_PATH')
+        const page = registry.get(node.path)
+        if (!page) {
+          if (/^\/(monitor|operations|configuration)\//.test(node.path)) throw new Error('UNREGISTERED_MENU_PATH')
+          continue
+        }
+        const expectedGroupPath = page.path.split('/').slice(0, -1).join('/')
+        if (currentWorkspace !== page.system || currentGroupPath !== expectedGroupPath) throw new Error('INVALID_MENU_HIERARCHY')
+        grantedPaths.add(node.path)
+        matched.push({ ...page, title: node.menuName.trim() || undefined })
       }
-      if (node.children) visit(node.children)
+      if (node.children) visit(node.children, currentWorkspace, currentGroupPath)
     }
   }
   visit(menus)
-  for (const [previous, current] of Object.entries(relocatedPages)) {
-    const grant = granted.get(previous)
-    if (grant && !granted.has(current)) granted.set(current, { ...grant, menuName: '' })
-  }
-  const matched = pages.filter(page => granted.has(page.path) || Boolean(page.legacyPath && granted.has(page.legacyPath)))
-  const nodeFor = (page: PageEntry) => granted.get(page.path) ?? granted.get(page.legacyPath ?? '')!
-  // 系统和组别仍按批准结构；组内排序及新路径的显示名称来自服务端维护值。
-  const groupOrder = [...new Set(pages.map(page => page.groupKey + page.system))]
-  return matched.sort((a, b) => groupOrder.indexOf(a.groupKey + a.system) - groupOrder.indexOf(b.groupKey + b.system)
-    || (nodeFor(a).sortOrder ?? 0) - (nodeFor(b).sortOrder ?? 0))
-    .map(page => ({ ...page, title: granted.get(page.path)?.menuName.trim() || undefined }))
+  return matched
 }

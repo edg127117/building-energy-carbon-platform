@@ -22,13 +22,13 @@ import java.util.Set;
 import static com.platform.iot.daikin.monitoring.query.DaikinMonitoringQueryDtos.*;
 
 /**
- * 大金监测查询的数据权限边界。每次请求同时校验 HVAC 叶子菜单和当前建筑授权；SQL继续按
+ * 大金监测查询的数据权限边界。每次请求同时校验实时监测叶子菜单和当前建筑授权；SQL继续按
  * 采集时归属快照过滤事件与设备异常，来源异常通过本建筑监测目标建立可见关联；
  * 独立运行统计还允许通过当前正式绑定与项目映射关联，不要求已启动分钟采集。
  */
 @Service
 public class DaikinMonitoringQueryService {
-    private static final Set<String> HVAC_MENUS = Set.of("/operations/realtime/hvac", "/hvac-demo");
+    private static final Set<String> HVAC_MENUS = Set.of("/operations/realtime/hvac");
     private static final long ONE_YEAR_MS = Duration.ofDays(365).toMillis();
     private static final long STALE_AFTER_MS = Duration.ofMinutes(5).toMillis();
     private final JdbcTemplate jdbc;

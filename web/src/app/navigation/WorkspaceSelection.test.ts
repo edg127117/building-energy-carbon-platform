@@ -2,16 +2,32 @@ import { describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
-import { useSession } from '@/modules/auth/public'
+import { useSession, type GrantedMenu } from '@/modules/auth/public'
 import { createPlatformRouter } from '@/app/router'
 import WorkspaceSelection from './WorkspaceSelection.vue'
+
+function menuTree(paths: string[]): GrantedMenu[] {
+  let id = 0
+  const roots = new Map<string, GrantedMenu>()
+  for (const path of paths) {
+    const parts = path.split('/').filter(Boolean)
+    const rootPath = `/${parts[0]}`
+    const root = roots.get(rootPath) ?? { id: ++id, menuName: '', path: rootPath, menuType: 'M', status: 1, visible: 1, sortOrder: id, children: [] }
+    roots.set(rootPath, root)
+    const groupPath = path.split('/').slice(0, -1).join('/')
+    const parent = groupPath === rootPath ? root : root.children!.find(menu => menu.path === groupPath)
+      ?? (() => { const group = { id: ++id, menuName: '', path: groupPath, menuType: 'M', status: 1, visible: 1, sortOrder: id, children: [] }; root.children!.push(group); return group })()
+    parent.children!.push({ id: ++id, menuName: '', path, menuType: 'C', status: 1, visible: 1, sortOrder: id })
+  }
+  return [...roots.values()]
+}
 
 async function render(paths: string[]) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const session = useSession()
   session.user = { id: 1, username: 'account-with-a-long-name', roles: [] }
-  session.menus = paths.map((path, index) => ({ id: index, menuName: '', path, menuType: 'C', status: 1, visible: 1, sortOrder: index }))
+  session.menus = menuTree(paths)
   vi.spyOn(session, 'refresh').mockResolvedValue(undefined)
   const router = createPlatformRouter(createMemoryHistory())
   await router.push('/systems')

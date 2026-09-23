@@ -2,7 +2,7 @@ import { createRouter, createWebHashHistory, type RouterHistory, type RouteRecor
 import OfficeLayout from '@/app/layouts/office/OfficeLayout.vue'
 import MonitorLayout from '@/app/layouts/monitor/MonitorLayout.vue'
 import WorkspaceSelection from '@/app/navigation/WorkspaceSelection.vue'
-import { pages, authorizedPages, relocatedPages } from '@/app/navigation/catalog'
+import { pages, authorizedPages } from '@/app/navigation/catalog'
 import PendingPage from '@/shared/components/PendingPage.vue'
 import NavigationState from '@/app/navigation/NavigationState.vue'
 import { LoginPage, PasswordSetupPage, useSession } from '@/modules/auth/public'
@@ -21,7 +21,6 @@ function businessRoute(page: (typeof pages)[number]) {
   if (page.path === '/operations/realtime/hvac') return dashboardRoutes[0]
   if (page.path === '/operations/energy/trend') return trendRoutes[0]
   return migratedRoutes.find(route => route.path === page.path)
-    ?? migratedRoutes.find(route => route.path === page.legacyPath)
 }
 
 export const routes: RouteRecordRaw[] = [
@@ -30,9 +29,6 @@ export const routes: RouteRecordRaw[] = [
   { path: '/login', component: LoginPage, meta: { public: true } },
   { path: '/password-setup', component: PasswordSetupPage, meta: { public: true, titleKey: 'auth.passwordSetup.title' } },
   { path: '/systems', component: WorkspaceSelection },
-  ...Object.entries(relocatedPages).map(([path, redirect]) => ({ path, redirect })),
-  { path: '/system/devices', redirect: '/operations/devices/businessDevices' },
-  { path: '/system/device-onboarding', redirect: '/operations/devices/pendingDevices' },
   ...(['monitor', 'operations', 'configuration'] as const).map(system => ({
     path: '/' + system, component: system === 'monitor' ? MonitorLayout : OfficeLayout,
     meta: { system, mode: system === 'monitor' ? 'monitor' : 'office' },
