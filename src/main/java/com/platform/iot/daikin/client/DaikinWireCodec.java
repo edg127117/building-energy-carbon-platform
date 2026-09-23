@@ -5,8 +5,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * 厂家确认后的 wire 封装边界。Header 是否签名、GET 密文位置等未确认内容必须由联调实现显式提供，
- * 客户端不会根据协议展示样例猜测默认值。
+ * 厂家 wire 封装边界。客户端不自行猜测签名或 GET 密文格式；生产封装只覆盖已联调端点。
  */
 public interface DaikinWireCodec {
 
@@ -17,11 +16,20 @@ public interface DaikinWireCodec {
 
     boolean isAuthenticationFailure(JsonNode envelope);
 
-    record EncodedRequest(Map<String, String> headers, Map<String, String> queryParameters, byte[] body) {
+    record EncodedRequest(Map<String, String> headers, Map<String, String> queryParameters,
+                          byte[] body, String encryptedQuery) {
+        public EncodedRequest(Map<String, String> headers, Map<String, String> queryParameters, byte[] body) {
+            this(headers, queryParameters, body, null);
+        }
+
         public EncodedRequest {
             headers = headers == null ? Map.of() : Map.copyOf(headers);
             queryParameters = queryParameters == null ? Map.of() : Map.copyOf(queryParameters);
             body = body == null ? new byte[0] : body.clone();
+            if (encryptedQuery != null && (!queryParameters.isEmpty()
+                    || !encryptedQuery.matches("[A-Za-z0-9+/]+={0,2}"))) {
+                throw new IllegalArgumentException("厂家密文查询参数无效");
+            }
         }
 
         @Override
@@ -31,7 +39,7 @@ public interface DaikinWireCodec {
 
         @Override
         public String toString() {
-            return "EncodedRequest[headers=<redacted>, queryParameters=<redacted>, body=<redacted>]";
+            return "EncodedRequest[headers=<redacted>, queryParameters=<redacted>, body=<redacted>, encryptedQuery=<redacted>]";
         }
     }
 

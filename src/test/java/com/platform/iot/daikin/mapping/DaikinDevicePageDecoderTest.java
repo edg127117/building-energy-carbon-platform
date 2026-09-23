@@ -57,6 +57,15 @@ class DaikinDevicePageDecoderTest {
     }
 
     @Test
+    void realMaintenanceFieldUsesExistingInternalKey() throws Exception {
+        ObjectNode page = page();
+        unit(page).put("inMaintenanceMode", true);
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("inMantenanceMode").normalizedValue()).isEqualTo("true");
+        assertThat(fields).doesNotContainKey("inMaintenanceMode");
+    }
+
+    @Test
     void temperatureRequiresExplicitUnitConfirmationAndDoesNotUseRemoteTemperatureAsRoomTemperature() throws Exception {
         ObjectNode page = page();
         unit(page).put("roomTemp", 0).put("arth1", "27.0");
