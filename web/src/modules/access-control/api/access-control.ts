@@ -15,6 +15,7 @@ import type {
   PageResult,
   RoleView,
   SensitiveChange,
+  SensitiveChangeList,
   SensitiveChangeOperation,
   UserPageQuery,
   UserProfileUpdate,
@@ -93,6 +94,14 @@ export function getChangeRequest(requestId: string): Promise<SensitiveChange> {
   return requestApi<SensitiveChange>({
     method: 'get',
     url: `/v1/backoffice/change-requests/${encodeURIComponent(requestId)}`,
+  })
+}
+
+export function listChangeRequests(scope: 'MINE' | 'REVIEW', page = 1, size = 10): Promise<SensitiveChangeList> {
+  return requestApi<SensitiveChangeList>({
+    method: 'get',
+    url: '/v1/backoffice/change-requests',
+    params: { scope, page, size },
   })
 }
 

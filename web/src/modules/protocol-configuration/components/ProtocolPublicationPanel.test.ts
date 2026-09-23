@@ -21,7 +21,8 @@ vi.mock('../api/protocol-configuration', () => ({
   requestProtocolPublication: vi.fn(), requestProtocolRollback: vi.fn(),
 }))
 
-vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }) }))
+vi.mock('@/modules/access-control/api/access-control', () => ({ newIdempotencyKey: () => 'test-idempotency', getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), listChangeRequests: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }) }))
+vi.mock('@/modules/auth/public', async importOriginal => ({ ...(await importOriginal<typeof import('@/modules/auth/public')>()), useSession: () => ({ user: { id: 1 } }) }))
 const readyTarget = { targetId: 'READY-1', name: '隔离适配器', outputVersion: 'V1', allowedTopics: ['raw/a'], lastSeen: 1000, currentSequence: 3, status: 'READY', errorCode: null }
 const unknownTarget = { ...readyTarget, targetId: 'UNKNOWN-1', name: '失联适配器', status: 'UNKNOWN' }
 const version = {

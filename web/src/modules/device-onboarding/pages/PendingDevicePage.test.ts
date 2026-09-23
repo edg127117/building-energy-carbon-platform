@@ -7,7 +7,7 @@ import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
 import PendingDevicePage from './PendingDevicePage.vue'
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: { view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' } }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
-vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { roles: ['PLATFORM_ADMIN'] } }) }))
+vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { id: 1, roles: ['PLATFORM_ADMIN'] } }) }))
 vi.mock('../api/onboarding', async original => ({
   ...(await original()),
   listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
@@ -17,7 +17,7 @@ vi.mock('../api/onboarding', async original => ({
   getPendingDevice: vi.fn().mockResolvedValue({ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }),
   getPendingDeviceConnection: vi.fn().mockResolvedValue(null),
 }))
-vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
+vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), listChangeRequests: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
 describe('待接入范围筛选', () => {
   beforeEach(() => {
     vi.clearAllMocks()

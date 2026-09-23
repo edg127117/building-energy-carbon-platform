@@ -1,5 +1,6 @@
 package com.platform.audit.sensitive;
 
+import com.platform.framework.web.PageResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -9,6 +10,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -34,6 +36,41 @@ public class SensitiveChangeRepository {
         return jdbcTemplate.query(SELECT + " WHERE submitted_by=? AND idempotency_key=?",
                 MAPPER, submitterId, idempotencyKey).stream().findFirst();
     }
+
+    /** 审核待办还包括本人已批准但待执行的申请；列表仅返回摘要，不泄露命令原文及一次性凭据。 */
+    public PageResponse<ListItem> list(long userId, boolean reviewQueue, boolean allowSelfApproval, int page, int size) {
+        String where = reviewQueue
+                ? " WHERE (r.status='PENDING_REVIEW' AND (?=TRUE OR r.submitted_by<>?))"
+                    + " OR (r.status='APPROVED' AND r.reviewer_id=?)"
+                : " WHERE r.submitted_by=?";
+        Long total = reviewQueue
+                ? jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request r" + where,
+                        Long.class, allowSelfApproval, userId, userId)
+                : jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request r" + where,
+                        Long.class, userId);
+        String sql = """
+                SELECT r.request_id,r.operation_code,r.status,r.target_type,r.target_id,r.impact_summary,
+                       r.submitted_by,u.username AS submitter_name,r.submitted_at,r.create_time
+                FROM sys_sensitive_change_request r
+                LEFT JOIN sys_user u ON u.id=r.submitted_by
+                """ + where + " ORDER BY r.create_time DESC,r.request_id DESC LIMIT ? OFFSET ?";
+        long offset = ((long) page - 1) * size;
+        List<ListItem> items = reviewQueue
+                ? jdbcTemplate.query(sql, LIST_MAPPER, allowSelfApproval, userId, userId, size, offset)
+                : jdbcTemplate.query(sql, LIST_MAPPER, userId, size, offset);
+        return new PageResponse<>(page, size, total == null ? 0 : total, items);
+    }
+
+    public record ListItem(String requestId, String operationCode, SensitiveChangeStatus status,
+                           String targetType, String targetId, String impactSummary, long submittedBy,
+                           String submitterName, LocalDateTime submittedAt, LocalDateTime createTime) { }
+
+    private static final RowMapper<ListItem> LIST_MAPPER = (rs, rowNum) -> new ListItem(
+            rs.getString("request_id"), rs.getString("operation_code"),
+            SensitiveChangeStatus.valueOf(rs.getString("status")), rs.getString("target_type"),
+            rs.getString("target_id"), rs.getString("impact_summary"), rs.getLong("submitted_by"),
+            rs.getString("submitter_name"), localDateTime(rs, "submitted_at"),
+            localDateTime(rs, "create_time"));
 
     public void insert(SensitiveChangeRecord value) {
         jdbcTemplate.update("""

@@ -4,6 +4,7 @@ import com.platform.audit.sensitive.SensitiveChangeService;
 import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.AuditEnvironmentMode;
 import com.platform.framework.common.Result;
+import com.platform.framework.web.PageResponse;
 import com.platform.security.SecurityUser;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -16,11 +17,13 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import static com.platform.audit.api.SensitiveChangeContracts.CreateRequest;
 import static com.platform.audit.api.SensitiveChangeContracts.ReviewRequest;
 import static com.platform.audit.api.SensitiveChangeContracts.View;
+import static com.platform.audit.api.SensitiveChangeContracts.ListItemView;
 
 @Tag(name = "后台敏感变更治理")
 @SecurityRequirement(name = "bearerAuth")
@@ -42,6 +45,15 @@ public class SensitiveChangeController {
     }
 
     public record ApprovalPolicy(String environmentMode, boolean selfApprovalAllowed) { }
+
+    @GetMapping
+    public Result<PageResponse<ListItemView>> list(Authentication authentication,
+            @RequestParam(defaultValue = "MINE") SensitiveChangeService.ListScope scope,
+            @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "10") int size) {
+        var result = service.list(SecurityUser.userId(authentication), scope, page, size);
+        return Result.success(new PageResponse<>(result.page(), result.size(), result.total(),
+                result.items().stream().map(ListItemView::from).toList()));
+    }
 
     @PostMapping
     public Result<View> create(Authentication authentication, @Valid @RequestBody CreateRequest request) {
