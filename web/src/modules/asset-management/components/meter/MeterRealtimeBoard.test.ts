@@ -449,7 +449,14 @@ describe('Meter Realtime Components', () => {
   })
 
   it('configures continuous time axis and breaks lines when gap exceeds 10 minutes', () => {
-    let capturedOption: any = null
+    interface CapturedChartOption {
+      xAxis: { type: string }
+      series: Array<{
+        connectNulls: boolean
+        data: Array<[number, number | null]>
+      }>
+    }
+    let capturedOption: CapturedChartOption | null = null
     const t1 = 1700000000000
     const t2 = t1 + 3600000 // 1小时之后，跨度远超 10 分钟
 
@@ -466,8 +473,8 @@ describe('Meter Realtime Components', () => {
         stubs: {
           ChartView: {
             props: ['option'],
-            setup(props) {
-              capturedOption = props.option
+            setup(props: { option: unknown }) {
+              capturedOption = props.option as CapturedChartOption
               return () => null
             },
           },

@@ -18,7 +18,6 @@ import {
 import { t } from '@/locales'
 import type { TrendDateRange, TrendRangeType } from '../../composables/use-equipment-trend-history'
 import {
-  METER_GAP_THRESHOLD_MS,
   buildTimeSeriesData,
   type MeterTrendRecord,
 } from './meter-display'
