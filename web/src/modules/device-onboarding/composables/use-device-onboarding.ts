@@ -387,10 +387,10 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     })
   }
 
-  function submitBindingBatch(pendingIds: string[], binding: PendingBindRequest, idempotencyKeys: Map<string, string>) {
+  function submitBindingBatch(items: Array<{ pendingId: string; binding: PendingBindRequest }>, idempotencyKeys: Map<string, string>) {
     return run('pending:binding:batch', async () => {
-      const applications = await submitOperationsBindingBatch(pendingIds.map(pendingId => ({
-        pendingId, binding, idempotencyKey: requiredIdempotencyKey(idempotencyKeys.get(pendingId)),
+      const applications = await submitOperationsBindingBatch(items.map(item => ({
+        ...item, idempotencyKey: requiredIdempotencyKey(idempotencyKeys.get(item.pendingId)),
       })))
       bindingApplications.value = applications
       await loadPendingDevices()
