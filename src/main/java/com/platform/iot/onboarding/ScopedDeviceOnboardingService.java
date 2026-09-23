@@ -11,6 +11,8 @@ import com.platform.audit.system.BindTypedPendingDeviceHandler;
 import com.platform.framework.exception.BusinessException;
 import com.platform.framework.web.PageResponse;
 import com.platform.iot.daikin.onboarding.DaikinDirectoryService;
+import com.platform.iot.daikin.onboarding.DaikinPendingLocationService;
+import com.platform.iot.daikin.onboarding.DaikinPendingLocationView;
 import com.platform.iot.onboarding.api.DeviceOnboardingContracts;
 import com.platform.iot.onboarding.mapper.BizPendingDeviceMapper;
 import com.platform.iot.onboarding.model.entity.BizPendingDevice;
@@ -49,6 +51,7 @@ public class ScopedDeviceOnboardingService {
     private final BuildingScopeService buildingScope;
     private final SysMenuMapper menuMapper;
     private final DaikinDirectoryService directory;
+    private final DaikinPendingLocationService locations;
     private final BizPendingDeviceMapper pendingMapper;
     private final DeviceOnboardingService onboarding;
     private final DeviceProductService products;
@@ -81,12 +84,15 @@ public class ScopedDeviceOnboardingService {
         }
         query.orderByDesc(BizPendingDevice::getLastSeenTime).orderByAsc(BizPendingDevice::getPendingId);
         var result = pendingMapper.selectPage(new Page<>(page, size), query);
+        Map<String, DaikinPendingLocationView> pageLocations = locations.forPendingIds(result.getRecords().stream()
+                .map(BizPendingDevice::getPendingId).toList());
         return new PageResponse<>(result.getCurrent(), result.getSize(), result.getTotal(), result.getRecords().stream()
                 .map(p -> new DeviceOnboardingContracts.PendingListItemView(p.getPendingId(), p.getIdentityType(),
                         "****", p.getProfileCode(), p.getLastProfileVersion(), p.getStatus(), p.getReportCount(),
                         p.getFirstSeenTime().atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
                         p.getLastSeenTime().atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
-                        Integer.valueOf(1).equals(p.getSampleTruncated()))).toList());
+                        Integer.valueOf(1).equals(p.getSampleTruncated()),
+                        pageLocations.get(p.getPendingId()))).toList());
     }
 
     @Transactional
@@ -98,7 +104,8 @@ public class ScopedDeviceOnboardingService {
     @Transactional
     public DirectoryDetail directoryDetail(Long userId, Set<String> roles, String pendingId) {
         requirePendingAccess(userId, roles, pendingId);
-        return new DirectoryDetail(onboarding.pendingDetail(pendingId, ADMIN), directory.detail(pendingId));
+        return new DirectoryDetail(onboarding.pendingDetail(pendingId, ADMIN), directory.detail(pendingId),
+                locations.forPending(pendingId));
     }
 
     @Transactional
@@ -291,7 +298,8 @@ public class ScopedDeviceOnboardingService {
 
     public record BindingApplication(String pendingId, String requestId, String status, String errorCode) { }
     public record DirectoryDetail(DeviceOnboardingContracts.PendingDetailView pending,
-                                  DaikinDirectoryService.DirectoryView directory) { }
+                                  DaikinDirectoryService.DirectoryView directory,
+                                  DaikinPendingLocationView location) { }
     public record BindingItem(String pendingId, DeviceOnboardingContracts.TypedBindRequest binding, String idempotencyKey) { }
     public record NumericSource(String sourceId, String sourceCode, String sourceName) { }
     public record BindingOptions(String buildingId, String buildingName, List<SpaceOption> spaces,

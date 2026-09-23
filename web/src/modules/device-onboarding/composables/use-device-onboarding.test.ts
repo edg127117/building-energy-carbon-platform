@@ -122,7 +122,10 @@ describe('设备接入异步状态', () => {
   })
 
   it('运维模式只使用范围受控列表并拆分厂家目录详情', async () => {
-    vi.mocked(listOperationsPendingDevices).mockResolvedValueOnce(page('DAIKIN-01'))
+    const location = { roomSpaceId: 'ROOM-303', roomCode: 'B303-1', monitorAddress: '1-01', assetReferenceCode: 'F000002' }
+    const pendingPage = page('DAIKIN-01')
+    pendingPage.items[0]!.location = location
+    vi.mocked(listOperationsPendingDevices).mockResolvedValueOnce(pendingPage)
     vi.mocked(getOperationsPendingDevice).mockResolvedValueOnce({
       pending: {
         ...page('DAIKIN-01').items[0]!, identityValue: 'unit-01', boundIdentityId: null,
@@ -133,6 +136,7 @@ describe('设备接入异步状态', () => {
         kind: 'INDOOR', unitId: 'unit-01', siteName: '项目', deviceName: '内机', equipmentId: null,
         buildingId: 'B-01', missing: false, observedAt: '2026-09-17T00:00:00Z',
       },
+      location,
     })
     const management = useDeviceOnboarding({ operations: true })
 
@@ -142,6 +146,8 @@ describe('设备接入异步状态', () => {
     expect(listPendingDevices).not.toHaveBeenCalled()
     expect(management.selectedPending.value?.identityValue).toBe('unit-01')
     expect(management.selectedDirectory.value?.sourceId).toBe('source-1')
+    expect(management.pendingDevices.value.items[0]?.location).toEqual(location)
+    expect(management.selectedDirectory.value?.location).toEqual(location)
   })
 
   it('从持久化历史恢复最新同步任务并支持空历史', async () => {

@@ -267,7 +267,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
         const detail = await getOperationsPendingDevice(pendingId)
         if (owner === pendingDetailGeneration) {
           selectedPending.value = detail.pending
-          selectedDirectory.value = detail.directory
+          selectedDirectory.value = { ...detail.directory, location: detail.location ?? null }
           selectedBindingProduct.value = null
           syncJob.value = null
         }
