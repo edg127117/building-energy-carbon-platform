@@ -215,6 +215,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     bindingOptions.value = await getOperationsBindingOptions(requiredPendingId(selectedPending.value?.pendingId), {
       page: params.page ?? 1, size: params.size ?? 20,
       spaceId: params.spaceId, systemGroupId: params.systemGroupId,
+      productId: selectedBindingProduct.value?.productId,
     })
     return bindingOptions.value
   }

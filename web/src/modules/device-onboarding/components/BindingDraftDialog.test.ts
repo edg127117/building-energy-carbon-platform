@@ -85,4 +85,14 @@ describe('绑定准备弹窗', () => {
     await flushPromises()
     expect(temperatureWrapper.text()).toContain('温度数值来源')
   })
+
+  it('大金设备默认新建台账且明确提示产品和系统分组前置条件', async () => {
+    const wrapper = mount(BindingDraftDialog, {
+      props: { open: true, pending: { ...pending, identityType: 'DAIKIN_UNIT' }, products: [], productTotal: 0, allowEmptyPoints: true },
+    })
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElRadioGroup)[0].props('modelValue')).toBe('new')
+    expect(wrapper.text()).toContain('当前没有已启用的兼容产品')
+    expect(wrapper.text()).toContain('系统分组来自当前建筑台账')
+  })
 })

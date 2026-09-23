@@ -78,9 +78,10 @@ public class ScopedDeviceOnboardingController {
     public Result<ScopedDeviceOnboardingService.BindingOptions> bindingOptions(Authentication authentication,
             @PathVariable String pendingId, @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size, @RequestParam(required = false) String spaceId,
-            @RequestParam(required = false) String systemGroupId) {
+            @RequestParam(required = false) String systemGroupId,
+            @RequestParam(required = false) String productId) {
         return Result.success(service.bindingOptions(SecurityUser.userId(authentication),
-                SecurityUser.roles(authentication), pendingId, page, size, spaceId, systemGroupId));
+                SecurityUser.roles(authentication), pendingId, page, size, spaceId, systemGroupId, productId));
     }
 
     @GetMapping("/pending/{pendingId}/connection")

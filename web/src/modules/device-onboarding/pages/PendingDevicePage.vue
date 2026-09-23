@@ -216,6 +216,7 @@ async function selectProduct(productId: string) {
       await management.selectProduct(null)
       bindingContractError.value = t('deviceOnboarding.validation.bindingProductContract')
     }
+    if (operationsMode.value) await loadBindingEquipment(1)
   } catch {
     // 产品详情读取失败会保留在产品详情状态，表单不伪造模板。
   }
