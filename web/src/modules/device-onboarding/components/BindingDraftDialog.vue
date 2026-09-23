@@ -69,7 +69,7 @@ const form = reactive({
   buildingId: undefined as string | undefined,
   spaceId: undefined as string | undefined,
   systemGroupId: undefined as string | undefined,
-  mode: defaultEquipmentMode(),
+  mode: 'new' as BindingMode,
   existingEquipmentId: undefined as string | undefined,
   equipmentName: '',
   manufacturer: '',
@@ -121,7 +121,7 @@ function syncProduct(product: BindingProduct | null | undefined) {
 function reset() {
   Object.assign(form, {
     productId: '', buildingId: props.bindingOptions?.buildingId, spaceId: undefined, systemGroupId: undefined,
-    mode: defaultEquipmentMode(), existingEquipmentId: undefined, equipmentName: '', manufacturer: '', pointCodePrefix: '', numericSourceId: undefined, bindings: {},
+    mode: 'new', existingEquipmentId: undefined, equipmentName: '', manufacturer: '', pointCodePrefix: '', numericSourceId: undefined, bindings: {},
   })
   validationKey.value = null
   if (!props.bindingOptions) {
@@ -134,14 +134,12 @@ function changeProduct(productId: string) {
   validationKey.value = null
   form.productId = productId
   form.bindings = {}
+  form.spaceId = undefined
+  form.systemGroupId = undefined
   form.existingEquipmentId = undefined
   clearExistingPointSelections()
   if (!props.bindingOptions) void assets.selectEquipment(null)
   emit('product-change', productId)
-}
-
-function defaultEquipmentMode(): BindingMode {
-  return props.pending?.identityType === 'DAIKIN_UNIT' ? 'existing' : 'new'
 }
 
 function applyPointCodePrefix() {
@@ -299,6 +297,8 @@ function joinPointCode(prefix: string, suffix: string): string {
         <p>{{ t('deviceOnboarding.prerequisites.boundary') }}</p>
       </section>
       <div class="form-grid"><ElFormItem :label="t('deviceOnboarding.labels.productName')" required><ElSelect v-model="form.productId" class="wide-control" :filterable="productSearchEnabled" :remote="productSearchEnabled" :remote-method="keyword => emit('product-search', keyword)" :loading="productLoading" @change="changeProduct"><ElOption v-for="item in products" :key="item.productId" :label="`${item.productName} · ${item.productCode}`" :value="item.productId" /></ElSelect><ElPagination size="small" layout="total, prev, next" :current-page="productPage" :page-size="productSize" :total="productTotal" @current-change="page => emit('product-page-change', page)" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.building')" required><ElSelect v-model="form.buildingId" class="wide-control" :disabled="Boolean(bindingOptions)" @change="changeBuilding"><ElOption v-for="item in buildingOptions" :key="item.value" :label="item.label" :value="item.value" /></ElSelect></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.space')" required><ElSelect v-model="form.spaceId" class="wide-control" @change="changeScope"><ElOption v-for="item in scopeSpaces" :key="item.spaceId" :label="item.spaceName" :value="item.spaceId" /></ElSelect></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.systemGroup')" required><ElSelect v-model="form.systemGroupId" class="wide-control" @change="changeScope"><ElOption v-for="item in scopeSystems" :key="item.systemGroupId" :label="item.systemName" :value="item.systemGroupId" /></ElSelect></ElFormItem></div>
+      <ElAlert v-if="pending?.identityType === 'DAIKIN_UNIT' && !productLoading && productTotal === 0" :title="t('deviceOnboarding.messages.noCompatibleProduct')" type="warning" show-icon :closable="false" />
+      <ElAlert v-if="pending?.identityType === 'DAIKIN_UNIT'" :title="t('deviceOnboarding.messages.daikinSystemScope')" type="info" show-icon :closable="false" />
       <ElFormItem :label="t('deviceOnboarding.labels.targetEquipment')" required><ElRadioGroup v-model="form.mode" @change="changeEquipmentMode"><ElRadio value="existing">{{ t('deviceOnboarding.labels.existingEquipment') }}</ElRadio><ElRadio value="new">{{ t('deviceOnboarding.labels.newEquipment') }}</ElRadio></ElRadioGroup></ElFormItem>
       <template v-if="form.mode === 'existing'"><ElFormItem :label="t('deviceOnboarding.labels.existingEquipment')" required><ElSelect v-model="form.existingEquipmentId" class="wide-control" @change="changeEquipment"><ElOption v-for="item in equipmentOptions" :key="item.equipmentId" :label="item.equipmentName" :value="item.equipmentId" /></ElSelect><ElPagination v-if="bindingOptions" size="small" layout="total, prev, next" :current-page="bindingOptions.equipmentPage" :page-size="bindingOptions.equipmentSize" :total="bindingOptions.equipmentTotal" @current-change="page => emit('equipment-page-change', page, form.spaceId, form.systemGroupId)" /></ElFormItem></template>
       <template v-else><div class="form-grid"><ElFormItem :label="t('deviceOnboarding.labels.equipmentName')" required><ElInput v-model="form.equipmentName" maxlength="100" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem></div></template>

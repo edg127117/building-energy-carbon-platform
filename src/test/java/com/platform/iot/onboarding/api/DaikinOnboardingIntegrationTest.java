@@ -186,12 +186,27 @@ class DaikinOnboardingIntegrationTest {
                 "DTEST_HTTP_" + numericSource.substring(3));
         assertThat(scoped.numericSources(4242L, OPS, visible))
                 .extracting(ScopedDeviceOnboardingService.NumericSource::sourceId).contains(numericSource);
-        assertThat(scoped.bindingOptions(4242L, OPS, visible, 1, 20, "SPACE001", "GROUP001").buildingId())
-                .isEqualTo("BLD001");
+        var unselected = scoped.bindingOptions(4242L, OPS, visible, 1, 20, "SPACE001", "GROUP001", null);
+        assertThat(unselected.buildingId()).isEqualTo("BLD001");
+        assertThat(unselected.equipmentTotal()).isZero();
+        jdbc.update("INSERT INTO biz_equipment(equip_id,equip_code,equip_name,type_code,equip_category,system_group_id,building_id,space_id,del_flag) "
+                + "VALUES ('DTEST-CANDIDATE-ODU','DTEST-ODU','DTEST-候选外机','DTEST_ODU','OUTDOOR_UNIT','GROUP001','BLD001','SPACE001',0)");
+        jdbc.update("INSERT INTO biz_equipment(equip_id,equip_code,equip_name,type_code,equip_category,system_group_id,building_id,space_id,del_flag) "
+                + "VALUES ('DTEST-CANDIDATE-IDU','DTEST-IDU','DTEST-非外机设备','DTEST_IDU','INDOOR_UNIT','GROUP001','BLD001','SPACE001',0)");
+        var candidates = scoped.bindingOptions(4242L, OPS, visible, 1, 20, "SPACE001", "GROUP001", product);
+        assertThat(candidates.equipmentTotal()).isEqualTo(1);
+        assertThat(candidates.equipment()).extracting(ScopedDeviceOnboardingService.EquipmentOption::equipmentId)
+                .containsExactly("DTEST-CANDIDATE-ODU");
+        var wrongTarget = new DeviceOnboardingContracts.TypedBindRequest(product, "BLD001", "SPACE001", "GROUP001",
+                "DTEST-CANDIDATE-IDU", null);
+        assertThatThrownBy(() -> scoped.apply(4242L, OPS, visible, wrongTarget, "DTEST-wrong-type"))
+                .isInstanceOf(BusinessException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request WHERE idempotency_key='DTEST-wrong-type'", Integer.class))
+                .isZero();
         for (String denied : List.of(other, unknown, "not-existing")) {
             assertThatThrownBy(() -> scoped.product(4242L, OPS, denied, product)).isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> scoped.numericSources(4242L, OPS, denied)).isInstanceOf(BusinessException.class);
-            assertThatThrownBy(() -> scoped.bindingOptions(4242L, OPS, denied, 1, 20, null, null)).isInstanceOf(BusinessException.class);
+            assertThatThrownBy(() -> scoped.bindingOptions(4242L, OPS, denied, 1, 20, null, null, product)).isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> scoped.requestIdentityStatus(4242L, OPS, denied, "ACTIVE", "DTEST-denied"))
                     .isInstanceOf(BusinessException.class);
             assertThatThrownBy(() -> scoped.detail(4242L, OPS, denied)).isInstanceOfSatisfying(BusinessException.class,

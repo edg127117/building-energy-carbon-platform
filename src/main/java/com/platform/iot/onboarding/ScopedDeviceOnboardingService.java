@@ -146,7 +146,7 @@ public class ScopedDeviceOnboardingService {
     /** 返回厂家映射建筑内的绑定候选，不调用管理员资产 API，也不包含其他建筑档案。 */
     @Transactional
     public BindingOptions bindingOptions(Long userId, Set<String> roles, String pendingId,
-            int page, int size, String spaceId, String systemGroupId) {
+            int page, int size, String spaceId, String systemGroupId, String productId) {
         requirePendingAccess(userId, roles, pendingId);
         if (page < 1 || size < 1 || size > 100) throw error(400, VALIDATION_FAILED, "设备候选分页参数无效");
         String buildingId = directory.requireMappedBuilding(pendingId);
@@ -160,13 +160,20 @@ public class ScopedDeviceOnboardingService {
                         .eq(BizSystemGroup::getBuildingId, buildingId).orderByAsc(BizSystemGroup::getSystemGroupName)
                         .orderByAsc(BizSystemGroup::getSystemGroupId)).stream()
                 .map(value -> new SystemOption(value.getSystemGroupId(), value.getSystemGroupName())).toList();
-        var equipmentQuery = new LambdaQueryWrapper<BizEquipment>().eq(BizEquipment::getBuildingId, buildingId);
-        if (spaceId != null && !spaceId.isBlank()) equipmentQuery.eq(BizEquipment::getSpaceId, spaceId);
-        if (systemGroupId != null && !systemGroupId.isBlank()) {
-            equipmentQuery.eq(BizEquipment::getSystemGroupId, systemGroupId);
+        Page<BizEquipment> equipmentPage = new Page<>(page, size);
+        if (productId != null && !productId.isBlank()) {
+            String equipmentType = product(userId, roles, pendingId, productId).equipmentTypeCode();
+            // 候选对应所选产品的物理设备类型；电表的计量关联不能成为空调绑定目标。
+            var equipmentQuery = new LambdaQueryWrapper<BizEquipment>()
+                    .eq(BizEquipment::getBuildingId, buildingId)
+                    .eq(BizEquipment::getTypeCode, equipmentType);
+            if (spaceId != null && !spaceId.isBlank()) equipmentQuery.eq(BizEquipment::getSpaceId, spaceId);
+            if (systemGroupId != null && !systemGroupId.isBlank()) {
+                equipmentQuery.eq(BizEquipment::getSystemGroupId, systemGroupId);
+            }
+            equipmentPage = equipment.selectPage(equipmentPage, equipmentQuery
+                    .orderByAsc(BizEquipment::getEquipName).orderByAsc(BizEquipment::getEquipId));
         }
-        var equipmentPage = equipment.selectPage(new Page<BizEquipment>(page, size), equipmentQuery
-                .orderByAsc(BizEquipment::getEquipName).orderByAsc(BizEquipment::getEquipId));
         var equipmentRows = equipmentPage.getRecords();
         List<String> equipmentIds = equipmentRows.stream().map(BizEquipment::getEquipId).toList();
         Map<String, List<PointOption>> pointViews = equipmentIds.isEmpty() ? Map.of()

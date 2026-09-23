@@ -265,6 +265,19 @@ public class DeviceOnboardingService {
         BizPendingDevice pending = requirePending(pendingId);
         String building = validateOwnership(request.asBinding());
         directoryService.requireBinding(pendingId, building, pending.getProfileCode());
+        BizDeviceProduct product = productMapper.selectById(request.productId());
+        if (product == null || !"ENABLED".equals(product.getStatus())
+                || !pending.getIdentityType().equalsIgnoreCase(product.getIdentityType())
+                || !pending.getProfileCode().equalsIgnoreCase(product.getExpectedProfileCode())) {
+            throw error(409, VALIDATION_FAILED, "产品不存在、未启用或与待绑定设备不匹配");
+        }
+        if (StringUtils.hasText(request.existingEquipmentId())) {
+            BizEquipment target = equipmentMapper.selectById(request.existingEquipmentId());
+            // 申请阶段阻止把计量设备当成空调；审批执行时仍在锁内重新校验类型和归属。
+            if (!product.getEquipmentTypeCode().equals(target.getTypeCode())) {
+                throw error(400, VALIDATION_FAILED, "设备类型与产品不一致");
+            }
+        }
         return building;
     }
 

@@ -198,6 +198,8 @@ export default {
     ignoreConfirm: '忽略后，该设备不会进入当前待处理队列。是否继续？',
     changeSubmitted: '已提交后台敏感变更申请，等待审批和执行。',
     selectProduct: '请先选择已启用的产品。',
+    noCompatibleProduct: '当前没有已启用的兼容产品。请先在产品模板中核对并完成启用审批。',
+    daikinSystemScope: '系统分组来自当前建筑台账。请按空调实际系统归属选择；没有合适分组时先到建筑档案维护。',
     selectScope: '请完整选择建筑、空间和系统分组。',
     selectTarget: '请选择已有设备，或填写新建设备信息。',
     completeBindings: '请完成必需测点的映射信息。',

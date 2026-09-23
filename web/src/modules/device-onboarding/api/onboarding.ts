@@ -98,7 +98,7 @@ export function listOperationsNumericSources(pendingId: string) {
   })
 }
 
-export function getOperationsBindingOptions(pendingId: string, params: { page: number; size: number; spaceId?: string; systemGroupId?: string }) {
+export function getOperationsBindingOptions(pendingId: string, params: { page: number; size: number; spaceId?: string; systemGroupId?: string; productId?: string }) {
   return requestApi<OperationsBindingOptions>({
     method: 'get', url: `${operationsPath}/pending/${encoded(pendingId)}/binding-options`, params,
   })
