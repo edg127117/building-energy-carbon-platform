@@ -20,6 +20,7 @@ export default {
   noObservation: '尚无有效观测', inactive: '接入已停用',
   qualityBlocked: '质量策略已屏蔽数值',
   currentAlarms: '厂家设备实时异常', historyAlarms: '厂家设备历史异常',
-  fieldNames: { onOff: '启停', mode: '模式', fanSpeed: '风速档位', airflowDirection: '风向', unitStatus: '机组状态', errorCode: '故障代码', errorType: '故障类型', roomTemp: '室温', temperature: '设定温度', inCommunicationError: '通信故障', inEquipmentError: '设备故障', inMantenanceMode: '维护模式', isFilterDirty: '滤网脏污', 'controller.isConnectionUp': '控制器连接', 'controller.inForcedStop': '控制器强制停止', compressorOnOff: '压缩机启停' },
+  fieldNames: { onOff: '启停', mode: '模式', fanSpeed: '风速档位', airflowDirection: '风向', unitStatus: '机组状态', errorCode: '故障代码', errorType: '故障类型', roomTemp: '室温', temperature: '设定温度', inCommunicationError: '通信故障', inEquipmentError: '设备故障', inMantenanceMode: '维护模式', isFilterDirty: '滤网脏污', 'controller.isConnectionUp': '控制器连接', 'controller.inForcedStop': '控制器强制停止', compressorOnOff: '压缩机启停', formalName: '设备名称', modelName: '设备型号' },
+  extendedFields: '厂家扩展字段与待确认值', showExtendedFields: '展开原始字段', hideExtendedFields: '收起原始字段',
   statusNames: { VENDOR_COMMUNICATION: '设备通信故障', VENDOR_EQUIPMENT: '设备故障', VENDOR_MAINTENANCE: '设备维护', FILTER_MAINTENANCE: '滤网维护', CONTROLLER_COMMUNICATION: '控制器通信故障', SOURCE_FETCH: '来源取数异常', RUNTIME_FETCH: '运行统计取数异常', DEVICE_STALE: '设备数据过期', totalRuntime: '累计运行时长', PRESENT: '有结果', MISSING: '缺失', INVALID: '无效', UNKNOWN: '未知', UNCONFIRMED: '待确认', QUEUED: '待执行', RUNNING: '执行中', RETRY_WAIT: '等待重试', SUCCEEDED: '已完成', UNSUPPORTED: '不支持', FAILED: '失败', EXPIRED: '已过期', on: '开', off: '关', true: '是', false: '否', cooling: '制冷', heating: '制热', fan: '送风', dry: '除湿', low: '低档', middle: '中档', high: '高档', automatic: '自动', operating: '运行', stopped: '停止' },
 } as const

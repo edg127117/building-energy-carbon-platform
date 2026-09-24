@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { daikinLabel, daikinFieldLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
+import { daikinLabel, daikinFieldLabel, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
+import type { CurrentField } from './daikin'
 
 describe('manufacturer display boundaries', () => {
   it('keeps zero and blocked values, breaks gaps without interpolation', () => {
@@ -18,6 +19,17 @@ describe('manufacturer display boundaries', () => {
     expect(daikinLabel('UNCONFIRMED')).toBe('待确认')
     expect(daikinFieldLabel('mc11')).toBe('未确认字段（原始字段名：mc11）')
     expect(daikinFieldLabel('onOff')).toBe('启停')
+  })
+  it('keeps verified fields visible and puts unknown codes in expandable details', () => {
+    const field = (fieldName: string, normalizedValue: string): CurrentField => ({
+      fieldName, normalizedValue, rawJson: null, status: 'PRESENT', lastValidAt: 1,
+      lastAttemptAt: 1, lastAttemptRawJson: null, valueVisible: true, stale: false,
+      mappingVersion: 1, lastAttemptMappingVersion: 1,
+    })
+    const rows = [field('onOff', 'on'), field('airflowDirection', 'airFlowSeven'), field('arth1', '22'), field('modelName', 'FSFP80AB')]
+    expect(daikinCurrentFields(rows)).toEqual({ primary: [rows[0], rows[3]], extended: [rows[1], rows[2]] })
+    expect(daikinCurrentValue('modelName', 'FSFP80AB')).toBe('FSFP80AB')
+    expect(daikinCurrentValue('errorCode', '')).toBe('—')
   })
   it('translates every runtime synchronization state for customer display', () => {
     expect(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED', 'UNSUPPORTED', 'EXPIRED'].map(daikinLabel))

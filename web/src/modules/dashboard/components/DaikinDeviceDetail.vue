@@ -7,7 +7,7 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { formatDateTime } from '@/shared/utils/format'
 import { t } from '@/locales'
 import { daikinApi } from '../api/daikin'
-import { daikinLabel, daikinFieldLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
+import { daikinLabel, daikinFieldLabel, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 
 const props = defineProps<{ equipmentId: string; equipmentName?: string | null; equipmentCode?: string | null; refreshTick: number }>()
@@ -25,6 +25,8 @@ const tab = ref('state')
 const range = ref<[number, number]>([Date.now() - 86400000, Date.now()])
 const queriedRange = ref<[number, number] | null>(null)
 const rangeError = ref(false)
+const showExtended = ref(false)
+const displayFields = computed(() => daikinCurrentFields(current.data.value?.fields ?? []))
 const hours = (millis: number) => (millis / 3_600_000).toFixed(2)
 const coverage = (covered: number, elapsed: number) => elapsed > 0 ? `${(covered / elapsed * 100).toFixed(1)}%` : '—'
 const option = computed<ChartOption>(() => ({
@@ -65,13 +67,23 @@ onMounted(loadCurrent)
       <ElTabPane :label="text('state')" name="state">
         <ElAlert v-if="current.error.value" :title="current.error.value" type="error" :closable="false" />
         <ElSkeleton v-if="current.loading.value" :rows="5" animated />
-        <ElTable v-else :data="current.data.value?.fields ?? []">
+        <ElTable v-else :data="displayFields.primary">
           <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinLabel(row.normalizedValue) : t('common.missing') }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
+          <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
           <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
           <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
           <ElTableColumn :label="text('attempt')"><template #default="{ row }">{{ date(row.lastAttemptAt) }}</template></ElTableColumn>
         </ElTable>
+        <template v-if="displayFields.extended.length">
+          <ElButton @click="showExtended = !showExtended">{{ text(showExtended ? 'hideExtendedFields' : 'showExtendedFields') }} {{ displayFields.extended.length }}</ElButton>
+          <ElTable v-if="showExtended" :data="displayFields.extended" :aria-label="text('extendedFields')">
+            <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
+            <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }}</template></ElTableColumn>
+            <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
+            <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
+            <ElTableColumn :label="text('attempt')"><template #default="{ row }">{{ date(row.lastAttemptAt) }}</template></ElTableColumn>
+          </ElTable>
+        </template>
       </ElTabPane>
       <ElTabPane :label="text('events')" name="events">
         <p>{{ text('eventNotice') }}</p>
