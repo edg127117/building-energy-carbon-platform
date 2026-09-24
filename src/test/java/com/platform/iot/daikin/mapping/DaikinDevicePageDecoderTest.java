@@ -57,6 +57,18 @@ class DaikinDevicePageDecoderTest {
     }
 
     @Test
+    void acceptsKnownVendorEnumWithDifferentCaseWithoutChangingRawValue() throws Exception {
+        ObjectNode page = page();
+        unit(page).put("onOff", "On").put("mode", "Cooling");
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("onOff").status()).isEqualTo(PRESENT);
+        assertThat(fields.get("onOff").normalizedValue()).isEqualTo("on");
+        assertThat(fields.get("onOff").rawJson()).isEqualTo("\"On\"");
+        assertThat(fields.get("mode").normalizedValue()).isEqualTo("cooling");
+        assertThat(fields.get("mode").rawJson()).isEqualTo("\"Cooling\"");
+    }
+
+    @Test
     void realMaintenanceFieldUsesExistingInternalKey() throws Exception {
         ObjectNode page = page();
         unit(page).put("inMaintenanceMode", true);

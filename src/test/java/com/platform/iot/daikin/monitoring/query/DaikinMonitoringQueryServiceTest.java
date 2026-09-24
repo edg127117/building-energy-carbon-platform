@@ -159,6 +159,7 @@ class DaikinMonitoringQueryServiceTest {
                 .containsExactly("equipment-A1", "equipment-A2");
         assertThat(second.items()).extracting(DaikinMonitoringQueryDtos.DeviceListItem::equipmentId)
                 .containsExactly("equipment-A3");
+        assertThat(first.items().get(1).onOff().stale()).isFalse();
         assertThat(first.items()).allSatisfy(item -> {
             assertThat(item.deviceKind()).isEqualTo("INDOOR");
             assertThat(item.active()).isTrue();
@@ -210,6 +211,7 @@ class DaikinMonitoringQueryServiceTest {
             assertThat(field.rawJson()).isNull();
             assertThat(field.normalizedValue()).isNull();
             assertThat(field.lastValidAt()).isNull();
+            assertThat(field.stale()).isFalse();
             assertThat(field.lastAttemptMappingVersion()).isEqualTo(2);
         });
         verify(buildings, times(2)).checkAccess(7L, OPS, "BLD-B");
