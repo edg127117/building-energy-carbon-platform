@@ -136,7 +136,7 @@ describe('审批环境提示', () => {
     await flushPromises()
     const checks = wrapper.findAll('.batch-check input')
     expect(checks).toHaveLength(2)
-    await wrapper.findAll('button').find(button => button.text() === '选择本页可处理申请')!.trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === '选择本页绑定申请')!.trigger('click')
     expect(wrapper.findAll('.batch-check input:checked')).toHaveLength(2)
     await wrapper.findAll('button').find(button => button.text() === '批量审核并执行')!.trigger('click')
     await flushPromises()
@@ -154,6 +154,49 @@ describe('审批环境提示', () => {
     expect(executeChangeRequest).toHaveBeenNthCalledWith(1, 'bind-1')
     expect(executeChangeRequest).toHaveBeenNthCalledWith(2, 'bind-2')
     expect(wrapper.text()).toContain('bind-2：请求失败')
+    wrapper.unmount()
+  })
+
+  it('身份启用申请可单独批量审核并执行，不混入绑定和产品申请', async () => {
+    vi.mocked(getApprovalPolicy).mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: true })
+    vi.mocked(listChangeRequests).mockResolvedValue({ page: 1, size: 10, total: 4, items: [
+      { requestId: 'bind-1', operationCode: 'BIND_TYPED_PENDING_DEVICE', status: 'PENDING_REVIEW',
+        targetType: 'PENDING_DEVICE', targetId: 'pending-1', impactSummary: null,
+        submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-09-23T12:00:00' },
+      { requestId: 'activate-1', operationCode: 'ACTIVATE_DEVICE_IDENTITY', status: 'PENDING_REVIEW',
+        targetType: 'DEVICE_IDENTITY', targetId: 'identity-1', impactSummary: 'buildingId=BLD001;equipmentName=大金内机-B303-1;action=ACTIVATE',
+        submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-09-23T12:00:00' },
+      { requestId: 'activate-2', operationCode: 'ACTIVATE_DEVICE_IDENTITY', status: 'APPROVED',
+        targetType: 'DEVICE_IDENTITY', targetId: 'identity-2', impactSummary: null,
+        submittedBy: 2, submitterName: 'reviewer', submittedAt: null, createTime: '2026-09-23T12:00:00' },
+      { requestId: 'product-1', operationCode: 'ENABLE_DEVICE_PRODUCT', status: 'PENDING_REVIEW',
+        targetType: 'DEVICE_PRODUCT', targetId: 'product-1', impactSummary: null,
+        submittedBy: 2, submitterName: 'reviewer', submittedAt: null, createTime: '2026-09-23T12:00:00' },
+    ] })
+    vi.mocked(approveChangeRequest).mockResolvedValue({ status: 'APPROVED' } as Awaited<ReturnType<typeof approveChangeRequest>>)
+    vi.mocked(executeChangeRequest).mockResolvedValue({ status: 'EXECUTED' } as Awaited<ReturnType<typeof executeChangeRequest>>)
+    const wrapper = mount(ChangeRequestControl, { attachTo: document.body, props: { inbox: true } })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '审核待办')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('设备名称：大金内机-B303-1 · 操作：启用')
+    await wrapper.findAll('button').find(button => button.text() === '选择本页身份启用申请')!.trigger('click')
+    expect(wrapper.findAll('.batch-check input:checked')).toHaveLength(2)
+    await wrapper.findAll('button').find(button => button.text() === '批量审核并执行')!.trigger('click')
+    await flushPromises()
+    const dialog = document.querySelector('.el-dialog') as HTMLElement
+    expect(dialog.textContent).toContain('本次处理的身份启用申请数：2')
+    const comment = dialog.querySelector('textarea') as HTMLTextAreaElement
+    comment.value = '设备身份核对完成'
+    comment.dispatchEvent(new Event('input', { bubbles: true }))
+    await flushPromises()
+    ;([...dialog.querySelectorAll('button')].find(button => button.textContent?.includes('批量审核并执行')) as HTMLButtonElement).click()
+    await flushPromises()
+    expect(approveChangeRequest).toHaveBeenCalledTimes(1)
+    expect(approveChangeRequest).toHaveBeenCalledWith('activate-1', '设备身份核对完成')
+    expect(executeChangeRequest).toHaveBeenCalledTimes(2)
+    expect(executeChangeRequest).toHaveBeenCalledWith('activate-1')
+    expect(executeChangeRequest).toHaveBeenCalledWith('activate-2')
     wrapper.unmount()
   })
 })

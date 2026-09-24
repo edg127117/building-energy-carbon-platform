@@ -137,6 +137,7 @@ class DeviceOnboardingServiceIntegrationTest {
                 objectMapper.createObjectNode().put("identityId", identityId),
                 "approved-identity-activate");
         assertThat(activated.buildingId()).isEqualTo("BLD001");
+        assertThat(activated.impactSummary()).contains("equipmentName=", ";action=ACTIVATE");
         executeSensitive("DEACTIVATE_DEVICE_IDENTITY",
                 objectMapper.createObjectNode().put("identityId", identityId),
                 "approved-identity-deactivate");

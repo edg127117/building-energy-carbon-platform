@@ -187,8 +187,8 @@ public class DeviceOnboardingService {
         return buildingId;
     }
 
-    /** 从持久化身份解析建筑范围，禁止公共申请使用客户端自报建筑。 */
-    public String resolveIdentityBuilding(String identityId, Set<String> roles) {
+    /** 审批建筑从持久化身份读取；台账缺失时仍允许申请停用，摘要退回身份编号。 */
+    public IdentityReviewTarget resolveIdentityReviewTarget(String identityId, Set<String> roles) {
         requireAdmin(roles);
         BizDeviceIdentity identity = identityMapper.selectById(identityId);
         if (identity == null) {
@@ -197,8 +197,16 @@ public class DeviceOnboardingService {
         if (!StringUtils.hasText(identity.getBuildingId())) {
             throw error(409, VALIDATION_FAILED, "设备身份缺少可信建筑归属");
         }
-        return identity.getBuildingId();
+        BizEquipment equipment = equipmentMapper.selectById(identity.getEquipId());
+        String name = identityId;
+        if (equipment != null && identity.getBuildingId().equals(equipment.getBuildingId())) {
+            name = StringUtils.hasText(equipment.getEquipName()) ? equipment.getEquipName()
+                    : StringUtils.hasText(equipment.getEquipCode()) ? equipment.getEquipCode() : equipment.getEquipId();
+        }
+        return new IdentityReviewTarget(identity.getBuildingId(), name);
     }
+
+    public record IdentityReviewTarget(String buildingId, String equipmentName) {}
 
     @Transactional
     public DeviceOnboardingContracts.PendingDetailView updatePendingStatus(

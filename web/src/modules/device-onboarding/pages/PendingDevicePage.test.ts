@@ -1,16 +1,22 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
-import { getDeviceProduct, listDeviceProducts, listPendingDevices, listPointNamingRules } from '../api/onboarding'
+import { getDeviceProduct, getOperationsPendingConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, submitOperationsIdentityStatus } from '../api/onboarding'
 import { createChangeRequest } from '@/modules/access-control/api/access-control'
 import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
 import PendingDevicePage from './PendingDevicePage.vue'
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: { view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' } }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
+const routeState = vi.hoisted(() => ({ view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
 vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { id: 1, roles: ['PLATFORM_ADMIN'] } }) }))
 vi.mock('../api/onboarding', async original => ({
   ...(await original()),
   listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
+  listOperationsPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
+  getOperationsPendingConnection: vi.fn(),
+  submitOperationsIdentityStatus: vi.fn(),
+  listDaikinSources: vi.fn().mockResolvedValue([]),
+  listDaikinDirectorySyncJobs: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }),
   listDeviceProducts: vi.fn(),
   getDeviceProduct: vi.fn(),
   listPointNamingRules: vi.fn().mockResolvedValue([]),
@@ -20,6 +26,7 @@ vi.mock('../api/onboarding', async original => ({
 vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), listChangeRequests: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
 describe('待接入范围筛选', () => {
   beforeEach(() => {
+    routeState.view = 'general'
     vi.clearAllMocks()
     vi.mocked(listPointNamingRules).mockResolvedValue([])
   })
@@ -100,6 +107,40 @@ describe('待接入范围筛选', () => {
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看全部设备')!.trigger('click')
     await flushPromises()
     expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ profileCode: undefined }))
+    wrapper.unmount()
+  })
+
+  it('批量身份启用逐台核对状态并提交，已启用设备不重复申请', async () => {
+    routeState.view = 'daikin'
+    const rows = ['D1', 'D2', 'D3'].map((pendingId, index) => ({
+      pendingId, status: 'BOUND', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
+      maskedIdentityValue: '****', location: { roomCode: `B303-${index + 1}` },
+    }))
+    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 3, items: rows } as never)
+    vi.mocked(getOperationsPendingConnection).mockImplementation(async pendingId => ({
+      pendingId, identityId: pendingId, identityStatus: pendingId === 'D2' ? 'ACTIVE' : 'INACTIVE',
+    }) as Awaited<ReturnType<typeof getOperationsPendingConnection>>)
+    vi.mocked(submitOperationsIdentityStatus).mockImplementation(async pendingId => {
+      if (pendingId === 'D3') throw new TransportError('request', 409)
+      return { pendingId, requestId: `request-${pendingId}`, status: 'PENDING_REVIEW', errorCode: null }
+    })
+    const wrapper = mount(PendingDevicePage, { attachTo: document.body })
+    await flushPromises()
+    const table = wrapper.findAllComponents({ name: 'ElTable' }).find(item => item.props('data')?.length === 3)!
+    table.vm.$emit('selection-change', rows)
+    await wrapper.vm.$nextTick()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '批量提交身份启用申请')!.trigger('click')
+    await flushPromises()
+    const dialog = document.querySelector('.el-dialog') as HTMLElement
+    expect(dialog.textContent).toContain('本次申请启用的已绑定设备数：3')
+    ;([...dialog.querySelectorAll('button')].find(button => button.textContent?.includes('批量提交身份启用申请')) as HTMLButtonElement).click()
+    await flushPromises()
+    expect(getOperationsPendingConnection).toHaveBeenCalledTimes(3)
+    expect(submitOperationsIdentityStatus).toHaveBeenCalledTimes(2)
+    expect(submitOperationsIdentityStatus).not.toHaveBeenCalledWith('D2', 'ACTIVE', expect.any(String))
+    expect(wrapper.text()).toContain('身份已启用，未重复申请')
+    expect(wrapper.text()).toContain('已提交启用申请，等待审核和执行')
+    expect(wrapper.text()).toContain('当前状态已变化，请刷新后重试。')
     wrapper.unmount()
   })
 })
