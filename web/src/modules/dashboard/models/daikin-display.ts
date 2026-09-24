@@ -15,6 +15,10 @@ export function daikinFieldLabel(value: string): string {
 
 export function daikinCurrentValue(fieldName: string, value: string | null): string {
   if (value == null || value === '') return '—'
+  if (fieldName === 'controller.status') {
+    const known: Record<string, string> = words.controllerStatusNames
+    return known[value] ?? words.controllerStatusUnknown(value)
+  }
   if (['modelName', 'formalName', 'errorCode'].includes(fieldName)) return value
   if (['roomTemp', 'temperature', 'coolLimitsettempU', 'coolLimitsettempL', 'heatLimitsettempU', 'heatLimitsettempL'].includes(fieldName)) return value
   const protocolValues = words.fieldValueNames as Record<string, Record<string, string>>

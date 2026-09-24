@@ -19,7 +19,7 @@ describe('manufacturer display boundaries', () => {
     expect(daikinLabel('UNCONFIRMED')).toBe('原始值待核验')
     expect(daikinLabel('airFlowSeven')).toBe('风向 7')
     expect(daikinLabel('operating')).toBe('正常')
-    expect(daikinFieldLabel('mc11')).toBe('未确认字段（原始字段名：mc11）')
+    expect(daikinFieldLabel('compressorOnOff')).toBe('压缩机启停')
     expect(daikinFieldLabel('onOff')).toBe('启停')
   })
   it('keeps verified fields visible and puts unknown codes in expandable details', () => {
@@ -34,6 +34,9 @@ describe('manufacturer display boundaries', () => {
     expect(daikinCurrentValue('errorCode', '')).toBe('—')
     expect(daikinCurrentValue('roomTemp', '25.2')).toBe('25.2')
     expect(daikinCurrentValue('errorType', '0')).toBe('正常')
+    expect(daikinCurrentValue('controller.status', 'decommissioned')).toBe('已退役')
+    expect(daikinCurrentValue('controller.status', 'vendor-new-status')).toBe('厂家状态（原值：vendor-new-status）')
+    expect(daikinCurrentValue('compressorOnOff', 'on')).toBe('开')
     expect(daikinCurrentValue('rcProhibitOnOff', 'stopOnly')).toBe('仅允许停止')
     expect(daikinCurrentValue('limitSettempCool', 'off')).toBe('无效')
     expect(daikinCurrentValue('coolLimitsettempU', '32')).toBe('32')

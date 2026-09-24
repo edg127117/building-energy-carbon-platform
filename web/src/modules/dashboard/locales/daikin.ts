@@ -34,6 +34,8 @@ export default {
   extendedFields: '其他协议字段及待核验值', showExtendedFields: '展开其他字段', hideExtendedFields: '收起其他字段',
   extendedNotice: '此处包含协议已定义但本次未返回或尚未解码的字段，也可能包含厂家新增值；数量不代表未知字段数。',
   unconfirmedValuePrefix: '未确认值',
+  controllerStatusNames: { decommissioned: '已退役' },
+  controllerStatusUnknown: (value: string) => `厂家状态（原值：${value}）`,
   fieldValueNames: {
     errorType: { '0': '正常', '1': 'D3 异常', '2': '设备／机器异常' },
     rcProhibitOnOff: { off: '禁止', stopOnly: '仅允许停止', on: '允许' },

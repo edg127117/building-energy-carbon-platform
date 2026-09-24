@@ -43,14 +43,9 @@ public final class DaikinDevicePageDecoder {
     private static final List<String> UNCONFIRMED_FIELDS = List.of("arth1", "fanSpeedSetList",
             "modeSetList", "onOffModeSetList", "DefaultSetpointRange", "masterSlaveIds");
 
-    /** 来源适配器按该项目证据显式传入单位和压缩机字段策略；本解码器默认仍保留未确认状态。 */
-    public record FieldPolicy(boolean temperatureCelsiusConfirmed, String compressorField) {
-        public FieldPolicy {
-            if (compressorField != null && !Set.of("mc11", "Mc11").contains(compressorField)) {
-                throw new IllegalArgumentException("压缩机字段映射无效");
-            }
-        }
-        public static FieldPolicy unconfirmed() { return new FieldPolicy(false, null); }
+    /** 温度单位仍由来源配置控制；压缩机字段名由协议的接口差异决定。 */
+    public record FieldPolicy(boolean temperatureCelsiusConfirmed) {
+        public static FieldPolicy unconfirmed() { return new FieldPolicy(false); }
     }
 
     public record Page(int currentPage, int totalPages, int totalCount, List<DaikinDeviceObservation> devices) {
@@ -107,23 +102,12 @@ public final class DaikinDevicePageDecoder {
         Map<String, DaikinFieldValue> fields = new LinkedHashMap<>();
         fields.put("controller.isConnectionUp", booleanField(controller.get("isConnectionUp")));
         fields.put("controller.inForcedStop", booleanField(controller.get("inForcedStop")));
-        fields.put("controller.status", candidate(controller.get("status")));
+        fields.put("controller.status", textField(controller.get("status")));
         fields.put("controller.decommissioned", candidate(controller.get("decommissioned")));
         fields.put("formalName", textField(unit.get("formalName")));
         fields.put("modelName", textField(unit.get("modelName")));
         if (kind == DaikinDeviceKey.Kind.OUTDOOR) {
-            String mapped = fieldPolicy.compressorField();
-            // 大小写冲突不能择一掩盖，未确认前保留两个候选字段而不推断压缩机状态。
-            if (mapped == null) {
-                fields.put("mc11", candidate(unit.get("mc11")));
-                fields.put("Mc11", candidate(unit.get("Mc11")));
-            } else {
-                JsonNode selected = unit.get(mapped);
-                JsonNode alternate = unit.get(mapped.equals("mc11") ? "Mc11" : "mc11");
-                fields.put("compressorOnOff", alternate != null && !alternate.equals(selected)
-                        ? new DaikinFieldValue(INVALID, null, null)
-                        : enumField(selected, Set.of("on", "off")));
-            }
+            fields.put("compressorOnOff", compressorOnOff(unit.get("mc11"), unit.get("Mc11")));
             return fields;
         }
         ENUMS.forEach((name, allowed) -> fields.put(name, enumField(unit.get(name), allowed)));
@@ -167,6 +151,30 @@ public final class DaikinDevicePageDecoder {
         return allowed.stream().filter(candidate -> candidate.equalsIgnoreCase(value.textValue()))
                 .findFirst().map(candidate -> present(value, candidate))
                 .orElseGet(() -> new DaikinFieldValue(UNKNOWN, raw(value), null));
+    }
+
+    private static DaikinFieldValue compressorOnOff(JsonNode listValue, JsonNode detailValue) {
+        if (missing(listValue) && missing(detailValue)) return absent();
+        JsonNode selected = missing(listValue) ? detailValue : listValue;
+        DaikinFieldValue decoded = compressorValue(selected);
+        if (!missing(listValue) && !missing(detailValue)) {
+            DaikinFieldValue other = compressorValue(detailValue);
+            if (decoded.status() != PRESENT || other.status() != PRESENT
+                    || !decoded.normalizedValue().equals(other.normalizedValue())) {
+                return new DaikinFieldValue(INVALID, null, null);
+            }
+        }
+        return decoded;
+    }
+
+    private static DaikinFieldValue compressorValue(JsonNode value) {
+        // 协议表写 Integer，示例使用 on/off；0/1 是通用二值约定，原始报文始终保留。
+        if (value.isIntegralNumber() && value.canConvertToInt()) {
+            if (value.intValue() == 0) return present(value, "off");
+            if (value.intValue() == 1) return present(value, "on");
+        }
+        if (value.isTextual()) return enumField(value, Set.of("on", "off"));
+        return new DaikinFieldValue(value.isNumber() ? UNKNOWN : INVALID, raw(value), null);
     }
 
     private static DaikinFieldValue booleanField(JsonNode value) {
