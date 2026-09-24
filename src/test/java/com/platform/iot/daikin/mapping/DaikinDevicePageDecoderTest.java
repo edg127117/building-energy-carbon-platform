@@ -81,7 +81,7 @@ class DaikinDevicePageDecoderTest {
     void temperatureRequiresExplicitUnitConfirmationAndDoesNotUseRemoteTemperatureAsRoomTemperature() throws Exception {
         ObjectNode page = page();
         unit(page).put("roomTemp", 0).put("arth1", "27.0");
-        var confirmed = new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(true, null));
+        var confirmed = new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(true));
         var fields = confirmed.decode("source-a", DaikinDeviceKey.Kind.INDOOR, page, received)
                 .devices().getFirst().fields();
         assertThat(fields.get("roomTemp").normalizedValue()).isEqualTo("0");
@@ -90,23 +90,73 @@ class DaikinDevicePageDecoderTest {
     }
 
     @Test
-    void compressorMappingDoesNotGuessCaseOrCoerceNumericSampleAndDetectsConflicts() throws Exception {
+    void decodesProtocolDefinedPermissionsAndSetpointLimitsWithoutPromotingAmbiguousFields() throws Exception {
+        ObjectNode page = page();
+        unit(page).put("rcProhibitOnOff", "stopOnly").put("rcProhibitOpMode", "off")
+                .put("limitSettempCool", "on").put("coolLimitsettempU", 32)
+                .put("heatLimitsettempL", 16).put("unitStatus", "unknown")
+                .put("arth1", "27.0").putArray("fanSpeedSetList").add("low");
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("rcProhibitOnOff").normalizedValue()).isEqualTo("stopOnly");
+        assertThat(fields.get("rcProhibitOpMode").normalizedValue()).isEqualTo("off");
+        assertThat(fields.get("limitSettempCool").normalizedValue()).isEqualTo("on");
+        assertThat(fields.get("coolLimitsettempU").normalizedValue()).isEqualTo("32");
+        assertThat(fields.get("heatLimitsettempL").normalizedValue()).isEqualTo("16");
+        assertThat(fields.get("unitStatus").normalizedValue()).isEqualTo("unknown");
+        assertThat(fields.get("arth1").status()).isEqualTo(UNCONFIRMED);
+        assertThat(fields.get("fanSpeedSetList").status()).isEqualTo(UNCONFIRMED);
+        unit(page).put("rcProhibitOnOff", "futurePermission").put("coolLimitsettempU", 33)
+                .put("heatLimitsettempL", 16.5);
+        fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("rcProhibitOnOff").status()).isEqualTo(UNKNOWN);
+        assertThat(fields.get("coolLimitsettempU").status()).isEqualTo(INVALID);
+        assertThat(fields.get("heatLimitsettempL").status()).isEqualTo(INVALID);
+    }
+
+    @Test
+    void normalizesBothProtocolCompressorKeysAndBinaryValuesWithoutConcealingConflicts() throws Exception {
         ObjectNode page = page();
         unit(page).put("mc11", "off");
-        var value = decode(page, DaikinDeviceKey.Kind.OUTDOOR);
-        assertThat(value.fields()).doesNotContainKey("roomTemp");
-        assertThat(value.fields().get("mc11").status()).isEqualTo(UNCONFIRMED);
-        var confirmed = new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(false, "mc11"));
-        var fields = confirmed.decode("source-a", DaikinDeviceKey.Kind.OUTDOOR, page, received)
-                .devices().getFirst().fields();
+        var fields = decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields();
+        assertThat(fields).doesNotContainKey("roomTemp");
         assertThat(fields.get("compressorOnOff").normalizedValue()).isEqualTo("off");
-        unit(page).put("Mc11", "on");
-        assertThat(confirmed.decode("source-a", DaikinDeviceKey.Kind.OUTDOOR, page, received)
-                .devices().getFirst().fields().get("compressorOnOff").status()).isEqualTo(INVALID);
-        unit(page).remove("Mc11");
+        assertThat(fields.get("compressorOnOff").rawJson()).isEqualTo("\"off\"");
+        unit(page).remove("mc11");
+        unit(page).put("Mc11", 1);
+        fields = decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields();
+        assertThat(fields.get("compressorOnOff").normalizedValue()).isEqualTo("on");
+        assertThat(fields.get("compressorOnOff").rawJson()).isEqualTo("1");
+        unit(page).put("mc11", "on");
+        assertThat(decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields().get("compressorOnOff")
+                .status()).isEqualTo(PRESENT);
         unit(page).put("mc11", 0);
-        assertThat(confirmed.decode("source-a", DaikinDeviceKey.Kind.OUTDOOR, page, received)
-                .devices().getFirst().fields().get("compressorOnOff").status()).isEqualTo(INVALID);
+        assertThat(decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields().get("compressorOnOff")
+                .status()).isEqualTo(INVALID);
+        unit(page).remove("Mc11");
+        assertThat(decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields().get("compressorOnOff")
+                .normalizedValue()).isEqualTo("off");
+        unit(page).put("mc11", 2);
+        assertThat(decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields().get("compressorOnOff")
+                .status()).isEqualTo(UNKNOWN);
+        unit(page).put("mc11", true);
+        assertThat(decode(page, DaikinDeviceKey.Kind.OUTDOOR).fields().get("compressorOnOff")
+                .status()).isEqualTo(INVALID);
+    }
+
+    @Test
+    void keepsUnknownControllerStatusAsRawTextWithoutMakingADeviceFault() throws Exception {
+        ObjectNode page = page();
+        ((ObjectNode) page.at("/data/sites/0/controlers/0")).put("status", "decommissioned");
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("controller.status").normalizedValue()).isEqualTo("decommissioned");
+        ((ObjectNode) page.at("/data/sites/0/controlers/0")).put("status", "vendor-new-status");
+        fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("controller.status").status()).isEqualTo(PRESENT);
+        assertThat(fields.get("controller.status").normalizedValue()).isEqualTo("vendor-new-status");
+        assertThat(fields.get("controller.status").rawJson()).isEqualTo("\"vendor-new-status\"");
+        ((ObjectNode) page.at("/data/sites/0/controlers/0")).put("status", 2);
+        assertThat(decode(page, DaikinDeviceKey.Kind.INDOOR).fields().get("controller.status")
+                .status()).isEqualTo(INVALID);
     }
 
     @Test
@@ -160,7 +210,7 @@ class DaikinDevicePageDecoderTest {
     void exponentCannotExpandIntoUnboundedTemperatureText() throws Exception {
         ObjectNode page = page();
         unit(page).put("roomTemp", new java.math.BigDecimal("1e-1000000"));
-        var confirmed = new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(true, null));
+        var confirmed = new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(true));
         assertThat(confirmed.decode("source-a", DaikinDeviceKey.Kind.INDOOR, page, received)
                 .devices().getFirst().fields().get("roomTemp").status()).isEqualTo(INVALID);
     }

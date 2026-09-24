@@ -16,8 +16,10 @@ describe('manufacturer display boundaries', () => {
     expect(daikinLabel('on')).toBe('开')
     expect(daikinLabel('vendor-future-mode')).toBe('未确认值（原始值：vendor-future-mode）')
     expect(daikinLabel('constructor')).toBe('未确认值（原始值：constructor）')
-    expect(daikinLabel('UNCONFIRMED')).toBe('待确认')
-    expect(daikinFieldLabel('mc11')).toBe('未确认字段（原始字段名：mc11）')
+    expect(daikinLabel('UNCONFIRMED')).toBe('原始值待核验')
+    expect(daikinLabel('airFlowSeven')).toBe('风向 7')
+    expect(daikinLabel('operating')).toBe('正常')
+    expect(daikinFieldLabel('compressorOnOff')).toBe('压缩机启停')
     expect(daikinFieldLabel('onOff')).toBe('启停')
   })
   it('keeps verified fields visible and puts unknown codes in expandable details', () => {
@@ -27,9 +29,17 @@ describe('manufacturer display boundaries', () => {
       mappingVersion: 1, lastAttemptMappingVersion: 1,
     })
     const rows = [field('onOff', 'on'), field('airflowDirection', 'airFlowSeven'), field('arth1', '22'), field('modelName', 'FSFP80AB')]
-    expect(daikinCurrentFields(rows)).toEqual({ primary: [rows[0], rows[3]], extended: [rows[1], rows[2]] })
+    expect(daikinCurrentFields(rows)).toEqual({ primary: [rows[0], rows[1], rows[3]], extended: [rows[2]] })
     expect(daikinCurrentValue('modelName', 'FSFP80AB')).toBe('FSFP80AB')
     expect(daikinCurrentValue('errorCode', '')).toBe('—')
+    expect(daikinCurrentValue('roomTemp', '25.2')).toBe('25.2')
+    expect(daikinCurrentValue('errorType', '0')).toBe('正常')
+    expect(daikinCurrentValue('controller.status', 'decommissioned')).toBe('已退役')
+    expect(daikinCurrentValue('controller.status', 'vendor-new-status')).toBe('厂家状态（原值：vendor-new-status）')
+    expect(daikinCurrentValue('compressorOnOff', 'on')).toBe('开')
+    expect(daikinCurrentValue('rcProhibitOnOff', 'stopOnly')).toBe('仅允许停止')
+    expect(daikinCurrentValue('limitSettempCool', 'off')).toBe('无效')
+    expect(daikinCurrentValue('coolLimitsettempU', '32')).toBe('32')
   })
   it('translates every runtime synchronization state for customer display', () => {
     expect(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED', 'UNSUPPORTED', 'EXPIRED'].map(daikinLabel))

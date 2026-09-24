@@ -101,7 +101,7 @@ public class DaikinTargetHarnessConfiguration {
                 64 * 1024, 2, 100);
         var client = new DaikinReadonlyClient(clientConfiguration, codec, transport, mapper, clock);
         var reader = new DaikinCatalogReader(new DaikinDevicePageDecoder(
-                new DaikinDevicePageDecoder.FieldPolicy(true, null)), clock, 2, 10);
+                new DaikinDevicePageDecoder.FieldPolicy(true)), clock, 2, 10);
         DaikinCatalogClient catalog = new DaikinCatalogClient(client, reader);
         return sourceId -> DaikinTargetFixture.SOURCE_ID.equals(sourceId)
                 ? Optional.of(catalog) : Optional.empty();

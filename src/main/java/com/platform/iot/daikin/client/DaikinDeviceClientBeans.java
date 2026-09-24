@@ -40,6 +40,6 @@ public class DaikinDeviceClientBeans {
 
     static DaikinDevicePageDecoder deviceDecoder(DaikinDeviceClientProperties properties) {
         return new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(
-                properties.isTemperatureCelsiusConfirmed(), null));
+                properties.isTemperatureCelsiusConfirmed()));
     }
 }
