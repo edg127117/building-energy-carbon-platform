@@ -38,10 +38,6 @@ spring:
     baseline-on-migrate: ${MYSQL_FLYWAY_BASELINE_ON_MIGRATE:false}
     baseline-version: ${MYSQL_FLYWAY_BASELINE_VERSION:3}
 
-# Spring 业务定时任务必须使用显式调度器，不能误用 MQTT 或 WebSocket 专用线程。
-scheduling:
-  business-pool-size: ${BUSINESS_SCHEDULER_POOL_SIZE:4}
-
   # Redis 缓存层配置（冻结书 D-010：仅用于缓存，不参与数据写入热路径）
   data:
     redis:
@@ -56,6 +52,10 @@ scheduling:
           max-idle: 8          # 最大空闲连接
           min-idle: 2          # 最小空闲连接
           max-wait: 2000ms     # 获取连接最大等待时间
+
+# Spring 业务定时任务必须使用显式调度器，不能误用 MQTT 或 WebSocket 专用线程。
+scheduling:
+  business-pool-size: ${BUSINESS_SCHEDULER_POOL_SIZE:4}
 
 mybatis-plus:
   mapper-locations: classpath*:/mapper/**/*.xml
