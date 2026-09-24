@@ -90,6 +90,30 @@ class DaikinDevicePageDecoderTest {
     }
 
     @Test
+    void decodesProtocolDefinedPermissionsAndSetpointLimitsWithoutPromotingAmbiguousFields() throws Exception {
+        ObjectNode page = page();
+        unit(page).put("rcProhibitOnOff", "stopOnly").put("rcProhibitOpMode", "off")
+                .put("limitSettempCool", "on").put("coolLimitsettempU", 32)
+                .put("heatLimitsettempL", 16).put("unitStatus", "unknown")
+                .put("arth1", "27.0").putArray("fanSpeedSetList").add("low");
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("rcProhibitOnOff").normalizedValue()).isEqualTo("stopOnly");
+        assertThat(fields.get("rcProhibitOpMode").normalizedValue()).isEqualTo("off");
+        assertThat(fields.get("limitSettempCool").normalizedValue()).isEqualTo("on");
+        assertThat(fields.get("coolLimitsettempU").normalizedValue()).isEqualTo("32");
+        assertThat(fields.get("heatLimitsettempL").normalizedValue()).isEqualTo("16");
+        assertThat(fields.get("unitStatus").normalizedValue()).isEqualTo("unknown");
+        assertThat(fields.get("arth1").status()).isEqualTo(UNCONFIRMED);
+        assertThat(fields.get("fanSpeedSetList").status()).isEqualTo(UNCONFIRMED);
+        unit(page).put("rcProhibitOnOff", "futurePermission").put("coolLimitsettempU", 33)
+                .put("heatLimitsettempL", 16.5);
+        fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("rcProhibitOnOff").status()).isEqualTo(UNKNOWN);
+        assertThat(fields.get("coolLimitsettempU").status()).isEqualTo(INVALID);
+        assertThat(fields.get("heatLimitsettempL").status()).isEqualTo(INVALID);
+    }
+
+    @Test
     void compressorMappingDoesNotGuessCaseOrCoerceNumericSampleAndDetectsConflicts() throws Exception {
         ObjectNode page = page();
         unit(page).put("mc11", "off");

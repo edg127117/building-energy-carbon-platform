@@ -76,6 +76,7 @@ onMounted(loadCurrent)
         </ElTable>
         <template v-if="displayFields.extended.length">
           <ElButton @click="showExtended = !showExtended">{{ text(showExtended ? 'hideExtendedFields' : 'showExtendedFields') }} {{ displayFields.extended.length }}</ElButton>
+          <p v-if="showExtended">{{ text('extendedNotice') }}</p>
           <ElTable v-if="showExtended" :data="displayFields.extended" :aria-label="text('extendedFields')">
             <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
             <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }}</template></ElTableColumn>
@@ -90,8 +91,8 @@ onMounted(loadCurrent)
         <ElAlert v-if="events.error.value" :title="events.error.value" type="error" :closable="false" />
         <ElTable :data="events.data.value?.items ?? []">
           <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('before')"><template #default="{ row }">{{ daikinLabel(row.beforeNormalizedValue) }}{{ ' · ' }}{{ date(row.previousObservedAt) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('after')"><template #default="{ row }">{{ daikinLabel(row.afterNormalizedValue) }}{{ ' · ' }}{{ date(row.observedAt) }} <ElTag v-if="row.afterGap" type="warning">{{ text('gap') }}</ElTag></template></ElTableColumn>
+          <ElTableColumn :label="text('before')"><template #default="{ row }">{{ daikinCurrentValue(row.fieldName, row.beforeNormalizedValue) }}{{ ' · ' }}{{ date(row.previousObservedAt) }}</template></ElTableColumn>
+          <ElTableColumn :label="text('after')"><template #default="{ row }">{{ daikinCurrentValue(row.fieldName, row.afterNormalizedValue) }}{{ ' · ' }}{{ date(row.observedAt) }} <ElTag v-if="row.afterGap" type="warning">{{ text('gap') }}</ElTag></template></ElTableColumn>
         </ElTable>
         <ElButton :loading="events.loading.value" @click="loadEvents()">{{ text('first') }}</ElButton>
         <ElButton :disabled="!events.data.value?.nextCursor" @click="loadEvents(events.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>

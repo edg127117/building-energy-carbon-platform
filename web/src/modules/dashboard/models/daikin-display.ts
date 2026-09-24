@@ -15,19 +15,23 @@ export function daikinFieldLabel(value: string): string {
 
 export function daikinCurrentValue(fieldName: string, value: string | null): string {
   if (value == null || value === '') return '—'
-  if (fieldName === 'modelName' || fieldName === 'formalName' || fieldName === 'errorCode') return value
+  if (['modelName', 'formalName', 'errorCode'].includes(fieldName)) return value
+  if (['roomTemp', 'temperature', 'coolLimitsettempU', 'coolLimitsettempL', 'heatLimitsettempU', 'heatLimitsettempL'].includes(fieldName)) return value
+  const protocolValues = words.fieldValueNames as Record<string, Record<string, string>>
+  if (Object.prototype.hasOwnProperty.call(protocolValues, fieldName)) return protocolValues[fieldName]?.[value] ?? daikinLabel(value)
   return daikinLabel(value)
 }
 
-/** 未确认的厂家扩展字段仍可展开核对，但不挤占已确认状态的默认视图。 */
+/** 扩展区包含协议已定义但未成功解码的字段，以及厂家新增值；数量不是未知字段数。 */
 export function daikinCurrentFields(fields: CurrentField[]): { primary: CurrentField[]; extended: CurrentField[] } {
   const primary: CurrentField[] = []
   const extended: CurrentField[] = []
+  const coreFields = new Set(['onOff', 'mode', 'fanSpeed', 'airflowDirection', 'unitStatus', 'errorCode', 'errorType', 'roomTemp', 'temperature', 'inCommunicationError', 'inEquipmentError', 'inMantenanceMode', 'isFilterDirty', 'controller.isConnectionUp', 'controller.inForcedStop', 'compressorOnOff', 'formalName', 'modelName'])
   for (const field of fields) {
-    const knownField = Object.prototype.hasOwnProperty.call(words.fieldNames, field.fieldName)
+    const knownField = coreFields.has(field.fieldName)
     const knownValue = !field.valueVisible || field.normalizedValue == null || field.normalizedValue === ''
       || ['modelName', 'formalName', 'errorCode'].includes(field.fieldName)
-      || Object.prototype.hasOwnProperty.call(words.statusNames, field.normalizedValue)
+      || !daikinCurrentValue(field.fieldName, field.normalizedValue).startsWith(words.unconfirmedValuePrefix)
     ;(knownField && knownValue ? primary : extended).push(field)
   }
   return { primary, extended }
