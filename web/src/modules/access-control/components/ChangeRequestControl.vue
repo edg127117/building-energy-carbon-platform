@@ -101,26 +101,41 @@ function changePageSize(size: number) {
   void loadList(1)
 }
 
+type BatchGroup = 'BIND' | 'ACTIVATE'
+function batchGroup(item: SensitiveChangeListItem): BatchGroup | null {
+  if (['BIND_PENDING_DEVICE', 'BIND_TYPED_PENDING_DEVICE'].includes(item.operationCode)) return 'BIND'
+  if (item.operationCode === 'ACTIVATE_DEVICE_IDENTITY') return 'ACTIVATE'
+  return null
+}
+
 function batchEligible(item: SensitiveChangeListItem): boolean {
   return listScope.value === 'REVIEW'
-    && ['BIND_PENDING_DEVICE', 'BIND_TYPED_PENDING_DEVICE'].includes(item.operationCode)
+    && batchGroup(item) !== null
     && ['PENDING_REVIEW', 'APPROVED'].includes(item.status)
     && (item.submittedBy !== session.user?.id || selfApprovalAllowed.value)
 }
 
 function toggleBatch(requestId: string, checked: boolean) {
-  batchSelected.value = checked
-    ? [...new Set([...batchSelected.value, requestId])]
-    : batchSelected.value.filter(id => id !== requestId)
+  if (!checked) {
+    batchSelected.value = batchSelected.value.filter(id => id !== requestId)
+    return
+  }
+  const item = list.value.items.find(row => row.requestId === requestId)
+  if (!item || !batchEligible(item)) return
+  const group = batchGroup(item)
+  batchSelected.value = [...new Set([...batchSelected.value.filter(id => {
+    const existing = list.value.items.find(row => row.requestId === id)
+    return existing && batchGroup(existing) === group
+  }), requestId])]
 }
 
 const selectedBatchItems = computed(() => list.value.items.filter(item =>
   batchSelected.value.includes(item.requestId) && batchEligible(item)))
 const eligibleBatchItems = computed(() => list.value.items.filter(batchEligible))
-const allEligibleSelected = computed(() => eligibleBatchItems.value.length > 0
-  && eligibleBatchItems.value.every(item => batchSelected.value.includes(item.requestId)))
-function toggleAllBatch() {
-  batchSelected.value = allEligibleSelected.value ? [] : eligibleBatchItems.value.map(item => item.requestId)
+const selectedBatchGroup = computed(() => selectedBatchItems.value.length ? batchGroup(selectedBatchItems.value[0]!) : null)
+function selectBatchGroup(group: BatchGroup) {
+  const ids = eligibleBatchItems.value.filter(item => batchGroup(item) === group).map(item => item.requestId)
+  batchSelected.value = ids.every(id => batchSelected.value.includes(id)) ? [] : ids
 }
 
 /** 沿用逐条审核和执行接口及其职责校验；失败只影响该申请，逐项展示结果。 */
@@ -221,9 +236,9 @@ function operationLabel(operation?: string) {
 function impactLabel(summary?: string | null) {
   if (!summary) return ''
   if (!summary.includes('=')) return summary
-  const fields = new Set(['buildingId', 'bindingType', 'pointCount', 'pointMode', 'productId', 'action',
+  const fields = new Set(['buildingId', 'bindingType', 'pointCount', 'pointMode', 'productId', 'equipmentName', 'action',
     'userId', 'roleId', 'roleCount', 'buildingCount', 'menuCount', 'menuId', 'menuName', 'menuType', 'status'])
-  const values = new Set(['TYPED_STATE', 'AUTO', 'MANUAL', 'ENABLE', 'DISABLE', 'ACTIVE', 'INACTIVE', 'M', 'C', 'F'])
+  const values = new Set(['TYPED_STATE', 'AUTO', 'MANUAL', 'ENABLE', 'DISABLE', 'ACTIVATE', 'DEACTIVATE', 'ACTIVE', 'INACTIVE', 'M', 'C', 'F'])
   const parts = summary.split(';').map(part => {
     const separator = part.indexOf('=')
     if (separator < 1) return null
@@ -309,7 +324,9 @@ function review(action: 'approve' | 'reject') {
         <ElButton :type="mineView === 'HISTORY' ? 'primary' : 'default'" :aria-pressed="mineView === 'HISTORY'" @click="changeMineView('HISTORY')">{{ t('accessControl.change.historyRequests') }}</ElButton>
       </div>
       <div v-if="listScope === 'REVIEW' && eligibleBatchItems.length && !listLoading" class="batch-toolbar">
-        <ElButton @click="toggleAllBatch">{{ t(allEligibleSelected ? 'accessControl.change.clearPageSelection' : 'accessControl.change.selectPage') }}</ElButton>
+        <ElButton v-if="eligibleBatchItems.some(item => batchGroup(item) === 'BIND')" @click="selectBatchGroup('BIND')">{{ t('accessControl.change.selectPageBindings') }}</ElButton>
+        <ElButton v-if="eligibleBatchItems.some(item => batchGroup(item) === 'ACTIVATE')" @click="selectBatchGroup('ACTIVATE')">{{ t('accessControl.change.selectPageActivations') }}</ElButton>
+        <ElButton v-if="selectedBatchItems.length" @click="batchSelected = []">{{ t('accessControl.change.clearPageSelection') }}</ElButton>
         <span v-if="selectedBatchItems.length">{{ t('accessControl.change.batchSelected') }}{{ selectedBatchItems.length }}</span>
         <ElButton v-if="selectedBatchItems.length" type="primary" @click="batchOpen = true">{{ t('accessControl.change.batchApproveExecute') }}</ElButton>
       </div>
@@ -339,7 +356,7 @@ function review(action: 'approve' | 'reject') {
     </details>
 
     <ElDialog v-if="inbox" v-model="batchOpen" :title="t('accessControl.change.batchApproveExecute')" :close-on-click-modal="!batchBusy" :close-on-press-escape="!batchBusy" :show-close="!batchBusy" width="min(36rem, 92vw)">
-      <p>{{ t('accessControl.change.batchConfirm') }}{{ selectedBatchItems.length }}</p>
+      <p>{{ t(selectedBatchGroup === 'ACTIVATE' ? 'accessControl.change.batchActivationConfirm' : 'accessControl.change.batchConfirm') }}{{ selectedBatchItems.length }}</p>
       <ul class="batch-preview"><li v-for="item in selectedBatchItems" :key="item.requestId">{{ operationLabel(item.operationCode) }}{{ t('accessControl.change.listSeparator') }}{{ impactLabel(item.impactSummary) || item.requestId }}</li></ul>
       <ElInput v-model="batchComment" type="textarea" :rows="3" :maxlength="500" show-word-limit :placeholder="t('accessControl.change.batchCommentPlaceholder')" :aria-label="t('accessControl.change.reviewComment')" />
       <ElAlert v-if="batchError" :title="batchError" type="error" show-icon :closable="false" />

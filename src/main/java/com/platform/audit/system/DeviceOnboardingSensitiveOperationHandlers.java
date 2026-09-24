@@ -146,11 +146,12 @@ class ActivateDeviceIdentityHandler implements SensitiveOperationHandler {
         IdentityCommand value = support.read(command, IdentityCommand.class, message);
         String identityId = SystemSensitiveCommandSupport.requireText(value.identityId(), 64, message);
         IdentityCommand normalized = new IdentityCommand(identityId);
-        String buildingId = service.resolveIdentityBuilding(
+        var target = service.resolveIdentityReviewTarget(
                 identityId, DeviceOnboardingSensitiveOperationHandlers.PLATFORM_ADMIN);
-        return new NormalizedSensitiveCommand(buildingId, "DEVICE_IDENTITY", identityId,
+        String equipmentName = target.equipmentName().replaceAll("[;=\\r\\n]+", " ").trim();
+        return new NormalizedSensitiveCommand(target.buildingId(), "DEVICE_IDENTITY", identityId,
                 support.canonical(normalized, message),
-                "buildingId=" + buildingId + ";action=" + action);
+                "buildingId=" + target.buildingId() + ";equipmentName=" + equipmentName + ";action=" + action);
     }
 }
 

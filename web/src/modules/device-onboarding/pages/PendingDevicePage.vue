@@ -36,6 +36,7 @@ import { ChangeRequestControl, newIdempotencyKey, useSensitiveChange } from '@/m
 import { useEquipmentReadings } from '@/modules/asset-management/public'
 import { useSession } from '@/modules/auth/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
+import { getOperationsPendingConnection } from '../api/onboarding'
 import { IndoorBatchBindingError, prepareIndoorBatchBindings } from '../models/indoor-batch-binding'
 import PendingStatusTag from '../components/PendingStatusTag.vue'
 import { useDeviceOnboarding } from '../composables/use-device-onboarding'
@@ -50,6 +51,7 @@ function clearProtocolScope() { protocolScope.value = ''; management.pendingQuer
 const administrator = computed(() => session.user?.roles.includes('PLATFORM_ADMIN') === true)
 const operationsMode = ref(!administrator.value || route.query.view !== 'general')
 const activeDeviceView = computed(() => operationsMode.value ? 'daikin' : 'general')
+const activationBusy = ref(false)
 const generalManagement = useDeviceOnboarding()
 const operationsManagement = useDeviceOnboarding({ operations: true })
 // 管理员切换视图时保留两套独立请求状态，避免厂家范围结果和旧全量结果相互覆盖。
@@ -60,7 +62,7 @@ const management = new Proxy(generalManagement, {
 })
 const viewSwitchDisabled = computed(() => [generalManagement, operationsManagement].some(state =>
   state.pendingLoading.value || state.pendingDetailLoading.value || state.productsLoading.value
-  || state.productDetailLoading.value || state.running.value.size > 0))
+  || state.productDetailLoading.value || state.running.value.size > 0) || activationBusy.value)
 const sensitiveChange = useSensitiveChange()
 const equipmentReadings = useEquipmentReadings()
 const detailOpen = ref(false)
@@ -74,6 +76,10 @@ const batchRows = computed(() => batchPendingIds.value.length > 1
 const bindingKeys = new Map<string, string>()
 const identityKeys = new Map<string, string>()
 const batchResultsOpen = ref(false)
+const activationOpen = ref(false)
+const activationRows = ref<PendingDevice[]>([])
+const activationResultsOpen = ref(false)
+const activationResults = ref<Array<{ pendingId: string; label: string; result: string; success: boolean }>>([])
 const syncSourceId = ref('')
 const syncHistoryOpen = ref(false)
 const selectedPending = computed(() => management.selectedPending.value)
@@ -303,6 +309,59 @@ function ensureBindingKeys(ids: string[]) {
   for (const id of ids) if (!bindingKeys.has(id)) bindingKeys.set(id, newIdempotencyKey())
 }
 
+function activationLabel(row: PendingDevice) {
+  return row.location?.roomCode || row.location?.assetReferenceCode || `${profileText(row.profileCode)}（${row.pendingId}）`
+}
+
+function openBatchActivation() {
+  if (selectedRows.value.length < 2 || selectedRows.value.some(row => row.status !== 'BOUND')) {
+    ElMessage.warning(t('deviceOnboarding.messages.batchActivationBoundOnly'))
+    return
+  }
+  activationResults.value = []
+  activationRows.value = [...selectedRows.value]
+  activationOpen.value = true
+}
+
+async function submitBatchActivation() {
+  if (activationBusy.value || !activationOpen.value) return
+  const rows = [...activationRows.value]
+  if (rows.length < 2 || rows.some(row => row.status !== 'BOUND')) return
+  activationBusy.value = true
+  const results: typeof activationResults.value = []
+  for (const row of rows) {
+    const label = activationLabel(row)
+    try {
+      const connection = await getOperationsPendingConnection(row.pendingId)
+      if (!connection.identityId) {
+        results.push({ pendingId: row.pendingId, label, result: t('deviceOnboarding.messages.batchActivationUnbound'), success: false })
+        continue
+      }
+      if (connection.identityStatus === 'ACTIVE') {
+        results.push({ pendingId: row.pendingId, label, result: t('deviceOnboarding.messages.batchActivationAlreadyActive'), success: false })
+        continue
+      }
+      const key = `${row.pendingId}:ACTIVE`
+      if (!identityKeys.has(key)) identityKeys.set(key, newIdempotencyKey())
+      const application = await management.submitIdentityStatus(row.pendingId, 'ACTIVE', identityKeys.get(key)!)
+      const status = application?.status
+      results.push({ pendingId: row.pendingId, label,
+        result: status === 'PENDING_REVIEW' ? t('deviceOnboarding.messages.batchActivationSubmitted')
+          : status === 'APPROVED' ? t('deviceOnboarding.messages.batchActivationApproved')
+            : status === 'EXECUTED' ? t('deviceOnboarding.messages.batchActivationExecuted')
+              : t('deviceOnboarding.messages.batchActivationFailed'),
+        success: Boolean(application?.requestId && ['PENDING_REVIEW', 'APPROVED', 'EXECUTED'].includes(status ?? '')) })
+    } catch (reason) {
+      results.push({ pendingId: row.pendingId, label, result: requestErrorMessage(reason), success: false })
+    }
+  }
+  activationResults.value = results
+  activationBusy.value = false
+  activationOpen.value = false
+  activationResultsOpen.value = true
+  await management.loadPendingDevices().catch(() => undefined)
+}
+
 async function requestSync() {
   const sourceId = syncSourceId.value
   if (!sourceId) {
@@ -499,7 +558,7 @@ onMounted(() => {
       <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="operationsManagement.syncJobs.value.page" :page-size="operationsManagement.syncJobs.value.size" :total="operationsManagement.syncJobs.value.total" @current-change="changeSyncHistoryPage" /></div>
     </ElDrawer>
     <ElCard shadow="never">
-      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="selectedRows.length < 2" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton></div>
+      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="selectedRows.length < 2 || activationBusy" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="selectedRows.length < 2 || activationBusy" @click="openBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></div>
       <ElSkeleton v-if="management.pendingLoading.value && !management.pendingDevices.value.items.length" animated :rows="5" />
       <ElTable v-else :data="management.pendingDevices.value.items" row-key="pendingId" @selection-change="changeSelection">
         <ElTableColumn v-if="operationsMode" type="selection" width="48" />
@@ -557,6 +616,19 @@ onMounted(() => {
       </ElTable>
     </ElDialog>
 
+    <ElDialog v-model="activationOpen" :title="t('deviceOnboarding.actions.batchActivateIdentity')" :close-on-click-modal="!activationBusy" :close-on-press-escape="!activationBusy" :show-close="!activationBusy" width="min(620px, 94vw)">
+      <p>{{ t('deviceOnboarding.messages.batchActivationConfirm') }}{{ activationRows.length }}</p>
+      <ul class="activation-preview"><li v-for="row in activationRows" :key="row.pendingId">{{ activationLabel(row) }}</li></ul>
+      <template #footer><ElButton :disabled="activationBusy" @click="activationOpen = false">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="activationBusy" @click="submitBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></template>
+    </ElDialog>
+    <ElDialog v-model="activationResultsOpen" :title="t('deviceOnboarding.pending.activationResults')" width="min(760px, 94vw)">
+      <ElAlert :title="t('deviceOnboarding.messages.batchActivationBoundary')" type="info" show-icon :closable="false" />
+      <ElTable :data="activationResults" row-key="pendingId">
+        <ElTableColumn :label="t('deviceOnboarding.labels.identity')" min-width="160"><template #default="{ row }">{{ row.label }}</template></ElTableColumn>
+        <ElTableColumn :label="t('deviceOnboarding.labels.status')" min-width="180"><template #default="{ row }"><ElTag :type="row.success ? 'success' : 'warning'">{{ row.result }}</ElTag></template></ElTableColumn>
+      </ElTable>
+    </ElDialog>
+
     <ElDialog v-model="readingsOpen" :title="t('deviceOnboarding.pending.readings')" width="min(900px, 94vw)" @closed="equipmentReadings.clear()"><ElSkeleton v-if="equipmentReadings.loading.value" animated :rows="5" /><ElAlert v-else-if="equipmentReadings.error.value" :title="equipmentReadings.error.value" type="error" show-icon :closable="false" /><template v-else-if="equipmentReadings.readings.value"><ElAlert :title="t('deviceOnboarding.messages.readingsBoundary')" type="info" show-icon :closable="false" /><ElTable :data="equipmentReadings.readings.value.points" row-key="pointId"><ElTableColumn :label="t('deviceOnboarding.labels.readingPointName')" prop="pointName" min-width="150" /><ElTableColumn :label="t('deviceOnboarding.labels.readingPointCode')" prop="pointCode" min-width="140" /><ElTableColumn :label="t('deviceOnboarding.labels.readingValue')" min-width="120"><template #default="{ row }">{{ row.value == null ? t('common.missing') : `${formatNumber(row.value)} ${row.unit === '1' ? '' : (row.unit || '')}` }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.readingStatus')" min-width="130"><template #default="{ row }">{{ readingStatusText(row.status) }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.eventTime')" min-width="180"><template #default="{ row }">{{ row.eventTime ? formatDateTime(row.eventTime) : t('common.missing') }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.reason')" min-width="240"><template #default="{ row }">{{ readingReasonText(row.reason) }}<details><summary>{{ t('deviceOnboarding.technicalDetails') }}</summary><div>{{ `${row.status} / ${row.usageStatus}` }}</div><div>{{ row.reason || t('common.missing') }}</div></details></template></ElTableColumn></ElTable></template></ElDialog>
   </section>
 </template>
@@ -594,6 +666,7 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .sync-result-outcome { background: color-mix(in srgb, var(--bec-color-success) 7%, var(--bec-color-surface)); }
 .sync-result-outcome.is-warning { background: color-mix(in srgb, var(--bec-color-warning) 9%, var(--bec-color-surface)); }
 .filter-bar { align-items: stretch; }
+.activation-preview { max-height: calc(var(--bec-ref-space-48) * 6); overflow: auto; }
 .filter-bar { flex-wrap: wrap; }
 .filter-bar > :deep(.el-input) { flex: 1 1 calc(var(--bec-navigation-width) * 1.5); min-width: var(--bec-navigation-width); order: -1; }
 .filter-bar :deep(.el-input__prefix svg) { width: var(--bec-icon-small); height: var(--bec-icon-small); }
