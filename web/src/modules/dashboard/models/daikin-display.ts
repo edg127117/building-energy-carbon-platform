@@ -1,11 +1,16 @@
 import words from '../locales/daikin'
 import type { TemperatureReading } from './daikin'
 
-/** 已确认枚举翻译；未知厂家值保留原值，不推断风量、故障含义或单位。 */
+/** 已确认枚举翻译；未知厂家值以中文提示并保留原值，不推断其业务含义。 */
 export function daikinLabel(value: string | null | undefined): string {
   if (value == null) return '—'
   const known: Record<string, string> = { ...words.fieldNames, ...words.statusNames }
-  return Object.prototype.hasOwnProperty.call(known, value) ? known[value]! : value
+  return Object.prototype.hasOwnProperty.call(known, value) ? known[value]! : `未确认值（原始值：${value}）`
+}
+
+export function daikinFieldLabel(value: string): string {
+  const known: Record<string, string> = words.fieldNames
+  return Object.prototype.hasOwnProperty.call(known, value) ? known[value]! : `未确认字段（原始字段名：${value}）`
 }
 
 /** 断线节点只控制图形连线；所有非空值均直接来自后端质量门禁后的读数。 */

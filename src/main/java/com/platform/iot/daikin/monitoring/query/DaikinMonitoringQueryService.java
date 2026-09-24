@@ -234,7 +234,7 @@ public class DaikinMonitoringQueryService {
                     visible ? rs.getString("normalized_value") : null,
                     rs.getString("field_status"), lastValidAt,
                     rs.getString("last_attempt_raw_json"), rs.getLong("last_attempt_at_ms"), visible,
-                    lastValidAt == null || lastValidAt < clock.millis() - STALE_AFTER_MS,
+                    lastValidAt != null && lastValidAt < clock.millis() - STALE_AFTER_MS,
                     rs.getInt("mapping_version"), rs.getInt("last_attempt_mapping_version"));
         }, target.identityId(), target.buildingId(), target.mappingVersion());
         return new DeviceCurrentView(target.identityId(), equipmentId, target.buildingId(), target.spaceId(),
@@ -469,7 +469,7 @@ public class DaikinMonitoringQueryService {
         Long lastValidAt = visibleValue ? nullableLong(rs, prefix + "_last_valid") : null;
         return new StateSummaryView(visibleValue ? rs.getString(prefix + "_value") : null,
                 currentAttempt ? rs.getString(prefix + "_status") : null, lastValidAt,
-                lastValidAt == null || lastValidAt < clock.millis() - STALE_AFTER_MS);
+                lastValidAt != null && lastValidAt < clock.millis() - STALE_AFTER_MS);
     }
 
     private static BusinessException forbidden() {

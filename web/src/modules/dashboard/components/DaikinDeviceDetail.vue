@@ -7,7 +7,7 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { formatDateTime } from '@/shared/utils/format'
 import { t } from '@/locales'
 import { daikinApi } from '../api/daikin'
-import { daikinLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
+import { daikinLabel, daikinFieldLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 
 const props = defineProps<{ equipmentId: string; equipmentName?: string | null; equipmentCode?: string | null; refreshTick: number }>()
@@ -68,7 +68,7 @@ onMounted(loadCurrent)
         <ElAlert v-if="current.error.value" :title="current.error.value" type="error" :closable="false" />
         <ElSkeleton v-if="current.loading.value" :rows="5" animated />
         <ElTable v-else :data="current.data.value?.fields ?? []">
-          <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinLabel(row.fieldName) }}</template></ElTableColumn>
+          <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
           <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinLabel(row.normalizedValue) : t('common.missing') }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
           <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
           <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
@@ -79,7 +79,7 @@ onMounted(loadCurrent)
         <p>{{ text('eventNotice') }}</p>
         <ElAlert v-if="events.error.value" :title="events.error.value" type="error" :closable="false" />
         <ElTable :data="events.data.value?.items ?? []">
-          <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinLabel(row.fieldName) }}</template></ElTableColumn>
+          <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
           <ElTableColumn :label="text('before')"><template #default="{ row }">{{ daikinLabel(row.beforeNormalizedValue) }}{{ ' · ' }}{{ date(row.previousObservedAt) }}</template></ElTableColumn>
           <ElTableColumn :label="text('after')"><template #default="{ row }">{{ daikinLabel(row.afterNormalizedValue) }}{{ ' · ' }}{{ date(row.observedAt) }} <ElTag v-if="row.afterGap" type="warning">{{ text('gap') }}</ElTag></template></ElTableColumn>
         </ElTable>
@@ -97,7 +97,7 @@ onMounted(loadCurrent)
         <ElAlert v-if="temperature.error.value" :title="temperature.error.value" type="warning" :closable="false" />
         <p v-if="temperature.data.value">{{ text('value') }}{{ ': ' }}{{ temperature.data.value.reading?.value ?? t('common.missing') }} {{ temperature.data.value.unit }}{{ ' · ' }}{{ daikinLabel(temperature.data.value.fieldStatus) }}{{ ' · ' }}{{ date(temperature.data.value.reading?.observedAt ?? null) }} <ElTag v-if="temperature.data.value.reading?.quality && temperature.data.value.reading.quality.decision !== 'ALLOW'" type="warning">{{ text('qualityBlocked') }}</ElTag><ElTag v-if="temperature.data.value.reading?.stale" type="warning">{{ text('stale') }}</ElTag></p>
         <ElAlert v-if="history.error.value" :title="history.error.value" type="error" :closable="false" />
-        <p class="chart-unit">{{ text('temperatureUnit') }}{{ '（' }}{{ history.data.value?.unit ?? '°C' }}{{ '）' }}</p>
+        <p v-if="history.data.value?.unit" class="chart-unit">{{ text('temperatureUnit') }}{{ '（' }}{{ history.data.value.unit }}{{ '）' }}</p>
         <div class="chart"><ChartView :option="option" :loading="history.loading.value" :empty="!history.data.value?.items.length" :accessible-label="text('temperature')" /></div>
         <ElButton :disabled="history.data.value?.nextCursor == null" @click="loadTemperature(history.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
       </ElTabPane>

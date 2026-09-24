@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { daikinLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
+import { daikinLabel, daikinFieldLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
 
 describe('manufacturer display boundaries', () => {
   it('keeps zero and blocked values, breaks gaps without interpolation', () => {
@@ -13,8 +13,11 @@ describe('manufacturer display boundaries', () => {
     expect(daikinLabel('VENDOR_EQUIPMENT')).toBe('设备故障')
     expect(daikinLabel('CONTROLLER_COMMUNICATION')).toBe('控制器通信故障')
     expect(daikinLabel('on')).toBe('开')
-    expect(daikinLabel('vendor-future-mode')).toBe('vendor-future-mode')
-    expect(daikinLabel('constructor')).toBe('constructor')
+    expect(daikinLabel('vendor-future-mode')).toBe('未确认值（原始值：vendor-future-mode）')
+    expect(daikinLabel('constructor')).toBe('未确认值（原始值：constructor）')
+    expect(daikinLabel('UNCONFIRMED')).toBe('待确认')
+    expect(daikinFieldLabel('mc11')).toBe('未确认字段（原始字段名：mc11）')
+    expect(daikinFieldLabel('onOff')).toBe('启停')
   })
   it('translates every runtime synchronization state for customer display', () => {
     expect(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED', 'UNSUPPORTED', 'EXPIRED'].map(daikinLabel))

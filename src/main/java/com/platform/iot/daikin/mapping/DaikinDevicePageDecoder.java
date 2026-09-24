@@ -154,8 +154,10 @@ public final class DaikinDevicePageDecoder {
     private static DaikinFieldValue enumField(JsonNode value, Set<String> allowed) {
         if (missing(value)) return absent();
         if (!value.isTextual() || raw(value) == null) return new DaikinFieldValue(INVALID, raw(value), null);
-        return allowed.contains(value.textValue()) ? present(value, value.textValue())
-                : new DaikinFieldValue(UNKNOWN, raw(value), null);
+        // 厂家同一枚举可能使用不同大小写；仅匹配已知成员，保留原始报文供追溯。
+        return allowed.stream().filter(candidate -> candidate.equalsIgnoreCase(value.textValue()))
+                .findFirst().map(candidate -> present(value, candidate))
+                .orElseGet(() -> new DaikinFieldValue(UNKNOWN, raw(value), null));
     }
 
     private static DaikinFieldValue booleanField(JsonNode value) {
