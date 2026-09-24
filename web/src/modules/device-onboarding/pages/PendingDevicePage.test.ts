@@ -110,10 +110,11 @@ describe('待接入范围筛选', () => {
     wrapper.unmount()
   })
 
-  it('批量身份启用逐台核对状态并提交，已启用设备不重复申请', async () => {
+  it('待接入列表显示身份状态，批量启用只允许选择已停用身份', async () => {
     routeState.view = 'daikin'
     const rows = ['D1', 'D2', 'D3'].map((pendingId, index) => ({
       pendingId, status: 'BOUND', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
+      identityStatus: pendingId === 'D2' ? 'ACTIVE' : 'INACTIVE',
       maskedIdentityValue: '****', location: { roomCode: `B303-${index + 1}` },
     }))
     vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 3, items: rows } as never)
@@ -127,20 +128,57 @@ describe('待接入范围筛选', () => {
     const wrapper = mount(PendingDevicePage, { attachTo: document.body })
     await flushPromises()
     const table = wrapper.findAllComponents({ name: 'ElTable' }).find(item => item.props('data')?.length === 3)!
+    expect(wrapper.text()).toContain('身份状态')
+    expect(wrapper.text()).toContain('已启用')
+    expect(wrapper.text()).toContain('已停用')
+    const selection = wrapper.findAllComponents({ name: 'ElTableColumn' }).find(column => column.props('type') === 'selection')!
+    const selectable = selection.props('selectable') as (row: typeof rows[number]) => boolean
+    expect(selectable(rows[0]!)).toBe(true)
+    expect(selectable(rows[1]!)).toBe(false)
     table.vm.$emit('selection-change', rows)
+    await wrapper.vm.$nextTick()
+    const activate = wrapper.findAllComponents(ElButton).find(button => button.text() === '批量提交身份启用申请')!
+    expect(activate.attributes('disabled')).toBeDefined()
+    table.vm.$emit('selection-change', [rows[0], rows[2]])
+    await wrapper.vm.$nextTick()
+    expect(activate.attributes('disabled')).toBeUndefined()
+    await activate.trigger('click')
+    await flushPromises()
+    const dialog = document.querySelector('.el-dialog') as HTMLElement
+    expect(dialog.textContent).toContain('本次申请启用的设备数：2')
+    expect(dialog.textContent).toContain('B303-1 · 身份已停用')
+    ;([...dialog.querySelectorAll('button')].find(button => button.textContent?.includes('批量提交身份启用申请')) as HTMLButtonElement).click()
+    await flushPromises()
+    expect(getOperationsPendingConnection).toHaveBeenCalledTimes(2)
+    expect(submitOperationsIdentityStatus).toHaveBeenCalledTimes(2)
+    expect(submitOperationsIdentityStatus).not.toHaveBeenCalledWith('D2', 'ACTIVE', expect.any(String))
+    expect(wrapper.text()).toContain('已提交启用申请，等待审核和执行')
+    expect(wrapper.text()).toContain('当前状态已变化，请刷新后重试。')
+    wrapper.unmount()
+  })
+
+  it('提交前身份已在别处启用时重新核对并跳过', async () => {
+    routeState.view = 'daikin'
+    const rows = ['D1', 'D2'].map(pendingId => ({
+      pendingId, status: 'BOUND', identityStatus: 'INACTIVE', identityType: 'DAIKIN_UNIT',
+      profileCode: 'DAIKIN_INDOOR_V2', maskedIdentityValue: '****',
+    }))
+    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 2, items: rows } as never)
+    vi.mocked(getOperationsPendingConnection).mockImplementation(async pendingId => ({
+      pendingId, identityId: pendingId, identityStatus: pendingId === 'D2' ? 'ACTIVE' : 'INACTIVE',
+    }) as Awaited<ReturnType<typeof getOperationsPendingConnection>>)
+    vi.mocked(submitOperationsIdentityStatus).mockResolvedValue({ pendingId: 'D1', requestId: 'R1', status: 'PENDING_REVIEW', errorCode: null })
+    const wrapper = mount(PendingDevicePage, { attachTo: document.body })
+    await flushPromises()
+    wrapper.findAllComponents({ name: 'ElTable' }).find(item => item.props('data')?.length === 2)!.vm.$emit('selection-change', rows)
     await wrapper.vm.$nextTick()
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '批量提交身份启用申请')!.trigger('click')
     await flushPromises()
-    const dialog = document.querySelector('.el-dialog') as HTMLElement
-    expect(dialog.textContent).toContain('本次申请启用的已绑定设备数：3')
-    ;([...dialog.querySelectorAll('button')].find(button => button.textContent?.includes('批量提交身份启用申请')) as HTMLButtonElement).click()
+    ;([...document.querySelector('.el-dialog')!.querySelectorAll('button')]
+      .find(button => button.textContent?.includes('批量提交身份启用申请')) as HTMLButtonElement).click()
     await flushPromises()
-    expect(getOperationsPendingConnection).toHaveBeenCalledTimes(3)
-    expect(submitOperationsIdentityStatus).toHaveBeenCalledTimes(2)
-    expect(submitOperationsIdentityStatus).not.toHaveBeenCalledWith('D2', 'ACTIVE', expect.any(String))
+    expect(submitOperationsIdentityStatus).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('身份已启用，未重复申请')
-    expect(wrapper.text()).toContain('已提交启用申请，等待审核和执行')
-    expect(wrapper.text()).toContain('当前状态已变化，请刷新后重试。')
     wrapper.unmount()
   })
 })

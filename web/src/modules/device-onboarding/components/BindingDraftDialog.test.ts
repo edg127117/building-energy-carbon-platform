@@ -23,7 +23,7 @@ const product = {
   updateTime: 1, createTime: 1, allowedActions: [],
   points: [{ metricCode: 'power', pointNameTemplate: '有功功率', suffixCode: 'P', unit: 'kW', minValue: null, maxValue: null, forCalc: true, required: true, sortOrder: 0, enabled: true }],
 }
-const pending = { pendingId: 'D1', identityType: 'SN', maskedIdentityValue: 'x', identityValue: 'SN1', profileCode: 'V1', lastProfileVersion: 1, status: 'DISCOVERED', reportCount: 1, firstSeenTime: 1, lastSeenTime: 1, sampleTruncated: false, boundIdentityId: null, latestEventTime: 1, latestTimeSource: null, latestMetrics: {}, allowedActions: [] }
+const pending = { pendingId: 'D1', identityType: 'SN', maskedIdentityValue: 'x', identityValue: 'SN1', profileCode: 'V1', lastProfileVersion: 1, status: 'DISCOVERED', identityStatus: 'UNBOUND' as const, reportCount: 1, firstSeenTime: 1, lastSeenTime: 1, sampleTruncated: false, boundIdentityId: null, latestEventTime: 1, latestTimeSource: null, latestMetrics: {}, allowedActions: [] }
 
 describe('绑定准备弹窗', () => {
   beforeEach(() => vi.clearAllMocks())

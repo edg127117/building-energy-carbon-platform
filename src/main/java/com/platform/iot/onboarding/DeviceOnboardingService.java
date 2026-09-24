@@ -117,10 +117,58 @@ public class DeviceOnboardingService {
         query.orderByDesc(BizPendingDevice::getLastSeenTime)
                 .orderByAsc(BizPendingDevice::getPendingId);
         Page<BizPendingDevice> result = pendingMapper.selectPage(new Page<>(page, size), query);
+        Map<String, String> identityStatuses = pendingIdentityStatuses(result.getRecords());
         List<DeviceOnboardingContracts.PendingListItemView> items = result.getRecords().stream()
-                .map(this::toListItem)
+                .map(pending -> toListItem(pending, identityStatuses.get(pending.getPendingId())))
                 .toList();
         return new PageResponse<>(result.getCurrent(), result.getSize(), result.getTotal(), items);
+    }
+
+    /** 分页批量读取身份及其设备归属；该状态不代表身份缓存生效或测点已有数据。 */
+    public Map<String, String> pendingIdentityStatuses(List<BizPendingDevice> pendingDevices) {
+        List<String> identityIds = pendingDevices.stream()
+                .filter(pending -> "BOUND".equals(pending.getStatus()))
+                .map(BizPendingDevice::getBoundIdentityId)
+                .filter(StringUtils::hasText)
+                .distinct().toList();
+        Map<String, BizDeviceIdentity> identities = new HashMap<>();
+        if (!identityIds.isEmpty()) {
+            identityMapper.selectBatchIds(identityIds).forEach(identity ->
+                    identities.put(identity.getIdentityId(), identity));
+        }
+        List<String> equipmentIds = identities.values().stream()
+                .map(BizDeviceIdentity::getEquipId)
+                .filter(StringUtils::hasText)
+                .distinct().toList();
+        Map<String, BizEquipment> equipment = new HashMap<>();
+        if (!equipmentIds.isEmpty()) {
+            equipmentMapper.selectBatchIds(equipmentIds).forEach(item ->
+                    equipment.put(item.getEquipId(), item));
+        }
+        Map<String, String> statuses = new HashMap<>();
+        for (BizPendingDevice pending : pendingDevices) {
+            if (!"BOUND".equals(pending.getStatus())) {
+                statuses.put(pending.getPendingId(), "UNBOUND");
+                continue;
+            }
+            BizDeviceIdentity identity = identities.get(pending.getBoundIdentityId());
+            BizEquipment boundEquipment = identity == null ? null : equipment.get(identity.getEquipId());
+            if (identity == null || boundEquipment == null
+                    || !StringUtils.hasText(pending.getIdentityType())
+                    || !pending.getIdentityType().equalsIgnoreCase(identity.getIdentityType())
+                    || !Objects.equals(pending.getIdentityValue(), identity.getIdentityValue())
+                    || !StringUtils.hasText(identity.getBuildingId())
+                    || !Objects.equals(identity.getBuildingId(), boundEquipment.getBuildingId())) {
+                statuses.put(pending.getPendingId(), "INVALID");
+            } else if (Integer.valueOf(1).equals(identity.getStatus())) {
+                statuses.put(pending.getPendingId(), "ACTIVE");
+            } else if (Integer.valueOf(0).equals(identity.getStatus())) {
+                statuses.put(pending.getPendingId(), "INACTIVE");
+            } else {
+                statuses.put(pending.getPendingId(), "INVALID");
+            }
+        }
+        return statuses;
     }
 
     public DeviceOnboardingContracts.PendingDetailView pendingDetail(String pendingId, Set<String> roles) {
@@ -906,10 +954,10 @@ public class DeviceOnboardingService {
                         && Integer.valueOf(0).equals(template.getForCalc()));
     }
 
-    private DeviceOnboardingContracts.PendingListItemView toListItem(BizPendingDevice pending) {
+    private DeviceOnboardingContracts.PendingListItemView toListItem(BizPendingDevice pending, String identityStatus) {
         return new DeviceOnboardingContracts.PendingListItemView(
                 pending.getPendingId(), pending.getIdentityType(), mask(pending.getIdentityValue()),
-                pending.getProfileCode(), pending.getLastProfileVersion(), pending.getStatus(),
+                pending.getProfileCode(), pending.getLastProfileVersion(), pending.getStatus(), identityStatus,
                 pending.getReportCount(), epoch(pending.getFirstSeenTime()), epoch(pending.getLastSeenTime()),
                 Integer.valueOf(1).equals(pending.getSampleTruncated()));
     }

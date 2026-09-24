@@ -109,6 +109,8 @@ class DaikinOnboardingIntegrationTest {
         String pending = discover("site1", "unit1", "BLD001");
         String product = enabledProduct();
         int before = jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class);
+        assertThat(scoped.list(4242L, OPS, 1, 20, null).items()).filteredOn(item -> item.pendingId().equals(pending))
+                .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("UNBOUND");
         var application = scoped.apply(1L, ADMIN, pending, binding(product, "BLD001"), "DTEST-bind");
         assertThat(application.status()).isEqualTo("PENDING_REVIEW");
         assertThat(pendingMapper.selectById(pending).getBoundIdentityId()).isNull();
@@ -116,6 +118,11 @@ class DaikinOnboardingIntegrationTest {
         assertThat(changes.execute(1L, application.requestId()).change().status().name()).isEqualTo("EXECUTED");
         var connection = onboarding.connection(pending, ADMIN);
         assertThat(connection.identityStatus()).isEqualTo("INACTIVE");
+        assertThat(scoped.list(4242L, OPS, 1, 20, null).items()).filteredOn(item -> item.pendingId().equals(pending))
+                .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("INACTIVE");
+        assertThat(onboarding.listPending(1, 20, "BOUND", null, null, ADMIN).items())
+                .filteredOn(item -> item.pendingId().equals(pending))
+                .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("INACTIVE");
         assertThat(connection.configEffective()).isTrue();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(before);
         assertThatThrownBy(() -> directory.mapProject(source, "site1", "BLD002", 1L, ADMIN)).isInstanceOf(BusinessException.class);
@@ -127,6 +134,8 @@ class DaikinOnboardingIntegrationTest {
         changes.approve(1L, activation.requestId(), "隔离测试审核");
         changes.execute(1L, activation.requestId());
         assertThat(onboarding.connection(pending, ADMIN).identityStatus()).isEqualTo("ACTIVE");
+        assertThat(scoped.list(4242L, OPS, 1, 20, null).items()).filteredOn(item -> item.pendingId().equals(pending))
+                .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("ACTIVE");
         assertThat(onboarding.connection(pending, ADMIN).configEffective()).isTrue();
         assertThatThrownBy(() -> scoped.requestIdentityStatus(4242L, OPS, pending, "ON", "DTEST-invalid"))
                 .isInstanceOf(BusinessException.class);

@@ -11,7 +11,7 @@ const binding: PendingBindRequest = {
 function indoor(pendingId: string, spaceId: string, roomCode: string): PendingDevice {
   return {
     pendingId, identityType: 'DAIKIN_UNIT', maskedIdentityValue: '****', profileCode: 'DAIKIN_INDOOR_V2',
-    lastProfileVersion: 2, status: 'DISCOVERED', reportCount: 1, firstSeenTime: 0, lastSeenTime: 0,
+    lastProfileVersion: 2, status: 'DISCOVERED', identityStatus: 'UNBOUND', reportCount: 1, firstSeenTime: 0, lastSeenTime: 0,
     sampleTruncated: false,
     location: { roomSpaceId: spaceId, roomCode, monitorAddress: '1-01', assetReferenceCode: 'F000002' },
   }

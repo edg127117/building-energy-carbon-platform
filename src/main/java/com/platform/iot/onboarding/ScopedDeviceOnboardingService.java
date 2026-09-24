@@ -86,9 +86,11 @@ public class ScopedDeviceOnboardingService {
         var result = pendingMapper.selectPage(new Page<>(page, size), query);
         Map<String, DaikinPendingLocationView> pageLocations = locations.forPendingIds(result.getRecords().stream()
                 .map(BizPendingDevice::getPendingId).toList());
+        Map<String, String> identityStatuses = onboarding.pendingIdentityStatuses(result.getRecords());
         return new PageResponse<>(result.getCurrent(), result.getSize(), result.getTotal(), result.getRecords().stream()
                 .map(p -> new DeviceOnboardingContracts.PendingListItemView(p.getPendingId(), p.getIdentityType(),
-                        "****", p.getProfileCode(), p.getLastProfileVersion(), p.getStatus(), p.getReportCount(),
+                        "****", p.getProfileCode(), p.getLastProfileVersion(), p.getStatus(),
+                        identityStatuses.get(p.getPendingId()), p.getReportCount(),
                         p.getFirstSeenTime().atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
                         p.getLastSeenTime().atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
                         Integer.valueOf(1).equals(p.getSampleTruncated()),
