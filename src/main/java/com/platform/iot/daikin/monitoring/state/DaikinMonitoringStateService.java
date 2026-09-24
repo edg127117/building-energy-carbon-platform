@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -22,6 +24,7 @@ import java.util.Set;
 @Service
 public class DaikinMonitoringStateService {
     private static final long STALE_AFTER_MS = 5 * 60 * 1000L;
+    private static final ZoneId STATISTICS_ZONE = ZoneId.of("Asia/Shanghai");
     private static final Set<String> TEMPERATURE_FIELDS = Set.of("roomTemp", "temperature");
     private static final Set<String> RUNTIME_FIELDS = Set.of(
             "onOff", "mode", "unitStatus", "fanSpeed", "airflowDirection",
@@ -135,6 +138,8 @@ public class DaikinMonitoringStateService {
                 // 轮次更新不代表页解析时间更新；迟到的成功值不能回退正式值、新鲜度或恢复异常。
                 if (current != null && current.lastValidAt() != null
                         && observedAt < current.lastValidAt()) continue;
+                if ("onOff".equals(fieldName)) recordObservedRuntime(target, current, incoming,
+                        observedAt, registered.firstPlannedAt());
                 if (current != null && current.lastValidAt() != null
                         && Objects.equals(current.buildingId(), target.buildingId())
                         && EVENT_FIELDS.contains(fieldName)
@@ -184,6 +189,39 @@ public class DaikinMonitoringStateService {
                 target.equipmentId(), target.buildingId(), target.spaceId(), target.systemGroupId(),
                 target.mappingVersion(), current.rawJson(), current.normalizedValue(), incoming.rawJson(),
                 incoming.normalizedValue(), current.lastValidAt(), observedAt, afterGap ? 1 : 0);
+    }
+
+    private void recordObservedRuntime(Target target, CurrentField previous,
+                                       DaikinFieldValue incoming, long observedAt, long activationAt) {
+        if (!Set.of("on", "off").contains(incoming.normalizedValue()) || previous == null
+                || previous.lastValidAt() == null || !"PRESENT".equals(previous.fieldStatus())
+                || !Set.of("on", "off").contains(previous.normalizedValue())
+                || !target.buildingId().equals(previous.buildingId())
+                || target.mappingVersion() != previous.mappingVersion()) return;
+        long from = previous.lastValidAt();
+        long elapsed = observedAt - from;
+        // 只把相邻有效观测之间的短间隔归于前一次状态；停用、搬迁和长间断都不推算开机时间。
+        if (from < activationAt || elapsed <= 0 || elapsed > STALE_AFTER_MS) return;
+        boolean wasOn = "on".equals(previous.normalizedValue());
+        while (from < observedAt) {
+            long dayStart = Instant.ofEpochMilli(from).atZone(STATISTICS_ZONE)
+                    .toLocalDate().atStartOfDay(STATISTICS_ZONE).toInstant().toEpochMilli();
+            long nextDay = Instant.ofEpochMilli(from).atZone(STATISTICS_ZONE)
+                    .toLocalDate().plusDays(1).atStartOfDay(STATISTICS_ZONE).toInstant().toEpochMilli();
+            long until = Math.min(observedAt, nextDay);
+            long covered = until - from;
+            long on = wasOn ? covered : 0;
+            int updated = jdbc.update("""
+                    UPDATE biz_daikin_observed_runtime_day SET on_ms=on_ms+?,covered_ms=covered_ms+?
+                    WHERE identity_id=? AND building_id=? AND mapping_version=? AND day_start_ms=?
+                    """, on, covered, target.identityId(), target.buildingId(), target.mappingVersion(), dayStart);
+            if (updated == 0) jdbc.update("""
+                    INSERT INTO biz_daikin_observed_runtime_day
+                      (identity_id,building_id,mapping_version,day_start_ms,on_ms,covered_ms)
+                    VALUES (?,?,?,?,?,?)
+                    """, target.identityId(), target.buildingId(), target.mappingVersion(), dayStart, on, covered);
+            from = until;
+        }
     }
 
     private void upsertPresent(Target target, String fieldName, long roundId, DaikinFieldValue incoming,
@@ -398,10 +436,12 @@ public class DaikinMonitoringStateService {
 
     private CurrentField currentFieldForUpdate(String identityId, String fieldName) {
         List<CurrentField> rows = jdbc.query("""
-                SELECT raw_json,normalized_value,last_valid_at_ms,last_round_id,building_id
+                SELECT raw_json,normalized_value,last_valid_at_ms,last_round_id,building_id,
+                       mapping_version,field_status
                 FROM biz_daikin_current_state WHERE identity_id=? AND field_name=? FOR UPDATE
                 """, (rs, row) -> new CurrentField(rs.getString(1), rs.getString(2),
-                nullableLong(rs, 3), rs.getLong(4), rs.getString(5)), identityId, fieldName);
+                nullableLong(rs, 3), rs.getLong(4), rs.getString(5), rs.getInt(6), rs.getString(7)),
+                identityId, fieldName);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -459,7 +499,8 @@ public class DaikinMonitoringStateService {
     private record TargetRow(String sourceId, boolean active, long firstPlannedAt,
                              Long lastValidAt, Long lastRoundId, String buildingId, String spaceId,
                              String systemGroupId, int mappingVersion) { }
-    private record CurrentField(String rawJson, String normalizedValue, Long lastValidAt, long roundId, String buildingId) { }
+    private record CurrentField(String rawJson, String normalizedValue, Long lastValidAt, long roundId,
+                                String buildingId, int mappingVersion, String fieldStatus) { }
     private record SourceResult(Long roundId, int failures) { }
     private record BooleanException(String type, boolean opensWhenTrue) { }
 }

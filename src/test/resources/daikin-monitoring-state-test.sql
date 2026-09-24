@@ -3,6 +3,7 @@ DROP TABLE IF EXISTS biz_daikin_current_state;
 DROP TABLE IF EXISTS biz_daikin_exception_instance;
 DROP TABLE IF EXISTS biz_daikin_source_result;
 DROP TABLE IF EXISTS biz_daikin_monitoring_target;
+DROP TABLE IF EXISTS biz_daikin_observed_runtime_day;
 
 CREATE TABLE biz_daikin_monitoring_target (
   identity_id VARCHAR(32) PRIMARY KEY, source_id VARCHAR(200) NOT NULL, pending_id VARCHAR(32),
@@ -41,4 +42,10 @@ CREATE TABLE biz_daikin_exception_instance (
 );
 CREATE TABLE biz_daikin_source_result (
   source_id VARCHAR(200) PRIMARY KEY, last_result_round_id BIGINT, consecutive_failure_rounds INT NOT NULL
+);
+CREATE TABLE biz_daikin_observed_runtime_day (
+  identity_id VARCHAR(32) NOT NULL, building_id VARCHAR(32) NOT NULL,
+  mapping_version INT NOT NULL, day_start_ms BIGINT NOT NULL,
+  on_ms BIGINT NOT NULL, covered_ms BIGINT NOT NULL,
+  PRIMARY KEY(identity_id,building_id,mapping_version,day_start_ms)
 );

@@ -121,6 +121,7 @@ public class DaikinRetentionJob {
                 case RUNTIME_JOB -> new BatchOutcome(deleteRuntimeIds("biz_daikin_runtime_job", "job_id",
                         "period_end_ms<? AND status IN ('FAILED','SUCCEEDED','UNSUPPORTED','EXPIRED')",
                         now - BUSINESS_RETENTION_MILLIS), progress.tdCursor());
+                case OBSERVED_RUNTIME -> new BatchOutcome(deleteObservedRuntime(now), progress.tdCursor());
                 case TEMPERATURE -> deleteTemperatureWindow(now, progress.tdCursor());
                 case COMPLETE -> new BatchOutcome(0, null);
             };
@@ -255,6 +256,21 @@ public class DaikinRetentionJob {
         return new BatchOutcome(affected, result.nextPointCursor());
     }
 
+    private int deleteObservedRuntime(long now) {
+        List<ObservedRuntimeKey> keys = jdbc.query("""
+                SELECT identity_id,building_id,mapping_version,day_start_ms
+                FROM biz_daikin_observed_runtime_day WHERE day_start_ms<?
+                ORDER BY day_start_ms LIMIT ?
+                """, (rs, row) -> new ObservedRuntimeKey(rs.getString(1), rs.getString(2),
+                rs.getInt(3), rs.getLong(4)), now - BUSINESS_RETENTION_MILLIS, properties.getBatchSize());
+        int deleted = 0;
+        for (ObservedRuntimeKey key : keys) deleted += jdbc.update("""
+                DELETE FROM biz_daikin_observed_runtime_day
+                WHERE identity_id=? AND building_id=? AND mapping_version=? AND day_start_ms=?
+                """, key.identityId(), key.buildingId(), key.mappingVersion(), key.dayStart());
+        return deleted;
+    }
+
     private void fail(String token, RuntimeException failure) {
         String error = failure.getClass().getSimpleName();
         transaction.executeWithoutResult(status -> jdbc.update("""
@@ -284,7 +300,7 @@ public class DaikinRetentionJob {
 
     private enum Phase {
         STATE_EVENT, EXCEPTION, INBOX_MARK, INBOX_TOMBSTONE,
-        RUNTIME_EXPIRE, RUNTIME_REVISION, RUNTIME_VALUE, RUNTIME_JOB, TEMPERATURE, COMPLETE;
+        RUNTIME_EXPIRE, RUNTIME_REVISION, RUNTIME_VALUE, RUNTIME_JOB, OBSERVED_RUNTIME, TEMPERATURE, COMPLETE;
 
         private Phase next() {
             return values()[ordinal() + 1];
@@ -296,4 +312,5 @@ public class DaikinRetentionJob {
     private record BatchOutcome(int affected, String tdCursor) { }
     private record RuntimeRow(String id, String sourceId) { }
     private record InboxRow(String id, String sourceId) { }
+    private record ObservedRuntimeKey(String identityId, String buildingId, int mappingVersion, long dayStart) { }
 }

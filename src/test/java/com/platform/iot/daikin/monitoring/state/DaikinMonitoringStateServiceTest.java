@@ -84,6 +84,42 @@ class DaikinMonitoringStateServiceTest {
     }
 
     @Test
+    void observedRuntimeSplitsAtBeijingMidnightAndCountsPreviousOnStateOnce() {
+        long beforeMidnight = Instant.parse("2026-09-16T15:59:00Z").toEpochMilli();
+        service.observe(target, 100, observation(beforeMidnight, Map.of("onOff", value("on"))));
+        service.observe(target, 200, observation(beforeMidnight + 120_000, Map.of("onOff", value("off"))));
+        service.observe(target, 200, observation(beforeMidnight + 120_000, Map.of("onOff", value("off"))));
+        service.observe(target, 300, observation(beforeMidnight + 180_000, Map.of("onOff", value("on"))));
+
+        var days = jdbc.queryForList("SELECT on_ms,covered_ms FROM biz_daikin_observed_runtime_day ORDER BY day_start_ms");
+        assertThat(days).hasSize(2);
+        assertThat(days.get(0).get("ON_MS")).isEqualTo(60_000L);
+        assertThat(days.get(0).get("COVERED_MS")).isEqualTo(60_000L);
+        assertThat(days.get(1).get("ON_MS")).isEqualTo(60_000L);
+        assertThat(days.get(1).get("COVERED_MS")).isEqualTo(120_000L);
+    }
+
+    @Test
+    void observedRuntimeExcludesMissingAndLongGaps() {
+        service.observe(target, 100, observation(NOW, Map.of("onOff", value("on"))));
+        service.observe(target, 200, observation(NOW + 60_000, Map.of("onOff", unavailable(MISSING))));
+        service.observe(target, 300, observation(NOW + 120_000, Map.of("onOff", value("on"))));
+        service.observe(target, 400, observation(NOW + 480_001, Map.of("onOff", value("off"))));
+
+        assertThat(count("biz_daikin_observed_runtime_day")).isZero();
+    }
+
+    @Test
+    void observedRuntimeDoesNotCountAcrossDeactivation() {
+        service.observe(target, 100, observation(NOW, Map.of("onOff", value("on"))));
+        service.deactivateTarget(target.identityId());
+        service.registerTarget(target, NOW + 30_000);
+        service.observe(target, 200, observation(NOW + 60_000, Map.of("onOff", value("off"))));
+
+        assertThat(count("biz_daikin_observed_runtime_day")).isZero();
+    }
+
+    @Test
     void sameValueRefreshesFieldTimeWithoutCreatingChangeEvent() {
         service.observe(target, 100, observation(NOW, Map.of("mode", value("cooling"))));
         service.observe(target, 200, observation(NOW + 60_000, Map.of("mode", value("cooling"))));

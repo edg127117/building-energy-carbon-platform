@@ -81,7 +81,8 @@ class FlywayMigrationConfigurationTest {
                 "V58__mysql_archive_legacy_hvac_baseline.sql",
                 "V59__mysql_retire_legacy_hvac_and_govern_menus.sql",
                 "V60__mysql_daikin_pending_location.sql",
-                "V61__mysql_sensitive_change_inbox_menu.sql");
+                "V61__mysql_sensitive_change_inbox_menu.sql",
+                "V62__mysql_daikin_observed_runtime.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)
