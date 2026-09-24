@@ -7,7 +7,7 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { formatDateTime } from '@/shared/utils/format'
 import { t } from '@/locales'
 import { daikinApi } from '../api/daikin'
-import { daikinLabel, daikinFieldLabel, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
+import { daikinLabel, daikinFieldLabel, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 
 const props = defineProps<{ equipmentId: string; equipmentName?: string | null; equipmentCode?: string | null; refreshTick: number }>()
@@ -18,16 +18,17 @@ const current = useDaikinResource<Awaited<ReturnType<typeof daikinApi.current>>>
 const events = useDaikinResource<Awaited<ReturnType<typeof daikinApi.events>>>()
 const temperature = useDaikinResource<Awaited<ReturnType<typeof daikinApi.temperature>>>()
 const history = useDaikinResource<Awaited<ReturnType<typeof daikinApi.history>>>()
-const runtime = useDaikinResource<Awaited<ReturnType<typeof daikinApi.runtime>>>()
-const revisions = useDaikinResource<Awaited<ReturnType<typeof daikinApi.revisions>>>()
+const runtime = useDaikinResource<Awaited<ReturnType<typeof daikinApi.observedRuntime>>>()
 const field = ref('roomTemp')
 const granularity = ref('DAY')
 const tab = ref('state')
 const range = ref<[number, number]>([Date.now() - 86400000, Date.now()])
 const queriedRange = ref<[number, number] | null>(null)
 const rangeError = ref(false)
-const revisionId = ref<string | null>(null)
-const runtimeRows = computed(() => [...(runtime.data.value?.items ?? [])].sort((a, b) => b.periodStart - a.periodStart))
+const showExtended = ref(false)
+const displayFields = computed(() => daikinCurrentFields(current.data.value?.fields ?? []))
+const hours = (millis: number) => (millis / 3_600_000).toFixed(2)
+const coverage = (covered: number, elapsed: number) => elapsed > 0 ? `${(covered / elapsed * 100).toFixed(1)}%` : '—'
 const option = computed<ChartOption>(() => ({
   tooltip: { trigger: 'axis' }, grid: { left: 55, right: 20, top: 25, bottom: 45 },
   xAxis: { type: 'time' }, yAxis: { type: 'value', scale: true },
@@ -46,8 +47,7 @@ function loadTemperature(after?: number) {
   const selected = queriedRange.value
   if (selected) void history.run(() => daikinApi.history(props.equipmentId, field.value, selected[0], selected[1], after))
 }
-function loadRuntime(cursor?: string) { revisionId.value = null; revisions.clear(); void runtime.run(() => daikinApi.runtime(props.equipmentId, granularity.value, cursor)) }
-function loadRevisions(valueId: string, after?: number) { revisionId.value = valueId; void revisions.run(() => daikinApi.revisions(props.equipmentId, valueId, after)) }
+function loadRuntime(before?: number) { void runtime.run(() => daikinApi.observedRuntime(props.equipmentId, granularity.value, before)) }
 function loadTab() {
   if (tab.value === 'events') loadEvents()
   if (tab.value === 'temperature') { void temperature.run(() => daikinApi.temperature(props.equipmentId, field.value)); loadTemperature() }
@@ -67,13 +67,23 @@ onMounted(loadCurrent)
       <ElTabPane :label="text('state')" name="state">
         <ElAlert v-if="current.error.value" :title="current.error.value" type="error" :closable="false" />
         <ElSkeleton v-if="current.loading.value" :rows="5" animated />
-        <ElTable v-else :data="current.data.value?.fields ?? []">
+        <ElTable v-else :data="displayFields.primary">
           <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinLabel(row.normalizedValue) : t('common.missing') }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
+          <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
           <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
           <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
           <ElTableColumn :label="text('attempt')"><template #default="{ row }">{{ date(row.lastAttemptAt) }}</template></ElTableColumn>
         </ElTable>
+        <template v-if="displayFields.extended.length">
+          <ElButton @click="showExtended = !showExtended">{{ text(showExtended ? 'hideExtendedFields' : 'showExtendedFields') }} {{ displayFields.extended.length }}</ElButton>
+          <ElTable v-if="showExtended" :data="displayFields.extended" :aria-label="text('extendedFields')">
+            <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
+            <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }}</template></ElTableColumn>
+            <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
+            <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
+            <ElTableColumn :label="text('attempt')"><template #default="{ row }">{{ date(row.lastAttemptAt) }}</template></ElTableColumn>
+          </ElTable>
+        </template>
       </ElTabPane>
       <ElTabPane :label="text('events')" name="events">
         <p>{{ text('eventNotice') }}</p>
@@ -105,21 +115,12 @@ onMounted(loadCurrent)
         <p>{{ text('runtimeNotice') }}</p>
         <ElSelect v-model="granularity" :aria-label="text('runtime')"><ElOption v-for="key in ['DAY', 'MONTH', 'YEAR']" :key="key" :value="key" :label="text(key)" /></ElSelect>
         <ElAlert v-if="runtime.error.value" :title="runtime.error.value" type="error" :closable="false" />
-        <p v-for="count in runtime.data.value?.synchronization ?? []" :key="count.status">{{ daikinLabel(count.status) }}{{ ': ' }}{{ count.periods }}</p>
-        <ElTable :data="runtimeRows">
-          <ElTableColumn :label="text('period')" min-width="220"><template #default="{ row }">{{ runtimePeriodTime(row.periodStart, row.statisticsZone) }}{{ ' — ' }}{{ runtimePeriodTime(row.periodEnd, row.statisticsZone) }}<br>{{ row.statisticsZone }}</template></ElTableColumn>
-          <ElTableColumn :label="text('value')" min-width="150"><template #default="{ row }"><span v-if="row.metrics == null">{{ t('common.missing') }}</span><div v-for="(value, name) in row.metrics" :key="name">{{ daikinLabel(String(name)) }}{{ ': ' }}{{ value }} {{ row.unit }}</div></template></ElTableColumn>
-          <ElTableColumn :label="text('status')" min-width="180"><template #default="{ row }">{{ daikinLabel(row.lastAttemptStatus) }}<br><ElTag v-if="!row.periodComplete" type="warning">{{ text('incomplete') }}</ElTag><ElTag v-if="!row.ownershipVerified" type="info">{{ text('unverified') }}</ElTag></template></ElTableColumn>
-          <ElTableColumn :label="text('success')" min-width="160"><template #default="{ row }">{{ date(row.lastSuccessAt) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('revisions')"><template #default="{ row }"><ElButton text @click="loadRevisions(row.valueId)">{{ text('revision') }} {{ row.revision }}</ElButton></template></ElTableColumn>
+        <ElTable :data="runtime.data.value?.items ?? []">
+          <ElTableColumn :label="text('period')" min-width="220"><template #default="{ row }">{{ runtimePeriodTime(row.periodStart, runtime.data.value?.statisticsZone ?? 'Asia/Shanghai') }}{{ ' — ' }}{{ runtimePeriodTime(row.periodEnd, runtime.data.value?.statisticsZone ?? 'Asia/Shanghai') }}</template></ElTableColumn>
+          <ElTableColumn :label="text('observedOnHours')" min-width="130"><template #default="{ row }">{{ hours(row.onMillis) }} {{ text('hourUnit') }}</template></ElTableColumn>
+          <ElTableColumn :label="text('observedCoverage')" min-width="160"><template #default="{ row }">{{ hours(row.coveredMillis) }} {{ text('hourUnit') }}{{ '（' }}{{ coverage(row.coveredMillis, row.elapsedMillis) }}{{ '）' }}</template></ElTableColumn>
         </ElTable>
-        <ElButton :loading="runtime.loading.value" @click="loadRuntime()">{{ text('first') }}</ElButton><ElButton :disabled="!runtime.data.value?.nextCursor" @click="loadRuntime(runtime.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
-        <template v-if="revisionId">
-          <h3>{{ text('revisions') }}</h3>
-          <ElAlert v-if="revisions.error.value" :title="revisions.error.value" type="error" :closable="false" />
-          <ElTable :data="revisions.data.value?.items ?? []"><ElTableColumn prop="revision" :label="text('revision')" /><ElTableColumn :label="text('value')"><template #default="{ row }"><div v-for="(value, name) in row.metrics" :key="name">{{ daikinLabel(String(name)) }}{{ ': ' }}{{ value }} {{ row.unit }}</div></template></ElTableColumn><ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.observedAt) }}</template></ElTableColumn></ElTable>
-          <ElButton :loading="revisions.loading.value" :disabled="revisions.data.value?.nextCursor == null" @click="loadRevisions(revisionId, revisions.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
-        </template>
+        <ElButton :loading="runtime.loading.value" @click="loadRuntime()">{{ text('first') }}</ElButton><ElButton :disabled="runtime.data.value?.nextCursor == null" @click="loadRuntime(runtime.data.value?.nextCursor ?? undefined)">{{ text('next') }}</ElButton>
       </ElTabPane>
     </ElTabs>
     <ElEmpty v-if="tab === 'state' && !current.loading.value && !current.error.value && !current.data.value?.fields.length" :description="text('empty')" />

@@ -1,9 +1,12 @@
 package com.platform.iot.daikin.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.iot.daikin.model.DaikinDeviceKey;
+import com.platform.iot.daikin.model.DaikinFieldValue;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -30,6 +33,28 @@ class DaikinDeviceClientBeansTest {
         assertThatThrownBy(() -> new DaikinDeviceClientBeans()
                 .daikinCatalogClientProvider(properties, new ObjectMapper()))
                 .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void productionDecoderRecognizesTheTwoCelsiusFieldsAndAllowsSafeRollback() throws Exception {
+        var properties = properties();
+        var payload = new ObjectMapper().readTree("""
+                {"code":"10000","data":{"curPage":1,"totalPages":1,"totalCount":1,
+                "sites":[{"siteId":"site","controlers":[{"lcNo":"lc","units":[
+                {"unitId":"indoor","roomTemp":27.3,"temperature":24}]}]}]}}
+                """);
+        var fields = DaikinDeviceClientBeans.deviceDecoder(properties)
+                .decode("registered-source", DaikinDeviceKey.Kind.INDOOR, payload, Instant.EPOCH)
+                .devices().getFirst().fields();
+        assertThat(fields.get("roomTemp").status()).isEqualTo(DaikinFieldValue.Status.PRESENT);
+        assertThat(fields.get("roomTemp").normalizedValue()).isEqualTo("27.3");
+        assertThat(fields.get("temperature").normalizedValue()).isEqualTo("24");
+
+        properties.setTemperatureCelsiusConfirmed(false);
+        var disabled = DaikinDeviceClientBeans.deviceDecoder(properties)
+                .decode("registered-source", DaikinDeviceKey.Kind.INDOOR, payload, Instant.EPOCH)
+                .devices().getFirst().fields();
+        assertThat(disabled.get("roomTemp").status()).isEqualTo(DaikinFieldValue.Status.UNCONFIRMED);
     }
 
     private static DaikinDeviceClientProperties properties() {

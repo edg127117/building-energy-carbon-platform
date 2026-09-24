@@ -33,9 +33,13 @@ public class DaikinDeviceClientBeans {
         var client = new DaikinReadonlyClient(configuration, new DaikinV2DeviceWireCodec(mapper),
                 new DaikinHttpTransport.Jdk(configuration.connectTimeout()), mapper, clock);
         var catalog = new DaikinCatalogClient(client,
-                new DaikinCatalogReader(new DaikinDevicePageDecoder(
-                        DaikinDevicePageDecoder.FieldPolicy.unconfirmed()), clock, 1000, 100000));
+                new DaikinCatalogReader(deviceDecoder(properties), clock, 1000, 100000));
         String sourceId = properties.getSourceId();
         return requestedSource -> sourceId.equals(requestedSource) ? Optional.of(catalog) : Optional.empty();
+    }
+
+    static DaikinDevicePageDecoder deviceDecoder(DaikinDeviceClientProperties properties) {
+        return new DaikinDevicePageDecoder(new DaikinDevicePageDecoder.FieldPolicy(
+                properties.isTemperatureCelsiusConfirmed(), null));
     }
 }

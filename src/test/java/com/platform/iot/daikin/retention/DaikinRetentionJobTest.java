@@ -67,6 +67,8 @@ class DaikinRetentionJobTest {
         runtime("retry-old", oldBusiness, "RETRY_WAIT");
         runtime("failed-old", oldBusiness, "FAILED");
         runtime("stale-running", oldBusiness, "RUNNING");
+        jdbc.update("INSERT INTO biz_daikin_observed_runtime_day VALUES ('old','building',1,?,1000,1000)", oldBusiness);
+        jdbc.update("INSERT INTO biz_daikin_observed_runtime_day VALUES ('recent','building',1,?,1000,1000)", recentBusiness);
         round("active", 10, "RUNNING");
         round("finished", 20, "SUCCEEDED");
         inbox("pending", "finished", 21, oldTemperature, "PENDING");
@@ -90,6 +92,8 @@ class DaikinRetentionJobTest {
         assertThat(count("biz_daikin_runtime_job", "job_id='retry-old-j'")).isZero();
         assertThat(count("biz_daikin_runtime_job", "job_id='failed-old-j'")).isZero();
         assertThat(count("biz_daikin_runtime_job", "job_id='stale-running-j'")).isZero();
+        assertThat(count("biz_daikin_observed_runtime_day", "identity_id='old'")).isZero();
+        assertThat(count("biz_daikin_observed_runtime_day", "identity_id='recent'")).isOne();
         assertThat(count("biz_daikin_monitor_inbox", "observation_id='active-done'")).isOne();
         assertThat(count("biz_daikin_monitor_inbox", "observation_id='finished-done'")).isZero();
         assertThat(jdbc.queryForObject("SELECT status FROM biz_daikin_monitor_inbox WHERE observation_id='pending'",

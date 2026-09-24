@@ -1,5 +1,5 @@
 import { requestApi } from '@/infrastructure/http/public'
-import type { CursorPage, DaikinDevice, DaikinException, DeviceCurrent, RuntimePage, RuntimeRevision, StateEvent, TemperatureCurrent, TemperatureHistory } from '../models/daikin'
+import type { CursorPage, DaikinDevice, DaikinException, DeviceCurrent, ObservedRuntimePage, RuntimePage, RuntimeRevision, StateEvent, TemperatureCurrent, TemperatureHistory } from '../models/daikin'
 
 const root = '/v1/hvac-monitoring'
 const device = (id: string) => `${root}/devices/${encodeURIComponent(id)}`
@@ -13,5 +13,6 @@ export const daikinApi = {
   temperature: (id: string, field: string) => requestApi<TemperatureCurrent>({ method: 'GET', url: `${device(id)}/temperatures/current`, params: { field } }),
   history: (id: string, field: string, from: number, to: number, after?: number) => requestApi<TemperatureHistory>({ method: 'GET', url: `${device(id)}/temperatures`, params: { field, from, to, after, limit: 1000 } }),
   runtime: (id: string, granularity: string, cursor?: string) => requestApi<RuntimePage>({ method: 'GET', url: `${device(id)}/runtime`, params: { granularity, cursor, limit: 50 } }),
+  observedRuntime: (id: string, granularity: string, before?: number) => requestApi<ObservedRuntimePage>({ method: 'GET', url: `${device(id)}/observed-runtime`, params: { granularity, before, limit: 50 } }),
   revisions: (id: string, valueId: string, after?: number) => requestApi<{ items: RuntimeRevision[]; nextCursor: number | null }>({ method: 'GET', url: `${device(id)}/runtime/${encodeURIComponent(valueId)}/revisions`, params: { after, limit: 50 } }),
 }

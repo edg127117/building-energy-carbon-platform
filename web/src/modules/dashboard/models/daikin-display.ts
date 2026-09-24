@@ -1,5 +1,5 @@
 import words from '../locales/daikin'
-import type { TemperatureReading } from './daikin'
+import type { CurrentField, TemperatureReading } from './daikin'
 
 /** 已确认枚举翻译；未知厂家值以中文提示并保留原值，不推断其业务含义。 */
 export function daikinLabel(value: string | null | undefined): string {
@@ -11,6 +11,26 @@ export function daikinLabel(value: string | null | undefined): string {
 export function daikinFieldLabel(value: string): string {
   const known: Record<string, string> = words.fieldNames
   return Object.prototype.hasOwnProperty.call(known, value) ? known[value]! : `未确认字段（原始字段名：${value}）`
+}
+
+export function daikinCurrentValue(fieldName: string, value: string | null): string {
+  if (value == null || value === '') return '—'
+  if (fieldName === 'modelName' || fieldName === 'formalName' || fieldName === 'errorCode') return value
+  return daikinLabel(value)
+}
+
+/** 未确认的厂家扩展字段仍可展开核对，但不挤占已确认状态的默认视图。 */
+export function daikinCurrentFields(fields: CurrentField[]): { primary: CurrentField[]; extended: CurrentField[] } {
+  const primary: CurrentField[] = []
+  const extended: CurrentField[] = []
+  for (const field of fields) {
+    const knownField = Object.prototype.hasOwnProperty.call(words.fieldNames, field.fieldName)
+    const knownValue = !field.valueVisible || field.normalizedValue == null || field.normalizedValue === ''
+      || ['modelName', 'formalName', 'errorCode'].includes(field.fieldName)
+      || Object.prototype.hasOwnProperty.call(words.statusNames, field.normalizedValue)
+    ;(knownField && knownValue ? primary : extended).push(field)
+  }
+  return { primary, extended }
 }
 
 /** 断线节点只控制图形连线；所有非空值均直接来自后端质量门禁后的读数。 */

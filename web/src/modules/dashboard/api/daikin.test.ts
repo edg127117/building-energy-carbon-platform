@@ -17,5 +17,7 @@ describe('manufacturer platform query contracts', () => {
     expect(requestApi).toHaveBeenLastCalledWith({ method: 'GET', url: '/v1/hvac-monitoring/buildings/b%2Fa/exceptions/history', params: { cursor: 'cursor', limit: 50 } })
     await daikinApi.runtime('a', 'MONTH', 'hash')
     expect(requestApi).toHaveBeenLastCalledWith({ method: 'GET', url: '/v1/hvac-monitoring/devices/a/runtime', params: { granularity: 'MONTH', cursor: 'hash', limit: 50 } })
+    await daikinApi.observedRuntime('a/b', 'DAY', 0)
+    expect(requestApi).toHaveBeenLastCalledWith({ method: 'GET', url: '/v1/hvac-monitoring/devices/a%2Fb/observed-runtime', params: { granularity: 'DAY', before: 0, limit: 50 } })
   })
 })

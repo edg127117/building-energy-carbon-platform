@@ -32,3 +32,8 @@ export interface RuntimeValue {
 }
 export interface RuntimeRevision extends Omit<RuntimeValue, 'valueId' | 'lastSuccessAt' | 'lastAttemptAt' | 'lastAttemptStatus'> { observedAt: number }
 export interface RuntimePage extends CursorPage<RuntimeValue> { synchronization: { status: string; periods: number }[] }
+export interface ObservedRuntimePage {
+  source: 'PLATFORM_OBSERVED'; granularity: string; statisticsZone: string
+  items: { periodStart: number; periodEnd: number; elapsedMillis: number; onMillis: number; coveredMillis: number }[]
+  nextCursor: number | null
+}

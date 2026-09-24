@@ -37,7 +37,7 @@ public final class DaikinDevicePageDecoder {
             "coolLimitsettempU", "coolLimitsettempL", "heatLimitsettempU", "heatLimitsettempL",
             "fanSpeedSetList", "modeSetList", "onOffModeSetList", "DefaultSetpointRange", "masterSlaveIds");
 
-    /** 单位和压缩机字段须经厂家确认后传入；默认不会输出已确认温度或压缩机值。 */
+    /** 来源适配器按该项目证据显式传入单位和压缩机字段策略；本解码器默认仍保留未确认状态。 */
     public record FieldPolicy(boolean temperatureCelsiusConfirmed, String compressorField) {
         public FieldPolicy {
             if (compressorField != null && !Set.of("mc11", "Mc11").contains(compressorField)) {

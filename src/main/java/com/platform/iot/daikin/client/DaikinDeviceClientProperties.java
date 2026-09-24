@@ -18,4 +18,6 @@ public class DaikinDeviceClientProperties {
     private String password;
     private String communicationKey;
     private String signatureSalt;
+    /** 本项目厂家界面以°C显示室温与设定温度；现场字段对照有异议时可关闭正式温度解码。 */
+    private boolean temperatureCelsiusConfirmed = true;
 }
