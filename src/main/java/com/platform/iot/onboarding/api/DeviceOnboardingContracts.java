@@ -32,16 +32,19 @@ public final class DeviceOnboardingContracts {
             String profileCode,
             int lastProfileVersion,
             String status,
+            @Schema(description = "绑定身份状态：UNBOUND、ACTIVE、INACTIVE、INVALID；与设备台账状态不同")
+            String identityStatus,
             long reportCount,
             long firstSeenTime,
             long lastSeenTime,
             boolean sampleTruncated,
             com.platform.iot.daikin.onboarding.DaikinPendingLocationView location) {
         public PendingListItemView(String pendingId, String identityType, String maskedIdentityValue,
-                                   String profileCode, int lastProfileVersion, String status, long reportCount,
-                                   long firstSeenTime, long lastSeenTime, boolean sampleTruncated) {
+                                   String profileCode, int lastProfileVersion, String status,
+                                   String identityStatus, long reportCount, long firstSeenTime,
+                                   long lastSeenTime, boolean sampleTruncated) {
             this(pendingId, identityType, maskedIdentityValue, profileCode, lastProfileVersion,
-                    status, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null);
+                    status, identityStatus, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null);
         }
     }
 

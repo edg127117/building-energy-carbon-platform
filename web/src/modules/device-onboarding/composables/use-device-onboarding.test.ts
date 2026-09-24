@@ -202,6 +202,7 @@ function page(pendingId: string): OnboardingPage<PendingDevice> {
       profileCode: 'V1',
       lastProfileVersion: 1,
       status: 'DISCOVERED',
+      identityStatus: 'UNBOUND',
       reportCount: 0,
       firstSeenTime: 0,
       lastSeenTime: 0,

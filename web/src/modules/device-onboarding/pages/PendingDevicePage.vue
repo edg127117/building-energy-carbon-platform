@@ -285,9 +285,7 @@ async function openBatchBinding() {
   const rows = selectedRows.value
   const first = rows[0]?.pendingId
   if (!first) return
-  if (rows.length < 2 || rows.some(row => row.status !== 'DISCOVERED'
-      || row.identityType !== 'DAIKIN_UNIT' || row.profileCode !== 'DAIKIN_INDOOR_V2'
-      || !row.location?.roomSpaceId || !row.location.roomCode)) {
+  if (!batchBindingReady.value) {
     ElMessage.warning(t('deviceOnboarding.messages.batchIndoorOnly'))
     return
   }
@@ -300,6 +298,21 @@ async function openBatchBinding() {
 }
 
 const selectedRows = ref<PendingDevice[]>([])
+function canBatchBind(row: PendingDevice) {
+  return row.status === 'DISCOVERED' && row.identityType === 'DAIKIN_UNIT'
+    && row.profileCode === 'DAIKIN_INDOOR_V2' && Boolean(row.location?.roomSpaceId && row.location.roomCode)
+}
+
+function canBatchActivate(row: PendingDevice) {
+  return row.status === 'BOUND' && row.identityStatus === 'INACTIVE'
+}
+
+function selectableForBatch(row: PendingDevice) {
+  return canBatchBind(row) || canBatchActivate(row)
+}
+
+const batchBindingReady = computed(() => selectedRows.value.length > 1 && selectedRows.value.every(canBatchBind))
+const batchActivationReady = computed(() => selectedRows.value.length > 1 && selectedRows.value.every(canBatchActivate))
 function changeSelection(rows: PendingDevice[]) {
   selectedRows.value = rows
   batchPendingIds.value = rows.map(item => item.pendingId)
@@ -314,7 +327,7 @@ function activationLabel(row: PendingDevice) {
 }
 
 function openBatchActivation() {
-  if (selectedRows.value.length < 2 || selectedRows.value.some(row => row.status !== 'BOUND')) {
+  if (!batchActivationReady.value) {
     ElMessage.warning(t('deviceOnboarding.messages.batchActivationBoundOnly'))
     return
   }
@@ -326,7 +339,7 @@ function openBatchActivation() {
 async function submitBatchActivation() {
   if (activationBusy.value || !activationOpen.value) return
   const rows = [...activationRows.value]
-  if (rows.length < 2 || rows.some(row => row.status !== 'BOUND')) return
+  if (rows.length < 2 || rows.some(row => !canBatchActivate(row))) return
   activationBusy.value = true
   const results: typeof activationResults.value = []
   for (const row of rows) {
@@ -360,6 +373,8 @@ async function submitBatchActivation() {
   activationOpen.value = false
   activationResultsOpen.value = true
   await management.loadPendingDevices().catch(() => undefined)
+  selectedRows.value = []
+  batchPendingIds.value = []
 }
 
 async function requestSync() {
@@ -558,10 +573,10 @@ onMounted(() => {
       <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="operationsManagement.syncJobs.value.page" :page-size="operationsManagement.syncJobs.value.size" :total="operationsManagement.syncJobs.value.total" @current-change="changeSyncHistoryPage" /></div>
     </ElDrawer>
     <ElCard shadow="never">
-      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="selectedRows.length < 2 || activationBusy" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="selectedRows.length < 2 || activationBusy" @click="openBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></div>
+      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchBindingReady || activationBusy" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchActivationReady || activationBusy" @click="openBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></div>
       <ElSkeleton v-if="management.pendingLoading.value && !management.pendingDevices.value.items.length" animated :rows="5" />
       <ElTable v-else :data="management.pendingDevices.value.items" row-key="pendingId" @selection-change="changeSelection">
-        <ElTableColumn v-if="operationsMode" type="selection" width="48" />
+        <ElTableColumn v-if="operationsMode" type="selection" width="48" :selectable="selectableForBatch" />
         <ElTableColumn :label="t('deviceOnboarding.labels.identity')" prop="maskedIdentityValue" min-width="200" />
         <ElTableColumn :label="t('deviceOnboarding.labels.expectedProfile')" min-width="150"><template #default="{ row }">{{ operationsMode ? profileText(row.profileCode) : row.profileCode }}</template></ElTableColumn>
         <ElTableColumn v-if="operationsMode" :label="t('deviceOnboarding.labels.roomCode')" min-width="110"><template #default="{ row }">{{ row.location?.roomCode || t('common.missing') }}</template></ElTableColumn>
@@ -570,6 +585,7 @@ onMounted(() => {
         <ElTableColumn :label="t('deviceOnboarding.labels.reportCount')" min-width="110"><template #default="{ row }">{{ formatNumber(row.reportCount) }}</template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.lastSeen')" min-width="180"><template #default="{ row }">{{ formatDateTime(row.lastSeenTime) }}</template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.status')" min-width="100"><template #default="{ row }"><PendingStatusTag :status="row.status" /></template></ElTableColumn>
+        <ElTableColumn v-if="operationsMode" :label="t('deviceOnboarding.labels.identityStatus')" min-width="115" fixed="right"><template #default="{ row }"><ElTag :type="row.identityStatus === 'ACTIVE' ? 'success' : row.identityStatus === 'INACTIVE' ? 'warning' : row.identityStatus === 'INVALID' ? 'danger' : 'info'">{{ t(`deviceOnboarding.identityStatus.${row.identityStatus || 'INVALID'}`) }}</ElTag></template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.actions.viewDetail')" min-width="260" fixed="right"><template #default="{ row }"><div class="row-actions"><ElButton :icon="Eye" link @click="openDetail(row.pendingId)">{{ t('deviceOnboarding.actions.viewDetail') }}</ElButton><ElPopconfirm v-if="can(row, 'IGNORE')" :title="t('deviceOnboarding.messages.ignoreConfirm')" :confirm-button-text="t('deviceOnboarding.actions.ignore')" :cancel-button-text="t('deviceOnboarding.actions.cancel')" @confirm="ignore(asPending(row))"><template #reference><ElButton link type="warning">{{ t('deviceOnboarding.actions.ignore') }}</ElButton></template></ElPopconfirm><ElButton v-if="can(row, 'RESTORE')" link @click="restore(asPending(row))">{{ t('deviceOnboarding.actions.restore') }}</ElButton><ElButton v-if="can(row, 'BIND')" :icon="Settings2" link type="primary" @click="openBindingFor(asPending(row))">{{ t('deviceOnboarding.actions.prepareBinding') }}</ElButton></div></template></ElTableColumn>
         <template #empty><ElEmpty :description="t('deviceOnboarding.empty.pending')" /></template>
       </ElTable>
@@ -618,7 +634,7 @@ onMounted(() => {
 
     <ElDialog v-model="activationOpen" :title="t('deviceOnboarding.actions.batchActivateIdentity')" :close-on-click-modal="!activationBusy" :close-on-press-escape="!activationBusy" :show-close="!activationBusy" width="min(620px, 94vw)">
       <p>{{ t('deviceOnboarding.messages.batchActivationConfirm') }}{{ activationRows.length }}</p>
-      <ul class="activation-preview"><li v-for="row in activationRows" :key="row.pendingId">{{ activationLabel(row) }}</li></ul>
+      <ul class="activation-preview"><li v-for="row in activationRows" :key="row.pendingId">{{ t('deviceOnboarding.messages.batchActivationPreviewRow', { device: activationLabel(row) }) }}</li></ul>
       <template #footer><ElButton :disabled="activationBusy" @click="activationOpen = false">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :loading="activationBusy" @click="submitBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></template>
     </ElDialog>
     <ElDialog v-model="activationResultsOpen" :title="t('deviceOnboarding.pending.activationResults')" width="min(760px, 94vw)">

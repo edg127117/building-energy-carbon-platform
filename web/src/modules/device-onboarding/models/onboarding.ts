@@ -62,6 +62,7 @@ export type PendingDevice = {
   profileCode: string
   lastProfileVersion: number
   status: string
+  identityStatus: 'UNBOUND' | 'ACTIVE' | 'INACTIVE' | 'INVALID'
   reportCount: number
   firstSeenTime: number
   lastSeenTime: number
@@ -76,7 +77,7 @@ export type DaikinPendingLocation = {
   assetReferenceCode: string
 }
 
-export type PendingDeviceDetail = Omit<PendingDevice, 'maskedIdentityValue'> & {
+export type PendingDeviceDetail = Omit<PendingDevice, 'maskedIdentityValue' | 'identityStatus'> & {
   identityValue: string
   boundIdentityId: string | null
   latestEventTime: number
