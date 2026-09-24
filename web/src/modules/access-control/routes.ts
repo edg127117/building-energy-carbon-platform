@@ -6,6 +6,7 @@ export const accessControlMenuRoutes: readonly MenuRouteRegistration[] = [
   { path: '/configuration/access/roles', routeName: 'system-roles' },
   { path: '/configuration/settings/menus', routeName: 'system-menus' },
   { path: '/configuration/access/buildingAccess', routeName: 'system-building-access' },
+  { path: '/configuration/access/changeRequests', routeName: 'system-change-requests' },
 ]
 
 /** 页面仅注册规范工作区路径，后端 API 地址不受前端路由迁移影响。 */
@@ -33,5 +34,11 @@ export const routes: RouteRecordRaw[] = [
     name: 'system-building-access',
     component: () => import('./pages/BuildingAccessManagementPage.vue'),
     meta: { requiresPlatformAdmin: true, titleKey: 'accessControl.buildingAccess.title' },
+  },
+  {
+    path: '/configuration/access/changeRequests',
+    name: 'system-change-requests',
+    component: () => import('./pages/SensitiveChangePage.vue'),
+    meta: { titleKey: 'accessControl.change.title' },
   },
 ]

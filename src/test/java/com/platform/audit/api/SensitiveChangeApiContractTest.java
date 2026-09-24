@@ -143,6 +143,20 @@ class SensitiveChangeApiContractTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("EXECUTED"));
 
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "MINE").param("view", "ACTIVE")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(0));
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "MINE").param("view", "HISTORY")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(1))
+                .andExpect(jsonPath("$.data.items[0].requestId").value(requestId));
+        mockMvc.perform(get("/v1/backoffice/change-requests")
+                        .param("scope", "REVIEW").param("view", "HISTORY")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest());
+
         JsonNode openApi = json(mockMvc.perform(get("/v3/api-docs")
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn());

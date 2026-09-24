@@ -97,11 +97,12 @@ export function getChangeRequest(requestId: string): Promise<SensitiveChange> {
   })
 }
 
-export function listChangeRequests(scope: 'MINE' | 'REVIEW', page = 1, size = 10): Promise<SensitiveChangeList> {
+export function listChangeRequests(scope: 'MINE' | 'REVIEW', page = 1, size = 10,
+  view: 'ALL' | 'ACTIVE' | 'HISTORY' = 'ALL'): Promise<SensitiveChangeList> {
   return requestApi<SensitiveChangeList>({
     method: 'get',
     url: '/v1/backoffice/change-requests',
-    params: { scope, page, size },
+    params: { scope, page, size, view },
   })
 }
 

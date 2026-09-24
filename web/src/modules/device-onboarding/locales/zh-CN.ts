@@ -26,6 +26,7 @@ export default {
     daikinTabDescription: '同步并接入大金厂家目录中的空调设备。',
     generalTabDescription: '处理通过标准报文发现的其他待接入设备。',
     bindingResults: '绑定申请结果',
+    batchPreview: '逐台绑定预览',
   },
   actions: {
     showAll: '查看全部设备', returnToDraft: '返回接入草稿',
@@ -216,6 +217,15 @@ export default {
     syncSourceBoundary: '这里只显示当前账号有权使用且已经完成接口配置的数据源。厂家账号、密钥和接口地址由配置管理员在后台维护。',
     syncHistoryBoundary: '记录按发起时间倒序展示，并按当前账号的建筑权限实时过滤。任务编号和失败代码仅在运维技术详情中提供。',
     batchBoundary: '批量申请逐台独立处理；部分成功不代表整批成功，请按每台结果核对审批申请。',
+    batchSpaceBoundary: '每台内机使用已核对的房间创建独立设备，设备名称为“大金内机-房间号”；这里只共同选择产品、建筑和系统分组。',
+    batchIndoorOnly: '批量绑定只支持已核对房间位置的待处理大金内机；请调整所选设备。',
+    batchEquipmentNamePrefix: '大金内机',
+    batchErrors: {
+      invalidSelection: '只能批量选择待处理的大金内机。',
+      unsupportedBinding: '批量绑定只能为无数值测点的内机逐台新建设备。',
+      missingLocation: '有内机缺少已核对的房间映射，请先逐台核对。',
+      duplicateRoom: '本批有多台内机位于同一房间，需逐台核对设备名称。',
+    },
   },
   empty: {
     products: '暂无产品模板',
@@ -264,5 +274,7 @@ export default {
     bindingTarget: '请选择已有设备，或填写新建设备名称。',
     bindingPoints: '请完成所有必需测点的映射信息。',
     bindingNumericSource: '温度测点必须选择同建筑、已启用的 HTTP 数值来源。',
+    batchPoints: '批量绑定暂只支持无数值测点的内机产品；含测点时请逐台绑定。',
+    batchLocation: '有内机缺少已核对的房间位置，请先逐台核对。',
   },
 } as const

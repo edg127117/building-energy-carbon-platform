@@ -63,6 +63,12 @@ describe('navigation authorization mapping', () => {
     expect(result.map(page => page.title)).toEqual(['角色授权', '用户维护'])
   })
 
+  it('recognizes the dedicated sensitive change application menu', () => {
+    expect(authorizedPages(tree('configuration', 'access', [
+      menu('/configuration/access/changeRequests', { menuName: '敏感变更申请' }),
+    ])).map(page => page.title)).toEqual(['敏感变更申请'])
+  })
+
   it('does not render children of disabled or hidden directories', () => {
     expect(authorizedPages([menu('/configuration', { menuType: 'M', status: 0, children: [
       menu('/configuration/access', { menuType: 'M', children: [menu('/configuration/access/users')] }),

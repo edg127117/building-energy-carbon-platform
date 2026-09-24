@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DaikinSyncJob, OnboardingPage, PendingDevice } from '../models/onboarding'
-import { getOperationsPendingDevice, listDaikinDirectorySyncJobs, listDaikinSources, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, updatePendingStatus } from '../api/onboarding'
+import { getOperationsPendingDevice, listDaikinDirectorySyncJobs, listDaikinSources, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, submitOperationsBindingBatch, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -148,6 +148,22 @@ describe('设备接入异步状态', () => {
     expect(management.selectedDirectory.value?.sourceId).toBe('source-1')
     expect(management.pendingDevices.value.items[0]?.location).toEqual(location)
     expect(management.selectedDirectory.value?.location).toEqual(location)
+  })
+
+  it('批量申请逐台保留不同空间和设备名称', async () => {
+    vi.mocked(listOperationsPendingDevices).mockResolvedValue(emptyPending)
+    vi.mocked(submitOperationsBindingBatch).mockResolvedValue([])
+    const management = useDeviceOnboarding({ operations: true })
+    const common = { productId: 'P1', buildingId: 'BLD001', systemGroupId: 'G1', pointBindings: [], newEquipment: { manufacturer: '大金' } }
+    const items = [
+      { pendingId: 'D1', binding: { ...common, spaceId: 'S1', newEquipment: { ...common.newEquipment, equipmentName: '大金内机-B314-3' } } },
+      { pendingId: 'D2', binding: { ...common, spaceId: 'S2', newEquipment: { ...common.newEquipment, equipmentName: '大金内机-B303-2' } } },
+    ]
+    await management.submitBindingBatch(items, new Map([['D1', 'key-1'], ['D2', 'key-2']]))
+    expect(submitOperationsBindingBatch).toHaveBeenCalledWith([
+      { ...items[0], idempotencyKey: 'key-1' },
+      { ...items[1], idempotencyKey: 'key-2' },
+    ])
   })
 
   it('从持久化历史恢复最新同步任务并支持空历史', async () => {

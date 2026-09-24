@@ -167,17 +167,22 @@ public class SensitiveChangeService {
     }
 
     public enum ListScope { MINE, REVIEW }
+    public enum ListView { ALL, ACTIVE, HISTORY }
 
     @Transactional(readOnly = true)
-    public PageResponse<SensitiveChangeRepository.ListItem> list(long userId, ListScope scope, int page, int size) {
+    public PageResponse<SensitiveChangeRepository.ListItem> list(long userId, ListScope scope,
+            ListView view, int page, int size) {
         if (page < 1 || size < 1 || size > 50) {
             throw new BusinessException(400, AuditGovernanceErrors.REQUEST_CONFLICT, "申请列表分页参数无效");
         }
         boolean reviewQueue = scope == ListScope.REVIEW;
         if (reviewQueue) dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
+        if (reviewQueue && view != ListView.ALL) {
+            throw new BusinessException(400, AuditGovernanceErrors.REQUEST_CONFLICT, "审核待办不支持历史筛选");
+        }
         boolean allowSelfApproval = properties.isAllowSelfApproval()
                 && properties.getEnvironmentMode() != AuditEnvironmentMode.PRODUCTION;
-        return repository.list(userId, reviewQueue, allowSelfApproval, page, size);
+        return repository.list(userId, reviewQueue, allowSelfApproval, view, page, size);
     }
 
     private SensitiveChangeExecutionResult executeApproved(long reviewerId, String requestId) {

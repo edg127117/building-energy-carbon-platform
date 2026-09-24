@@ -14,10 +14,13 @@ import {
   ElRadioGroup,
   ElSelect,
   ElSkeleton,
+  ElTable,
+  ElTableColumn,
 } from '@/shared/ui'
 import { t } from '@/locales'
 import { flattenSpaces, useAssetManagement, type AssetPoint } from '@/modules/asset-management/public'
-import type { BindingProduct, DeviceProductListItem, NumericSourceOption, OperationsBindingOptions, PendingBindRequest, PendingDeviceDetail, PointBinding, PointNamingRule } from '../models/onboarding'
+import type { BindingProduct, DeviceProductListItem, NumericSourceOption, OperationsBindingOptions, PendingBindRequest, PendingDevice, PendingDeviceDetail, PointBinding, PointNamingRule } from '../models/onboarding'
+import { indoorEquipmentName } from '../models/indoor-batch-binding'
 
 type BindingMode = 'existing' | 'new'
 type BindingPointMode = 'existing' | 'new'
@@ -50,8 +53,9 @@ const props = withDefaults(defineProps<{
   numericSources?: NumericSourceOption[]
   numericSourcesLoading?: boolean
   bindingOptions?: OperationsBindingOptions | null
+  batchRows?: PendingDevice[]
   submitError?: string | null
-}>(), { pending: null, product: null, productLoading: false, productTotal: 0, productPage: 1, productSize: 20, namingRules: () => [], namingRulesLoading: false, submitting: false, allowEmptyPoints: false, productSearchEnabled: true, numericSources: () => [], numericSourcesLoading: false, bindingOptions: null, submitError: null })
+}>(), { pending: null, product: null, productLoading: false, productTotal: 0, productPage: 1, productSize: 20, namingRules: () => [], namingRulesLoading: false, submitting: false, allowEmptyPoints: false, productSearchEnabled: true, numericSources: () => [], numericSourcesLoading: false, bindingOptions: null, batchRows: () => [], submitError: null })
 const emit = defineEmits<{
   close: []
   'product-change': [productId: string]
@@ -78,6 +82,14 @@ const form = reactive({
   bindings: {} as Record<string, BindingRow>,
 })
 const productPoints = computed(() => props.product?.productId === form.productId ? props.product.points.filter(point => point.enabled) : [])
+const batchMode = computed(() => props.batchRows.length > 1)
+const batchPreview = computed(() => props.batchRows.map(row => ({
+  pendingId: row.pendingId,
+  roomCode: row.location?.roomCode ?? '',
+  monitorAddress: row.location?.monitorAddress ?? '',
+  assetReferenceCode: row.location?.assetReferenceCode ?? '',
+  equipmentName: row.location?.roomCode ? indoorEquipmentName(row.location.roomCode, t('deviceOnboarding.messages.batchEquipmentNamePrefix')) : '',
+})))
 const hasIncludedPoints = computed(() => productPoints.value.some(point => form.bindings[point.metricCode]?.include))
 const automaticPointCreation = computed(() => form.mode === 'new'
   && props.pending?.identityType !== 'DAIKIN_UNIT' && productPoints.value.length > 0)
@@ -120,8 +132,8 @@ function syncProduct(product: BindingProduct | null | undefined) {
 
 function reset() {
   Object.assign(form, {
-    productId: '', buildingId: props.bindingOptions?.buildingId, spaceId: undefined, systemGroupId: undefined,
-    mode: 'new', existingEquipmentId: undefined, equipmentName: '', manufacturer: '', pointCodePrefix: '', numericSourceId: undefined, bindings: {},
+    productId: '', buildingId: props.bindingOptions?.buildingId, spaceId: props.batchRows[0]?.location?.roomSpaceId, systemGroupId: undefined,
+    mode: 'new', existingEquipmentId: undefined, equipmentName: batchMode.value ? t('deviceOnboarding.messages.batchEquipmentNamePrefix') : '', manufacturer: '', pointCodePrefix: '', numericSourceId: undefined, bindings: {},
   })
   validationKey.value = null
   if (!props.bindingOptions) {
@@ -134,7 +146,7 @@ function changeProduct(productId: string) {
   validationKey.value = null
   form.productId = productId
   form.bindings = {}
-  form.spaceId = undefined
+  form.spaceId = props.batchRows[0]?.location?.roomSpaceId
   form.systemGroupId = undefined
   form.existingEquipmentId = undefined
   clearExistingPointSelections()
@@ -239,6 +251,8 @@ function submit() {
 function validate(): string | null {
   if (!form.productId || !props.product) return 'validation.bindingProduct'
   if (!form.buildingId || !form.spaceId || !form.systemGroupId) return 'validation.bindingScope'
+  if (batchMode.value && props.batchRows.some(row => !row.location?.roomSpaceId || !row.location.roomCode)) return 'validation.batchLocation'
+  if (batchMode.value && productPoints.value.length > 0) return 'validation.batchPoints'
   if (form.mode === 'existing' && !form.existingEquipmentId) return 'validation.bindingTarget'
   if (form.mode === 'new' && !form.equipmentName.trim()) return 'validation.bindingTarget'
   if (automaticPointCreation.value) return null
@@ -296,12 +310,22 @@ function joinPointCode(prefix: string, suffix: string): string {
         </ol>
         <p>{{ t('deviceOnboarding.prerequisites.boundary') }}</p>
       </section>
-      <div class="form-grid"><ElFormItem :label="t('deviceOnboarding.labels.productName')" required><ElSelect v-model="form.productId" class="wide-control" :filterable="productSearchEnabled" :remote="productSearchEnabled" :remote-method="keyword => emit('product-search', keyword)" :loading="productLoading" @change="changeProduct"><ElOption v-for="item in products" :key="item.productId" :label="`${item.productName} · ${item.productCode}`" :value="item.productId" /></ElSelect><ElPagination size="small" layout="total, prev, next" :current-page="productPage" :page-size="productSize" :total="productTotal" @current-change="page => emit('product-page-change', page)" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.building')" required><ElSelect v-model="form.buildingId" class="wide-control" :disabled="Boolean(bindingOptions)" @change="changeBuilding"><ElOption v-for="item in buildingOptions" :key="item.value" :label="item.label" :value="item.value" /></ElSelect></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.space')" required><ElSelect v-model="form.spaceId" class="wide-control" @change="changeScope"><ElOption v-for="item in scopeSpaces" :key="item.spaceId" :label="item.spaceName" :value="item.spaceId" /></ElSelect></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.systemGroup')" required><ElSelect v-model="form.systemGroupId" class="wide-control" @change="changeScope"><ElOption v-for="item in scopeSystems" :key="item.systemGroupId" :label="item.systemName" :value="item.systemGroupId" /></ElSelect></ElFormItem></div>
+      <div class="form-grid"><ElFormItem :label="t('deviceOnboarding.labels.productName')" required><ElSelect v-model="form.productId" class="wide-control" :filterable="productSearchEnabled" :remote="productSearchEnabled" :remote-method="keyword => emit('product-search', keyword)" :loading="productLoading" @change="changeProduct"><ElOption v-for="item in products" :key="item.productId" :label="`${item.productName} · ${item.productCode}`" :value="item.productId" /></ElSelect><ElPagination size="small" layout="total, prev, next" :current-page="productPage" :page-size="productSize" :total="productTotal" @current-change="page => emit('product-page-change', page)" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.building')" required><ElSelect v-model="form.buildingId" class="wide-control" :disabled="Boolean(bindingOptions)" @change="changeBuilding"><ElOption v-for="item in buildingOptions" :key="item.value" :label="item.label" :value="item.value" /></ElSelect></ElFormItem><ElFormItem v-if="!batchMode" :label="t('deviceOnboarding.labels.space')" required><ElSelect v-model="form.spaceId" class="wide-control" @change="changeScope"><ElOption v-for="item in scopeSpaces" :key="item.spaceId" :label="item.spaceName" :value="item.spaceId" /></ElSelect></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.systemGroup')" required><ElSelect v-model="form.systemGroupId" class="wide-control" @change="changeScope"><ElOption v-for="item in scopeSystems" :key="item.systemGroupId" :label="item.systemName" :value="item.systemGroupId" /></ElSelect></ElFormItem></div>
       <ElAlert v-if="pending?.identityType === 'DAIKIN_UNIT' && !productLoading && productTotal === 0" :title="t('deviceOnboarding.messages.noCompatibleProduct')" type="warning" show-icon :closable="false" />
       <ElAlert v-if="pending?.identityType === 'DAIKIN_UNIT'" :title="t('deviceOnboarding.messages.daikinSystemScope')" type="info" show-icon :closable="false" />
-      <ElFormItem :label="t('deviceOnboarding.labels.targetEquipment')" required><ElRadioGroup v-model="form.mode" @change="changeEquipmentMode"><ElRadio value="existing">{{ t('deviceOnboarding.labels.existingEquipment') }}</ElRadio><ElRadio value="new">{{ t('deviceOnboarding.labels.newEquipment') }}</ElRadio></ElRadioGroup></ElFormItem>
+      <ElFormItem v-if="!batchMode" :label="t('deviceOnboarding.labels.targetEquipment')" required><ElRadioGroup v-model="form.mode" @change="changeEquipmentMode"><ElRadio value="existing">{{ t('deviceOnboarding.labels.existingEquipment') }}</ElRadio><ElRadio value="new">{{ t('deviceOnboarding.labels.newEquipment') }}</ElRadio></ElRadioGroup></ElFormItem>
       <template v-if="form.mode === 'existing'"><ElFormItem :label="t('deviceOnboarding.labels.existingEquipment')" required><ElSelect v-model="form.existingEquipmentId" class="wide-control" @change="changeEquipment"><ElOption v-for="item in equipmentOptions" :key="item.equipmentId" :label="item.equipmentName" :value="item.equipmentId" /></ElSelect><ElPagination v-if="bindingOptions" size="small" layout="total, prev, next" :current-page="bindingOptions.equipmentPage" :page-size="bindingOptions.equipmentSize" :total="bindingOptions.equipmentTotal" @current-change="page => emit('equipment-page-change', page, form.spaceId, form.systemGroupId)" /></ElFormItem></template>
-      <template v-else><div class="form-grid"><ElFormItem :label="t('deviceOnboarding.labels.equipmentName')" required><ElInput v-model="form.equipmentName" maxlength="100" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem></div></template>
+      <template v-else><div class="form-grid"><ElFormItem v-if="!batchMode" :label="t('deviceOnboarding.labels.equipmentName')" required><ElInput v-model="form.equipmentName" maxlength="100" /></ElFormItem><ElFormItem :label="t('deviceOnboarding.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem></div></template>
+      <section v-if="batchMode" class="batch-preview">
+        <h2>{{ t('deviceOnboarding.pending.batchPreview') }}</h2>
+        <ElAlert :title="t('deviceOnboarding.messages.batchSpaceBoundary')" type="info" show-icon :closable="false" />
+        <ElTable :data="batchPreview" row-key="pendingId" max-height="320">
+          <ElTableColumn :label="t('deviceOnboarding.labels.roomCode')" prop="roomCode" min-width="100" />
+          <ElTableColumn :label="t('deviceOnboarding.labels.monitorAddress')" prop="monitorAddress" min-width="110" />
+          <ElTableColumn :label="t('deviceOnboarding.labels.assetReferenceCode')" prop="assetReferenceCode" min-width="150" />
+          <ElTableColumn :label="t('deviceOnboarding.labels.equipmentName')" prop="equipmentName" min-width="180" />
+        </ElTable>
+      </section>
       <ElFormItem v-if="allowEmptyPoints && hasIncludedPoints && !automaticPointCreation" :label="t('deviceOnboarding.labels.numericSource')" required><ElSelect v-model="form.numericSourceId" class="wide-control" :loading="numericSourcesLoading"><ElOption v-for="item in numericSources" :key="item.sourceId" :label="`${item.sourceName} · ${item.sourceCode}`" :value="item.sourceId" /></ElSelect></ElFormItem>
       <ElSkeleton v-if="productLoading || (!bindingOptions && assets.scopeLoading.value)" animated :rows="4" />
       <ElAlert v-else-if="!bindingOptions && assets.buildingsError.value" :title="assets.buildingsError.value.message" type="error" show-icon :closable="false" />

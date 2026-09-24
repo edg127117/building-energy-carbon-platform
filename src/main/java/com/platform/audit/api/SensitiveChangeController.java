@@ -49,8 +49,9 @@ public class SensitiveChangeController {
     @GetMapping
     public Result<PageResponse<ListItemView>> list(Authentication authentication,
             @RequestParam(defaultValue = "MINE") SensitiveChangeService.ListScope scope,
+            @RequestParam(defaultValue = "ALL") SensitiveChangeService.ListView view,
             @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "10") int size) {
-        var result = service.list(SecurityUser.userId(authentication), scope, page, size);
+        var result = service.list(SecurityUser.userId(authentication), scope, view, page, size);
         return Result.success(new PageResponse<>(result.page(), result.size(), result.total(),
                 result.items().stream().map(ListItemView::from).toList()));
     }
