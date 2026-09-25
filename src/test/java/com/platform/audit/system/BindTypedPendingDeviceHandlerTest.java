@@ -22,7 +22,8 @@ class BindTypedPendingDeviceHandlerTest {
         ObjectMapper mapper = new ObjectMapper();
         DeviceOnboardingService service = mock(DeviceOnboardingService.class);
         SystemSensitiveCommandSupport support = new SystemSensitiveCommandSupport(mapper);
-        BindTypedPendingDeviceHandler handler = new BindTypedPendingDeviceHandler(support, service);
+        BindTypedPendingDeviceHandler handler = new BindTypedPendingDeviceHandler(support, service,
+                mock(com.platform.iot.temperature.TemperaturePlanService.class));
         var point = new DeviceOnboardingContracts.PointBindingRequest(
                 " roomTemp ", null, " AHU1_roomTemp ", " 室温 ", " RULE_AHU_MAIN ",
                 " AHU ", " MAIN ", " AI ");

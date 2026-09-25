@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ElRadioGroup, ElSelect } from '@/shared/ui'
+import { ElButton, ElInput, ElRadioGroup, ElSelect } from '@/shared/ui'
 import BindingDraftDialog from './BindingDraftDialog.vue'
 
 const assets = {
@@ -110,7 +110,63 @@ describe('绑定准备弹窗', () => {
     expect(wrapper.text()).toContain('逐台绑定预览')
     expect(wrapper.text()).toContain('大金内机-B314-3')
     expect(wrapper.text()).toContain('大金内机-B303-2')
-    expect(wrapper.findAllComponents(ElRadioGroup)).toHaveLength(0)
+    expect(wrapper.findAllComponents(ElRadioGroup)).toHaveLength(1)
     expect(wrapper.text()).toContain('每台内机使用已核对的房间')
+  })
+
+  it('大金室内机默认自动匹配，并且不混入旧测点映射', async () => {
+    const bindingOptions = {
+      buildingId: 'BLD001', buildingName: '创新港大楼',
+      spaces: [{ spaceId: 'S1', parentSpaceId: null, spaceName: 'B303' }],
+      systems: [{ systemGroupId: 'G1', systemName: '空调系统' }],
+      equipmentPage: 1, equipmentSize: 20, equipmentTotal: 0, equipment: [],
+    }
+    const wrapper = mount(BindingDraftDialog, {
+      props: {
+        open: true,
+        pending: { ...pending, identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2' },
+        product,
+        products: [product],
+        allowEmptyPoints: true,
+        bindingOptions,
+        temperatureOptions: { templates: [{ productId: 'T1', productName: '大金双温度模板' }], numericSources: [{ sourceId: 'S1', sourceName: '厂家温度来源' }], rules: [] },
+      },
+    })
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElRadioGroup).at(-1)!.props('modelValue')).toBe('AUTO')
+    const selects = wrapper.findAllComponents(ElSelect)
+    selects[2]!.vm.$emit('update:modelValue', 'S1')
+    selects[2]!.vm.$emit('change', 'S1')
+    selects[3]!.vm.$emit('update:modelValue', 'G1')
+    selects[3]!.vm.$emit('change', 'G1')
+    const name = wrapper.findAllComponents(ElInput)[0]!
+    name.vm.$emit('update:modelValue', '大金内机-B303')
+    await nextTick()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '预览温度测点')!.trigger('click')
+    expect(wrapper.emitted('temperature-preview')?.at(-1)?.[0]).toEqual(expect.objectContaining({
+      pendingId: 'D1', mode: 'AUTO', binding: expect.objectContaining({
+        buildingId: 'BLD001', spaceId: 'S1', systemGroupId: 'G1', pointBindings: [],
+      }),
+    }))
+    wrapper.unmount()
+  })
+
+  it('批量大金内机允许含测点产品走温度计划，但仍不展示旧手工逐点映射', async () => {
+    const rows = [
+      { ...pending, identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S1', roomCode: 'B314-3', monitorAddress: '1-10', assetReferenceCode: 'F000011' } },
+      { ...pending, pendingId: 'D2', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S2', roomCode: 'B303-2', monitorAddress: '1-08', assetReferenceCode: 'F000009' } },
+    ]
+    const wrapper = mount(BindingDraftDialog, {
+      props: {
+        open: true, pending: rows[0], batchRows: rows, product, products: [product], allowEmptyPoints: true,
+        bindingOptions: { buildingId: 'BLD001', buildingName: '创新港大楼', spaces: [], systems: [], equipmentPage: 1, equipmentSize: 20, equipmentTotal: 0, equipment: [] },
+        temperatureOptions: { templates: [], numericSources: [], rules: [] },
+      },
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('温度测点接入')
+    expect(wrapper.text()).not.toContain('测点映射')
+    expect(wrapper.findAllComponents(ElRadioGroup)).toHaveLength(1)
+    wrapper.unmount()
   })
 })

@@ -103,7 +103,7 @@ function changePageSize(size: number) {
 
 type BatchGroup = 'BIND' | 'ACTIVATE'
 function batchGroup(item: SensitiveChangeListItem): BatchGroup | null {
-  if (['BIND_PENDING_DEVICE', 'BIND_TYPED_PENDING_DEVICE'].includes(item.operationCode)) return 'BIND'
+  if (['BIND_PENDING_DEVICE', 'BIND_TYPED_PENDING_DEVICE', 'BIND_HVAC_TEMPERATURE'].includes(item.operationCode)) return 'BIND'
   if (item.operationCode === 'ACTIVATE_DEVICE_IDENTITY') return 'ACTIVATE'
   return null
 }
@@ -220,6 +220,9 @@ function operationLabel(operation?: string) {
     DISABLE_DEVICE_PRODUCT: 'disableDeviceProduct',
     BIND_PENDING_DEVICE: 'bindPendingDevice',
     BIND_TYPED_PENDING_DEVICE: 'bindTypedPendingDevice',
+    BIND_HVAC_TEMPERATURE: 'bindHvacTemperature',
+    INITIALIZE_HVAC_TEMPERATURE: 'initializeHvacTemperature',
+    CONFIGURE_TEMPERATURE_RULE: 'configureTemperatureRule',
     ACTIVATE_DEVICE_IDENTITY: 'activateDeviceIdentity',
     DEACTIVATE_DEVICE_IDENTITY: 'deactivateDeviceIdentity',
     PUBLISH_PROTOCOL_CONFIGURATION: 'publishProtocolConfiguration',
@@ -236,9 +239,9 @@ function operationLabel(operation?: string) {
 function impactLabel(summary?: string | null) {
   if (!summary) return ''
   if (!summary.includes('=')) return summary
-  const fields = new Set(['buildingId', 'bindingType', 'pointCount', 'pointMode', 'productId', 'equipmentName', 'action',
+  const fields = new Set(['buildingId', 'bindingType', 'pointCount', 'pointMode', 'productId', 'equipmentName', 'action', 'adapter',
     'userId', 'roleId', 'roleCount', 'buildingCount', 'menuCount', 'menuId', 'menuName', 'menuType', 'status'])
-  const values = new Set(['TYPED_STATE', 'AUTO', 'MANUAL', 'ENABLE', 'DISABLE', 'ACTIVATE', 'DEACTIVATE', 'ACTIVE', 'INACTIVE', 'M', 'C', 'F'])
+  const values = new Set(['TYPED_STATE', 'AUTO', 'MANUAL', 'ENABLE', 'DISABLE', 'ACTIVATE', 'DEACTIVATE', 'ACTIVE', 'INACTIVE', 'M', 'C', 'F', 'CONFIGURE', 'DAIKIN_INDOOR_V2'])
   const parts = summary.split(';').map(part => {
     const separator = part.indexOf('=')
     if (separator < 1) return null

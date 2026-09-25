@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
 import {
   copyDeviceProduct,
+  createHvacTemperatureBatchJob,
+  createHvacTemperatureInitializationJob,
+  createHvacTemperatureRuleRequest,
   getDaikinDirectorySync,
+  getHvacTemperatureBatchJob,
+  getLatestHvacTemperatureBatchJob,
+  getHvacTemperatureBindingOptions,
   getOperationsPendingDevice,
   getOperationsCompatibleProduct,
   getOperationsBindingOptions,
@@ -16,6 +22,9 @@ import {
   listPendingDevices,
   listPointNamingRules,
   requestDaikinDirectorySync,
+  retryHvacTemperatureBatchJob,
+  previewHvacTemperatureBindings,
+  previewHvacTemperatureInitialization,
   submitOperationsBinding,
   submitOperationsBindingBatch,
   submitOperationsIdentityStatus,
@@ -108,5 +117,62 @@ describe('设备接入接口契约', () => {
     expect(requestApi).toHaveBeenNthCalledWith(2, { method: 'post', url: '/v1/daikin/sources/source%2FA/sync-jobs' })
     expect(requestApi).toHaveBeenNthCalledWith(3, { method: 'get', url: '/v1/daikin/sources/source%2FA/sync-jobs/job%2F1' })
     expect(requestApi).toHaveBeenNthCalledWith(4, { method: 'get', url: '/v1/daikin/sync-jobs', params: { page: 2, size: 10 } })
+  })
+
+  it('温度绑定使用服务端预览摘要、持久批量任务和审批规则接口', async () => {
+    const binding = {
+      productId: 'P-01', buildingId: 'B-01', spaceId: 'S-01', systemGroupId: 'G-01',
+      existingEquipmentId: null, newEquipment: { equipmentName: '大金内机-B303', manufacturer: '大金' }, pointBindings: [],
+      temperatureMode: 'AUTO' as const,
+    }
+    await getHvacTemperatureBindingOptions('D/01')
+    await previewHvacTemperatureBindings([{ pendingId: 'D/01', mode: 'AUTO', binding }])
+    await createHvacTemperatureBatchJob('stable-temperature', [{ pendingId: 'D/01', mode: 'AUTO', numericSourceId: 'SRC-01', digest: 'digest-01' }])
+    await getHvacTemperatureBatchJob('job/1')
+    await getLatestHvacTemperatureBatchJob('D/01')
+    await retryHvacTemperatureBatchJob('job/1', ['D/01'])
+    await createHvacTemperatureRuleRequest({
+      idempotencyKey: 'stable-rule',
+      rule: { adapterId: 'DAIKIN_INDOOR_V2', buildingId: 'B-01', sourceScope: '', model: '', templateProductId: 'TP-01', numericSourceId: 'SRC-01', revision: 0, enabled: true },
+    })
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, { method: 'get', url: '/v1/operations/hvac-temperature-bindings/pending/D%2F01/options' })
+    expect(requestApi).toHaveBeenNthCalledWith(2, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/preview', data: { items: [{ pendingId: 'D/01', mode: 'AUTO', binding }] },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(3, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/batch-jobs',
+      data: { idempotencyKey: 'stable-temperature', items: [{ pendingId: 'D/01', mode: 'AUTO', numericSourceId: 'SRC-01', digest: 'digest-01' }] },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(4, { method: 'get', url: '/v1/operations/hvac-temperature-bindings/batch-jobs/job%2F1' })
+    expect(requestApi).toHaveBeenNthCalledWith(5, {
+      method: 'get', url: '/v1/operations/hvac-temperature-bindings/batch-jobs/latest', params: { pendingId: 'D/01' },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(6, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/batch-jobs/job%2F1/retry', data: { pendingIds: ['D/01'] },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(7, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/rule-requests',
+      data: {
+        idempotencyKey: 'stable-rule',
+        rule: { adapterId: 'DAIKIN_INDOOR_V2', buildingId: 'B-01', sourceScope: '', model: '', templateProductId: 'TP-01', numericSourceId: 'SRC-01', revision: 0, enabled: true },
+      },
+    })
+  })
+
+  it('首次温度初始化使用独立预览和批次任务契约', async () => {
+    await previewHvacTemperatureInitialization({ pendingIds: ['D1', 'D2'], templateProductId: 'T1' })
+    await createHvacTemperatureInitializationJob({
+      pendingIds: ['D1', 'D2'], templateProductId: 'T1', digest: 'batch-digest', idempotencyKey: 'init-1',
+    })
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/initialization/preview',
+      data: { pendingIds: ['D1', 'D2'], templateProductId: 'T1' },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(2, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/initialization/jobs',
+      data: { pendingIds: ['D1', 'D2'], templateProductId: 'T1', digest: 'batch-digest', idempotencyKey: 'init-1' },
+    })
   })
 })

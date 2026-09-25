@@ -65,6 +65,14 @@ public class ScopedDeviceOnboardingService {
     private final SensitiveChangeService changes;
     private final ObjectMapper mapper;
     private final TransactionTemplate transaction;
+    private final com.platform.iot.temperature.TemperaturePlanService temperaturePlans;
+
+    public void validateTemperatureBinding(Long userId, Set<String> roles, String pendingId,
+            DeviceOnboardingContracts.TypedBindRequest binding) {
+        requirePendingAccess(userId, roles, pendingId);
+        buildingScope.checkAccess(userId, roles, binding.buildingId());
+        onboarding.resolveTypedBindBuilding(pendingId, binding, ADMIN);
+    }
 
     public PageResponse<DeviceOnboardingContracts.PendingListItemView> list(
             Long userId, Set<String> roles, int page, int size, String status) {
@@ -217,6 +225,10 @@ public class ScopedDeviceOnboardingService {
         duties.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         String building = onboarding.resolveTypedBindBuilding(pendingId, binding, ADMIN);
         buildingScope.checkAccess(userId, roles, building);
+        if (binding.temperatureMode() != null && !"STATE_ONLY".equals(binding.temperatureMode())) {
+            temperaturePlans.validate(com.platform.iot.temperature.TemperaturePlanService.input(pendingId, binding),
+                    binding.temperaturePlanDigest(), true);
+        }
         var draft = changes.createDraft(userId, BindTypedPendingDeviceHandler.CODE,
                 mapper.valueToTree(new BindTypedPendingDeviceHandler.Command(pendingId, binding)), idempotencyKey);
         var submitted = draft.status() == SensitiveChangeStatus.DRAFT ? changes.submit(userId, draft.requestId()) : draft;
