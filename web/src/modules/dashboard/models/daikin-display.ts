@@ -13,11 +13,27 @@ export function daikinFieldLabel(value: string): string {
   return Object.prototype.hasOwnProperty.call(known, value) ? known[value]! : `未确认字段（原始字段名：${value}）`
 }
 
+export function daikinFieldExplanation(fieldName: string): string | undefined {
+  const explanations: Record<string, string> = words.fieldExplanations
+  return Object.prototype.hasOwnProperty.call(explanations, fieldName) ? explanations[fieldName] : undefined
+}
+
+/** 仅把本次缺失的参考字段显示为未提供；已有历史有效值和被屏蔽值仍遵守原有可见性。 */
+export function daikinCurrentFieldValue(field: Pick<CurrentField, 'fieldName' | 'status' | 'valueVisible' | 'normalizedValue'>): string {
+  if (field.valueVisible && field.normalizedValue != null) return daikinCurrentValue(field.fieldName, field.normalizedValue)
+  if (field.status === 'MISSING' && ['arth1', 'controller.decommissioned'].includes(field.fieldName)) return words.notProvided
+  return '—'
+}
+
 export function daikinCurrentValue(fieldName: string, value: string | null): string {
   if (value == null || value === '') return '—'
   if (fieldName === 'controller.status') {
     const known: Record<string, string> = words.controllerStatusNames
-    return known[value] ?? words.controllerStatusUnknown(value)
+    if (Object.prototype.hasOwnProperty.call(known, value)) return known[value]!
+    // 通用生命周期解释只用于展示，保留原码，不提升为厂家确认的故障或运行状态。
+    const references: Record<string, string> = words.controllerStatusReferences
+    return Object.prototype.hasOwnProperty.call(references, value)
+      ? words.controllerStatusReference(references[value]!, value) : words.controllerStatusUnknown(value)
   }
   if (['fanSpeedSetList', 'modeSetList', 'onOffModeSetList', 'masterSlaveIds', 'DefaultSetpointRange'].includes(fieldName)) {
     try {
