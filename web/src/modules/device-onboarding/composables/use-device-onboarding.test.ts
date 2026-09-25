@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DaikinSyncJob, OnboardingPage, PendingDevice } from '../models/onboarding'
-import { createHvacTemperatureBatchJob, getHvacTemperatureBindingOptions, getLatestHvacTemperatureBatchJob, getOperationsPendingDevice, listDaikinDirectorySyncJobs, listDaikinSources, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, previewHvacTemperatureBindings, submitOperationsBindingBatch, updatePendingStatus } from '../api/onboarding'
+import { createHvacTemperatureBatchJob, createHvacTemperatureInitializationJob, getHvacTemperatureBindingOptions, getLatestHvacTemperatureBatchJob, getOperationsPendingDevice, listDaikinDirectorySyncJobs, listDaikinSources, listEquipmentTypes, getPendingDeviceConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, previewHvacTemperatureBindings, previewHvacTemperatureInitialization, submitOperationsBindingBatch, updatePendingStatus } from '../api/onboarding'
 import { useDeviceOnboarding } from './use-device-onboarding'
 
 vi.mock('../api/onboarding', () => ({
@@ -30,8 +30,10 @@ vi.mock('../api/onboarding', () => ({
   updatePendingStatus: vi.fn(),
   requestDaikinDirectorySync: vi.fn(),
   createHvacTemperatureBatchJob: vi.fn(),
+  createHvacTemperatureInitializationJob: vi.fn(),
   createHvacTemperatureRuleRequest: vi.fn(),
   previewHvacTemperatureBindings: vi.fn(),
+  previewHvacTemperatureInitialization: vi.fn(),
   retryHvacTemperatureBatchJob: vi.fn(),
   submitOperationsBinding: vi.fn(),
   submitOperationsBindingBatch: vi.fn(),
@@ -193,6 +195,30 @@ describe('设备接入异步状态', () => {
     expect(management.temperatureOptions.value?.templates[0]?.productId).toBe('T1')
     expect(management.temperaturePlans.value[0]?.digest).toBe('digest-1')
     expect(management.temperatureBatchJob.value?.jobId).toBe('J1')
+  })
+
+  it('首次温度初始化预览和任务沿用持久温度任务状态', async () => {
+    vi.mocked(previewHvacTemperatureInitialization).mockResolvedValue({
+      buildingId: 'B1', sourceScope: 'DAIKIN', sourceId: 'S1', sourceName: '大金来源',
+      templateProductId: 'T1', digest: 'batch-digest', expiresAt: Date.now() + 60000,
+      plans: [{ ...({
+        pendingId: 'D1', buildingId: 'B1', mode: 'MANUAL', templateProductId: 'T1', templateName: '模板',
+        numericSourceId: 'S1', status: 'READY', message: null, digest: 'device-digest', expiresAt: Date.now() + 60000, points: [],
+      } as const) }],
+    })
+    vi.mocked(createHvacTemperatureInitializationJob).mockResolvedValue({
+      jobId: 'J-INIT', items: [{ pendingId: 'D1', requestId: 'R-INIT', configurationStatus: 'PENDING_REVIEW', message: null, samplingStatus: 'WAITING_CONFIGURATION' }],
+    })
+    const management = useDeviceOnboarding({ operations: true })
+    const request = { pendingIds: ['D1'], templateProductId: 'T1' }
+    await management.previewTemperatureInitialization(request)
+    await management.createTemperatureInitializationJob({ ...request, digest: 'batch-digest', idempotencyKey: 'init-1' })
+
+    expect(management.temperatureInitializationPreview.value?.sourceName).toBe('大金来源')
+    expect(management.temperatureBatchJob.value?.jobId).toBe('J-INIT')
+    expect(createHvacTemperatureInitializationJob).toHaveBeenCalledWith({
+      ...request, digest: 'batch-digest', idempotencyKey: 'init-1',
+    })
   })
 
   it('按设备恢复最近温度补齐任务，空结果会清除旧任务', async () => {

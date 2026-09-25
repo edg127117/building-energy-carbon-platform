@@ -98,6 +98,20 @@ public class TemperaturePlanService {
     }
 
     public Resolved resolve(Input input) {
+        return resolve(input, null);
+    }
+
+    /** 初始化预览只使用内存候选来源；不放宽普通绑定的数据源校验。 */
+    Resolved resolveInitial(Input input, BizDataSource candidate) {
+        return resolve(input, candidate);
+    }
+
+    TemperatureAdapter.Context context(String pendingId) {
+        var pending = requirePending(pendingId);
+        return adapter(pending).context(pending);
+    }
+
+    private Resolved resolve(Input input, BizDataSource candidate) {
         if (input == null || !Set.of("AUTO", "MANUAL").contains(Objects.toString(input.mode(), ""))) {
             throw invalid("温度计划仅接受自动或人工模式；仅状态接入无需温度计划");
         }
@@ -146,7 +160,9 @@ public class TemperaturePlanService {
         if (!Objects.equals(equipmentType, product.getEquipmentTypeCode())) throw invalid("温度模板与设备类型不兼容");
         var templatePoints = templatePoints(product, adapter);
         String sourceId = text(input.numericSourceId()) ? input.numericSourceId() : match == null ? null : match.numericSourceId();
-        var source = requireSource(sourceId, context.buildingId(), adapter);
+        var source = candidate == null ? requireSource(sourceId, context.buildingId(), adapter) : candidate;
+        if (!context.buildingId().equals(source.getBuildingId()) || !sourceId.equals(source.getSourceId())
+                || !adapter.transportType().equals(source.getTransportType())) throw invalid("初始化来源归属不匹配");
         if ("AUTO".equals(input.mode()) && match != null && !match.numericSourceId().equals(sourceId)) {
             throw invalid("自动模式必须使用已批准的来源关系，变更来源请使用人工模式");
         }
@@ -235,7 +251,7 @@ public class TemperaturePlanService {
         return matches.getFirst();
     }
 
-    private String fingerprint(Resolved plan) {
+    String fingerprint(Resolved plan) {
         // 输入中的摘要本身不能参与摘要；设备运行状态和采样值也不是配置版本。
         var binding = plan.input().binding();
         Object asset = binding == null ? "EXISTING" : Arrays.asList(binding.productId(), binding.buildingId(),

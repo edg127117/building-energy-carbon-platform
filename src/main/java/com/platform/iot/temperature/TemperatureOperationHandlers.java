@@ -28,6 +28,34 @@ final class TemperatureOperationHandlers {
     }
 }
 
+/** 首次配置包使用一张公共审批单；执行时再次验证管理员和建筑范围，失败沿用审批事务回滚。 */
+@Component
+@RequiredArgsConstructor
+class InitializeHvacTemperatureHandler implements SensitiveOperationHandler {
+    private final TemperatureInitializationService initialization;
+    private final TemperaturePlanService plans;
+    private final ObjectMapper json;
+    private final SysRoleMapper roles;
+    private final BuildingScopeService scope;
+    @Override public String operationCode() { return "INITIALIZE_HVAC_TEMPERATURE"; }
+    @Override public NormalizedSensitiveCommand normalize(JsonNode command) {
+        var request = TemperatureOperationHandlers.read(json, command, InitializationRequest.class);
+        var plan = initialization.validate(request, false);
+        return new NormalizedSensitiveCommand(plan.context().buildingId(), "HVAC_TEMPERATURE_INITIALIZATION",
+                plan.source().getSourceId(), plans.write(request), "buildingId=" + plan.context().buildingId()
+                + ";deviceCount=" + plan.items().size() + ";pointCount=" + plan.items().size() * 2);
+    }
+    @Override public SensitiveOperationResult execute(NormalizedSensitiveCommand command, SensitiveOperationContext context) {
+        var currentRoles = Set.copyOf(roles.selectRoleKeysByUserId(context.submitterId()));
+        if (!currentRoles.contains("PLATFORM_ADMIN")) throw TemperaturePlanService.invalid("初始化提交人已不具备管理员权限");
+        scope.checkAccess(context.submitterId(), currentRoles, command.buildingId());
+        initialization.execute(TemperatureOperationHandlers.read(json,
+                TemperatureOperationHandlers.read(json, command.canonicalJson()), InitializationRequest.class),
+                context.requestId(), context.submitterId());
+        return SensitiveOperationResult.none();
+    }
+}
+
 /** 规则发布执行时再次核对提交人的当前管理员身份，避免通过通用申请入口绕过规则配置权限。 */
 @Component
 @RequiredArgsConstructor

@@ -3,6 +3,7 @@ import { requestApi } from '@/infrastructure/http/public'
 import {
   copyDeviceProduct,
   createHvacTemperatureBatchJob,
+  createHvacTemperatureInitializationJob,
   createHvacTemperatureRuleRequest,
   getDaikinDirectorySync,
   getHvacTemperatureBatchJob,
@@ -23,6 +24,7 @@ import {
   requestDaikinDirectorySync,
   retryHvacTemperatureBatchJob,
   previewHvacTemperatureBindings,
+  previewHvacTemperatureInitialization,
   submitOperationsBinding,
   submitOperationsBindingBatch,
   submitOperationsIdentityStatus,
@@ -155,6 +157,22 @@ describe('设备接入接口契约', () => {
         idempotencyKey: 'stable-rule',
         rule: { adapterId: 'DAIKIN_INDOOR_V2', buildingId: 'B-01', sourceScope: '', model: '', templateProductId: 'TP-01', numericSourceId: 'SRC-01', revision: 0, enabled: true },
       },
+    })
+  })
+
+  it('首次温度初始化使用独立预览和批次任务契约', async () => {
+    await previewHvacTemperatureInitialization({ pendingIds: ['D1', 'D2'], templateProductId: 'T1' })
+    await createHvacTemperatureInitializationJob({
+      pendingIds: ['D1', 'D2'], templateProductId: 'T1', digest: 'batch-digest', idempotencyKey: 'init-1',
+    })
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/initialization/preview',
+      data: { pendingIds: ['D1', 'D2'], templateProductId: 'T1' },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(2, {
+      method: 'post', url: '/v1/operations/hvac-temperature-bindings/initialization/jobs',
+      data: { pendingIds: ['D1', 'D2'], templateProductId: 'T1', digest: 'batch-digest', idempotencyKey: 'init-1' },
     })
   })
 })

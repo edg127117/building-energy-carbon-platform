@@ -15,18 +15,22 @@ vi.mock('@/modules/auth/public', async importOriginal => ({
 describe('审批环境提示', () => {
   it('温度规则和补齐申请使用中文操作名称与摘要', async () => {
     vi.mocked(getApprovalPolicy).mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: true })
-    vi.mocked(listChangeRequests).mockResolvedValue({ page: 1, size: 10, total: 2, items: [
+    vi.mocked(listChangeRequests).mockResolvedValue({ page: 1, size: 10, total: 3, items: [
       { requestId: 'temp-rule', operationCode: 'CONFIGURE_TEMPERATURE_RULE', status: 'PENDING_REVIEW',
         targetType: 'TEMPERATURE_RULE', targetId: 'rule', impactSummary: 'buildingId=B;adapter=DAIKIN_INDOOR_V2;action=CONFIGURE',
         submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-09-25T10:00:00' },
       { requestId: 'temp-bind', operationCode: 'BIND_HVAC_TEMPERATURE', status: 'PENDING_REVIEW',
         targetType: 'HVAC_TEMPERATURE', targetId: 'pending', impactSummary: 'buildingId=B;pointCount=2',
         submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-09-25T10:00:00' },
+      { requestId: 'temp-init', operationCode: 'INITIALIZE_HVAC_TEMPERATURE', status: 'PENDING_REVIEW',
+        targetType: 'HVAC_TEMPERATURE', targetId: 'batch', impactSummary: 'buildingId=B;pointCount=2',
+        submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-09-25T10:00:00' },
     ] })
     const wrapper = mount(ChangeRequestControl, { props: { inbox: true } })
     await flushPromises()
     expect(wrapper.text()).toContain('配置温度模板匹配规则')
     expect(wrapper.text()).toContain('配置空调温度测点')
+    expect(wrapper.text()).toContain('初始化空调温度接入')
     expect(wrapper.text()).toContain('协议类型：大金内机 API 2.0')
     wrapper.unmount()
   })

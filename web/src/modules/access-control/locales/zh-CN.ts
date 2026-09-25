@@ -229,6 +229,7 @@ export default {
     bindPendingDevice: '绑定待接入设备',
     bindTypedPendingDevice: '绑定厂家待接入设备',
     bindHvacTemperature: '配置空调温度测点',
+    initializeHvacTemperature: '初始化空调温度接入',
     configureTemperatureRule: '配置温度模板匹配规则',
     activateDeviceIdentity: '启用设备身份',
     deactivateDeviceIdentity: '停用设备身份',

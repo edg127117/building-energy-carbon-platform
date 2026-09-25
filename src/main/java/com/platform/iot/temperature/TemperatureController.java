@@ -17,6 +17,14 @@ import static com.platform.iot.temperature.TemperatureContracts.*;
 /** 登录态温度接入入口；服务端按菜单、建筑和提交职责校验每个设备，前端不能直接执行配置。 */
 public class TemperatureController {
     private final TemperatureBindingService service;
+    @PostMapping("/initialization/preview")
+    public Result<InitializationPlan> previewInitialization(Authentication auth, @Valid @RequestBody InitializationInput input) {
+        return Result.success(service.previewInitialization(SecurityUser.userId(auth), SecurityUser.roles(auth), input));
+    }
+    @PostMapping("/initialization/jobs")
+    public Result<JobView> initialize(Authentication auth, @Valid @RequestBody InitializationRequest request) {
+        return Result.success(service.initialize(SecurityUser.userId(auth), SecurityUser.roles(auth), request));
+    }
     @GetMapping("/pending/{pendingId}/options")
     public Result<Options> options(Authentication auth, @PathVariable String pendingId) {
         return Result.success(service.options(SecurityUser.userId(auth), SecurityUser.roles(auth), pendingId));

@@ -853,6 +853,44 @@ public class CollectionPolicyService {
                 version.getMinuteRetentionMode(), version.getMinuteRetentionDays());
     }
 
+    /**
+     * 温度初始化审批事务的内部收尾：首批正式别名补齐策略后才允许整包提交。
+     * 保留大金温度90天历史口径；不提供HTTP直调入口，也不替代通用来源发布审批。
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void completeApprovedTemperatureSource(String sourceId, Long operator, String requestId, int intervalSeconds) {
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("TEMPERATURE_TRANSACTION_REQUIRED");
+        }
+        BizDataSource source = requireLockedSource(sourceId);
+        if (!source.getSourceCode().startsWith("DAIKIN_TEMP_") || !"HTTP".equals(source.getTransportType())
+                || !"ENABLED".equals(source.getStatus())) throw new IllegalStateException("TEMPERATURE_SOURCE_INVALID");
+        var values = aliases(sourceId);
+        if (values.isEmpty()) throw new IllegalStateException("TEMPERATURE_SOURCE_EMPTY");
+        var initial = new InitialPolicyRequest(intervalSeconds, intervalSeconds, "FIXED_DAYS", 90, "FIXED_DAYS", 90, true);
+        validatePolicy(initial);
+        for (BizPointAlias alias : values) {
+            if (!"DAIKIN_V2".equals(alias.getSourceSystem()) || !Integer.valueOf(1).equals(alias.getStatus())) {
+                throw new IllegalStateException("TEMPERATURE_ALIAS_INVALID");
+            }
+            if (policyMapper.selectCount(new LambdaQueryWrapper<BizCollectionPolicy>().eq(BizCollectionPolicy::getAliasId, alias.getAliasId())) > 0) continue;
+            BizCollectionPolicy policy = new BizCollectionPolicy();
+            policy.setPolicyId(id()); policy.setSourceId(sourceId); policy.setAliasId(alias.getAliasId());
+            policy.setBuildingId(source.getBuildingId()); policy.setCreateBy(operator);
+            policy.setCreateTime(now()); policy.setUpdateTime(policy.getCreateTime());
+            var version = draftVersion(policy, source, alias, requirePoint(alias.getPointId()), initial,
+                    "温度初始化审批 " + requestId, ChangeType.CREATE, null, operator, 1);
+            policy.setDraftVersionId(version.getVersionId());
+            policyMapper.insert(policy); versionMapper.insert(version);
+            validatePublication(source, alias, version);
+            activateVersion(policy, version, null, operator, now());
+        }
+        validateFormalConfiguration(source);
+        audit(operator, source.getBuildingId(), "INITIALIZE_TEMPERATURE_SOURCE", "DATA_SOURCE", sourceId,
+                null, null, "status=ENABLED;requestId=" + requestId);
+        runtimeStateService.refreshAfterCommit(sourceId, source.getRuntimeRevision());
+    }
+
     private void validateFormalConfiguration(BizDataSource source) {
         for (BizPointAlias alias : aliases(source.getSourceId())) {
             if (Integer.valueOf(1).equals(alias.getStatus())) {

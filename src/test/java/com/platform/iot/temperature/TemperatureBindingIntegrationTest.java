@@ -36,6 +36,10 @@ class TemperatureBindingIntegrationTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired MySqlDataPointConfigProvider cache;
     @Autowired org.mybatis.spring.SqlSessionTemplate sqlSession;
+    @Autowired TemperatureInitializationService initialization;
+    @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
+    @org.springframework.boot.test.mock.mockito.SpyBean
+    com.platform.iot.collection.CollectionPolicyService collection;
     private String suffix, source, http, template, asset, pending;
 
     @BeforeEach void setup() {
@@ -212,6 +216,105 @@ class TemperatureBindingIntegrationTest {
         assertThatThrownBy(() -> approve(job.items().stream().filter(i -> i.pendingId().equals(other)).findFirst().orElseThrow().requestId()))
                 .isInstanceOf(BusinessException.class);
         assertThat(countPoints()).isEqualTo(2);
+    }
+
+    @Test void emptyEnvironmentInitializesOnceThroughOneApprovalAndFutureDeviceMatchesAutomatically() {
+        prepareEmptyTemperatureEnvironment();
+        String other = discover("2");
+        onboarding.bindTyped(other, binding(null, null), 1L, ADMIN);
+        var input = new InitializationInput(List.of(pending, other), template);
+        var preview = service.previewInitialization(1L, ADMIN, input);
+        assertThat(preview.plans()).hasSize(2);
+        assertThat(countPoints()).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_source WHERE source_id=?", Integer.class, preview.sourceId())).isZero();
+        var request = new InitializationRequest(input.pendingIds(), template, preview.digest(), "init" + suffix);
+        var job = service.initialize(1L, ADMIN, request);
+        assertThat(job.items()).extracting(JobItem::requestId).containsOnly(job.items().getFirst().requestId());
+        assertThat(service.initialize(1L, ADMIN, request).jobId()).isEqualTo(job.jobId());
+        approve(job.items().getFirst().requestId());
+        assertThat(countPoints()).isEqualTo(4);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_collection_policy WHERE source_id=? AND active_version_id IS NOT NULL", Integer.class, preview.sourceId())).isEqualTo(4);
+        assertThat(service.initialize(1L, ADMIN, request).jobId()).isEqualTo(job.jobId());
+        cache.refreshAll();
+        assertThat(service.job(1L, ADMIN, job.jobId()).items()).extracting(JobItem::configurationStatus).containsOnly("CONFIGURED");
+        String future = discover("3");
+        var automatic = plans.preview(new Input(future, "AUTO", null, null, Map.of(), binding(null, null)));
+        assertThat(automatic.numericSourceId()).isEqualTo(preview.sourceId());
+        assertThat(automatic.points()).hasSize(2);
+    }
+
+    @Test void initializationRejectsExpiredChangedAndDuplicateSelections() {
+        prepareEmptyTemperatureEnvironment();
+        assertThatThrownBy(() -> service.previewInitialization(1L, ADMIN, new InitializationInput(List.of(pending, pending), template)))
+                .isInstanceOf(BusinessException.class);
+        var preview = service.previewInitialization(1L, ADMIN, new InitializationInput(List.of(pending), template));
+        assertThatThrownBy(() -> service.initialize(1L, ADMIN, new InitializationRequest(List.of(pending), template,
+                "1000000000000:" + preview.digest().substring(14), "old" + suffix))).isInstanceOf(BusinessException.class);
+        jdbc.update("UPDATE biz_device_product SET status='DISABLED' WHERE product_id=?", template);
+        sqlSession.clearCache();
+        assertThatThrownBy(() -> service.initialize(1L, ADMIN, new InitializationRequest(List.of(pending), template,
+                preview.digest(), "changed" + suffix))).isInstanceOf(BusinessException.class);
+        assertThat(countPoints()).isZero();
+    }
+
+    @Test void initializationDoesNotTakeOverExistingHttpSourceOrPermitNonAdmin() {
+        onboarding.bindTyped(pending, binding(null, null), 1L, ADMIN);
+        assertThatThrownBy(() -> service.previewInitialization(1L, ADMIN, new InitializationInput(List.of(pending), template)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已有HTTP");
+        assertThatThrownBy(() -> service.previewInitialization(1L, Set.of("ENERGY_MANAGER"), new InitializationInput(List.of(pending), template)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("管理员");
+        assertThatThrownBy(() -> service.previewInitialization(9999L, ADMIN, new InitializationInput(List.of(pending), template)))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test void competingInitializationPlansCannotOverwriteFirstApprovedSource() {
+        prepareEmptyTemperatureEnvironment();
+        var preview = service.previewInitialization(1L, ADMIN, new InitializationInput(List.of(pending), template));
+        var first = service.initialize(1L, ADMIN, new InitializationRequest(List.of(pending), template, preview.digest(), "first-init" + suffix));
+        var second = service.initialize(1L, ADMIN, new InitializationRequest(List.of(pending), template, preview.digest(), "second-init" + suffix));
+        approve(first.items().getFirst().requestId());
+        assertThatThrownBy(() -> approve(second.items().getFirst().requestId())).isInstanceOf(BusinessException.class);
+        assertThat(countPoints()).isEqualTo(2);
+        assertThat(service.job(1L, ADMIN, second.jobId()).items()).extracting(JobItem::configurationStatus).containsOnly("PLAN_EXPIRED");
+    }
+
+    @Test void initializationRejectsMixedManufacturerSources() {
+        prepareEmptyTemperatureEnvironment();
+        String original = source;
+        source = "OTHER" + suffix;
+        directory.registerSource(source, 1L, ADMIN);
+        directory.mapProject(source, "site", "BLD001", 1L, ADMIN);
+        String other = discover("2");
+        onboarding.bindTyped(other, binding(null, null), 1L, ADMIN);
+        source = original;
+        assertThatThrownBy(() -> service.previewInitialization(1L, ADMIN, new InitializationInput(List.of(pending, other), template)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("同一厂家来源");
+        assertThat(countPoints()).isZero();
+    }
+
+    @Test void initializationFailureAfterPointsRollsBackEntireConfigurationPackage() {
+        prepareEmptyTemperatureEnvironment();
+        var preview = service.previewInitialization(1L, ADMIN, new InitializationInput(List.of(pending), template));
+        var request = new InitializationRequest(List.of(pending), template, preview.digest(), "rollback" + suffix);
+        org.mockito.Mockito.doThrow(new IllegalStateException("test policy failure")).when(collection)
+                .completeApprovedTemperatureSource(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyLong(),
+                        org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt());
+        // 保存点使测试能在失败后检查完整回滚；仍执行真实建源、建点和别名逻辑。
+        var nested = new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        nested.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_NESTED);
+        assertThatThrownBy(() -> nested.executeWithoutResult(status -> initialization.execute(request, "rollback-test", 1L)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("test policy failure");
+        sqlSession.clearCache();
+        assertThat(countPoints()).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_source WHERE source_id=?", Integer.class, preview.sourceId())).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_temperature_binding WHERE identity_id=(SELECT bound_identity_id FROM biz_pending_device WHERE pending_id=?)", Integer.class, pending)).isZero();
+    }
+
+    private void prepareEmptyTemperatureEnvironment() {
+        onboarding.bindTyped(pending, binding(null, null), 1L, ADMIN);
+        jdbc.update("DELETE FROM biz_temperature_rule WHERE source_scope=?", source);
+        jdbc.update("DELETE FROM biz_data_source WHERE source_id=?", http);
+        sqlSession.clearCache();
     }
 
     private int countPoints() { return jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point WHERE family_code='TPT'", Integer.class); }

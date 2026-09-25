@@ -260,6 +260,27 @@ export type TemperaturePlanView = {
   points: TemperaturePlanPoint[]
 }
 
+export type TemperatureInitializationPreview = {
+  buildingId: string
+  sourceScope: string
+  sourceId: string
+  sourceName: string
+  templateProductId: string
+  digest: string
+  expiresAt: number
+  plans: TemperaturePlanView[]
+}
+
+export type TemperatureInitializationPreviewRequest = {
+  pendingIds: string[]
+  templateProductId: string
+}
+
+export type TemperatureInitializationJobRequest = TemperatureInitializationPreviewRequest & {
+  digest: string
+  idempotencyKey: string
+}
+
 export type TemperaturePreviewItem = {
   pendingId: string
   mode: TemperatureBindingMode

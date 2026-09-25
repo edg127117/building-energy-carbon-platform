@@ -28,6 +28,55 @@ public class TemperatureBindingService {
     private final TransactionTemplate transaction;
     private final ObjectMapper json;
     private final TemperatureHistoryVerifier history;
+    private final TemperatureInitializationService initialization;
+
+    public InitializationPlan previewInitialization(Long user, Set<String> roles, InitializationInput input) {
+        requireInitializationAccess(user, roles, input);
+        return initialization.preview(input);
+    }
+
+    private void requireInitializationAccess(Long user, Set<String> roles, InitializationInput input) {
+        if (!roles.contains("PLATFORM_ADMIN")) throw new BusinessException(403, "TEMPERATURE_FORBIDDEN", "首次初始化需平台管理员操作");
+        if (input == null || input.pendingIds() == null || input.pendingIds().isEmpty() || input.pendingIds().size() > 50) {
+            throw invalid("请选择1至50台内机");
+        }
+        input.pendingIds().forEach(id -> onboarding.detail(user, roles, id));
+    }
+
+    /** 同一批引用同一审批单，幂等重试返回原任务，不产生重复审批或部分设备生效。 */
+    public JobView initialize(Long user, Set<String> roles, InitializationRequest request) {
+        requireInitializationAccess(user, roles, request.input());
+        duties.requireDuty(user, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        String requestHash = hash(plans.write(request));
+        String jobId;
+        try {
+            jobId = transaction.execute(status -> {
+                var existing = jdbc.queryForList("SELECT job_id,request_hash FROM biz_temperature_job WHERE submitted_by=? AND idempotency_key=?",
+                        user, request.idempotencyKey());
+                if (!existing.isEmpty()) {
+                    if (!requestHash.equals(existing.getFirst().get("request_hash"))) throw invalid("幂等键已用于其他批次");
+                    return existing.getFirst().get("job_id").toString();
+                }
+                var bundle = initialization.validate(request, true);
+                String job = id();
+                jdbc.update("INSERT INTO biz_temperature_job(job_id,submitted_by,idempotency_key,request_hash,created_at_ms) VALUES(?,?,?,?,?)",
+                        job, user, request.idempotencyKey(), requestHash, System.currentTimeMillis());
+                var draft = changes.createDraft(user, "INITIALIZE_HVAC_TEMPERATURE", json.valueToTree(request), "temperature-init:" + job);
+                var submitted = changes.submit(user, draft.requestId());
+                for (String pendingId : request.pendingIds()) {
+                    jdbc.update("INSERT INTO biz_temperature_job_item(job_id,pending_id,building_id,command_json,submission_status,request_id) VALUES(?,?,?,?,?,?)",
+                            job, pendingId, bundle.context().buildingId(), plans.write(request), "SUBMITTED", submitted.requestId());
+                }
+                return job;
+            });
+        } catch (org.springframework.dao.DuplicateKeyException duplicate) {
+            var existing = jdbc.queryForMap("SELECT job_id,request_hash FROM biz_temperature_job WHERE submitted_by=? AND idempotency_key=?",
+                    user, request.idempotencyKey());
+            if (!requestHash.equals(existing.get("request_hash"))) throw invalid("幂等键已用于其他批次");
+            jobId = existing.get("job_id").toString();
+        }
+        return job(user, roles, jobId);
+    }
 
     public Options options(Long user, Set<String> roles, String pending) {
         onboarding.detail(user, roles, pending);
@@ -121,7 +170,7 @@ public class TemperatureBindingService {
             throw new BusinessException(404, "TEMPERATURE_JOB_NOT_FOUND", "任务不存在或不可见");
         }
         var rows = jdbc.queryForList("""
-                SELECT i.*,r.status AS approval_status FROM biz_temperature_job_item i
+                SELECT i.*,r.status AS approval_status,r.operation_code FROM biz_temperature_job_item i
                 LEFT JOIN sys_sensitive_change_request r ON r.request_id=i.request_id WHERE i.job_id=? ORDER BY i.pending_id
                 """, jobId);
         List<JobItem> result = new ArrayList<>();
@@ -138,8 +187,14 @@ public class TemperatureBindingService {
                 sampling = "CONFIGURED".equals(state) ? sampling(pending) : "WAITING_CONFIGURATION";
             } else if (Set.of("PENDING_REVIEW", "APPROVED", "EXECUTION_FAILED").contains(state)) {
                 try {
-                    Item frozen = readItem(row.get("command_json").toString());
-                    plans.validate(frozen.input(), frozen.digest(), false);
+                    if ("INITIALIZE_HVAC_TEMPERATURE".equals(row.get("operation_code"))) {
+                        var frozen = TemperatureOperationHandlers.read(json,
+                                TemperatureOperationHandlers.read(json, row.get("command_json").toString()), InitializationRequest.class);
+                        initialization.validate(frozen, false);
+                    } else {
+                        Item frozen = readItem(row.get("command_json").toString());
+                        plans.validate(frozen.input(), frozen.digest(), false);
+                    }
                 } catch (BusinessException ex) {
                     state = "PLAN_EXPIRED";
                     message = "配置已变化，请重新预览并提交申请";

@@ -27,6 +27,10 @@ class TemperatureApiContractTest {
                 .andExpect(status().isUnauthorized());
         mvc.perform(get(ROOT + "/batch-jobs/unknown")).andExpect(status().isUnauthorized());
         mvc.perform(get(ROOT + "/batch-jobs/latest").param("pendingId", "unknown")).andExpect(status().isUnauthorized());
+        mvc.perform(post(ROOT + "/initialization/preview").contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post(ROOT + "/initialization/jobs").contentType("application/json").content("{}"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test void validatesInputAndPublishesDistinctSchemas() throws Exception {
@@ -37,12 +41,17 @@ class TemperatureApiContractTest {
         mvc.perform(post(ROOT + "/preview").header("Authorization", "Bearer " + token)
                 .contentType("application/json").content("{\"items\":[]}"))
                 .andExpect(status().isBadRequest());
+        mvc.perform(post(ROOT + "/initialization/preview").header("Authorization", "Bearer " + token)
+                .contentType("application/json").content("{\"pendingIds\":[],\"templateProductId\":\"template\"}"))
+                .andExpect(status().isBadRequest());
         String spec = mvc.perform(get("/v3/api-docs").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
         var document = mapper.readTree(spec);
         assertThat(document.path("paths").has(ROOT + "/preview")).isTrue();
         assertThat(document.path("paths").has(ROOT + "/batch-jobs/{jobId}/retry")).isTrue();
         assertThat(document.path("paths").has(ROOT + "/batch-jobs/latest")).isTrue();
+        assertThat(document.path("paths").has(ROOT + "/initialization/preview")).isTrue();
+        assertThat(document.path("paths").has(ROOT + "/initialization/jobs")).isTrue();
         assertThat(document.path("components").path("schemas").has("HvacTemperaturePlanView")).isTrue();
         assertThat(document.path("components").path("schemas").path("TypedBindRequest").path("properties")
                 .has("temperatureMode")).isTrue();

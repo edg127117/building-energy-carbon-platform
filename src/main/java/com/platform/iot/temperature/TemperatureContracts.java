@@ -53,4 +53,16 @@ public final class TemperatureContracts {
                           String message, String samplingStatus) { }
     @Schema(name = "HvacTemperatureJobView")
     public record JobView(String jobId, List<JobItem> items) { }
+    @Schema(name = "HvacTemperatureInitializationInput")
+    public record InitializationInput(@NotEmpty @Size(max = 50) List<@NotBlank String> pendingIds,
+                                       @NotBlank String templateProductId) { }
+    @Schema(name = "HvacTemperatureInitializationRequest")
+    public record InitializationRequest(@NotEmpty @Size(max = 50) List<@NotBlank String> pendingIds,
+                                         @NotBlank String templateProductId, @NotBlank String digest,
+                                         @NotBlank @Size(max = 100) String idempotencyKey) {
+        public InitializationInput input() { return new InitializationInput(pendingIds, templateProductId); }
+    }
+    @Schema(name = "HvacTemperatureInitializationPlan")
+    public record InitializationPlan(String buildingId, String sourceScope, String sourceId, String sourceName,
+                                      String templateProductId, String digest, long expiresAt, List<PlanView> plans) { }
 }

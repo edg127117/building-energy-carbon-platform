@@ -47,6 +47,7 @@ import {
   type PendingBindRequest,
   type PendingDevice,
   type TemperatureBatchRequestItem,
+  type TemperatureInitializationPreview,
   type TemperaturePlanSelection,
   type TemperaturePreviewItem,
   type TemperatureRuleDraft,
@@ -385,6 +386,7 @@ async function openTemperatureBatch() {
   temperatureBatchRows.value = [...selectedRows.value]
   temperatureBatchIdempotencyKey.value = newIdempotencyKey()
   operationsManagement.clearTemperaturePlans()
+  operationsManagement.clearTemperatureInitializationPreview()
   operationsManagement.clearTemperatureBatchJob()
   temperatureBatchOpen.value = true
   try {
@@ -406,6 +408,43 @@ async function previewTemperatureBatch(selection: TemperaturePlanSelection) {
     })))
   } catch {
     // 预览失败已经保留在温度计划状态，不能据此提交任务。
+  }
+}
+
+async function previewTemperatureInitialization(templateProductId: string) {
+  if (!temperatureBatchRows.value.length || !templateProductId) return
+  operationsManagement.clearTemperaturePlans()
+  try {
+    await operationsManagement.previewTemperatureInitialization({
+      pendingIds: temperatureBatchRows.value.map(row => row.pendingId),
+      templateProductId,
+    })
+  } catch {
+    // 初始化预览失败时只展示错误，不创建任务或审批申请。
+  }
+}
+
+function clearTemperaturePreviews() {
+  operationsManagement.clearTemperaturePlans()
+  operationsManagement.clearTemperatureInitializationPreview()
+}
+
+async function submitTemperatureInitialization(preview: TemperatureInitializationPreview) {
+  const idempotencyKey = temperatureBatchIdempotencyKey.value
+  const pendingIds = temperatureBatchRows.value.map(row => row.pendingId)
+  if (!idempotencyKey || !pendingIds.length || preview.expiresAt <= Date.now()) {
+    operationsManagement.clearTemperatureInitializationPreview()
+    return
+  }
+  try {
+    await operationsManagement.createTemperatureInitializationJob({
+      pendingIds,
+      templateProductId: preview.templateProductId,
+      digest: preview.digest,
+      idempotencyKey,
+    })
+  } catch {
+    // 同一幂等键可安全重试，任务创建错误在弹窗内展示。
   }
 }
 
@@ -455,6 +494,7 @@ async function retryTemperatureBatch(pendingIds: string[]) {
 function restartTemperatureBatch() {
   temperatureBatchIdempotencyKey.value = newIdempotencyKey()
   operationsManagement.clearTemperaturePlans()
+  operationsManagement.clearTemperatureInitializationPreview()
   operationsManagement.clearTemperatureBatchJob()
 }
 
@@ -834,6 +874,11 @@ onMounted(() => {
       :previewing="operationsManagement.temperaturePreviewLoading.value"
       :preview-error="operationsManagement.temperaturePreviewError.value?.message"
       :submitting="operationsManagement.running.value.has('temperature:batch:create')"
+      :initialization-preview="operationsManagement.temperatureInitializationPreview.value"
+      :initialization-previewing="operationsManagement.temperatureInitializationPreviewLoading.value"
+      :initialization-preview-error="operationsManagement.temperatureInitializationPreviewError.value?.message"
+      :initialization-submitting="operationsManagement.running.value.has('temperature:initialize:create')"
+      :initialization-submit-error="operationsManagement.temperatureInitializationJobError.value?.message"
       :job="operationsManagement.temperatureBatchJob.value"
       :job-loading="operationsManagement.temperatureBatchJobLoading.value"
       :job-error="operationsManagement.temperatureBatchJobError.value?.message"
@@ -843,8 +888,10 @@ onMounted(() => {
       :rule-result="operationsManagement.temperatureRuleRequest.value"
       @close="temperatureBatchOpen = false"
       @preview="previewTemperatureBatch"
-      @preview-invalidated="operationsManagement.clearTemperaturePlans()"
+      @preview-invalidated="clearTemperaturePreviews"
       @submit="submitTemperatureBatch"
+      @initialization-preview="previewTemperatureInitialization"
+      @initialization-submit="submitTemperatureInitialization"
       @refresh-job="refreshTemperatureBatch"
       @retry-job="retryTemperatureBatch"
       @new-task="restartTemperatureBatch"

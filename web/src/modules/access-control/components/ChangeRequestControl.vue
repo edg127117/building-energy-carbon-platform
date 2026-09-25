@@ -221,6 +221,7 @@ function operationLabel(operation?: string) {
     BIND_PENDING_DEVICE: 'bindPendingDevice',
     BIND_TYPED_PENDING_DEVICE: 'bindTypedPendingDevice',
     BIND_HVAC_TEMPERATURE: 'bindHvacTemperature',
+    INITIALIZE_HVAC_TEMPERATURE: 'initializeHvacTemperature',
     CONFIGURE_TEMPERATURE_RULE: 'configureTemperatureRule',
     ACTIVATE_DEVICE_IDENTITY: 'activateDeviceIdentity',
     DEACTIVATE_DEVICE_IDENTITY: 'deactivateDeviceIdentity',

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onUnmounted, reactive, ref, watch } from 'vue'
 import {
   ElAlert,
   ElButton,
@@ -22,6 +22,7 @@ import type {
   TemperatureBindingMode,
   TemperatureBindingOptions,
   TemperatureBindingRule,
+  TemperatureInitializationPreview,
   TemperaturePlanSelection,
   TemperaturePlanView,
   TemperatureRuleDraft,
@@ -44,6 +45,11 @@ const props = withDefaults(defineProps<{
   ruleSubmitting?: boolean
   ruleError?: string | null
   ruleResult?: { requestId: string; status: string } | null
+  initializationPreview?: TemperatureInitializationPreview | null
+  initializationPreviewing?: boolean
+  initializationPreviewError?: string | null
+  initializationSubmitting?: boolean
+  initializationSubmitError?: string | null
 }>(), {
   options: null,
   optionsLoading: false,
@@ -59,6 +65,11 @@ const props = withDefaults(defineProps<{
   ruleSubmitting: false,
   ruleError: null,
   ruleResult: null,
+  initializationPreview: null,
+  initializationPreviewing: false,
+  initializationPreviewError: null,
+  initializationSubmitting: false,
+  initializationSubmitError: null,
 })
 const emit = defineEmits<{
   close: []
@@ -69,6 +80,8 @@ const emit = defineEmits<{
   'retry-job': [pendingIds: string[]]
   'new-task': []
   'rule-submit': [rule: TemperatureRuleDraft]
+  'initialization-preview': [templateProductId: string]
+  'initialization-submit': [preview: TemperatureInitializationPreview]
 }>()
 
 const form = reactive({
@@ -87,12 +100,26 @@ const ruleForm = reactive({
   enabled: true,
 })
 const validationKey = ref<string | null>(null)
+const currentTime = ref(Date.now())
+let expiryTimer: ReturnType<typeof setInterval> | null = null
 const mappingPoints = ref<TemperaturePlanView['points']>([])
 const selectedIds = computed(() => new Set(props.rows.map(row => row.pendingId)))
 const singleDeviceSelection = computed(() => props.rows.length === 1)
-const plans = computed(() => props.plans.filter(plan => selectedIds.value.has(plan.pendingId)))
+const initializing = computed(() => Boolean(props.options) && props.options!.numericSources.length === 0)
+const optionsUnavailable = computed(() => props.optionsLoading || !props.options)
+const plans = computed(() => initializing.value
+  ? (props.initializationPreview?.plans ?? []).filter(plan => selectedIds.value.has(plan.pendingId))
+  : props.plans.filter(plan => selectedIds.value.has(plan.pendingId)))
 const previewReady = computed(() => plans.value.length === props.rows.length
   && plans.value.every(plan => ['READY', 'COMPLETE'].includes(plan.status) && Boolean(plan.digest) && Boolean(plan.numericSourceId)))
+const initializationPreviewReady = computed(() => Boolean(props.initializationPreview)
+  && props.initializationPreview!.templateProductId === form.templateProductId
+  && props.initializationPreview!.plans.length === props.rows.length
+  && plans.value.length === props.rows.length
+  && plans.value.every(plan => ['READY', 'COMPLETE'].includes(plan.status) && Boolean(plan.digest))
+  && Boolean(props.initializationPreview!.digest))
+const initializationPreviewExpired = computed(() => Boolean(props.initializationPreview)
+  && props.initializationPreview!.expiresAt <= currentTime.value)
 const retryablePendingIds = computed(() => props.job?.items
   .filter(item => (item.configurationStatus === 'FAILED' && !item.requestId)
     || (item.configurationStatus === 'PENDING' && !item.requestId)
@@ -120,6 +147,22 @@ watch(() => props.open, open => {
   validationKey.value = null
 }, { immediate: true })
 
+watch(() => props.options, options => {
+  if (options?.numericSources.length === 0 && options.templates.length === 1 && !form.templateProductId) {
+    form.templateProductId = options.templates[0]!.productId
+  }
+}, { immediate: true, deep: true })
+
+watch(() => props.initializationPreview, preview => {
+  if (expiryTimer) clearInterval(expiryTimer)
+  expiryTimer = null
+  if (preview) expiryTimer = setInterval(() => { currentTime.value = Date.now() }, 1000)
+}, { immediate: true })
+
+onUnmounted(() => {
+  if (expiryTimer) clearInterval(expiryTimer)
+})
+
 watch(() => props.plans, value => {
   const first = value.find(plan => selectedIds.value.has(plan.pendingId))
   if (!first) return
@@ -130,6 +173,7 @@ watch(() => props.plans, value => {
 
 function invalidatePreview() {
   emit('preview-invalidated')
+  validationKey.value = null
 }
 
 function changeMode() {
@@ -162,7 +206,33 @@ function preview() {
   emit('preview', selection())
 }
 
+function previewInitialization() {
+  if (!props.rows.length) {
+    validationKey.value = 'messages.temperatureBatchSelection'
+    return
+  }
+  if (!form.templateProductId) {
+    validationKey.value = 'validation.temperatureTemplate'
+    return
+  }
+  validationKey.value = null
+  emit('preview-invalidated')
+  emit('initialization-preview', form.templateProductId)
+}
+
 function submit() {
+  if (initializing.value) {
+    if (initializationPreviewExpired.value) {
+      validationKey.value = 'messages.temperatureInitializationPreviewExpired'
+      return
+    }
+    if (!initializationPreviewReady.value) {
+      validationKey.value = 'validation.temperaturePreview'
+      return
+    }
+    if (props.initializationPreview) emit('initialization-submit', props.initializationPreview)
+    return
+  }
   validationKey.value = validate(true)
   if (validationKey.value) return
   emit('submit', selection())
@@ -240,6 +310,9 @@ function samplingStatusText(status: string) {
 }
 
 function sourceLabel(sourceId: string | null) {
+  if (initializing.value && props.initializationPreview) {
+    return `${props.initializationPreview.sourceName} · ${props.initializationPreview.sourceId}`
+  }
   if (!sourceId) return t('common.missing')
   const source = props.options?.numericSources.find(item => item.sourceId === sourceId)
   return source ? `${source.sourceName} · ${sourceId}` : sourceId
@@ -264,9 +337,15 @@ function ruleLabel(rule: TemperatureBindingRule) {
 <template>
   <ElDialog :model-value="open" :title="t('deviceOnboarding.pending.temperatureBatch')" width="min(920px, 94vw)" @update:model-value="emit('close')">
     <section class="temperature-batch">
-      <ElAlert :title="t('deviceOnboarding.temperature.batchDescription')" type="info" show-icon :closable="false" />
+      <ElAlert :title="t(initializing ? 'deviceOnboarding.temperature.initializationDescription' : 'deviceOnboarding.temperature.batchDescription')" type="info" show-icon :closable="false" />
       <ElAlert v-if="optionsError" :title="optionsError" type="error" show-icon :closable="false" />
-      <ElForm label-position="top">
+      <ElAlert v-if="initializing && !platformAdmin" :title="t('deviceOnboarding.messages.temperatureInitializationAdminRequired')" type="warning" show-icon :closable="false" />
+      <ElForm v-if="initializing" label-position="top">
+        <ElFormItem :label="t('deviceOnboarding.temperature.template')" required>
+          <ElSelect v-model="form.templateProductId" class="wide-control" :loading="optionsLoading" :disabled="Boolean(job) || initializationSubmitting" @change="invalidatePreview"><ElOption v-for="template in options?.templates ?? []" :key="template.productId" :label="template.productName" :value="template.productId" /></ElSelect>
+        </ElFormItem>
+      </ElForm>
+      <ElForm v-else label-position="top">
         <ElFormItem :label="t('deviceOnboarding.labels.temperatureMode')" required>
           <ElRadioGroup v-model="form.mode" @change="changeMode"><ElRadio value="AUTO">{{ t('deviceOnboarding.temperature.auto') }}</ElRadio><ElRadio value="MANUAL">{{ t('deviceOnboarding.temperature.manual') }}</ElRadio></ElRadioGroup>
         </ElFormItem>
@@ -277,8 +356,9 @@ function ruleLabel(rule: TemperatureBindingRule) {
           <ElSelect v-model="form.numericSourceId" clearable class="wide-control" :loading="optionsLoading" @change="invalidatePreview"><ElOption v-for="source in options?.numericSources ?? []" :key="source.sourceId" :label="source.sourceName" :value="source.sourceId" /></ElSelect>
         </ElFormItem>
       </ElForm>
-      <div class="batch-actions"><ElButton type="primary" :loading="previewing" @click="preview">{{ t('deviceOnboarding.actions.previewTemperature') }}</ElButton><span>{{ t('deviceOnboarding.messages.temperaturePreviewBoundary') }}</span></div>
-      <ElAlert v-if="previewError" :title="previewError" type="error" show-icon :closable="false" />
+      <div class="batch-actions"><ElButton type="primary" :disabled="optionsUnavailable || Boolean(job) || initializationSubmitting || (initializing && !platformAdmin)" :loading="initializing ? initializationPreviewing : previewing" @click="initializing ? previewInitialization() : preview()">{{ t(initializing ? 'deviceOnboarding.actions.previewTemperatureInitialization' : 'deviceOnboarding.actions.previewTemperature') }}</ElButton><span>{{ t(initializing ? 'deviceOnboarding.messages.temperatureInitializationPreviewBoundary' : 'deviceOnboarding.messages.temperaturePreviewBoundary') }}</span></div>
+      <ElAlert v-if="initializing ? initializationPreviewError : previewError" :title="initializing ? initializationPreviewError! : previewError!" type="error" show-icon :closable="false" />
+      <ElAlert v-if="initializing && initializationPreviewExpired" :title="t('deviceOnboarding.messages.temperatureInitializationPreviewExpired')" type="warning" show-icon :closable="false" />
       <ElTable v-if="plans.length" :data="plans" row-key="pendingId">
         <ElTableColumn :label="t('deviceOnboarding.labels.identity')" prop="pendingId" min-width="150" />
         <ElTableColumn :label="t('deviceOnboarding.labels.temperatureTemplate')" min-width="160"><template #default="{ row }">{{ row.templateName || t('common.missing') }}</template></ElTableColumn>
@@ -286,11 +366,12 @@ function ruleLabel(rule: TemperatureBindingRule) {
         <ElTableColumn :label="t('deviceOnboarding.labels.configurationStatus')" min-width="120"><template #default="{ row }"><ElTag :type="row.status === 'READY' || row.status === 'COMPLETE' ? 'success' : 'warning'">{{ t(`deviceOnboarding.temperature.planStatus.${row.status}`) }}</ElTag></template></ElTableColumn>
         <ElTableColumn :label="t('deviceOnboarding.labels.temperatureMessage')" min-width="260"><template #default="{ row }">{{ row.message || t('common.missing') }}</template></ElTableColumn>
       </ElTable>
-      <section v-if="form.mode === 'MANUAL' && singleDeviceSelection && mappingPoints.length" class="reuse-points">
+      <section v-if="!initializing && form.mode === 'MANUAL' && singleDeviceSelection && mappingPoints.length" class="reuse-points">
         <h3>{{ t('deviceOnboarding.temperature.reusePoints') }}</h3><p>{{ t('deviceOnboarding.messages.temperatureReuseHint') }}</p>
         <ElForm label-position="top"><ElFormItem v-for="point in mappingPoints" :key="point.metricCode" :label="`${point.semantic} · ${point.unit}`"><ElInput v-model="form.existingPointIds[point.metricCode]" clearable @change="invalidatePreview" /></ElFormItem></ElForm>
       </section>
-      <ElAlert v-else-if="form.mode === 'MANUAL' && !singleDeviceSelection" :title="t('deviceOnboarding.messages.temperatureBatchManualReuseBoundary')" type="info" show-icon :closable="false" />
+      <ElAlert v-else-if="!initializing && form.mode === 'MANUAL' && !singleDeviceSelection" :title="t('deviceOnboarding.messages.temperatureBatchManualReuseBoundary')" type="info" show-icon :closable="false" />
+      <ElAlert v-if="initializationSubmitError" :title="initializationSubmitError" type="error" show-icon :closable="false" />
       <ElAlert v-if="validationKey" :title="t(`deviceOnboarding.${validationKey}`)" type="error" show-icon :closable="false" />
       <section v-if="job" class="job-result">
         <div class="job-heading"><div><h3>{{ t('deviceOnboarding.pending.temperatureBatchResult') }}</h3><p>{{ job.jobId }}</p></div><ElButton :loading="jobLoading" @click="emit('refresh-job')">{{ t('deviceOnboarding.actions.refreshTemperatureBatch') }}</ElButton></div>
@@ -300,7 +381,7 @@ function ruleLabel(rule: TemperatureBindingRule) {
         <ElTable :data="job.items" row-key="pendingId"><ElTableColumn :label="t('deviceOnboarding.labels.identity')" prop="pendingId" min-width="140" /><ElTableColumn :label="t('deviceOnboarding.labels.requestId')" min-width="160"><template #default="{ row }">{{ row.requestId || t('common.missing') }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.configurationStatus')" min-width="140"><template #default="{ row }">{{ configurationStatusText(row.configurationStatus) }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.samplingStatus')" min-width="140"><template #default="{ row }">{{ samplingStatusText(row.samplingStatus) }}</template></ElTableColumn><ElTableColumn :label="t('deviceOnboarding.labels.temperatureMessage')" min-width="240"><template #default="{ row }">{{ row.message || t('common.missing') }}</template></ElTableColumn></ElTable>
         <div class="job-actions"><ElButton v-if="retryablePendingIds.length" type="warning" :loading="jobLoading" @click="emit('retry-job', retryablePendingIds)">{{ t('deviceOnboarding.actions.retryTemperatureBatch') }}</ElButton><ElButton v-if="!jobMatchesRows || requiresNewPreview" type="warning" :disabled="jobLoading" @click="emit('new-task')">{{ t(!jobMatchesRows ? 'deviceOnboarding.actions.newTemperatureBatch' : 'deviceOnboarding.actions.restartTemperatureBatch') }}</ElButton></div>
       </section>
-      <section v-if="platformAdmin" class="rule-request">
+      <section v-if="platformAdmin && !initializing" class="rule-request">
         <h3>{{ t('deviceOnboarding.temperature.ruleTitle') }}</h3>
         <p>{{ t('deviceOnboarding.temperature.ruleDescription') }}</p>
         <ElAlert v-if="plans.length && !ruleBuildingId" :title="t('deviceOnboarding.messages.temperatureRuleBuildingBoundary')" type="warning" show-icon :closable="false" />
@@ -343,7 +424,7 @@ function ruleLabel(rule: TemperatureBindingRule) {
         <ElButton type="primary" :disabled="!ruleBuildingId" :loading="ruleSubmitting" @click="submitRule">{{ t('deviceOnboarding.actions.submitTemperatureRule') }}</ElButton>
       </section>
     </section>
-    <template #footer><ElButton @click="emit('close')">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :disabled="Boolean(job) || !previewReady" :loading="submitting" @click="submit">{{ t('deviceOnboarding.actions.submitTemperatureBatch') }}</ElButton></template>
+    <template #footer><ElButton @click="emit('close')">{{ t('deviceOnboarding.actions.cancel') }}</ElButton><ElButton type="primary" :disabled="optionsUnavailable || Boolean(job) || (initializing ? !platformAdmin || initializationPreviewing || !initializationPreviewReady || initializationPreviewExpired : !previewReady)" :loading="initializing ? initializationSubmitting : submitting" @click="submit">{{ t(initializing ? 'deviceOnboarding.actions.submitTemperatureInitialization' : 'deviceOnboarding.actions.submitTemperatureBatch') }}</ElButton></template>
   </ElDialog>
 </template>
 

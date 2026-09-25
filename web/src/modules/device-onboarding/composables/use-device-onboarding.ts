@@ -24,8 +24,10 @@ import {
   listPointNamingRules,
   requestDaikinDirectorySync,
   createHvacTemperatureBatchJob,
+  createHvacTemperatureInitializationJob,
   createHvacTemperatureRuleRequest,
   previewHvacTemperatureBindings,
+  previewHvacTemperatureInitialization,
   retryHvacTemperatureBatchJob,
   submitOperationsBinding,
   submitOperationsBindingBatch,
@@ -56,6 +58,9 @@ import type {
   TemperatureBatchJob,
   TemperatureBatchRequestItem,
   TemperatureBindingOptions,
+  TemperatureInitializationJobRequest,
+  TemperatureInitializationPreview,
+  TemperatureInitializationPreviewRequest,
   TemperaturePlanView,
   TemperaturePreviewItem,
   TemperatureRuleRequest,
@@ -133,6 +138,10 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   const temperatureBatchJob = ref<TemperatureBatchJob | null>(null)
   const temperatureBatchJobLoading = ref(false)
   const temperatureBatchJobError = ref<RequestState>(null)
+  const temperatureInitializationPreview = ref<TemperatureInitializationPreview | null>(null)
+  const temperatureInitializationPreviewLoading = ref(false)
+  const temperatureInitializationPreviewError = ref<RequestState>(null)
+  const temperatureInitializationJobError = ref<RequestState>(null)
   const temperatureRuleRequest = ref<{ requestId: string; status: string } | null>(null)
   const temperatureRuleRequestLoading = ref(false)
   const temperatureRuleRequestError = ref<RequestState>(null)
@@ -157,6 +166,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   let daikinSourcesGeneration = 0
   let temperatureOptionsGeneration = 0
   let temperaturePreviewGeneration = 0
+  let temperatureInitializationPreviewGeneration = 0
   let temperatureBatchJobGeneration = 0
 
   async function loadProducts() {
@@ -281,6 +291,31 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     }
   }
 
+  async function previewTemperatureInitialization(request: TemperatureInitializationPreviewRequest) {
+    const owner = ++temperatureInitializationPreviewGeneration
+    temperatureInitializationPreviewLoading.value = true
+    temperatureInitializationPreviewError.value = null
+    temperatureInitializationPreview.value = null
+    try {
+      const result = await previewHvacTemperatureInitialization(request)
+      if (owner === temperatureInitializationPreviewGeneration) temperatureInitializationPreview.value = result
+      return result
+    } catch (reason) {
+      if (owner === temperatureInitializationPreviewGeneration) temperatureInitializationPreviewError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === temperatureInitializationPreviewGeneration) temperatureInitializationPreviewLoading.value = false
+    }
+  }
+
+  function clearTemperatureInitializationPreview() {
+    ++temperatureInitializationPreviewGeneration
+    temperatureInitializationPreview.value = null
+    temperatureInitializationPreviewError.value = null
+    temperatureInitializationJobError.value = null
+    temperatureInitializationPreviewLoading.value = false
+  }
+
   function clearTemperaturePlans() {
     ++temperaturePreviewGeneration
     temperaturePlans.value = []
@@ -297,6 +332,23 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
         return temperatureBatchJob.value
       } catch (reason) {
         temperatureBatchJobError.value = requestState(reason)
+        throw reason
+      } finally {
+        temperatureBatchJobLoading.value = false
+      }
+    })
+  }
+
+  function createTemperatureInitializationJob(request: TemperatureInitializationJobRequest) {
+    return run('temperature:initialize:create', async () => {
+      temperatureBatchJobLoading.value = true
+      temperatureInitializationJobError.value = null
+      temperatureBatchJobError.value = null
+      try {
+        temperatureBatchJob.value = await createHvacTemperatureInitializationJob(request)
+        return temperatureBatchJob.value
+      } catch (reason) {
+        temperatureInitializationJobError.value = requestState(reason)
         throw reason
       } finally {
         temperatureBatchJobLoading.value = false
@@ -340,6 +392,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     ++temperatureBatchJobGeneration
     temperatureBatchJob.value = null
     temperatureBatchJobError.value = null
+    temperatureInitializationJobError.value = null
     temperatureBatchJobLoading.value = false
   }
 
@@ -672,8 +725,15 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     loadBindingOptions,
     loadTemperatureOptions,
     previewTemperaturePlans,
+    temperatureInitializationPreview,
+    temperatureInitializationPreviewLoading,
+    temperatureInitializationPreviewError,
+    temperatureInitializationJobError,
+    previewTemperatureInitialization,
+    clearTemperatureInitializationPreview,
     clearTemperaturePlans,
     createTemperatureBatchJob,
+    createTemperatureInitializationJob,
     loadTemperatureBatchJob,
     loadLatestTemperatureBatchJob,
     clearTemperatureBatchJob,

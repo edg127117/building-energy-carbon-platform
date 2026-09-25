@@ -20,6 +20,9 @@ import type {
   TemperatureBatchJob,
   TemperatureBatchRequestItem,
   TemperatureBindingOptions,
+  TemperatureInitializationJobRequest,
+  TemperatureInitializationPreview,
+  TemperatureInitializationPreviewRequest,
   TemperaturePlanView,
   TemperaturePreviewItem,
   TemperatureRuleRequest,
@@ -144,6 +147,18 @@ export function getHvacTemperatureBindingOptions(pendingId: string) {
 
 export function previewHvacTemperatureBindings(items: TemperaturePreviewItem[]) {
   return requestApi<TemperaturePlanView[]>({ method: 'post', url: `${temperatureBindingPath}/preview`, data: { items } })
+}
+
+export function previewHvacTemperatureInitialization(request: TemperatureInitializationPreviewRequest) {
+  return requestApi<TemperatureInitializationPreview>({
+    method: 'post', url: `${temperatureBindingPath}/initialization/preview`, data: request,
+  })
+}
+
+export function createHvacTemperatureInitializationJob(request: TemperatureInitializationJobRequest) {
+  return requestApi<TemperatureBatchJob>({
+    method: 'post', url: `${temperatureBindingPath}/initialization/jobs`, data: request,
+  })
 }
 
 export function createHvacTemperatureBatchJob(idempotencyKey: string, items: TemperatureBatchRequestItem[]) {

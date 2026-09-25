@@ -18,7 +18,7 @@ const plans = [{
 describe('温度补齐任务弹窗', () => {
   it('只能使用服务端预览的摘要提交批量任务', async () => {
     const wrapper = mount(TemperatureBatchDialog, {
-      props: { open: true, rows, plans, options: { templates: [], numericSources: [], rules: [] } },
+      props: { open: true, rows, plans, options: { templates: [], numericSources: [{ sourceId: 'S1', sourceName: '来源一' }], rules: [] } },
       attachTo: document.body,
     })
     await flushPromises()
@@ -74,6 +74,105 @@ describe('温度补齐任务弹窗', () => {
     const create = wrapper.findAllComponents(ElButton).find(button => button.text() === '按当前选择新建任务')!
     await create.trigger('click')
     expect(wrapper.emitted('new-task')).toEqual([[]])
+    wrapper.unmount()
+  })
+
+  it('无数值来源时自动选中唯一模板，先预览来源计划，再一次提交初始化审批', async () => {
+    const initializationPreview = {
+      buildingId: 'B1', sourceScope: 'DAIKIN', sourceId: 'SOURCE-NEW', sourceName: '大金来源-B1',
+      templateProductId: 'T1', digest: 'batch-digest', expiresAt: 4_102_444_800_000,
+      plans: [{ ...plans[0]!, numericSourceId: 'SOURCE-NEW' }],
+    }
+    const wrapper = mount(TemperatureBatchDialog, {
+      props: {
+        open: true,
+        rows,
+        platformAdmin: true,
+        options: { templates: [{ productId: 'T1', productName: '大金双温度模板' }], numericSources: [], rules: [] },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('一次审批创建来源、首批双温度测点和大金来源匹配规则')
+    expect(wrapper.text()).not.toContain('自动匹配规则审批申请')
+    const template = wrapper.findComponent(ElSelect)
+    expect(template.props('modelValue')).toBe('T1')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '预览首次初始化')!.trigger('click')
+    expect(wrapper.emitted('initialization-preview')).toEqual([['T1']])
+
+    await wrapper.setProps({ initializationPreview })
+    await flushPromises()
+    expect(wrapper.text()).toContain('大金来源-B1 · SOURCE-NEW')
+    const submit = wrapper.findAllComponents(ElButton).find(button => button.text() === '提交首次初始化审批')!
+    expect(submit.attributes('disabled')).toBeUndefined()
+    await submit.trigger('click')
+    expect(wrapper.emitted('initialization-submit')).toEqual([[initializationPreview]])
+    wrapper.unmount()
+  })
+
+  it('首次初始化预览过期后禁止提交并明确要求重新预览', async () => {
+    const wrapper = mount(TemperatureBatchDialog, {
+      props: {
+        open: true,
+        rows,
+        platformAdmin: true,
+        options: { templates: [{ productId: 'T1', productName: '大金双温度模板' }], numericSources: [], rules: [] },
+        initializationPreview: {
+          buildingId: 'B1', sourceScope: 'DAIKIN', sourceId: 'SOURCE-NEW', sourceName: '大金来源-B1',
+          templateProductId: 'T1', digest: 'batch-digest', expiresAt: 1, plans,
+        },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('首次初始化预览已过期，请重新预览后提交')
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '提交首次初始化审批')!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('初始化预览必须逐台覆盖当前所选设备', async () => {
+    const wrapper = mount(TemperatureBatchDialog, {
+      props: {
+        open: true,
+        rows: [...rows, { ...rows[0]!, pendingId: 'D2' }],
+        platformAdmin: true,
+        options: { templates: [{ productId: 'T1', productName: '大金双温度模板' }], numericSources: [], rules: [] },
+        initializationPreview: {
+          buildingId: 'B1', sourceScope: 'DAIKIN', sourceId: 'SOURCE-NEW', sourceName: '大金来源-B1',
+          templateProductId: 'T1', digest: 'batch-digest', expiresAt: 4_102_444_800_000,
+          plans: [{ ...plans[0]!, pendingId: 'D3' }, { ...plans[0]!, pendingId: 'D4' }],
+        },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '提交首次初始化审批')!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('非平台管理员不能预览或提交首次初始化', async () => {
+    const wrapper = mount(TemperatureBatchDialog, {
+      props: {
+        open: true, rows,
+        options: { templates: [{ productId: 'T1', productName: '大金双温度模板' }], numericSources: [], rules: [] },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.text()).toContain('首次初始化需要平台管理员权限')
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '预览首次初始化')!.attributes('disabled')).toBeDefined()
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '提交首次初始化审批')!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('选项仍在加载时不允许走普通批量温度提交', async () => {
+    const wrapper = mount(TemperatureBatchDialog, {
+      props: { open: true, rows, plans, optionsLoading: true },
+      attachTo: document.body,
+    })
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '预览温度测点')!.attributes('disabled')).toBeDefined()
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '提交温度补齐任务')!.attributes('disabled')).toBeDefined()
     wrapper.unmount()
   })
 
