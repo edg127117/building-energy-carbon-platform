@@ -17,11 +17,18 @@ import type {
   DaikinSourceOption,
   NumericSourceOption,
   OperationsBindingOptions,
+  TemperatureBatchJob,
+  TemperatureBatchRequestItem,
+  TemperatureBindingOptions,
+  TemperaturePlanView,
+  TemperaturePreviewItem,
+  TemperatureRuleRequest,
 } from '../models/onboarding'
 
 const productPath = '/v1/device-products'
 const onboardingPath = '/v1/device-onboarding'
 const operationsPath = '/v1/operations/device-onboarding'
+const temperatureBindingPath = '/v1/operations/hvac-temperature-bindings'
 const encoded = (value: string) => encodeURIComponent(value)
 
 export function listEquipmentTypes() {
@@ -125,6 +132,41 @@ export function submitOperationsIdentityStatus(pendingId: string, targetStatus: 
   return requestApi<OperationsBindingApplication>({
     method: 'post', url: `${operationsPath}/pending/${encoded(pendingId)}/identity-status-requests`,
     data: { targetStatus, idempotencyKey },
+  })
+}
+
+/** 温度模板的匹配、计划摘要和批量任务均由运维端服务端裁决，浏览器只展示并回传已冻结的结果。 */
+export function getHvacTemperatureBindingOptions(pendingId: string) {
+  return requestApi<TemperatureBindingOptions>({
+    method: 'get', url: `${temperatureBindingPath}/pending/${encoded(pendingId)}/options`,
+  })
+}
+
+export function previewHvacTemperatureBindings(items: TemperaturePreviewItem[]) {
+  return requestApi<TemperaturePlanView[]>({ method: 'post', url: `${temperatureBindingPath}/preview`, data: { items } })
+}
+
+export function createHvacTemperatureBatchJob(idempotencyKey: string, items: TemperatureBatchRequestItem[]) {
+  return requestApi<TemperatureBatchJob>({
+    method: 'post', url: `${temperatureBindingPath}/batch-jobs`, data: { idempotencyKey, items } })
+}
+
+export function getHvacTemperatureBatchJob(jobId: string) {
+  return requestApi<TemperatureBatchJob>({ method: 'get', url: `${temperatureBindingPath}/batch-jobs/${encoded(jobId)}` })
+}
+
+export function getLatestHvacTemperatureBatchJob(pendingId: string) {
+  return requestApi<TemperatureBatchJob | null>({ method: 'get', url: `${temperatureBindingPath}/batch-jobs/latest`, params: { pendingId } })
+}
+
+export function retryHvacTemperatureBatchJob(jobId: string, pendingIds: string[]) {
+  return requestApi<TemperatureBatchJob>({
+    method: 'post', url: `${temperatureBindingPath}/batch-jobs/${encoded(jobId)}/retry`, data: { pendingIds } })
+}
+
+export function createHvacTemperatureRuleRequest(request: TemperatureRuleRequest) {
+  return requestApi<{ requestId: string; status: string }>({
+    method: 'post', url: `${temperatureBindingPath}/rule-requests`, data: request,
   })
 }
 

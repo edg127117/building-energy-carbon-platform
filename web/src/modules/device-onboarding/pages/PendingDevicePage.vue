@@ -36,11 +36,21 @@ import { ChangeRequestControl, newIdempotencyKey, useSensitiveChange } from '@/m
 import { useEquipmentReadings } from '@/modules/asset-management/public'
 import { useSession } from '@/modules/auth/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
+import TemperatureBatchDialog from '../components/TemperatureBatchDialog.vue'
 import { getOperationsPendingConnection } from '../api/onboarding'
 import { IndoorBatchBindingError, prepareIndoorBatchBindings } from '../models/indoor-batch-binding'
 import PendingStatusTag from '../components/PendingStatusTag.vue'
 import { useDeviceOnboarding } from '../composables/use-device-onboarding'
-import { canRunOnboardingAction, type OperationsBindingApplication, type PendingBindRequest, type PendingDevice } from '../models/onboarding'
+import {
+  canRunOnboardingAction,
+  type OperationsBindingApplication,
+  type PendingBindRequest,
+  type PendingDevice,
+  type TemperatureBatchRequestItem,
+  type TemperaturePlanSelection,
+  type TemperaturePreviewItem,
+  type TemperatureRuleDraft,
+} from '../models/onboarding'
 
 const session = useSession()
 const route = useRoute()
@@ -76,6 +86,9 @@ const batchRows = computed(() => batchPendingIds.value.length > 1
 const bindingKeys = new Map<string, string>()
 const identityKeys = new Map<string, string>()
 const batchResultsOpen = ref(false)
+const temperatureBatchOpen = ref(false)
+const temperatureBatchRows = ref<PendingDevice[]>([])
+const temperatureBatchIdempotencyKey = ref<string | null>(null)
 const activationOpen = ref(false)
 const activationRows = ref<PendingDevice[]>([])
 const activationResultsOpen = ref(false)
@@ -162,6 +175,7 @@ async function openBinding(ids?: string[]) {
   ensureBindingKeys(batchPendingIds.value)
   try {
     bindingContractError.value = null
+    management.clearTemperaturePlans()
     await loadBindingProducts({
       page: 1,
       size: 20,
@@ -170,7 +184,10 @@ async function openBinding(ids?: string[]) {
       expectedProfileCode: pending.profileCode,
       identityType: pending.identityType,
     })
-    if (operationsMode.value) await Promise.all([management.loadNumericSources(), management.loadBindingOptions()])
+    if (operationsMode.value) {
+      await Promise.all([management.loadNumericSources(), management.loadBindingOptions()])
+      if (isTemperatureEligible(pending)) void management.loadTemperatureOptions(pending.pendingId).catch(() => undefined)
+    }
     else await management.loadNamingRules()
     bindingOpen.value = true
   } catch {
@@ -218,6 +235,7 @@ async function openBindingFor(item: PendingDevice) {
 
 async function selectProduct(productId: string) {
   try {
+    if (operationsMode.value) management.clearTemperaturePlans()
     bindingContractError.value = null
     const detail = await (operationsMode.value ? management.selectBindingProduct(productId) : management.selectProduct(productId))
     const pending = selectedPending.value
@@ -228,6 +246,56 @@ async function selectProduct(productId: string) {
     if (operationsMode.value) await loadBindingEquipment(1)
   } catch {
     // 产品详情读取失败会保留在产品详情状态，表单不伪造模板。
+  }
+}
+
+/**
+ * 温度预览只冻结服务端生成的计划；批量内机仍使用各自已核对的房间和设备名称，不能复用首台设备的摘要。
+ */
+async function previewBindingTemperature(value: TemperaturePreviewItem) {
+  const pending = selectedPending.value
+  const request = value.binding
+  if (!pending || !request || !operationsMode.value) return
+  try {
+    const items = bindingItemsForTemperature(request).map(item => ({
+      pendingId: item.pendingId,
+      mode: value.mode,
+      ...(value.templateProductId ? { templateProductId: value.templateProductId } : {}),
+      ...(value.numericSourceId ? { numericSourceId: value.numericSourceId } : {}),
+      ...(value.existingPointIds ? { existingPointIds: value.existingPointIds } : {}),
+      binding: item.binding,
+    }))
+    await management.previewTemperaturePlans(items)
+  } catch (reason) {
+    bindingSubmitError.value = reason instanceof IndoorBatchBindingError
+      ? t(`deviceOnboarding.messages.batchErrors.${reason.reason}`) : requestErrorMessage(reason)
+  }
+}
+
+function bindingItemsForTemperature(request: PendingBindRequest) {
+  const pending = selectedPending.value
+  if (!pending) return []
+  return batchPendingIds.value.length > 1
+    ? prepareIndoorBatchBindings(batchRows.value, request, t('deviceOnboarding.messages.batchEquipmentNamePrefix'))
+    : [{ pendingId: pending.pendingId, binding: request }]
+}
+
+function bindTemperaturePlan(request: PendingBindRequest, pendingId: string): PendingBindRequest {
+  if (request.temperatureMode !== 'AUTO' && request.temperatureMode !== 'MANUAL') return request
+  const plan = management.temperaturePlans.value.find(item => item.pendingId === pendingId)
+  if (!plan?.digest || !plan.numericSourceId || !['READY', 'COMPLETE'].includes(plan.status)) {
+    throw new Error(t('deviceOnboarding.validation.temperaturePreview'))
+  }
+  if (request.temperatureMode === 'AUTO') {
+    const withoutTemplate = { ...request }
+    delete withoutTemplate.temperatureTemplateProductId
+    return { ...withoutTemplate, numericSourceId: plan.numericSourceId, temperaturePlanDigest: plan.digest }
+  }
+  return {
+    ...request,
+    numericSourceId: plan.numericSourceId,
+    temperatureTemplateProductId: plan.templateProductId ?? request.temperatureTemplateProductId,
+    temperaturePlanDigest: plan.digest,
   }
 }
 
@@ -243,8 +311,10 @@ async function submitBindingDraft(request: PendingBindRequest) {
       const ids = batchPendingIds.value.length ? batchPendingIds.value : [pending.pendingId]
       ensureBindingKeys(ids)
       const result = ids.length > 1
-        ? await management.submitBindingBatch(prepareIndoorBatchBindings(batchRows.value, request, t('deviceOnboarding.messages.batchEquipmentNamePrefix')), bindingKeys)
-        : await management.submitBindingRequest(ids[0]!, request, bindingKeys.get(ids[0]!)!)
+        ? await management.submitBindingBatch(bindingItemsForTemperature(request).map(item => ({
+            ...item, binding: bindTemperaturePlan(item.binding, item.pendingId),
+          })), bindingKeys)
+        : await management.submitBindingRequest(ids[0]!, bindTemperaturePlan(request, ids[0]!), bindingKeys.get(ids[0]!)!)
       if (!result) return
       bindingOpen.value = false
       batchResultsOpen.value = true
@@ -297,6 +367,105 @@ async function openBatchBinding() {
   }
 }
 
+function isTemperatureEligible(row: Pick<PendingDevice, 'identityType' | 'profileCode'>) {
+  return row.identityType === 'DAIKIN_UNIT' && row.profileCode === 'DAIKIN_INDOOR_V2'
+}
+
+function canBatchTemperatureCompletion(row: PendingDevice) {
+  return row.status === 'BOUND' && isTemperatureEligible(row)
+}
+
+const batchTemperatureReady = computed(() => selectedRows.value.length > 0 && selectedRows.value.every(canBatchTemperatureCompletion))
+
+async function openTemperatureBatch() {
+  if (!batchTemperatureReady.value) {
+    ElMessage.warning(t('deviceOnboarding.messages.temperatureBatchSelection'))
+    return
+  }
+  temperatureBatchRows.value = [...selectedRows.value]
+  temperatureBatchIdempotencyKey.value = newIdempotencyKey()
+  operationsManagement.clearTemperaturePlans()
+  operationsManagement.clearTemperatureBatchJob()
+  temperatureBatchOpen.value = true
+  try {
+    await Promise.all([
+      operationsManagement.loadTemperatureOptions(temperatureBatchRows.value[0]!.pendingId),
+      operationsManagement.loadLatestTemperatureBatchJob(temperatureBatchRows.value[0]!.pendingId),
+    ])
+  } catch {
+    // 弹窗保留受控错误，管理员仍可看到当前选择和后端返回的配置缺口。
+  }
+}
+
+async function previewTemperatureBatch(selection: TemperaturePlanSelection) {
+  if (!temperatureBatchRows.value.length) return
+  try {
+    await operationsManagement.previewTemperaturePlans(temperatureBatchRows.value.map(row => ({
+      pendingId: row.pendingId,
+      ...selection,
+    })))
+  } catch {
+    // 预览失败已经保留在温度计划状态，不能据此提交任务。
+  }
+}
+
+async function submitTemperatureBatch(selection: TemperaturePlanSelection) {
+  const key = temperatureBatchIdempotencyKey.value
+  if (!key || !temperatureBatchRows.value.length) return
+  const items: TemperatureBatchRequestItem[] = []
+  for (const row of temperatureBatchRows.value) {
+    const plan = operationsManagement.temperaturePlans.value.find(item => item.pendingId === row.pendingId)
+    if (!plan?.digest || !plan.numericSourceId || !['READY', 'COMPLETE'].includes(plan.status)) return
+    items.push({
+      pendingId: row.pendingId,
+      mode: selection.mode,
+      ...(selection.templateProductId ? { templateProductId: selection.templateProductId } : {}),
+      numericSourceId: plan.numericSourceId,
+      ...(selection.existingPointIds ? { existingPointIds: selection.existingPointIds } : {}),
+      digest: plan.digest,
+    })
+  }
+  try {
+    await operationsManagement.createTemperatureBatchJob(key, items)
+  } catch {
+    // 任务创建错误由持久任务区域展示；同一幂等键可安全重试。
+  }
+}
+
+async function refreshTemperatureBatch() {
+  const jobId = operationsManagement.temperatureBatchJob.value?.jobId
+  if (!jobId) return
+  try {
+    await operationsManagement.loadTemperatureBatchJob(jobId)
+  } catch {
+    // 持久任务错误保留在弹窗内，不能将最后一次结果误作当前状态。
+  }
+}
+
+async function retryTemperatureBatch(pendingIds: string[]) {
+  const jobId = operationsManagement.temperatureBatchJob.value?.jobId
+  if (!jobId || !pendingIds.length) return
+  try {
+    await operationsManagement.retryTemperatureBatchJob(jobId, pendingIds)
+  } catch {
+    // 重试只接受服务端标记的失败项；错误由任务结果区域展示。
+  }
+}
+
+function restartTemperatureBatch() {
+  temperatureBatchIdempotencyKey.value = newIdempotencyKey()
+  operationsManagement.clearTemperaturePlans()
+  operationsManagement.clearTemperatureBatchJob()
+}
+
+async function submitTemperatureRule(rule: TemperatureRuleDraft) {
+  try {
+    await operationsManagement.submitTemperatureRuleRequest({ rule, idempotencyKey: newIdempotencyKey() })
+  } catch {
+    // 规则申请错误保留在弹窗内；页面不直接启用规则。
+  }
+}
+
 const selectedRows = ref<PendingDevice[]>([])
 function canBatchBind(row: PendingDevice) {
   return row.status === 'DISCOVERED' && row.identityType === 'DAIKIN_UNIT'
@@ -308,7 +477,7 @@ function canBatchActivate(row: PendingDevice) {
 }
 
 function selectableForBatch(row: PendingDevice) {
-  return canBatchBind(row) || canBatchActivate(row)
+  return canBatchBind(row) || canBatchActivate(row) || canBatchTemperatureCompletion(row)
 }
 
 const batchBindingReady = computed(() => selectedRows.value.length > 1 && selectedRows.value.every(canBatchBind))
@@ -573,7 +742,7 @@ onMounted(() => {
       <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="operationsManagement.syncJobs.value.page" :page-size="operationsManagement.syncJobs.value.size" :total="operationsManagement.syncJobs.value.total" @current-change="changeSyncHistoryPage" /></div>
     </ElDrawer>
     <ElCard shadow="never">
-      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchBindingReady || activationBusy" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchActivationReady || activationBusy" @click="openBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></div>
+      <div class="filter-bar"><ElSelect v-model="management.pendingQuery.value.status" clearable :placeholder="t('deviceOnboarding.labels.status')" @change="query"><ElOption value="DISCOVERED" :label="t('deviceOnboarding.status.discovered')" /><ElOption value="IGNORED" :label="t('deviceOnboarding.status.ignored')" /><ElOption value="BOUND" :label="t('deviceOnboarding.status.bound')" /></ElSelect><ElInput v-if="!operationsMode" v-model="management.pendingQuery.value.identity" :placeholder="t('deviceOnboarding.labels.identity')" clearable @keyup.enter="query"><template #prefix><Search aria-hidden="true" /></template></ElInput><ElInput v-if="!operationsMode && !protocolScope" v-model="management.pendingQuery.value.profileCode" :placeholder="t('deviceOnboarding.labels.expectedProfile')" clearable @keyup.enter="query" /><ElButton :icon="Search" @click="query">{{ t('deviceOnboarding.actions.query') }}</ElButton><ElButton :icon="RefreshCw" @click="resetFilters">{{ t('deviceOnboarding.actions.reset') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchBindingReady || activationBusy" @click="openBatchBinding">{{ t('deviceOnboarding.actions.batchBinding') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchTemperatureReady || activationBusy" @click="openTemperatureBatch">{{ t('deviceOnboarding.actions.configureTemperature') }}</ElButton><ElButton v-if="operationsMode" type="primary" :disabled="!batchActivationReady || activationBusy" @click="openBatchActivation">{{ t('deviceOnboarding.actions.batchActivateIdentity') }}</ElButton></div>
       <ElSkeleton v-if="management.pendingLoading.value && !management.pendingDevices.value.items.length" animated :rows="5" />
       <ElTable v-else :data="management.pendingDevices.value.items" row-key="pendingId" @selection-change="changeSelection">
         <ElTableColumn v-if="operationsMode" type="selection" width="48" :selectable="selectableForBatch" />
@@ -620,7 +789,67 @@ onMounted(() => {
       </section>
     </ElDrawer>
 
-    <BindingDraftDialog :open="bindingOpen" :pending="selectedPending" :batch-rows="batchRows" :products="management.products.value.items" :product="bindingProduct" :product-loading="management.productsLoading.value || management.productDetailLoading.value" :product-total="management.products.value.total" :product-page="management.products.value.page" :product-size="management.products.value.size" :naming-rules="management.namingRules.value" :naming-rules-loading="management.namingRulesLoading.value" :numeric-sources="management.numericSources.value" :numeric-sources-loading="management.numericSourcesLoading.value" :binding-options="operationsMode ? management.bindingOptions.value : null" :submitting="bindingSubmitting" :submit-error="bindingSubmitError" :allow-empty-points="operationsMode" :product-search-enabled="!operationsMode" @close="bindingOpen = false" @product-change="selectProduct" @product-search="searchBindingProducts" @product-page-change="changeBindingProductPage" @binding-scope-change="(spaceId, systemGroupId) => loadBindingEquipment(1, spaceId, systemGroupId)" @equipment-page-change="loadBindingEquipment" @submit="submitBindingDraft" />
+    <BindingDraftDialog
+      :open="bindingOpen"
+      :pending="selectedPending"
+      :batch-rows="batchRows"
+      :products="management.products.value.items"
+      :product="bindingProduct"
+      :product-loading="management.productsLoading.value || management.productDetailLoading.value"
+      :product-total="management.products.value.total"
+      :product-page="management.products.value.page"
+      :product-size="management.products.value.size"
+      :naming-rules="management.namingRules.value"
+      :naming-rules-loading="management.namingRulesLoading.value"
+      :numeric-sources="management.numericSources.value"
+      :numeric-sources-loading="management.numericSourcesLoading.value"
+      :temperature-options="operationsMode ? management.temperatureOptions.value : null"
+      :temperature-options-loading="operationsMode && management.temperatureOptionsLoading.value"
+      :temperature-plans="operationsMode ? management.temperaturePlans.value : []"
+      :temperature-previewing="operationsMode && management.temperaturePreviewLoading.value"
+      :temperature-preview-error="operationsMode ? management.temperaturePreviewError.value?.message : null"
+      :binding-options="operationsMode ? management.bindingOptions.value : null"
+      :submitting="bindingSubmitting"
+      :submit-error="bindingSubmitError"
+      :allow-empty-points="operationsMode"
+      :product-search-enabled="!operationsMode"
+      @close="bindingOpen = false"
+      @product-change="selectProduct"
+      @product-search="searchBindingProducts"
+      @product-page-change="changeBindingProductPage"
+      @binding-scope-change="(spaceId, systemGroupId) => loadBindingEquipment(1, spaceId, systemGroupId)"
+      @equipment-page-change="loadBindingEquipment"
+      @temperature-preview="previewBindingTemperature"
+      @temperature-preview-invalidated="management.clearTemperaturePlans()"
+      @submit="submitBindingDraft"
+    />
+
+    <TemperatureBatchDialog
+      :open="temperatureBatchOpen"
+      :rows="temperatureBatchRows"
+      :options="operationsManagement.temperatureOptions.value"
+      :options-loading="operationsManagement.temperatureOptionsLoading.value"
+      :options-error="operationsManagement.temperatureOptionsError.value?.message"
+      :plans="operationsManagement.temperaturePlans.value"
+      :previewing="operationsManagement.temperaturePreviewLoading.value"
+      :preview-error="operationsManagement.temperaturePreviewError.value?.message"
+      :submitting="operationsManagement.running.value.has('temperature:batch:create')"
+      :job="operationsManagement.temperatureBatchJob.value"
+      :job-loading="operationsManagement.temperatureBatchJobLoading.value"
+      :job-error="operationsManagement.temperatureBatchJobError.value?.message"
+      :platform-admin="administrator"
+      :rule-submitting="operationsManagement.temperatureRuleRequestLoading.value"
+      :rule-error="operationsManagement.temperatureRuleRequestError.value?.message"
+      :rule-result="operationsManagement.temperatureRuleRequest.value"
+      @close="temperatureBatchOpen = false"
+      @preview="previewTemperatureBatch"
+      @preview-invalidated="operationsManagement.clearTemperaturePlans()"
+      @submit="submitTemperatureBatch"
+      @refresh-job="refreshTemperatureBatch"
+      @retry-job="retryTemperatureBatch"
+      @new-task="restartTemperatureBatch"
+      @rule-submit="submitTemperatureRule"
+    />
 
     <ElDialog v-model="batchResultsOpen" :title="t('deviceOnboarding.pending.bindingResults')" width="min(760px, 94vw)">
       <ElAlert :title="t('deviceOnboarding.messages.batchBoundary')" type="info" show-icon :closable="false" />

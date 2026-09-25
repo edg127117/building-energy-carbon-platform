@@ -9,6 +9,9 @@ import {
   getOperationsPendingDevice,
   getOperationsCompatibleProduct,
   getOperationsBindingOptions,
+  getHvacTemperatureBatchJob,
+  getLatestHvacTemperatureBatchJob,
+  getHvacTemperatureBindingOptions,
   getDaikinDirectorySync,
   listDaikinSources,
   listDaikinDirectorySyncJobs,
@@ -20,6 +23,10 @@ import {
   listOperationsNumericSources,
   listPointNamingRules,
   requestDaikinDirectorySync,
+  createHvacTemperatureBatchJob,
+  createHvacTemperatureRuleRequest,
+  previewHvacTemperatureBindings,
+  retryHvacTemperatureBatchJob,
   submitOperationsBinding,
   submitOperationsBindingBatch,
   submitOperationsIdentityStatus,
@@ -46,6 +53,12 @@ import type {
   PendingBindRequest,
   NumericSourceOption,
   OperationsBindingOptions,
+  TemperatureBatchJob,
+  TemperatureBatchRequestItem,
+  TemperatureBindingOptions,
+  TemperaturePlanView,
+  TemperaturePreviewItem,
+  TemperatureRuleRequest,
 } from '../models/onboarding'
 import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
 
@@ -111,6 +124,18 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   const numericSourcesLoading = ref(false)
   const numericSourcesError = ref<RequestState>(null)
   const bindingOptions = ref<OperationsBindingOptions | null>(null)
+  const temperatureOptions = ref<TemperatureBindingOptions | null>(null)
+  const temperatureOptionsLoading = ref(false)
+  const temperatureOptionsError = ref<RequestState>(null)
+  const temperaturePlans = ref<TemperaturePlanView[]>([])
+  const temperaturePreviewLoading = ref(false)
+  const temperaturePreviewError = ref<RequestState>(null)
+  const temperatureBatchJob = ref<TemperatureBatchJob | null>(null)
+  const temperatureBatchJobLoading = ref(false)
+  const temperatureBatchJobError = ref<RequestState>(null)
+  const temperatureRuleRequest = ref<{ requestId: string; status: string } | null>(null)
+  const temperatureRuleRequestLoading = ref(false)
+  const temperatureRuleRequestError = ref<RequestState>(null)
   const pendingDetailLoading = ref(false)
   const pendingDetailError = ref<RequestState>(null)
   const pendingConnection = ref<PendingDeviceConnection | null>(null)
@@ -130,6 +155,9 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   let namingRulesGeneration = 0
   let syncJobsGeneration = 0
   let daikinSourcesGeneration = 0
+  let temperatureOptionsGeneration = 0
+  let temperaturePreviewGeneration = 0
+  let temperatureBatchJobGeneration = 0
 
   async function loadProducts() {
     const owner = ++productGeneration
@@ -218,6 +246,131 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
       productId: selectedBindingProduct.value?.productId,
     })
     return bindingOptions.value
+  }
+
+  async function loadTemperatureOptions(pendingId: string) {
+    const owner = ++temperatureOptionsGeneration
+    temperatureOptionsLoading.value = true
+    temperatureOptionsError.value = null
+    temperatureOptions.value = null
+    try {
+      const result = await getHvacTemperatureBindingOptions(pendingId)
+      if (owner === temperatureOptionsGeneration) temperatureOptions.value = result
+      return result
+    } catch (reason) {
+      if (owner === temperatureOptionsGeneration) temperatureOptionsError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === temperatureOptionsGeneration) temperatureOptionsLoading.value = false
+    }
+  }
+
+  async function previewTemperaturePlans(items: TemperaturePreviewItem[]) {
+    const owner = ++temperaturePreviewGeneration
+    temperaturePreviewLoading.value = true
+    temperaturePreviewError.value = null
+    try {
+      const result = await previewHvacTemperatureBindings(items)
+      if (owner === temperaturePreviewGeneration) temperaturePlans.value = result
+      return result
+    } catch (reason) {
+      if (owner === temperaturePreviewGeneration) temperaturePreviewError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === temperaturePreviewGeneration) temperaturePreviewLoading.value = false
+    }
+  }
+
+  function clearTemperaturePlans() {
+    ++temperaturePreviewGeneration
+    temperaturePlans.value = []
+    temperaturePreviewError.value = null
+    temperaturePreviewLoading.value = false
+  }
+
+  function createTemperatureBatchJob(idempotencyKey: string, items: TemperatureBatchRequestItem[]) {
+    return run('temperature:batch:create', async () => {
+      temperatureBatchJobLoading.value = true
+      temperatureBatchJobError.value = null
+      try {
+        temperatureBatchJob.value = await createHvacTemperatureBatchJob(idempotencyKey, items)
+        return temperatureBatchJob.value
+      } catch (reason) {
+        temperatureBatchJobError.value = requestState(reason)
+        throw reason
+      } finally {
+        temperatureBatchJobLoading.value = false
+      }
+    })
+  }
+
+  async function loadTemperatureBatchJob(jobId: string) {
+    const owner = ++temperatureBatchJobGeneration
+    temperatureBatchJobLoading.value = true
+    temperatureBatchJobError.value = null
+    try {
+      const result = await getHvacTemperatureBatchJob(jobId)
+      if (owner === temperatureBatchJobGeneration) temperatureBatchJob.value = result
+      return result
+    } catch (reason) {
+      if (owner === temperatureBatchJobGeneration) temperatureBatchJobError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === temperatureBatchJobGeneration) temperatureBatchJobLoading.value = false
+    }
+  }
+
+  async function loadLatestTemperatureBatchJob(pendingId: string) {
+    const owner = ++temperatureBatchJobGeneration
+    temperatureBatchJobLoading.value = true
+    temperatureBatchJobError.value = null
+    try {
+      const result = await getLatestHvacTemperatureBatchJob(pendingId)
+      if (owner === temperatureBatchJobGeneration) temperatureBatchJob.value = result
+      return result
+    } catch (reason) {
+      if (owner === temperatureBatchJobGeneration) temperatureBatchJobError.value = requestState(reason)
+      throw reason
+    } finally {
+      if (owner === temperatureBatchJobGeneration) temperatureBatchJobLoading.value = false
+    }
+  }
+
+  function clearTemperatureBatchJob() {
+    ++temperatureBatchJobGeneration
+    temperatureBatchJob.value = null
+    temperatureBatchJobError.value = null
+    temperatureBatchJobLoading.value = false
+  }
+
+  function retryTemperatureBatchJob(jobId: string, pendingIds: string[]) {
+    return run(`temperature:batch:retry:${jobId}`, async () => {
+      temperatureBatchJobLoading.value = true
+      temperatureBatchJobError.value = null
+      try {
+        temperatureBatchJob.value = await retryHvacTemperatureBatchJob(jobId, pendingIds)
+        return temperatureBatchJob.value
+      } catch (reason) {
+        temperatureBatchJobError.value = requestState(reason)
+        throw reason
+      } finally {
+        temperatureBatchJobLoading.value = false
+      }
+    })
+  }
+
+  async function submitTemperatureRuleRequest(request: TemperatureRuleRequest) {
+    temperatureRuleRequestLoading.value = true
+    temperatureRuleRequestError.value = null
+    try {
+      temperatureRuleRequest.value = await createHvacTemperatureRuleRequest(request)
+      return temperatureRuleRequest.value
+    } catch (reason) {
+      temperatureRuleRequestError.value = requestState(reason)
+      throw reason
+    } finally {
+      temperatureRuleRequestLoading.value = false
+    }
   }
 
   async function loadPendingDevices() {
@@ -489,6 +642,18 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     numericSourcesLoading,
     numericSourcesError,
     bindingOptions,
+    temperatureOptions,
+    temperatureOptionsLoading,
+    temperatureOptionsError,
+    temperaturePlans,
+    temperaturePreviewLoading,
+    temperaturePreviewError,
+    temperatureBatchJob,
+    temperatureBatchJobLoading,
+    temperatureBatchJobError,
+    temperatureRuleRequest,
+    temperatureRuleRequestLoading,
+    temperatureRuleRequestError,
     pendingDetailLoading,
     pendingDetailError,
     pendingConnection,
@@ -505,6 +670,15 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     selectBindingProduct,
     loadNumericSources,
     loadBindingOptions,
+    loadTemperatureOptions,
+    previewTemperaturePlans,
+    clearTemperaturePlans,
+    createTemperatureBatchJob,
+    loadTemperatureBatchJob,
+    loadLatestTemperatureBatchJob,
+    clearTemperatureBatchJob,
+    retryTemperatureBatchJob,
+    submitTemperatureRuleRequest,
     saveProduct,
     copyProduct,
     loadPendingDevices,

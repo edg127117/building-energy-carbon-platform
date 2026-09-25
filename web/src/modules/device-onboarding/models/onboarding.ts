@@ -200,6 +200,115 @@ export type PendingBindRequest = {
   pointBindings: PointBinding[]
   autoCreatePoints?: boolean
   numericSourceId?: string | null
+  temperatureMode?: TemperatureBindingMode | null
+  temperatureTemplateProductId?: string | null
+  temperaturePlanDigest?: string | null
+  temperatureExistingPointIds?: Record<string, string> | null
+}
+
+export type TemperatureBindingMode = 'AUTO' | 'MANUAL' | 'STATE_ONLY'
+
+export type TemperatureTemplateOption = {
+  productId: string
+  productName: string
+}
+
+export type TemperatureNumericSourceOption = {
+  sourceId: string
+  sourceName: string
+}
+
+export type TemperatureBindingRule = {
+  ruleId: string
+  adapterId: string
+  buildingId: string
+  sourceScope: string
+  model: string
+  templateProductId: string
+  numericSourceId: string
+  revision: number
+  enabled: boolean
+}
+
+export type TemperatureBindingOptions = {
+  templates: TemperatureTemplateOption[]
+  numericSources: TemperatureNumericSourceOption[]
+  rules: TemperatureBindingRule[]
+}
+
+export type TemperaturePlanPoint = {
+  metricCode: string
+  semantic: string
+  unit: string
+  action: 'CREATE' | 'REUSE'
+  pointId: string | null
+  pointCode: string | null
+  pointName: string | null
+}
+
+export type TemperaturePlanView = {
+  pendingId: string
+  buildingId: string
+  mode: TemperatureBindingMode
+  templateProductId: string | null
+  templateName: string | null
+  numericSourceId: string | null
+  status: 'READY' | 'COMPLETE' | 'BLOCKED' | 'NOT_APPLICABLE'
+  message: string | null
+  digest: string | null
+  expiresAt: number | null
+  points: TemperaturePlanPoint[]
+}
+
+export type TemperaturePreviewItem = {
+  pendingId: string
+  mode: TemperatureBindingMode
+  templateProductId?: string
+  numericSourceId?: string
+  existingPointIds?: Record<string, string>
+  binding?: PendingBindRequest
+}
+
+export type TemperaturePlanSelection = Pick<TemperaturePreviewItem,
+  'mode' | 'templateProductId' | 'numericSourceId' | 'existingPointIds'>
+
+export type TemperatureBatchJobItem = {
+  pendingId: string
+  requestId: string | null
+  configurationStatus: string
+  message: string | null
+  samplingStatus: string
+}
+
+export type TemperatureBatchJob = {
+  jobId: string
+  items: TemperatureBatchJobItem[]
+}
+
+export type TemperatureBatchRequestItem = {
+  pendingId: string
+  mode: TemperatureBindingMode
+  templateProductId?: string
+  numericSourceId?: string
+  existingPointIds?: Record<string, string>
+  digest: string
+}
+
+export type TemperatureRuleDraft = {
+  ruleId?: string
+  adapterId: 'DAIKIN_INDOOR_V2'
+  buildingId: string
+  sourceScope: string
+  model: string
+  templateProductId: string
+  numericSourceId: string
+  revision: number
+  enabled: boolean
+}
+
+export type TemperatureRuleRequest = {
+  rule: TemperatureRuleDraft
+  idempotencyKey: string
 }
 
 /** 运维接口返回兼容产品摘要；大金状态型设备允许没有数值测点模板。 */
