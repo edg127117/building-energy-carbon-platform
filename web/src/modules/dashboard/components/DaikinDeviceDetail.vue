@@ -7,7 +7,7 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { formatDateTime } from '@/shared/utils/format'
 import { t } from '@/locales'
 import { daikinApi } from '../api/daikin'
-import { daikinLabel, daikinFieldLabel, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
+import { daikinLabel, daikinFieldLabel, daikinFieldExplanation, daikinCurrentFieldValue, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 
 const props = defineProps<{ equipmentId: string; equipmentName?: string | null; equipmentCode?: string | null; refreshTick: number }>()
@@ -69,7 +69,7 @@ onMounted(loadCurrent)
         <ElSkeleton v-if="current.loading.value" :rows="5" animated />
         <ElTable v-else :data="displayFields.primary">
           <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
-          <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
+          <ElTableColumn :label="text('value')"><template #default="{ row }">{{ daikinCurrentFieldValue({ fieldName: row.fieldName, status: row.status, valueVisible: row.valueVisible, normalizedValue: row.normalizedValue }) }} <ElTag v-if="row.stale" type="warning">{{ text('stale') }}</ElTag></template></ElTableColumn>
           <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
           <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
           <ElTableColumn :label="text('attempt')"><template #default="{ row }">{{ date(row.lastAttemptAt) }}</template></ElTableColumn>
@@ -78,8 +78,8 @@ onMounted(loadCurrent)
           <ElButton @click="showExtended = !showExtended">{{ text(showExtended ? 'hideExtendedFields' : 'showExtendedFields') }} {{ displayFields.extended.length }}</ElButton>
           <p v-if="showExtended">{{ text('extendedNotice') }}</p>
           <ElTable v-if="showExtended" :data="displayFields.extended" :aria-label="text('extendedFields')">
-            <ElTableColumn :label="text('field')"><template #default="{ row }">{{ daikinFieldLabel(row.fieldName) }}</template></ElTableColumn>
-            <ElTableColumn :label="text('value')"><template #default="{ row }">{{ row.valueVisible ? daikinCurrentValue(row.fieldName, row.normalizedValue) : t('common.missing') }}</template></ElTableColumn>
+            <ElTableColumn :label="text('field')"><template #default="{ row }"><span :title="daikinFieldExplanation(row.fieldName)">{{ daikinFieldLabel(row.fieldName) }}</span></template></ElTableColumn>
+            <ElTableColumn :label="text('value')"><template #default="{ row }">{{ daikinCurrentFieldValue({ fieldName: row.fieldName, status: row.status, valueVisible: row.valueVisible, normalizedValue: row.normalizedValue }) }}</template></ElTableColumn>
             <ElTableColumn :label="text('status')"><template #default="{ row }">{{ daikinLabel(row.status) }}</template></ElTableColumn>
             <ElTableColumn :label="text('fresh')"><template #default="{ row }">{{ date(row.lastValidAt) }}</template></ElTableColumn>
             <ElTableColumn :label="text('attempt')"><template #default="{ row }">{{ date(row.lastAttemptAt) }}</template></ElTableColumn>

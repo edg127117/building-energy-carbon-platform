@@ -104,7 +104,7 @@ class DaikinDevicePageDecoderTest {
         assertThat(fields.get("heatLimitsettempL").normalizedValue()).isEqualTo("16");
         assertThat(fields.get("unitStatus").normalizedValue()).isEqualTo("unknown");
         assertThat(fields.get("arth1").status()).isEqualTo(UNCONFIRMED);
-        assertThat(fields.get("fanSpeedSetList").status()).isEqualTo(UNCONFIRMED);
+        assertThat(fields.get("fanSpeedSetList").normalizedValue()).isEqualTo("[\"low\"]");
         unit(page).put("rcProhibitOnOff", "futurePermission").put("coolLimitsettempU", 33)
                 .put("heatLimitsettempL", 16.5);
         fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
@@ -221,6 +221,67 @@ class DaikinDevicePageDecoderTest {
         ObjectNode data = (ObjectNode) page.path("data");
         data.put("totalCount", 0).put("totalPages", 0).putArray("sites");
         assertThat(decoder.decode("source-a", DaikinDeviceKey.Kind.INDOOR, page, received).devices()).isEmpty();
+    }
+
+    @Test
+    void decodesObservedDecimalLimitsAndCapabilityShapesWithoutLosingRawValues() throws Exception {
+        ObjectNode page = page();
+        unit(page).put("coolLimitsettempL", 16.0).put("coolLimitsettempU", 32.0)
+                .put("heatLimitsettempL", 16.0).put("heatLimitsettempU", 32.0)
+                .put("fanSpeedSetList", "[low,middle,high]")
+                .put("modeSetList", "[fan,dependent,dry]").put("onOffModeSetList", "[on,off]");
+        unit(page).set("DefaultSetpointRange", mapper.readTree("{\"min\":16.0,\"max\":32.0,\"step\":1.0}"));
+        unit(page).set("masterSlaveIds", mapper.readTree("[101,102]"));
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("coolLimitsettempL").normalizedValue()).isEqualTo("16");
+        assertThat(fields.get("coolLimitsettempL").rawJson()).isEqualTo("16.0");
+        assertThat(fields.get("coolLimitsettempU").normalizedValue()).isEqualTo("32");
+        assertThat(fields.get("heatLimitsettempL").normalizedValue()).isEqualTo("16");
+        assertThat(fields.get("heatLimitsettempU").normalizedValue()).isEqualTo("32");
+        assertThat(fields.get("fanSpeedSetList").normalizedValue()).isEqualTo("[\"low\",\"middle\",\"high\"]");
+        assertThat(fields.get("modeSetList").normalizedValue()).isEqualTo("[\"fan\",\"dependent\",\"dry\"]");
+        assertThat(fields.get("onOffModeSetList").normalizedValue()).isEqualTo("[\"on\",\"off\"]");
+        assertThat(mapper.readTree(fields.get("DefaultSetpointRange").normalizedValue()).get("step").asInt()).isEqualTo(1);
+        assertThat(fields.get("masterSlaveIds").normalizedValue()).isEqualTo("[\"101\",\"102\"]");
+    }
+
+    @Test
+    void distinguishesMissingEmptyUnknownAndMalformedCapabilities() throws Exception {
+        ObjectNode page = page();
+        assertThat(decode(page, DaikinDeviceKey.Kind.INDOOR).fields().get("modeSetList").status()).isEqualTo(MISSING);
+        unit(page).put("modeSetList", "[]").put("fanSpeedSetList", "[low,future]")
+                .put("onOffModeSetList", "[on,]").put("coolLimitsettempL", 16.5);
+        unit(page).set("DefaultSetpointRange", mapper.readTree("{\"min\":32,\"max\":16,\"step\":1}"));
+        unit(page).set("masterSlaveIds", mapper.readTree("[101,null]"));
+        var fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("modeSetList").normalizedValue()).isEqualTo("[]");
+        assertThat(fields.get("fanSpeedSetList").status()).isEqualTo(UNKNOWN);
+        assertThat(fields.get("fanSpeedSetList").rawJson()).contains("future");
+        assertThat(fields.get("onOffModeSetList").status()).isEqualTo(INVALID);
+        assertThat(fields.get("coolLimitsettempL").status()).isEqualTo(INVALID);
+        assertThat(fields.get("DefaultSetpointRange").status()).isEqualTo(INVALID);
+        assertThat(fields.get("masterSlaveIds").status()).isEqualTo(INVALID);
+        unit(page).set("modeSetList", mapper.readTree("[\"FAN\",\"cooling\"]"));
+        unit(page).set("masterSlaveIds", mapper.readTree("[\"00101\",9007199254740993]"));
+        fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("modeSetList").normalizedValue()).isEqualTo("[\"fan\",\"cooling\"]");
+        assertThat(fields.get("masterSlaveIds").normalizedValue()).isEqualTo("[\"00101\",\"9007199254740993\"]");
+        unit(page).put("coolLimitsettempL", new java.math.BigDecimal("1e-1000000"));
+        unit(page).set("DefaultSetpointRange", mapper.readTree("{\"min\":16,\"max\":32,\"step\":0}"));
+        fields = decode(page, DaikinDeviceKey.Kind.INDOOR).fields();
+        assertThat(fields.get("coolLimitsettempL").status()).isEqualTo(INVALID);
+        assertThat(fields.get("DefaultSetpointRange").status()).isEqualTo(INVALID);
+    }
+
+    @Test
+    void normalizedCapabilityCannotOverflowTheStoredValueColumn() throws Exception {
+        ObjectNode page = page();
+        String modes = "[" + String.join(",", java.util.Collections.nCopies(44, "ventilationMonitorOnly")) + "]";
+        unit(page).put("modeSetList", modes);
+        var field = decode(page, DaikinDeviceKey.Kind.INDOOR).fields().get("modeSetList");
+        assertThat(field.rawJson()).hasSizeLessThanOrEqualTo(1024);
+        assertThat(field.status()).isEqualTo(INVALID);
+        assertThat(field.normalizedValue()).isNull();
     }
 
     private DaikinDeviceObservation decode(ObjectNode page, DaikinDeviceKey.Kind kind) {

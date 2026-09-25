@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { daikinLabel, daikinFieldLabel, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
+import { daikinLabel, daikinFieldLabel, daikinFieldExplanation, daikinCurrentFieldValue, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
 import type { CurrentField } from './daikin'
 
 describe('manufacturer display boundaries', () => {
@@ -44,6 +44,42 @@ describe('manufacturer display boundaries', () => {
   it('translates every runtime synchronization state for customer display', () => {
     expect(['QUEUED', 'RUNNING', 'RETRY_WAIT', 'SUCCEEDED', 'FAILED', 'UNSUPPORTED', 'EXPIRED'].map(daikinLabel))
       .toEqual(['待执行', '执行中', '等待重试', '已完成', '失败', '不支持', '已过期'])
+  })
+  it('renders decoded capability structures and preserves unknown state semantics', () => {
+    expect(daikinCurrentValue('fanSpeedSetList', '["low","middle","high"]')).toBe('低档、中档、高档')
+    expect(daikinCurrentValue('modeSetList', '["fan","dependent","dry"]')).toBe('送风、冷热模式、除湿')
+    expect(daikinCurrentValue('onOffModeSetList', '["on","off"]')).toBe('开、关')
+    expect(daikinCurrentValue('masterSlaveIds', '["00101","9007199254740993"]')).toBe('00101、9007199254740993')
+    expect(daikinCurrentValue('DefaultSetpointRange', '{"min":16,"max":32,"step":1}')).toBe('16～32，步长 1')
+    expect(daikinCurrentValue('modeSetList', '[]')).toBe('空列表')
+    expect(daikinCurrentValue('modeSetList', 'invalid')).toContain('未确认值')
+    expect(daikinCurrentValue('controller.status', 'CommissionPending')).toBe('待开通／调试（参考解释，原值：CommissionPending）')
+    expect(daikinFieldLabel('isGroupSlave')).toBe('组内从机')
+    expect(daikinFieldLabel('controller.decommissioned')).toBe('控制器停用信息')
+  })
+  it('promotes successfully decoded protocol fields without promoting invalid attempts', () => {
+    const field = (status: string): CurrentField => ({ fieldName: 'modeSetList', normalizedValue: '["fan"]', rawJson: null,
+      status, lastValidAt: 1, lastAttemptAt: 1, lastAttemptRawJson: null, valueVisible: true, stale: false,
+      mappingVersion: 1, lastAttemptMappingVersion: 1 })
+    const valid = field('PRESENT')
+    const invalid = field('INVALID')
+    expect(daikinCurrentFields([valid, invalid])).toEqual({ primary: [valid], extended: [invalid] })
+  })
+  it('distinguishes missing reference values from unconfirmed and hidden readings', () => {
+    const field: CurrentField = { fieldName: 'arth1', normalizedValue: null, rawJson: null,
+      status: 'MISSING', lastValidAt: null, lastAttemptAt: 1, lastAttemptRawJson: null,
+      valueVisible: false, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 }
+    expect(daikinCurrentFieldValue(field)).toBe('未提供')
+    expect(daikinCurrentFieldValue({ ...field, fieldName: 'controller.decommissioned' })).toBe('未提供')
+    const unconfirmed: CurrentField = { ...field, status: 'UNCONFIRMED', lastAttemptRawJson: '25' }
+    expect(daikinCurrentFieldValue(unconfirmed)).toBe('—')
+    expect(daikinCurrentFieldValue({ ...field, fieldName: 'roomTemp', normalizedValue: '25', status: 'PRESENT' })).toBe('—')
+    expect(daikinCurrentFieldValue({ ...field, fieldName: 'roomTemp', normalizedValue: '25', valueVisible: true })).toBe('25')
+    expect(daikinFieldExplanation('arth1')).toContain('不替代室温')
+    expect(daikinFieldExplanation('controller.decommissioned')).toContain('不等于未停用')
+    expect(daikinFieldExplanation('controller.status')).toContain('不据此判断')
+    expect(daikinFieldExplanation('constructor')).toBeUndefined()
+    expect(daikinCurrentValue('controller.status', 'constructor')).toBe('厂家状态（原值：constructor）')
   })
   it('uses manufacturer period timezone independently of browser timezone', () => {
     expect(runtimePeriodTime(Date.parse('2026-09-16T16:00:00Z'), 'Asia/Shanghai')).toContain('2026/09/17')
