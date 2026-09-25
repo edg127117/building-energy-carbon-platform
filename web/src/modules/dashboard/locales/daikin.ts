@@ -23,8 +23,8 @@ export default {
   fieldNames: {
     onOff: '启停', mode: '模式', fanSpeed: '风速档位', airflowDirection: '风向', unitStatus: '机组状态', errorCode: '故障代码', errorType: '故障类型',
     roomTemp: '室温', temperature: '设定温度', inCommunicationError: '通信故障', inEquipmentError: '设备故障', inMantenanceMode: '维护模式',
-    isFilterDirty: '滤网需更换', isGroupSlave: '共用遥控器', masterSlaveFlag: '主从机', masterSlaveIds: '主从关联设备编号',
-    'controller.isConnectionUp': '控制器连接', 'controller.inForcedStop': '控制器强制停止', 'controller.status': '控制器状态', 'controller.decommissioned': '控制器退役时间',
+    isFilterDirty: '滤网需更换', isGroupSlave: '组内从机', masterSlaveFlag: '主从机', masterSlaveIds: '主从关联设备编号',
+    'controller.isConnectionUp': '控制器连接', 'controller.inForcedStop': '控制器强制停止', 'controller.status': '控制器状态', 'controller.decommissioned': '控制器停用信息',
     compressorOnOff: '压缩机启停', formalName: '设备类型', modelName: '设备型号', arth1: '遥控器温度（单位待核验）',
     rcProhibitOnOff: '遥控器开关权限', rcProhibitOpMode: '遥控器模式权限', rcProhibitSetpoint: '遥控器设温权限',
     limitSettempHeat: '暖房设温限制', limitSettempCool: '冷房设温限制', coolLimitsettempU: '冷房设温上限', coolLimitsettempL: '冷房设温下限',
@@ -36,6 +36,8 @@ export default {
   unconfirmedValuePrefix: '未确认值',
   controllerStatusNames: { decommissioned: '已退役' },
   controllerStatusUnknown: (value: string) => `厂家状态（原值：${value}）`,
+  setpointRangeValue: (min: number, max: number, step: number) => `${min}～${max}，步长 ${step}`,
+  emptyCapabilityList: '空列表',
   fieldValueNames: {
     errorType: { '0': '正常', '1': 'D3 异常', '2': '设备／机器异常' },
     rcProhibitOnOff: { off: '禁止', stopOnly: '仅允许停止', on: '允许' },

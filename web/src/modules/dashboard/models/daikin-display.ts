@@ -19,6 +19,22 @@ export function daikinCurrentValue(fieldName: string, value: string | null): str
     const known: Record<string, string> = words.controllerStatusNames
     return known[value] ?? words.controllerStatusUnknown(value)
   }
+  if (['fanSpeedSetList', 'modeSetList', 'onOffModeSetList', 'masterSlaveIds', 'DefaultSetpointRange'].includes(fieldName)) {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      if (fieldName === 'DefaultSetpointRange' && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const range = parsed as Record<string, unknown>
+        if ([range.min, range.max, range.step].every(item => typeof item === 'number' && Number.isFinite(item))) {
+          return words.setpointRangeValue(range.min as number, range.max as number, range.step as number)
+        }
+      }
+      if (Array.isArray(parsed) && parsed.every(item => typeof item === 'string')) {
+        if (!parsed.length) return words.emptyCapabilityList
+        return fieldName === 'masterSlaveIds' ? parsed.join('、') : parsed.map(daikinLabel).join('、')
+      }
+    } catch { /* 历史或不符合契约的值保留原文，不伪造成空列表。 */ }
+    return daikinLabel(value)
+  }
   if (['modelName', 'formalName', 'errorCode'].includes(fieldName)) return value
   if (['roomTemp', 'temperature', 'coolLimitsettempU', 'coolLimitsettempL', 'heatLimitsettempU', 'heatLimitsettempL'].includes(fieldName)) return value
   const protocolValues = words.fieldValueNames as Record<string, Record<string, string>>
@@ -26,13 +42,14 @@ export function daikinCurrentValue(fieldName: string, value: string | null): str
   return daikinLabel(value)
 }
 
-/** 扩展区包含协议已定义但未成功解码的字段，以及厂家新增值；数量不是未知字段数。 */
+/** 已成功解码的协议能力进入主表；未返回、未解码及厂家新增值仍保留在扩展区。 */
 export function daikinCurrentFields(fields: CurrentField[]): { primary: CurrentField[]; extended: CurrentField[] } {
   const primary: CurrentField[] = []
   const extended: CurrentField[] = []
   const coreFields = new Set(['onOff', 'mode', 'fanSpeed', 'airflowDirection', 'unitStatus', 'errorCode', 'errorType', 'roomTemp', 'temperature', 'inCommunicationError', 'inEquipmentError', 'inMantenanceMode', 'isFilterDirty', 'controller.isConnectionUp', 'controller.inForcedStop', 'compressorOnOff', 'formalName', 'modelName'])
+  const decodedProtocolFields = new Set(['isGroupSlave', 'masterSlaveFlag', 'masterSlaveIds', 'rcProhibitOnOff', 'rcProhibitOpMode', 'rcProhibitSetpoint', 'limitSettempHeat', 'limitSettempCool', 'coolLimitsettempU', 'coolLimitsettempL', 'heatLimitsettempU', 'heatLimitsettempL', 'fanSpeedSetList', 'modeSetList', 'onOffModeSetList', 'DefaultSetpointRange'])
   for (const field of fields) {
-    const knownField = coreFields.has(field.fieldName)
+    const knownField = coreFields.has(field.fieldName) || (field.status === 'PRESENT' && decodedProtocolFields.has(field.fieldName))
     const knownValue = !field.valueVisible || field.normalizedValue == null || field.normalizedValue === ''
       || ['modelName', 'formalName', 'errorCode'].includes(field.fieldName)
       || !daikinCurrentValue(field.fieldName, field.normalizedValue).startsWith(words.unconfirmedValuePrefix)

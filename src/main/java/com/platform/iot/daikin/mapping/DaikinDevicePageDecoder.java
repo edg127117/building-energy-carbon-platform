@@ -1,6 +1,7 @@
 package com.platform.iot.daikin.mapping;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.platform.iot.daikin.model.DaikinDeviceKey;
 import com.platform.iot.daikin.model.DaikinDeviceObservation;
 import com.platform.iot.daikin.model.DaikinFieldValue;
@@ -40,8 +41,6 @@ public final class DaikinDevicePageDecoder {
             "coolLimitsettempL", "heatLimitsettempU", "heatLimitsettempL");
     private static final List<String> BOOLEAN_FIELDS = List.of("inCommunicationError", "inEquipmentError",
             "isFilterDirty", "isGroupSlave");
-    private static final List<String> UNCONFIRMED_FIELDS = List.of("arth1", "fanSpeedSetList",
-            "modeSetList", "onOffModeSetList", "DefaultSetpointRange", "masterSlaveIds");
 
     /** 温度单位仍由来源配置控制；压缩机字段名由协议的接口差异决定。 */
     public record FieldPolicy(boolean temperatureCelsiusConfirmed) {
@@ -126,7 +125,12 @@ public final class DaikinDevicePageDecoder {
         // 协议给出了权限枚举与设温边界的类型；只解码符合协议的值，不推断设备控制能力。
         PROTOCOL_ENUMS.forEach((name, allowed) -> fields.put(name, enumField(unit.get(name), allowed)));
         SETPOINT_LIMIT_FIELDS.forEach(name -> fields.put(name, setpointLimit(unit.get(name))));
-        UNCONFIRMED_FIELDS.forEach(name -> fields.put(name, candidate(unit.get(name))));
+        fields.put("arth1", candidate(unit.get("arth1")));
+        fields.put("fanSpeedSetList", capabilityList(unit.get("fanSpeedSetList"), ENUMS.get("fanSpeed")));
+        fields.put("modeSetList", capabilityList(unit.get("modeSetList"), ENUMS.get("mode")));
+        fields.put("onOffModeSetList", capabilityList(unit.get("onOffModeSetList"), ENUMS.get("onOff")));
+        fields.put("DefaultSetpointRange", setpointRange(unit.get("DefaultSetpointRange")));
+        fields.put("masterSlaveIds", relatedIds(unit.get("masterSlaveIds")));
         return fields;
     }
 
@@ -184,9 +188,73 @@ public final class DaikinDevicePageDecoder {
 
     private static DaikinFieldValue setpointLimit(JsonNode value) {
         if (missing(value)) return absent();
-        return value.isIntegralNumber() && value.canConvertToInt()
-                && value.intValue() >= 16 && value.intValue() <= 32 && raw(value) != null
-                ? present(value, value.asText()) : new DaikinFieldValue(INVALID, raw(value), null);
+        // 厂家以 16.0/32.0 传输整数设温；按数值检查整数性，不能按 JSON 节点类型拒收。
+        return boundedNumber(value) && value.decimalValue().stripTrailingZeros().scale() <= 0
+                && value.doubleValue() >= 16 && value.doubleValue() <= 32
+                ? present(value, value.decimalValue().stripTrailingZeros().toPlainString())
+                : new DaikinFieldValue(INVALID, raw(value), null);
+    }
+
+    private static boolean boundedNumber(JsonNode value) {
+        return value != null && value.isNumber() && Double.isFinite(value.doubleValue()) && raw(value) != null
+                && value.decimalValue().precision() <= 32 && Math.abs((long) value.decimalValue().scale()) <= 32;
+    }
+
+    /** 能力列表兼容厂家方括号字符串与 JSON 数组；只读枚举不产生控制权限。 */
+    private static DaikinFieldValue capabilityList(JsonNode value, Set<String> allowed) {
+        if (missing(value)) return absent();
+        if (raw(value) == null) return new DaikinFieldValue(INVALID, null, null);
+        JsonNode items = value;
+        if (value.isTextual()) {
+            String text = value.textValue().trim();
+            if (!text.startsWith("[") || !text.endsWith("]")) return new DaikinFieldValue(INVALID, raw(value), null);
+            var array = JsonNodeFactory.instance.arrayNode();
+            String body = text.substring(1, text.length() - 1).trim();
+            if (!body.isEmpty()) for (String token : body.split(",", -1)) array.add(token.trim());
+            items = array;
+        }
+        if (!items.isArray() || items.size() > 100) return new DaikinFieldValue(INVALID, raw(value), null);
+        var normalized = JsonNodeFactory.instance.arrayNode();
+        for (JsonNode item : items) {
+            if (!item.isTextual() || item.textValue().isBlank()) return new DaikinFieldValue(INVALID, raw(value), null);
+            var decoded = enumField(item, allowed);
+            if (decoded.status() != PRESENT) return new DaikinFieldValue(decoded.status(), raw(value), null);
+            normalized.add(decoded.normalizedValue());
+        }
+        String text = normalized.toString();
+        return text.length() <= 1024 ? present(value, text) : new DaikinFieldValue(INVALID, raw(value), null);
+    }
+
+    private static DaikinFieldValue setpointRange(JsonNode value) {
+        if (missing(value)) return absent();
+        if (!value.isObject() || raw(value) == null) return new DaikinFieldValue(INVALID, raw(value), null);
+        var min = value.get("min");
+        var max = value.get("max");
+        var step = value.get("step");
+        if (!boundedNumber(min) || !boundedNumber(max) || !boundedNumber(step)
+                || min.decimalValue().compareTo(max.decimalValue()) > 0 || step.decimalValue().signum() <= 0) {
+            return new DaikinFieldValue(INVALID, raw(value), null);
+        }
+        var normalized = JsonNodeFactory.instance.objectNode();
+        normalized.put("min", min.decimalValue().stripTrailingZeros());
+        normalized.put("max", max.decimalValue().stripTrailingZeros());
+        normalized.put("step", step.decimalValue().stripTrailingZeros());
+        return present(value, normalized.toString());
+    }
+
+    /** 设备编号保留为字符串，避免前端数值精度损失；关联关系不推断内外机物理连接。 */
+    private static DaikinFieldValue relatedIds(JsonNode value) {
+        if (missing(value)) return absent();
+        if (!value.isArray() || value.size() > 100 || raw(value) == null) return new DaikinFieldValue(INVALID, raw(value), null);
+        var normalized = JsonNodeFactory.instance.arrayNode();
+        for (JsonNode id : value) {
+            if (!(id.isTextual() || id.isIntegralNumber()) || !id.asText().matches("[A-Za-z0-9_.:-]{1,200}")) {
+                return new DaikinFieldValue(INVALID, raw(value), null);
+            }
+            normalized.add(id.asText());
+        }
+        String text = normalized.toString();
+        return text.length() <= 1024 ? present(value, text) : new DaikinFieldValue(INVALID, raw(value), null);
     }
 
     private static DaikinFieldValue textField(JsonNode value) {
