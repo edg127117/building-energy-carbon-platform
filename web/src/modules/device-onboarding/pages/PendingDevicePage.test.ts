@@ -1,10 +1,11 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
-import { getDeviceProduct, getOperationsPendingConnection, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, submitOperationsIdentityStatus } from '../api/onboarding'
+import { getDeviceProduct, getLatestHvacTemperatureBatchJob, getOperationsPendingConnection, getOperationsPendingDevice, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, previewHvacTemperatureBindings, submitOperationsBinding, submitOperationsIdentityStatus } from '../api/onboarding'
 import { createChangeRequest } from '@/modules/access-control/api/access-control'
 import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
+import TemperatureBatchDialog from '../components/TemperatureBatchDialog.vue'
 import PendingDevicePage from './PendingDevicePage.vue'
 const routeState = vi.hoisted(() => ({ view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
@@ -14,6 +15,11 @@ vi.mock('../api/onboarding', async original => ({
   listPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
   listOperationsPendingDevices: vi.fn().mockResolvedValue({ page: 1, size: 20, total: 0, items: [] }),
   getOperationsPendingConnection: vi.fn(),
+  getOperationsPendingDevice: vi.fn(),
+  getLatestHvacTemperatureBatchJob: vi.fn().mockResolvedValue(null),
+  getHvacTemperatureBindingOptions: vi.fn().mockResolvedValue({ templates: [], numericSources: [], rules: [] }),
+  previewHvacTemperatureBindings: vi.fn(),
+  submitOperationsBinding: vi.fn(),
   submitOperationsIdentityStatus: vi.fn(),
   listDaikinSources: vi.fn().mockResolvedValue([]),
   listDaikinDirectorySyncJobs: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }),
@@ -134,7 +140,7 @@ describe('待接入范围筛选', () => {
     const selection = wrapper.findAllComponents({ name: 'ElTableColumn' }).find(column => column.props('type') === 'selection')!
     const selectable = selection.props('selectable') as (row: typeof rows[number]) => boolean
     expect(selectable(rows[0]!)).toBe(true)
-    expect(selectable(rows[1]!)).toBe(false)
+    expect(selectable(rows[1]!)).toBe(true)
     table.vm.$emit('selection-change', rows)
     await wrapper.vm.$nextTick()
     const activate = wrapper.findAllComponents(ElButton).find(button => button.text() === '批量提交身份启用申请')!
@@ -142,6 +148,7 @@ describe('待接入范围筛选', () => {
     table.vm.$emit('selection-change', [rows[0], rows[2]])
     await wrapper.vm.$nextTick()
     expect(activate.attributes('disabled')).toBeUndefined()
+    expect(wrapper.findAllComponents(ElButton).find(button => button.text() === '补齐温度测点')!.attributes('disabled')).toBeUndefined()
     await activate.trigger('click')
     await flushPromises()
     const dialog = document.querySelector('.el-dialog') as HTMLElement
@@ -179,6 +186,68 @@ describe('待接入范围筛选', () => {
     await flushPromises()
     expect(submitOperationsIdentityStatus).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('身份已启用，未重复申请')
+    wrapper.unmount()
+  })
+
+  it('打开温度补齐时恢复当前设备最近的持久任务', async () => {
+    routeState.view = 'daikin'
+    const row = {
+      pendingId: 'D1', status: 'BOUND', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
+      identityStatus: 'ACTIVE', maskedIdentityValue: '****', lastProfileVersion: 2, reportCount: 1,
+      firstSeenTime: 0, lastSeenTime: 0, sampleTruncated: false,
+    }
+    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 1, items: [row] } as never)
+    vi.mocked(getLatestHvacTemperatureBatchJob).mockResolvedValue({
+      jobId: 'JOB-1', items: [{ pendingId: 'D1', requestId: 'R1', configurationStatus: 'PENDING_REVIEW', message: null, samplingStatus: 'WAITING_CONFIGURATION' }],
+    } as never)
+    const wrapper = mount(PendingDevicePage)
+    await flushPromises()
+    wrapper.findAllComponents({ name: 'ElTable' }).find(item => item.props('data')?.length === 1)!.vm.$emit('selection-change', [row])
+    await wrapper.vm.$nextTick()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '补齐温度测点')!.trigger('click')
+    await flushPromises()
+    expect(getLatestHvacTemperatureBatchJob).toHaveBeenCalledWith('D1')
+    expect(wrapper.findComponent(TemperatureBatchDialog).props('job')).toMatchObject({ jobId: 'JOB-1' })
+    wrapper.unmount()
+  })
+
+  it('大金新设备只提交服务端预览返回的温度摘要和来源', async () => {
+    routeState.view = 'daikin'
+    const row = {
+      pendingId: 'D1', status: 'DISCOVERED', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
+      identityStatus: 'UNBOUND', maskedIdentityValue: '****', lastProfileVersion: 2, reportCount: 1,
+      firstSeenTime: 0, lastSeenTime: 0, sampleTruncated: false,
+    }
+    const binding = {
+      productId: 'P1', buildingId: 'B1', spaceId: 'S1', systemGroupId: 'G1', existingEquipmentId: null,
+      newEquipment: { equipmentName: '大金内机-B303', manufacturer: '大金' }, pointBindings: [], autoCreatePoints: false,
+      numericSourceId: null, temperatureMode: 'AUTO' as const, temperatureExistingPointIds: null,
+    }
+    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 1, items: [row] } as never)
+    vi.mocked(getOperationsPendingDevice).mockResolvedValue({
+      pending: { ...row, identityValue: 'site/unit', boundIdentityId: null, latestEventTime: 0, latestTimeSource: null, latestMetrics: {}, allowedActions: ['BIND'] },
+      directory: { pendingId: 'D1', sourceId: 'SRC', siteId: 'SITE', controllerId: 'CTRL', kind: 'INDOOR', unitId: 'UNIT', siteName: null, deviceName: null, equipmentId: null, buildingId: 'B1', missing: false, observedAt: '2026-09-25T00:00:00Z' },
+    } as never)
+    vi.mocked(previewHvacTemperatureBindings).mockResolvedValue([{
+      pendingId: 'D1', buildingId: 'B1', mode: 'AUTO', templateProductId: 'T1', templateName: '大金双温度模板',
+      numericSourceId: 'SOURCE-1', status: 'READY', message: null, digest: 'digest-1', expiresAt: 1, points: [],
+    }] as never)
+    vi.mocked(submitOperationsBinding).mockResolvedValue({ pendingId: 'D1', requestId: 'R1', status: 'PENDING_REVIEW', errorCode: null } as never)
+
+    const wrapper = mount(PendingDevicePage)
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await flushPromises()
+    const form = wrapper.findComponent(BindingDraftDialog)
+    form.vm.$emit('temperature-preview', { pendingId: 'D1', mode: 'AUTO', binding })
+    await flushPromises()
+    expect(previewHvacTemperatureBindings).toHaveBeenCalledWith([{ pendingId: 'D1', mode: 'AUTO', binding }])
+    form.vm.$emit('submit', binding)
+    await flushPromises()
+    expect(submitOperationsBinding).toHaveBeenCalledWith('D1', expect.objectContaining({
+      temperatureMode: 'AUTO', temperaturePlanDigest: 'digest-1', numericSourceId: 'SOURCE-1',
+    }), expect.any(String))
+    expect(vi.mocked(submitOperationsBinding).mock.calls.at(-1)?.[1]).not.toHaveProperty('temperatureTemplateProductId')
     wrapper.unmount()
   })
 })

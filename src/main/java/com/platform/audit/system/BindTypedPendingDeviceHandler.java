@@ -19,6 +19,7 @@ public class BindTypedPendingDeviceHandler implements SensitiveOperationHandler 
     public static final String CODE = "BIND_TYPED_PENDING_DEVICE";
     private final SystemSensitiveCommandSupport support;
     private final DeviceOnboardingService service;
+    private final com.platform.iot.temperature.TemperaturePlanService temperaturePlans;
 
     @Override public String operationCode() { return CODE; }
 
@@ -47,19 +48,29 @@ public class BindTypedPendingDeviceHandler implements SensitiveOperationHandler 
                 equipmentId, equipment == null ? null : new DeviceOnboardingContracts.NewEquipmentRequest(
                         requireText(equipment.equipmentName(), 100, message),
                         optionalText(equipment.manufacturer(), 100, message)), points,
-                optionalText(binding.numericSourceId(), 32, message));
+                optionalText(binding.numericSourceId(), 32, message),
+                optionalText(binding.temperatureMode(), 20, message),
+                optionalText(binding.temperatureTemplateProductId(), 32, message),
+                optionalText(binding.temperaturePlanDigest(), 100, message), binding.temperatureExistingPointIds());
         String building = service.resolveTypedBindBuilding(pendingId, normalized,
                 DeviceOnboardingSensitiveOperationHandlers.PLATFORM_ADMIN);
+        int pointCount = points.size();
+        if (normalized.temperatureMode() != null) {
+            if (!points.isEmpty()) throw invalid("温度模式不能混用旧测点映射");
+            if (!"STATE_ONLY".equals(normalized.temperatureMode())) pointCount = temperaturePlans.validate(
+                    com.platform.iot.temperature.TemperaturePlanService.input(pendingId, normalized),
+                    normalized.temperaturePlanDigest(), false).points().size();
+        }
         return new NormalizedSensitiveCommand(building, "PENDING_DEVICE", pendingId,
                 support.canonical(new Command(pendingId, normalized), message),
-                "buildingId=" + building + ";bindingType=TYPED_STATE;pointCount=" + points.size());
+                "buildingId=" + building + ";bindingType=TYPED_STATE;pointCount=" + pointCount);
     }
 
     @Override
     public SensitiveOperationResult execute(NormalizedSensitiveCommand command, SensitiveOperationContext context) {
         Command value = support.readCanonical(command.canonicalJson(), Command.class, "类型化设备绑定命令无效");
         service.bindTyped(value.pendingId(), value.binding(), context.reviewerId(),
-                DeviceOnboardingSensitiveOperationHandlers.PLATFORM_ADMIN);
+                DeviceOnboardingSensitiveOperationHandlers.PLATFORM_ADMIN, context.requestId());
         return SensitiveOperationResult.none();
     }
 

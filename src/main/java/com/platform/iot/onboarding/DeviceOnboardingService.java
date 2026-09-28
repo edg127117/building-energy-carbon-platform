@@ -91,6 +91,7 @@ public class DeviceOnboardingService {
     private final OnboardingAuditService auditService;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    private final com.platform.iot.temperature.TemperaturePlanService temperaturePlans;
 
     @Value("${ingestion.standard-source-system:MQTT_STANDARD_V1}")
     private String standardSourceSystem;
@@ -339,10 +340,16 @@ public class DeviceOnboardingService {
 
     public DeviceOnboardingContracts.BindResultView bindTyped(String pendingId,
             DeviceOnboardingContracts.TypedBindRequest request, Long operatorId, Set<String> roles) {
+        return bindTyped(pendingId, request, operatorId, roles, pendingId);
+    }
+
+    /** 公共审批执行携带申请引用，使自动测点可追溯到批准的冻结命令。 */
+    public DeviceOnboardingContracts.BindResultView bindTyped(String pendingId,
+            DeviceOnboardingContracts.TypedBindRequest request, Long operatorId, Set<String> roles, String approvalId) {
         requireAdmin(roles);
         BindTransactionResult result;
         try {
-            result = transactionTemplate.execute(status -> doBindTyped(pendingId, request, operatorId));
+            result = transactionTemplate.execute(status -> doBindTyped(pendingId, request, operatorId, approvalId));
         } catch (DuplicateKeyException exception) {
             throw error(409, DUPLICATE, "身份已被其他绑定占用");
         }
@@ -357,8 +364,8 @@ public class DeviceOnboardingService {
     }
 
     private BindTransactionResult doBindTyped(String pendingId,
-            DeviceOnboardingContracts.TypedBindRequest request, Long operatorId) {
-        return doBind(pendingId, request.asBinding(), operatorId, true, request.numericSourceId());
+            DeviceOnboardingContracts.TypedBindRequest request, Long operatorId, String approvalId) {
+        return doBind(pendingId, request.asBinding(), operatorId, true, request.numericSourceId(), request, approvalId);
     }
 
     /** 身份状态先提交数据库，再以刷新后快照是否可见决定接口能否返回成功。 */
@@ -414,6 +421,12 @@ public class DeviceOnboardingService {
 
     private BindTransactionResult doBind(String pendingId, DeviceOnboardingContracts.BindRequest request,
             Long operatorId, boolean typed, String numericSourceId) {
+        return doBind(pendingId, request, operatorId, typed, numericSourceId, null, pendingId);
+    }
+
+    private BindTransactionResult doBind(String pendingId, DeviceOnboardingContracts.BindRequest request,
+            Long operatorId, boolean typed, String numericSourceId, DeviceOnboardingContracts.TypedBindRequest temperatureRequest,
+            String approvalId) {
         // 与目录同步统一使用来源/项目→待接入记录的锁顺序，避免并发绑定和同步形成反向锁。
         if (typed) directoryService.requireBinding(pendingId, request.buildingId(), requirePending(pendingId).getProfileCode());
         BizPendingDevice pending = pendingMapper.selectByIdForUpdate(pendingId);
@@ -423,6 +436,12 @@ public class DeviceOnboardingService {
         if (!"DISCOVERED".equals(pending.getStatus())) {
             throw error(409, STATE_CONFLICT, "只有待处理设备可以绑定");
         }
+        var temperaturePlan = temperatureRequest != null && temperatureRequest.temperatureMode() != null
+                && !"STATE_ONLY".equals(temperatureRequest.temperatureMode())
+                ? temperaturePlans.validate(com.platform.iot.temperature.TemperaturePlanService.input(pendingId, temperatureRequest),
+                        temperatureRequest.temperaturePlanDigest(), false) : null;
+        boolean stateOnly = temperatureRequest != null && "STATE_ONLY".equals(temperatureRequest.temperatureMode());
+        if (stateOnly && !request.pointBindings().isEmpty()) throw error(400, VALIDATION_FAILED, "仅状态接入不能携带测点映射");
         BizDeviceProduct product = productMapper.selectById(request.productId());
         if (product == null || !"ENABLED".equals(product.getStatus())) {
             throw error(409, VALIDATION_FAILED, "产品不存在或未启用");
@@ -438,7 +457,7 @@ public class DeviceOnboardingService {
             if (!isTypedProduct(product) || !typedTemperatureTemplatesValid(product, typedTemplates)) {
                 throw error(409, VALIDATION_FAILED, "类型化产品的温度测点模板无效");
             }
-            if (request.pointBindings().isEmpty() && typedTemplates.stream().anyMatch(template ->
+            if (temperaturePlan == null && !stateOnly && request.pointBindings().isEmpty() && typedTemplates.stream().anyMatch(template ->
                     Integer.valueOf(1).equals(template.getStatus())
                             && Integer.valueOf(1).equals(template.getRequiredFlag()))) {
                 throw error(400, VALIDATION_FAILED, "缺少产品必填温度测点映射");
@@ -458,7 +477,10 @@ public class DeviceOnboardingService {
         }
         BizDeviceIdentity identity = createDisabledIdentity(pending, product, equipment);
         PointBindingResult pointResult;
-        if (typed && request.pointBindings().isEmpty()) {
+        if (temperaturePlan != null) {
+            var ids = temperaturePlans.install(temperaturePlan, equipment, identity.getIdentityId(), approvalId);
+            pointResult = new PointBindingResult(ids, List.of());
+        } else if (typed && request.pointBindings().isEmpty()) {
             pointResult = new PointBindingResult(List.of(), List.of());
         } else if (typed) {
             BizDataSource source = requireTypedNumericDataSource(numericSourceId, equipment.getBuildingId());
