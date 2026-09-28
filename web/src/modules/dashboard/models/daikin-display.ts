@@ -162,8 +162,8 @@ export function daikinCurrentFields(fields: CurrentField[]): { primary: CurrentF
 }
 
 /** 列表内联启停或机组状态直接取自服务端归一化摘要，不推断外机未返回的模式字段。 */
-export function isDaikinDeviceRunning(device: Pick<DaikinDevice, 'onOff' | 'unitStatus'>): boolean {
-  return device.onOff?.value === 'on' || device.unitStatus?.value === 'operating'
+export function isDaikinDeviceRunning(device: Partial<Pick<DaikinDevice, 'onOff' | 'unitStatus'>> | null | undefined): boolean {
+  return device?.onOff?.value === 'on' || device?.unitStatus?.value === 'operating'
 }
 
 export function daikinQuickStatusCounts(items: DaikinDevice[]): Record<DaikinQuickStatus, number> {
