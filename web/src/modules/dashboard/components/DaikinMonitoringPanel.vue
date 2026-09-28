@@ -10,7 +10,7 @@ import { formatDateTime } from '@/shared/utils/format'
 import { listAccessibleBuildings } from '../api/hvac'
 import { daikinApi } from '../api/daikin'
 import {
-  daikinLabel, daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
+  daikinFieldTone, daikinLabel, daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
   groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning,
   type DaikinQuickStatus,
 } from '../models/daikin-display'
@@ -44,7 +44,7 @@ const refreshTick = ref(0)
 const rawDevices = computed(() => devices.data.value?.items ?? [])
 const statusCounts = computed(() => daikinQuickStatusCounts(rawDevices.value))
 const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevices.value, quickStatus.value))
-const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value))
+const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value))
 const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? []))
 const selectedDevice = computed(() => rawDevices.value.find(item => item.equipmentId === selected.value))
 
@@ -62,6 +62,14 @@ function deviceHealthLabel(row: DaikinDevice): string {
   if (row.lastValidAt == null) return text('noObservation')
   if (row.stale) return text('stale')
   return text('onlineNormal')
+}
+
+function pillToneClass(status: DaikinQuickStatus): string {
+  if (status === 'RUNNING') return 'tone-success'
+  if (status === 'STOPPED') return 'tone-muted'
+  if (status === 'EXCEPTION') return 'tone-warning'
+  if (status === 'STALE') return 'tone-danger'
+  return 'tone-default'
 }
 
 function search() {
@@ -176,9 +184,12 @@ onUnmounted(() => {
             :key="pill[0]"
             type="button"
             class="status-pill"
-            :class="{ 'status-pill-active': quickStatus === pill[0] }"
+            :class="[
+              quickStatus === pill[0] ? 'status-pill-active' : pillToneClass(pill[0]),
+            ]"
             @click="quickStatus = pill[0]"
           >
+            <span v-if="pill[0] !== 'ALL'" class="status-dot" :class="`dot-${pill[0].toLowerCase()}`" />
             <span>{{ text(pill[1]) }}</span>
             <span class="pill-count">{{ '（' }}{{ pill[2] }}{{ '）' }}</span>
           </button>
@@ -221,12 +232,16 @@ onUnmounted(() => {
                     {{ sysGroup.outdoorUnit ? (sysGroup.outdoorUnit.equipmentName || text('unnamed')) : text('unassignedSystem') }}
                   </strong>
                   <span v-if="sysGroup.outdoorUnit" class="group-subtitle">
-                    {{ sysGroup.outdoorUnit.equipmentCode }}{{ ' · ' }}{{ text('unitStatusLabel') }}{{ '：' }}{{ daikinLabel(sysGroup.outdoorUnit.unitStatus?.value) }}
+                    {{ sysGroup.outdoorUnit.equipmentCode }}{{ ' · ' }}{{ text('unitStatusLabel') }}{{ '：' }}
+                    <strong :class="`tone-${daikinFieldTone('unitStatus', sysGroup.outdoorUnit.unitStatus?.value)}`">
+                      {{ daikinLabel(sysGroup.outdoorUnit.unitStatus?.value) }}
+                    </strong>
                   </span>
                 </div>
                 <div class="group-header-actions">
                   <span class="group-summary">
-                    {{ text('linkedIndoorPrefix') }}{{ ' ' }}{{ sysGroup.indoorUnits.length }}{{ ' ' }}{{ text('unitCountSuffix') }}{{ ' · ' }}{{ text('runningIndoorPrefix') }}{{ ' ' }}{{ sysGroup.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}
+                    {{ text('linkedIndoorPrefix') }}{{ ' ' }}{{ sysGroup.indoorUnits.length }}{{ ' ' }}{{ text('unitCountSuffix') }}{{ ' · ' }}
+                    <strong class="tone-success">{{ text('runningIndoorPrefix') }}{{ ' ' }}{{ sysGroup.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</strong>
                   </span>
                   <ElButton
                     v-if="sysGroup.outdoorUnit"
@@ -245,6 +260,7 @@ onUnmounted(() => {
                   :key="item.equipmentId"
                   class="device-card"
                   :class="{
+                    'device-card-running': isDaikinDeviceRunning(item),
                     'device-card-active': selected === item.equipmentId,
                     'device-card-warning': item.hasActiveException,
                   }"
@@ -252,7 +268,10 @@ onUnmounted(() => {
                 >
                   <header class="device-card-header">
                     <div>
-                      <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
+                      <div class="device-title-row">
+                        <span class="status-dot" :class="isDaikinDeviceRunning(item) ? 'dot-running' : 'dot-stopped'" />
+                        <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
+                      </div>
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ spaceNameOf(item.spaceId) }}</p>
                     </div>
                     <div class="device-card-tags">
@@ -264,19 +283,24 @@ onUnmounted(() => {
                   <div class="device-card-metrics">
                     <div class="metric-cell">
                       <span class="metric-label">{{ text('runStateLabel') }}</span>
-                      <strong class="metric-value">
+                      <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
                         {{ item.deviceKind === 'OUTDOOR' ? daikinLabel(item.unitStatus?.value) : (isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel')) }}
                       </strong>
                     </div>
                     <div class="metric-cell">
                       <span class="metric-label">{{ text('modeLabel') }}</span>
-                      <strong class="metric-value">
+                      <strong
+                        class="metric-value"
+                        :class="item.deviceKind === 'OUTDOOR' ? 'tone-muted' : `tone-${daikinFieldTone('mode', item.mode?.value)}`"
+                      >
                         {{ item.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(item.mode?.value) }}
                       </strong>
                     </div>
                     <div class="metric-cell">
                       <span class="metric-label">{{ text('unitStatusLabel') }}</span>
-                      <strong class="metric-value">{{ daikinLabel(item.unitStatus?.value) }}</strong>
+                      <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
+                        {{ daikinLabel(item.unitStatus?.value) }}
+                      </strong>
                     </div>
                   </div>
 
@@ -300,7 +324,8 @@ onUnmounted(() => {
                 </div>
                 <div class="group-header-actions">
                   <span class="group-summary">
-                    {{ spGroup.devices.length }}{{ ' ' }}{{ text('unitCountSuffix') }}{{ ' · ' }}{{ text('runningIndoorPrefix') }}{{ ' ' }}{{ spGroup.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}
+                    {{ spGroup.devices.length }}{{ ' ' }}{{ text('unitCountSuffix') }}{{ ' · ' }}
+                    <strong class="tone-success">{{ text('runningIndoorPrefix') }}{{ ' ' }}{{ spGroup.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</strong>
                   </span>
                 </div>
               </header>
@@ -311,6 +336,7 @@ onUnmounted(() => {
                   :key="item.equipmentId"
                   class="device-card"
                   :class="{
+                    'device-card-running': isDaikinDeviceRunning(item),
                     'device-card-active': selected === item.equipmentId,
                     'device-card-warning': item.hasActiveException,
                   }"
@@ -318,7 +344,10 @@ onUnmounted(() => {
                 >
                   <header class="device-card-header">
                     <div>
-                      <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
+                      <div class="device-title-row">
+                        <span class="status-dot" :class="isDaikinDeviceRunning(item) ? 'dot-running' : 'dot-stopped'" />
+                        <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
+                      </div>
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ text(item.deviceKind === 'OUTDOOR' ? 'outdoorBadge' : 'indoorBadge') }}</p>
                     </div>
                     <div class="device-card-tags">
@@ -330,19 +359,24 @@ onUnmounted(() => {
                   <div class="device-card-metrics">
                     <div class="metric-cell">
                       <span class="metric-label">{{ text('runStateLabel') }}</span>
-                      <strong class="metric-value">
+                      <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
                         {{ item.deviceKind === 'OUTDOOR' ? daikinLabel(item.unitStatus?.value) : (isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel')) }}
                       </strong>
                     </div>
                     <div class="metric-cell">
                       <span class="metric-label">{{ text('modeLabel') }}</span>
-                      <strong class="metric-value">
+                      <strong
+                        class="metric-value"
+                        :class="item.deviceKind === 'OUTDOOR' ? 'tone-muted' : `tone-${daikinFieldTone('mode', item.mode?.value)}`"
+                      >
                         {{ item.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(item.mode?.value) }}
                       </strong>
                     </div>
                     <div class="metric-cell">
                       <span class="metric-label">{{ text('unitStatusLabel') }}</span>
-                      <strong class="metric-value">{{ daikinLabel(item.unitStatus?.value) }}</strong>
+                      <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
+                        {{ daikinLabel(item.unitStatus?.value) }}
+                      </strong>
                     </div>
                   </div>
 
@@ -365,7 +399,13 @@ onUnmounted(() => {
           :empty-text="text('none')"
         >
           <ElTableColumn :label="text('equipment')" min-width="180">
-            <template #default="{ row }">{{ row.equipmentName || text('unnamed') }}<br>{{ row.equipmentCode || row.equipmentId }}</template>
+            <template #default="{ row }">
+              <div class="device-title-row">
+                <span class="status-dot" :class="isDaikinDeviceRunning(row) ? 'dot-running' : 'dot-stopped'" />
+                <strong>{{ row.equipmentName || text('unnamed') }}</strong>
+              </div>
+              <span class="table-sub">{{ row.equipmentCode || row.equipmentId }}</span>
+            </template>
           </ElTableColumn>
           <ElTableColumn :label="text('kind')">
             <template #default="{ row }">{{ ['INDOOR', 'OUTDOOR'].includes(row.deviceKind) ? text(row.deviceKind) : row.deviceKind }}</template>
@@ -374,17 +414,29 @@ onUnmounted(() => {
             <template #default="{ row }">{{ spaceNameOf(row.spaceId) }}</template>
           </ElTableColumn>
           <ElTableColumn :label="text('onOff')">
-            <template #default="{ row }">{{ row.deviceKind === 'OUTDOOR' ? daikinLabel(row.unitStatus?.value) : daikinLabel(row.onOff?.value) }}</template>
+            <template #default="{ row }">
+              <strong :class="isDaikinDeviceRunning(row) ? 'tone-success' : 'tone-muted'">
+                {{ row.deviceKind === 'OUTDOOR' ? daikinLabel(row.unitStatus?.value) : daikinLabel(row.onOff?.value) }}
+              </strong>
+            </template>
           </ElTableColumn>
           <ElTableColumn :label="text('unitStatusLabel')">
-            <template #default="{ row }">{{ daikinLabel(row.unitStatus?.value) }}</template>
+            <template #default="{ row }">
+              <strong :class="`tone-${daikinFieldTone('unitStatus', row.unitStatus?.value)}`">
+                {{ daikinLabel(row.unitStatus?.value) }}
+              </strong>
+            </template>
           </ElTableColumn>
           <ElTableColumn :label="text('mode')">
-            <template #default="{ row }">{{ row.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(row.mode?.value) }}</template>
+            <template #default="{ row }">
+              <strong :class="row.deviceKind === 'OUTDOOR' ? 'tone-muted' : `tone-${daikinFieldTone('mode', row.mode?.value)}`">
+                {{ row.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(row.mode?.value) }}
+              </strong>
+            </template>
           </ElTableColumn>
           <ElTableColumn :label="text('state')" min-width="140">
             <template #default="{ row }">
-              <ElTag :type="row.stale ? 'warning' : 'info'">{{ text(!row.active ? 'inactive' : row.lastValidAt == null ? 'noObservation' : row.stale ? 'stale' : 'normal') }}</ElTag>
+              <ElTag :type="row.stale ? 'warning' : 'success'">{{ text(!row.active ? 'inactive' : row.lastValidAt == null ? 'noObservation' : row.stale ? 'stale' : 'normal') }}</ElTag>
               <ElTag v-if="row.hasActiveException" type="danger">{{ text('exception') }}</ElTag>
             </template>
           </ElTableColumn>
@@ -392,7 +444,7 @@ onUnmounted(() => {
             <template #default="{ row }">{{ row.lastValidAt == null ? t('common.missing') : formatDateTime(row.lastValidAt) }}</template>
           </ElTableColumn>
           <ElTableColumn :label="text('detail')">
-            <template #default="{ row }"><ElButton text @click="selected = row.equipmentId">{{ text('detail') }}</ElButton></template>
+            <template #default="{ row }"><ElButton text type="primary" @click="selected = row.equipmentId">{{ text('detail') }}</ElButton></template>
           </ElTableColumn>
         </ElTable>
 
@@ -451,9 +503,21 @@ onUnmounted(() => {
 .el-select { width: calc(var(--bec-control-height) * 6); }
 .toolbar-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--bec-space-group); padding: var(--bec-space-group); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
 .status-pills { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-tight); }
-.status-pill { display: inline-flex; align-items: center; gap: var(--bec-space-tight); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); color: var(--bec-color-text-primary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); cursor: pointer; font-size: var(--bec-font-size-body); }
-.status-pill-active { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); border-color: var(--bec-color-action-primary); font-weight: var(--bec-font-weight-heading); }
+.status-pill { display: inline-flex; align-items: center; gap: var(--bec-space-tight); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); color: var(--bec-color-text-primary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); cursor: pointer; font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); }
+.status-pill-active { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); border-color: var(--bec-color-action-primary); }
+.status-pill-active .status-dot { background: var(--bec-color-on-action); }
 .pill-count { opacity: 0.85; }
+.status-dot { display: inline-block; width: var(--bec-space-tight); height: var(--bec-space-tight); border-radius: var(--bec-radius-tag); flex-shrink: 0; }
+.dot-running { background: var(--bec-color-success); }
+.dot-stopped { background: var(--bec-color-text-disabled); }
+.dot-exception { background: var(--bec-color-warning); }
+.dot-stale { background: var(--bec-color-error); }
+.tone-success { color: var(--bec-color-success); }
+.tone-primary { color: var(--bec-color-brand-primary); }
+.tone-warning { color: var(--bec-color-warning); }
+.tone-danger { color: var(--bec-color-error); }
+.tone-muted { color: var(--bec-color-text-secondary); }
+.tone-default { color: var(--bec-color-text-primary); }
 .view-switchers { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-group); }
 .device-list { min-width: 0; display: grid; gap: var(--bec-space-group); }
 .group-stack { display: grid; gap: var(--bec-space-group); }
@@ -466,16 +530,19 @@ onUnmounted(() => {
 .group-summary { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--bec-control-height) * 9), 1fr)); gap: var(--bec-space-group); padding: var(--bec-panel-padding); }
 .device-card { display: grid; gap: var(--bec-space-group); padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); box-shadow: var(--bec-shadow-card); cursor: pointer; }
+.device-card-running { border-color: color-mix(in srgb, var(--bec-color-success) 45%, var(--bec-color-border)); background: color-mix(in srgb, var(--bec-color-success) 3%, var(--bec-color-surface)); }
 .device-card-active { border-color: var(--bec-color-brand-primary); box-shadow: var(--bec-shadow-focus); }
 .device-card-warning { border-color: var(--bec-color-warning); }
 .device-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--bec-space-tight); }
+.device-title-row { display: flex; align-items: center; gap: var(--bec-space-tight); }
 .device-card-name { font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
 .device-card-sub { margin: var(--bec-space-tight) 0 0; color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
+.table-sub { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .device-card-tags { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); }
 .device-card-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--bec-space-tight); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
 .metric-cell { display: grid; gap: var(--bec-space-tight); }
 .metric-label { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
-.metric-value { font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
+.metric-value { font-weight: var(--bec-font-weight-heading); }
 .device-card-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); }
 .sync-time { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .exception-pagination { display: flex; gap: var(--bec-space-tight); justify-content: flex-start; }

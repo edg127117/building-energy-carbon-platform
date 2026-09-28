@@ -83,4 +83,10 @@ export default {
   currentRoomTempLabel: '当前室内温度', currentSetTempLabel: '当前设定温度',
   latestObservedLabel: '最近有效观测', sampleIntegrityLabel: '区间采样与连续性',
   samplePointsSuffix: '个有效点', noGapNotice: '连续无间断', gapCountPrefix: '含采集间断', gapCountSuffix: '处',
+  healthNormalBadge: '运行正常', healthStoppedBadge: '停机待命', healthExceptionBadge: '存在异常',
+  eventRangeAll: '全部记录', eventRange24h: '近 24 小时', eventRange7d: '近 7 天', eventRange30d: '近 30 天',
+  eventFieldAll: '全部状态字段', eventPrevPage: '上一页', eventNextPage: '更早记录', eventLatestPage: '回到最新',
+  eventFromPrefix: '由「', eventToConnector: '」切换为', eventValueLeftQuote: '「', eventValueRightQuote: '」',
+  eventObservedTimePrefix: '变更观测：', eventPreviousTimePrefix: '前次观测：',
+  latestPeriodOnHours: '最新周期开机时长', latestPeriodCoverage: '最新周期有效覆盖率',
 } as const

@@ -83,16 +83,26 @@ describe('DaikinMonitoringPanel', () => {
       active: true,
       lastValidAt: 1700000000000,
       fields: [
-        { fieldName: 'roomTemp', rawJson: '24.5', normalizedValue: '24.5', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
-        { fieldName: 'temperature', rawJson: '25.0', normalizedValue: '25.0', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
         { fieldName: 'onOff', rawJson: '"on"', normalizedValue: 'on', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'mode', rawJson: '"cooling"', normalizedValue: 'cooling', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
         { fieldName: 'unitStatus', rawJson: '"operating"', normalizedValue: 'operating', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
         { fieldName: 'modelName', rawJson: '"FSFP71AB"', normalizedValue: 'FSFP71AB', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
       ],
     })
+    vi.mocked(daikinApi.temperature).mockImplementation(async (_id, field) => ({
+      fieldStatus: 'PRESENT',
+      unit: '°C',
+      reading: {
+        observedAt: 1700000000000,
+        value: field === 'roomTemp' ? 24.6 : 25,
+        dataQuality: 0,
+        gapBefore: false,
+        stale: false,
+      },
+    }))
   })
 
-  it('renders system grouping, quick status pills, and opens right-side drawer on card click', async () => {
+  it('renders system grouping, quick status pills, semantic tones, and opens right-side drawer on card click', async () => {
     const wrapper = mount(DaikinMonitoringPanel, {
       global: {
         stubs: {
@@ -111,13 +121,16 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.text()).toContain('大金内机-B308-1')
     expect(wrapper.text()).toContain('全部设备（2）')
     expect(wrapper.text()).toContain('运行中（1）')
+    expect(wrapper.find('.device-card.device-card-running').exists()).toBe(true)
 
     await wrapper.find('.device-card').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('.drawer-stub').exists()).toBe(true)
     expect(wrapper.text()).toContain('室内温度')
-    expect(wrapper.text()).toContain('24.5')
+    expect(wrapper.text()).toContain('24.6 °C')
+    expect(wrapper.text()).toContain('25 °C')
+    expect(wrapper.text()).toContain('运行正常')
     expect(wrapper.text()).toContain('机组健康、维保与控制器状态')
     expect(wrapper.text()).toContain('设备档案与系统归属')
     expect(wrapper.text()).toContain('FSFP71AB')
