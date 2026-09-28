@@ -78,6 +78,13 @@ web_hash=$(sed -n 's/^webIndexSha256=//p' <<< "$manifest")
 [[ "$commit" =~ ^[0-9a-f]{40}$ && "$jar_hash" =~ ^[0-9a-f]{64}$ && "$web_hash" =~ ^[0-9a-f]{64}$ ]]
 [[ "$(sha256sum "$stage/building-energy-carbon-platform.jar" | cut -d' ' -f1)" == "$jar_hash" ]]
 [[ "$(sha256sum "$stage/web/index.html" | cut -d' ' -f1)" == "$web_hash" ]]
+# mktemp creates a root-only directory; normalize artifact access before switching the running service.
+# Packages contain only public application artifacts, never server credentials or shared configuration.
+find "$stage" -type d -exec chmod 0755 {} +
+find "$stage" -type f -exec chmod 0644 {} +
+service_user=$(systemctl show "$service" --property=User --value)
+[[ -n "$service_user" && "$service_user" != root ]] || { echo INVALID_SERVICE_USER >&2; exit 1; }
+runuser -u "$service_user" -- bash -c 'cd "$1" && test -r building-energy-carbon-platform.jar && test -r web/index.html' _ "$stage"
 mv "$stage" "$release"
 ln -s "$release" "$base/.next-$name-$$"
 mv -Tf "$base/.next-$name-$$" "$base/current"

@@ -99,9 +99,19 @@ public final class DeviceOnboardingContracts {
     public record TypedBindRequest(
             @NotBlank String productId, @NotBlank String buildingId, @NotBlank String spaceId,
             @NotBlank String systemGroupId, String existingEquipmentId, @Valid NewEquipmentRequest newEquipment,
-            List<@Valid PointBindingRequest> pointBindings, String numericSourceId) {
+            List<@Valid PointBindingRequest> pointBindings, String numericSourceId,
+            String temperatureMode, String temperatureTemplateProductId, String temperaturePlanDigest,
+            java.util.Map<String, String> temperatureExistingPointIds) {
         public TypedBindRequest {
             pointBindings = pointBindings == null ? List.of() : List.copyOf(pointBindings);
+            temperatureExistingPointIds = temperatureExistingPointIds == null ? java.util.Map.of() : java.util.Map.copyOf(temperatureExistingPointIds);
+        }
+
+        public TypedBindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
+                String existingEquipmentId, NewEquipmentRequest newEquipment, List<PointBindingRequest> pointBindings,
+                String numericSourceId) {
+            this(productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment,
+                    pointBindings, numericSourceId, null, null, null, java.util.Map.of());
         }
 
         public TypedBindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
