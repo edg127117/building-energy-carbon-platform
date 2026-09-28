@@ -1,0 +1,126 @@
+import { flushPromises, mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { listAccessibleBuildings } from '../api/hvac'
+import { daikinApi } from '../api/daikin'
+import DaikinMonitoringPanel from './DaikinMonitoringPanel.vue'
+
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ query: {} }),
+}))
+
+vi.mock('../api/hvac', async original => ({
+  ...(await original<typeof import('../api/hvac')>()),
+  listAccessibleBuildings: vi.fn(),
+}))
+
+vi.mock('../api/daikin', () => ({
+  daikinApi: {
+    spaces: vi.fn(),
+    devices: vi.fn(),
+    current: vi.fn(),
+    events: vi.fn(),
+    temperature: vi.fn(),
+    history: vi.fn(),
+    observedRuntime: vi.fn(),
+    exceptions: vi.fn(),
+  },
+}))
+
+describe('DaikinMonitoringPanel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(listAccessibleBuildings).mockResolvedValue([
+      { buildingId: 'BLD001', buildingName: '测试大楼' },
+    ] as never)
+    vi.mocked(daikinApi.spaces).mockResolvedValue([
+      { spaceId: 'SP-308', spaceName: '3F B308办公区' },
+    ])
+    vi.mocked(daikinApi.devices).mockResolvedValue({
+      total: 2,
+      items: [
+        {
+          identityId: 'id-odu-2',
+          equipmentId: 'eq-odu-2',
+          pendingId: 'pd-odu-2',
+          buildingId: 'BLD001',
+          spaceId: null,
+          systemGroupId: 'SYS-3F',
+          deviceKind: 'OUTDOOR',
+          mappingVersion: 1,
+          active: true,
+          stale: false,
+          lastValidAt: 1700000000000,
+          onOff: null,
+          mode: null,
+          unitStatus: { value: 'stopped', status: 'PRESENT', lastValidAt: 1700000000000, stale: false },
+          hasActiveException: false,
+          equipmentCode: 'ODU2',
+          equipmentName: '大金3F-6空调外机',
+        },
+        {
+          identityId: 'id-idu-2',
+          equipmentId: 'eq-idu-2',
+          pendingId: 'pd-idu-2',
+          buildingId: 'BLD001',
+          spaceId: 'SP-308',
+          systemGroupId: 'SYS-3F',
+          deviceKind: 'INDOOR',
+          mappingVersion: 1,
+          active: true,
+          stale: false,
+          lastValidAt: 1700000000000,
+          onOff: { value: 'on', status: 'PRESENT', lastValidAt: 1700000000000, stale: false },
+          mode: { value: 'cooling', status: 'PRESENT', lastValidAt: 1700000000000, stale: false },
+          unitStatus: { value: 'operating', status: 'PRESENT', lastValidAt: 1700000000000, stale: false },
+          hasActiveException: true,
+          equipmentCode: 'IDU2',
+          equipmentName: '大金内机-B308-1',
+        },
+      ],
+    })
+    vi.mocked(daikinApi.current).mockResolvedValue({
+      equipmentId: 'eq-idu-2',
+      active: true,
+      lastValidAt: 1700000000000,
+      fields: [
+        { fieldName: 'roomTemp', rawJson: '24.5', normalizedValue: '24.5', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'temperature', rawJson: '25.0', normalizedValue: '25.0', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'onOff', rawJson: '"on"', normalizedValue: 'on', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'unitStatus', rawJson: '"operating"', normalizedValue: 'operating', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'modelName', rawJson: '"FSFP71AB"', normalizedValue: 'FSFP71AB', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+      ],
+    })
+  })
+
+  it('renders system grouping, quick status pills, and opens right-side drawer on card click', async () => {
+    const wrapper = mount(DaikinMonitoringPanel, {
+      global: {
+        stubs: {
+          ElDrawer: {
+            props: ['modelValue', 'title'],
+            template: '<div v-if="modelValue" class="drawer-stub"><h2>{{ title }}</h2><slot /></div>',
+          },
+          ChartView: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('室外机主系统')
+    expect(wrapper.text()).toContain('大金3F-6空调外机')
+    expect(wrapper.text()).toContain('大金内机-B308-1')
+    expect(wrapper.text()).toContain('全部设备（2）')
+    expect(wrapper.text()).toContain('运行中（1）')
+
+    await wrapper.find('.device-card').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.drawer-stub').exists()).toBe(true)
+    expect(wrapper.text()).toContain('室内温度')
+    expect(wrapper.text()).toContain('24.5')
+    expect(wrapper.text()).toContain('机组健康、维保与控制器状态')
+    expect(wrapper.text()).toContain('设备档案与系统归属')
+    expect(wrapper.text()).toContain('FSFP71AB')
+    wrapper.unmount()
+  })
+})

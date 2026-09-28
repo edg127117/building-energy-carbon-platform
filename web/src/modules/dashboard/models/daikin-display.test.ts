@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { daikinLabel, daikinFieldLabel, daikinFieldExplanation, daikinCurrentFieldValue, daikinCurrentValue, daikinCurrentFields, temperatureSeries, runtimePeriodTime, temperatureWindow } from './daikin-display'
-import type { CurrentField } from './daikin'
+import {
+  daikinLabel, daikinFieldLabel, daikinFieldExplanation,
+  daikinCurrentFieldValue, daikinCurrentValue, daikinCurrentFields,
+  daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
+  groupDaikinDevicesBySystem, groupDaikinDevicesBySpace,
+  daikinStructuredDetail, daikinTemperatureSummary,
+  temperatureSeries, runtimePeriodTime, temperatureWindow,
+} from './daikin-display'
+import type { CurrentField, DaikinDevice } from './daikin'
 
 describe('manufacturer display boundaries', () => {
   it('keeps zero and blocked values, breaks gaps without interpolation', () => {
@@ -91,5 +98,101 @@ describe('manufacturer display boundaries', () => {
     expect(temperatureWindow([0, now], now)).toBeNull()
     expect(temperatureWindow([now - 1000, now + 1], now)).toBeNull()
     expect(temperatureWindow(null, now)).toBeNull()
+  })
+  it('groups devices by multi-split system and space while counting quick statuses', () => {
+    const makeDevice = (partial: Partial<DaikinDevice> & Pick<DaikinDevice, 'equipmentId' | 'equipmentCode' | 'equipmentName' | 'deviceKind'>): DaikinDevice => ({
+      identityId: partial.equipmentId,
+      pendingId: partial.equipmentId,
+      buildingId: 'BLD001',
+      spaceId: 'SP1',
+      systemGroupId: 'SYS-1',
+      mappingVersion: 1,
+      active: true,
+      stale: false,
+      lastValidAt: 1000,
+      onOff: null,
+      mode: null,
+      unitStatus: { value: 'stopped', status: 'PRESENT', lastValidAt: 1000, stale: false },
+      hasActiveException: false,
+      ...partial,
+    })
+    const odu = makeDevice({ equipmentId: 'odu-2', equipmentCode: 'ODU2', equipmentName: '大金3F-6空调外机', deviceKind: 'OUTDOOR', spaceId: 'SP-ROOF' })
+    const iduOn = makeDevice({
+      equipmentId: 'idu-2', equipmentCode: 'IDU2', equipmentName: '大金内机-B308-1', deviceKind: 'INDOOR',
+      onOff: { value: 'on', status: 'PRESENT', lastValidAt: 1000, stale: false },
+      mode: { value: 'cooling', status: 'PRESENT', lastValidAt: 1000, stale: false },
+      unitStatus: { value: 'operating', status: 'PRESENT', lastValidAt: 1000, stale: false },
+    })
+    const iduStale = makeDevice({
+      equipmentId: 'idu-3', equipmentCode: 'IDU3', equipmentName: '大金内机-B308-2', deviceKind: 'INDOOR',
+      onOff: { value: 'off', status: 'PRESENT', lastValidAt: 1000, stale: true },
+      stale: true,
+      hasActiveException: true,
+    })
+    const list = [odu, iduOn, iduStale]
+    expect(daikinQuickStatusCounts(list)).toEqual({ ALL: 3, RUNNING: 1, STOPPED: 2, EXCEPTION: 1, STALE: 1 })
+    expect(filterDaikinDevicesByQuickStatus(list, 'RUNNING')).toEqual([iduOn])
+    expect(filterDaikinDevicesByQuickStatus(list, 'EXCEPTION')).toEqual([iduStale])
+
+    const sysGroups = groupDaikinDevicesBySystem(list)
+    expect(sysGroups).toHaveLength(1)
+    expect(sysGroups[0]?.outdoorUnit?.equipmentCode).toBe('ODU2')
+    expect(sysGroups[0]?.indoorUnits.map(i => i.equipmentCode)).toEqual(['IDU2', 'IDU3'])
+    expect(sysGroups[0]?.runningCount).toBe(1)
+
+    const spaceGroups = groupDaikinDevicesBySpace(list, [{ spaceId: 'SP1', spaceName: '3F B308办公区' }])
+    expect(spaceGroups.map(g => g.spaceName)).toEqual(['未分配空间', '3F B308办公区'])
+  })
+  it('structures 37 protocol fields into Chinese cards and hides missing indoor fields for outdoor units', () => {
+    const makeField = (fieldName: string, normalizedValue: string | null, status = 'PRESENT', valueVisible = true): CurrentField => ({
+      fieldName, normalizedValue, rawJson: null, status, lastValidAt: 100, lastAttemptAt: 100,
+      lastAttemptRawJson: null, valueVisible, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1,
+    })
+    const indoorFields = [
+      makeField('roomTemp', '24.8'),
+      makeField('temperature', '24.0'),
+      makeField('onOff', 'on'),
+      makeField('mode', 'cooling'),
+      makeField('fanSpeed', 'high'),
+      makeField('airflowDirection', 'airFlowTwo'),
+      makeField('unitStatus', 'operating'),
+      makeField('isFilterDirty', 'false'),
+      makeField('formalName', '天花板嵌入式'),
+      makeField('modelName', 'FSFP71AB'),
+      makeField('masterSlaveFlag', 'Slave'),
+      makeField('rcProhibitOnOff', 'on'),
+      makeField('rcProhibitOpMode', 'on'),
+      makeField('rcProhibitSetpoint', 'on'),
+      makeField('coolLimitsettempL', '16'),
+      makeField('coolLimitsettempU', '32'),
+      makeField('limitSettempCool', 'off'),
+      makeField('arth1', null, 'MISSING', false),
+    ]
+    const structuredIndoor = daikinStructuredDetail(indoorFields, 'INDOOR')
+    expect(structuredIndoor.roomTempText).toBe('24.8')
+    expect(structuredIndoor.setTempText).toBe('24.0')
+    expect(structuredIndoor.coreTiles.map(t => `${t.label}:${t.value}`)).toEqual([
+      '启停:开', '模式:制冷', '风速档位:高档', '风向:风向 2',
+    ])
+    expect(structuredIndoor.capabilityRows.find(r => r.key === 'rcPermissions')?.value).toBe('允许 / 允许 / 允许')
+    expect(structuredIndoor.capabilityRows.find(r => r.key === 'coolLimit')?.value).toBe('16～32 °C（未启用限制）')
+    expect(structuredIndoor.extendedRows.map(r => r.fieldName)).toEqual(['arth1'])
+
+    const outdoorFields = [
+      makeField('compressorOnOff', 'off'),
+      makeField('unitStatus', 'stopped'),
+      makeField('modelName', 'RUCXYQ40BB'),
+      makeField('isFilterDirty', null, 'MISSING', false),
+    ]
+    const structuredOutdoor = daikinStructuredDetail(outdoorFields, 'OUTDOOR')
+    expect(structuredOutdoor.coreTiles.map(t => `${t.label}:${t.value}`)).toEqual([
+      '压缩机启停:关', '机组状态:停止', '设备型号:RUCXYQ40BB',
+    ])
+    expect(structuredOutdoor.healthRows.map(r => r.key)).toEqual(['unitStatus'])
+
+    expect(daikinTemperatureSummary(
+      [{ observedAt: 1, value: 24.5, dataQuality: 0, gapBefore: false, stale: false }],
+      [{ observedAt: 1, value: 25.0, dataQuality: 0, gapBefore: true, stale: false }],
+    )).toEqual({ sampleCount: 2, gapCount: 1 })
   })
 })

@@ -1,5 +1,42 @@
 import words from '../locales/daikin'
-import type { CurrentField, TemperatureReading } from './daikin'
+import type { CurrentField, DaikinDevice, TemperatureReading } from './daikin'
+
+export type DaikinQuickStatus = 'ALL' | 'RUNNING' | 'STOPPED' | 'EXCEPTION' | 'STALE'
+
+export interface DaikinSystemGroup {
+  groupKey: string
+  systemGroupId: string | null
+  outdoorUnit: DaikinDevice | null
+  indoorUnits: DaikinDevice[]
+  runningCount: number
+}
+
+export interface DaikinSpaceGroup {
+  groupKey: string
+  spaceId: string | null
+  spaceName: string
+  devices: DaikinDevice[]
+  runningCount: number
+}
+
+export interface DaikinDetailRow {
+  key: string
+  label: string
+  value: string
+  stale: boolean
+  statusLabel: string
+  explanation?: string
+}
+
+export interface DaikinStructuredDetail {
+  coreTiles: DaikinDetailRow[]
+  roomTempText: string
+  setTempText: string
+  healthRows: DaikinDetailRow[]
+  archiveRows: DaikinDetailRow[]
+  capabilityRows: DaikinDetailRow[]
+  extendedRows: CurrentField[]
+}
 
 /** 已确认枚举翻译；未知厂家值以中文提示并保留原值，不推断其业务含义。 */
 export function daikinLabel(value: string | null | undefined): string {
@@ -72,6 +109,171 @@ export function daikinCurrentFields(fields: CurrentField[]): { primary: CurrentF
     ;(knownField && knownValue ? primary : extended).push(field)
   }
   return { primary, extended }
+}
+
+/** 列表内联启停或机组状态直接取自服务端归一化摘要，不推断外机未返回的模式字段。 */
+export function isDaikinDeviceRunning(device: Pick<DaikinDevice, 'onOff' | 'unitStatus'>): boolean {
+  return device.onOff?.value === 'on' || device.unitStatus?.value === 'operating'
+}
+
+export function daikinQuickStatusCounts(items: DaikinDevice[]): Record<DaikinQuickStatus, number> {
+  return {
+    ALL: items.length,
+    RUNNING: items.filter(isDaikinDeviceRunning).length,
+    STOPPED: items.filter(item => !isDaikinDeviceRunning(item)).length,
+    EXCEPTION: items.filter(item => item.hasActiveException).length,
+    STALE: items.filter(item => item.stale).length,
+  }
+}
+
+export function filterDaikinDevicesByQuickStatus(items: DaikinDevice[], status: DaikinQuickStatus): DaikinDevice[] {
+  if (status === 'RUNNING') return items.filter(isDaikinDeviceRunning)
+  if (status === 'STOPPED') return items.filter(item => !isDaikinDeviceRunning(item))
+  if (status === 'EXCEPTION') return items.filter(item => item.hasActiveException)
+  if (status === 'STALE') return items.filter(item => item.stale)
+  return items
+}
+
+/** 按共享的多联机系统分组 ID 归集外机与内机；无外机或无内机时仍完整保留设备。 */
+export function groupDaikinDevicesBySystem(items: DaikinDevice[]): DaikinSystemGroup[] {
+  const buckets = new Map<string, { systemGroupId: string | null; outdoorUnit: DaikinDevice | null; indoorUnits: DaikinDevice[] }>()
+  for (const item of items) {
+    const key = item.systemGroupId ?? '__UNASSIGNED__'
+    let bucket = buckets.get(key)
+    if (!bucket) {
+      bucket = { systemGroupId: item.systemGroupId, outdoorUnit: null, indoorUnits: [] }
+      buckets.set(key, bucket)
+    }
+    if (item.deviceKind === 'OUTDOOR' && !bucket.outdoorUnit) bucket.outdoorUnit = item
+    else bucket.indoorUnits.push(item)
+  }
+  return Array.from(buckets.entries()).map(([groupKey, bucket]) => ({
+    groupKey,
+    systemGroupId: bucket.systemGroupId,
+    outdoorUnit: bucket.outdoorUnit,
+    indoorUnits: bucket.indoorUnits,
+    runningCount: bucket.indoorUnits.filter(isDaikinDeviceRunning).length,
+  }))
+}
+
+export function groupDaikinDevicesBySpace(items: DaikinDevice[], spaces: Array<{ spaceId: string; spaceName: string }>): DaikinSpaceGroup[] {
+  const spaceNames = new Map(spaces.map(item => [item.spaceId, item.spaceName]))
+  const buckets = new Map<string, { spaceId: string | null; spaceName: string; devices: DaikinDevice[] }>()
+  for (const item of items) {
+    const key = item.spaceId ?? '__UNASSIGNED__'
+    let bucket = buckets.get(key)
+    if (!bucket) {
+      bucket = {
+        spaceId: item.spaceId,
+        spaceName: (item.spaceId && spaceNames.get(item.spaceId)) || words.unassignedSpace,
+        devices: [],
+      }
+      buckets.set(key, bucket)
+    }
+    bucket.devices.push(item)
+  }
+  return Array.from(buckets.entries()).map(([groupKey, bucket]) => ({
+    groupKey,
+    spaceId: bucket.spaceId,
+    spaceName: bucket.spaceName,
+    devices: bucket.devices,
+    runningCount: bucket.devices.filter(isDaikinDeviceRunning).length,
+  }))
+}
+
+/** 将当前详情字段按温控核心、健康维保、设备档案、控制能力与待核验扩展分层组织。 */
+export function daikinStructuredDetail(fields: CurrentField[], deviceKind?: string | null): DaikinStructuredDetail {
+  const { primary, extended } = daikinCurrentFields(fields)
+  const primaryMap = new Map(primary.map(item => [item.fieldName, item]))
+  const isOutdoor = deviceKind === 'OUTDOOR'
+  const toRow = (fieldName: string, skipWhenMissingForOutdoor = false): DaikinDetailRow | null => {
+    const item = primaryMap.get(fieldName)
+    if (!item) return null
+    if (isOutdoor && skipWhenMissingForOutdoor && item.status === 'MISSING' && !item.valueVisible) return null
+    return {
+      key: item.fieldName,
+      label: daikinFieldLabel(item.fieldName),
+      value: daikinCurrentFieldValue(item),
+      stale: item.stale,
+      statusLabel: daikinLabel(item.status),
+      explanation: daikinFieldExplanation(item.fieldName),
+    }
+  }
+  const coreFieldNames = isOutdoor
+    ? ['compressorOnOff', 'unitStatus', 'modelName', 'controller.isConnectionUp']
+    : ['onOff', 'mode', 'fanSpeed', 'airflowDirection']
+  const coreTiles = coreFieldNames.map(name => toRow(name)).filter((row): row is DaikinDetailRow => row != null)
+  const roomTempField = primaryMap.get('roomTemp')
+  const setTempField = primaryMap.get('temperature')
+  const healthFieldNames = [
+    'unitStatus', 'errorType', 'errorCode', 'isFilterDirty',
+    'inCommunicationError', 'inEquipmentError', 'inMantenanceMode',
+    'controller.isConnectionUp', 'controller.inForcedStop', 'controller.status',
+  ]
+  const healthRows = healthFieldNames
+    .map(name => toRow(name, name !== 'unitStatus'))
+    .filter((row): row is DaikinDetailRow => row != null)
+  const archiveFieldNames = ['formalName', 'modelName', 'masterSlaveFlag', 'isGroupSlave', 'masterSlaveIds']
+  const archiveRows = archiveFieldNames
+    .map(name => toRow(name, ['masterSlaveFlag', 'isGroupSlave', 'masterSlaveIds'].includes(name)))
+    .filter((row): row is DaikinDetailRow => row != null)
+
+  const capabilityRows: DaikinDetailRow[] = []
+  const rcFields = ['rcProhibitOnOff', 'rcProhibitOpMode', 'rcProhibitSetpoint']
+    .map(name => primaryMap.get(name))
+    .filter((item): item is CurrentField => item != null)
+  if (rcFields.length) {
+    capabilityRows.push({
+      key: 'rcPermissions',
+      label: words.rcPermissionMerged,
+      value: rcFields.map(item => daikinCurrentFieldValue(item)).join(' / '),
+      stale: rcFields.some(item => item.stale),
+      statusLabel: daikinLabel(rcFields[0]!.status),
+    })
+  }
+  const defaultRange = toRow('DefaultSetpointRange', true)
+  if (defaultRange) capabilityRows.push(defaultRange)
+
+  const buildLimitRow = (key: string, label: string, lowName: string, highName: string, flagName: string) => {
+    const low = primaryMap.get(lowName)
+    const high = primaryMap.get(highName)
+    const flag = primaryMap.get(flagName)
+    if (!low && !high && !flag) return
+    const lowText = low ? daikinCurrentFieldValue(low) : '—'
+    const highText = high ? daikinCurrentFieldValue(high) : '—'
+    const suffix = flag?.normalizedValue === 'on' ? words.limitEnabledSuffix : words.limitDisabledSuffix
+    capabilityRows.push({
+      key,
+      label,
+      value: `${lowText}～${highText} °C${suffix}`,
+      stale: Boolean(low?.stale || high?.stale || flag?.stale),
+      statusLabel: daikinLabel((low ?? high ?? flag)!.status),
+    })
+  }
+  buildLimitRow('coolLimit', words.coolLimitMerged, 'coolLimitsettempL', 'coolLimitsettempU', 'limitSettempCool')
+  buildLimitRow('heatLimit', words.heatLimitMerged, 'heatLimitsettempL', 'heatLimitsettempU', 'limitSettempHeat')
+
+  for (const name of ['modeSetList', 'fanSpeedSetList', 'onOffModeSetList']) {
+    const row = toRow(name, true)
+    if (row) capabilityRows.push(row)
+  }
+
+  return {
+    coreTiles,
+    roomTempText: roomTempField ? daikinCurrentFieldValue(roomTempField) : '—',
+    setTempText: setTempField ? daikinCurrentFieldValue(setTempField) : '—',
+    healthRows,
+    archiveRows,
+    capabilityRows,
+    extendedRows: extended,
+  }
+}
+
+/** 仅统计后端返回的真实采样点与已标记的采集间断数，不在浏览器重算衍生温度指标。 */
+export function daikinTemperatureSummary(roomItems: TemperatureReading[], setItems: TemperatureReading[]): { sampleCount: number; gapCount: number } {
+  const sampleCount = roomItems.filter(item => item.value != null).length + setItems.filter(item => item.value != null).length
+  const gapCount = roomItems.filter(item => item.gapBefore).length + setItems.filter(item => item.gapBefore).length
+  return { sampleCount, gapCount }
 }
 
 /** 断线节点只控制图形连线；所有非空值均直接来自后端质量门禁后的读数。 */
