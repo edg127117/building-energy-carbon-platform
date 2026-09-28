@@ -25,4 +25,18 @@ describe('manufacturer read resource', () => {
     expect(resource.data.value).toBeNull()
     expect(resource.loading.value).toBe(false)
   })
+  it('preserves existing data without flashing loading state during silent background refresh', async () => {
+    const scope = effectScope()
+    const resource = scope.run(() => useDaikinResource<number>())!
+    await resource.run(async () => 10)
+    expect(resource.data.value).toBe(10)
+    let resolve!: (value: number) => void
+    const refreshing = resource.run(() => new Promise<number>(done => { resolve = done }), true)
+    expect(resource.data.value).toBe(10)
+    expect(resource.loading.value).toBe(false)
+    resolve(20)
+    await refreshing
+    expect(resource.data.value).toBe(20)
+    scope.stop()
+  })
 })
