@@ -143,6 +143,21 @@ describe('manufacturer display boundaries', () => {
 
     const spaceGroups = groupDaikinDevicesBySpace(list, [{ spaceId: 'SP1', spaceName: '3F B308办公区' }])
     expect(spaceGroups.map(g => g.spaceName)).toEqual(['未分配空间', '3F B308办公区'])
+
+    const splitRoomDevices = [
+      makeDevice({ equipmentId: 'idu-b308-2', equipmentCode: 'IDU4', equipmentName: '大金内机-B308-2', deviceKind: 'INDOOR', spaceId: 'SP-308-2' }),
+      makeDevice({ equipmentId: 'idu-b308-1', equipmentCode: 'IDU2', equipmentName: '大金内机-B308-1', deviceKind: 'INDOOR', spaceId: 'SP-308-1' }),
+      makeDevice({ equipmentId: 'idu-b302-1', equipmentCode: 'IDU3', equipmentName: '大金内机-B302-1', deviceKind: 'INDOOR', spaceId: 'SP-302-1' }),
+    ]
+    const mergedGroups = groupDaikinDevicesBySpace(splitRoomDevices, [
+      { spaceId: 'SP-308-1', spaceName: 'B308-1' },
+      { spaceId: 'SP-308-2', spaceName: 'B308-2' },
+      { spaceId: 'SP-302-1', spaceName: 'B302-1' },
+    ])
+    expect(mergedGroups.map(g => [g.spaceName, g.devices.map(d => d.equipmentName)])).toEqual([
+      ['B302', ['大金内机-B302-1']],
+      ['B308', ['大金内机-B308-1', '大金内机-B308-2']],
+    ])
   })
   it('structures 37 protocol fields with semantic tones and filters state events by field and time window', () => {
     expect(daikinFieldTone('onOff', 'on')).toBe('success')

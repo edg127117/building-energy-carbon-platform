@@ -20,7 +20,7 @@ import {
 import { t } from '@/locales'
 import { flattenSpaces, useAssetManagement, type AssetPoint } from '@/modules/asset-management/public'
 import type { BindingProduct, DeviceProductListItem, NumericSourceOption, OperationsBindingOptions, PendingBindRequest, PendingDevice, PendingDeviceDetail, PointBinding, PointNamingRule } from '../models/onboarding'
-import { indoorEquipmentName } from '../models/indoor-batch-binding'
+import { resolveIndoorBatchEquipmentNames } from '../models/indoor-batch-binding'
 
 type BindingMode = 'existing' | 'new'
 type BindingPointMode = 'existing' | 'new'
@@ -83,12 +83,16 @@ const form = reactive({
 })
 const productPoints = computed(() => props.product?.productId === form.productId ? props.product.points.filter(point => point.enabled) : [])
 const batchMode = computed(() => props.batchRows.length > 1)
+const batchNameMap = computed(() => resolveIndoorBatchEquipmentNames(
+  props.batchRows,
+  t('deviceOnboarding.messages.batchEquipmentNamePrefix'),
+))
 const batchPreview = computed(() => props.batchRows.map(row => ({
   pendingId: row.pendingId,
   roomCode: row.location?.roomCode ?? '',
   monitorAddress: row.location?.monitorAddress ?? '',
   assetReferenceCode: row.location?.assetReferenceCode ?? '',
-  equipmentName: row.location?.roomCode ? indoorEquipmentName(row.location.roomCode, t('deviceOnboarding.messages.batchEquipmentNamePrefix')) : '',
+  equipmentName: batchNameMap.value.get(row.pendingId) ?? '',
 })))
 const hasIncludedPoints = computed(() => productPoints.value.some(point => form.bindings[point.metricCode]?.include))
 const automaticPointCreation = computed(() => form.mode === 'new'

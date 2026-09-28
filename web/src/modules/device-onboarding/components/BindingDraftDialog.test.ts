@@ -96,11 +96,12 @@ describe('绑定准备弹窗', () => {
     expect(wrapper.text()).toContain('系统分组来自当前建筑台账')
   })
 
-  it('批量内机预览逐台房间和名称，不要求选择一个共享空间', async () => {
+  it('批量内机预览逐台房间和名称，支持同房间多台内机自动编号且不要求选择一个共享空间', async () => {
     const stateProduct = { ...product, pointCount: 0, points: [] }
     const rows = [
-      { ...pending, identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S1', roomCode: 'B314-3', monitorAddress: '1-10', assetReferenceCode: 'F000011' } },
-      { ...pending, pendingId: 'D2', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S2', roomCode: 'B303-2', monitorAddress: '1-08', assetReferenceCode: 'F000009' } },
+      { ...pending, identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S1', roomCode: 'B308', monitorAddress: '1-02', assetReferenceCode: 'F000003' } },
+      { ...pending, pendingId: 'D2', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S1', roomCode: 'B308', monitorAddress: '1-01', assetReferenceCode: 'F000005' } },
+      { ...pending, pendingId: 'D3', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2', location: { roomSpaceId: 'S2', roomCode: 'B313', monitorAddress: '1-06', assetReferenceCode: 'F000007' } },
     ]
     const bindingOptions = { buildingId: 'BLD001', buildingName: '创新港大楼', spaces: [], systems: [], equipmentPage: 1, equipmentSize: 20, equipmentTotal: 0, equipment: [] }
     const wrapper = mount(BindingDraftDialog, {
@@ -108,8 +109,9 @@ describe('绑定准备弹窗', () => {
     })
     await flushPromises()
     expect(wrapper.text()).toContain('逐台绑定预览')
-    expect(wrapper.text()).toContain('大金内机-B314-3')
-    expect(wrapper.text()).toContain('大金内机-B303-2')
+    expect(wrapper.text()).toContain('大金内机-B308-1')
+    expect(wrapper.text()).toContain('大金内机-B308-2')
+    expect(wrapper.text()).toContain('大金内机-B313')
     expect(wrapper.findAllComponents(ElRadioGroup)).toHaveLength(0)
     expect(wrapper.text()).toContain('每台内机使用已核对的房间')
   })

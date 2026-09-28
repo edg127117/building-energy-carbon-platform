@@ -11,7 +11,7 @@ import { listAccessibleBuildings } from '../api/hvac'
 import { daikinApi } from '../api/daikin'
 import {
   daikinFieldTone, daikinLabel, daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
-  groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning,
+  groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning, normalizeDaikinSpaceName,
   type DaikinQuickStatus,
 } from '../models/daikin-display'
 import type { DaikinDevice } from '../models/daikin'
@@ -41,7 +41,29 @@ const page = ref(1)
 const selected = ref<string | null>(null)
 const refreshTick = ref(0)
 
-const rawDevices = computed(() => devices.data.value?.items ?? [])
+const spaceFilterOptions = computed(() => {
+  const map = new Map<string, { value: string; label: string; spaceIds: string[] }>()
+  for (const item of spaces.data.value ?? []) {
+    const label = normalizeDaikinSpaceName(item.spaceName)
+    let entry = map.get(label)
+    if (!entry) {
+      entry = { value: item.spaceId, label, spaceIds: [] }
+      map.set(label, entry)
+    }
+    entry.spaceIds.push(item.spaceId)
+  }
+  return Array.from(map.values()).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN', { numeric: true }))
+})
+const selectedSpaceOption = computed(() => spaceFilterOptions.value.find(item => item.value === space.value))
+const rawDevices = computed(() => {
+  const items = devices.data.value?.items ?? []
+  const opt = selectedSpaceOption.value
+  if (opt && opt.spaceIds.length > 1) {
+    const allowed = new Set(opt.spaceIds)
+    return items.filter(item => item.spaceId != null && allowed.has(item.spaceId))
+  }
+  return items
+})
 const statusCounts = computed(() => daikinQuickStatusCounts(rawDevices.value))
 const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevices.value, quickStatus.value))
 const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value))
@@ -50,7 +72,8 @@ const selectedDevice = computed(() => rawDevices.value.find(item => item.equipme
 
 function spaceNameOf(spaceId: string | null | undefined): string {
   if (!spaceId) return text('unassignedSpace')
-  return spaces.data.value?.find(item => item.spaceId === spaceId)?.spaceName ?? text('unassignedSpace')
+  const rawName = spaces.data.value?.find(item => item.spaceId === spaceId)?.spaceName
+  return rawName ? normalizeDaikinSpaceName(rawName) : text('unassignedSpace')
 }
 
 function toggleGroup(groupKey: string) {
@@ -84,8 +107,9 @@ let disposed = false
 
 function load(cursor?: string, silent = false) {
   if (!building.value) return
+  const backendSpaceId = selectedSpaceOption.value && selectedSpaceOption.value.spaceIds.length > 1 ? '' : space.value
   if (props.alarms) void exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor), silent)
-  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, space.value, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
+  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, backendSpaceId, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
 }
 
 function refresh() {
@@ -153,7 +177,7 @@ onUnmounted(() => {
           <span>{{ text('space') }}</span>
           <ElSelect v-model="space" :placeholder="text('all')" filterable :aria-label="text('space')">
             <ElOption value="" :label="text('all')" />
-            <ElOption v-for="item in spaces.data.value ?? []" :key="item.spaceId" :value="item.spaceId" :label="item.spaceName" />
+            <ElOption v-for="item in spaceFilterOptions" :key="item.value" :value="item.value" :label="item.label" />
           </ElSelect>
         </label>
         <label v-if="!alarms" class="filter-field">

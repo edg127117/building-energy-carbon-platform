@@ -216,29 +216,48 @@ export function groupDaikinDevicesBySystem(items: DaikinDevice[], allDevices: Da
   }))
 }
 
+/** 将误按内机机位拆分的空间名称（如 B308-1、B302-3）归一化为主房间名称（如 B308、B302）。 */
+export function normalizeDaikinSpaceName(spaceName: string): string {
+  const trimmed = spaceName.trim()
+  const match = /^(.+[A-Za-z0-9\u4e00-\u9fa5])-\d+$/.exec(trimmed)
+  return match?.[1]?.trim() || trimmed
+}
+
 export function groupDaikinDevicesBySpace(items: DaikinDevice[], spaces: Array<{ spaceId: string; spaceName: string }>): DaikinSpaceGroup[] {
-  const spaceNames = new Map(spaces.map(item => [item.spaceId, item.spaceName]))
+  const spaceNames = new Map(spaces.map(item => [item.spaceId, normalizeDaikinSpaceName(item.spaceName)]))
   const buckets = new Map<string, { spaceId: string | null; spaceName: string; devices: DaikinDevice[] }>()
   for (const item of items) {
-    const key = item.spaceId ?? '__UNASSIGNED__'
+    const normalizedName = item.spaceId ? spaceNames.get(item.spaceId) : undefined
+    const key = normalizedName ? `ROOM:${normalizedName}` : '__UNASSIGNED__'
     let bucket = buckets.get(key)
     if (!bucket) {
       bucket = {
-        spaceId: item.spaceId,
-        spaceName: (item.spaceId && spaceNames.get(item.spaceId)) || words.unassignedSpace,
+        spaceId: normalizedName ? item.spaceId : null,
+        spaceName: normalizedName || words.unassignedSpace,
         devices: [],
       }
       buckets.set(key, bucket)
     }
     bucket.devices.push(item)
   }
-  return Array.from(buckets.entries()).map(([groupKey, bucket]) => ({
-    groupKey,
-    spaceId: bucket.spaceId,
-    spaceName: bucket.spaceName,
-    devices: bucket.devices,
-    runningCount: bucket.devices.filter(isDaikinDeviceRunning).length,
-  }))
+  return Array.from(buckets.entries())
+    .map(([groupKey, bucket]) => {
+      const sortedDevices = [...bucket.devices].sort((a, b) =>
+        (a.equipmentName || a.equipmentCode).localeCompare(b.equipmentName || b.equipmentCode, 'zh-CN', { numeric: true }),
+      )
+      return {
+        groupKey,
+        spaceId: bucket.spaceId,
+        spaceName: bucket.spaceName,
+        devices: sortedDevices,
+        runningCount: sortedDevices.filter(isDaikinDeviceRunning).length,
+      }
+    })
+    .sort((a, b) => {
+      if (a.groupKey === '__UNASSIGNED__') return -1
+      if (b.groupKey === '__UNASSIGNED__') return 1
+      return a.spaceName.localeCompare(b.spaceName, 'zh-CN', { numeric: true })
+    })
 }
 
 /** 将当前详情字段按温控核心、健康维保、设备档案、控制能力与待核验扩展分层组织。 */
