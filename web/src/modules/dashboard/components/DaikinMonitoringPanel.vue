@@ -10,13 +10,24 @@ import { formatDateTime } from '@/shared/utils/format'
 import { listAccessibleBuildings } from '../api/hvac'
 import { daikinApi } from '../api/daikin'
 import {
-  daikinFieldTone, daikinLabel, daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
+  daikinCurrentValue, daikinFieldTone, daikinLabel, daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
   groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning, normalizeDaikinSpaceName,
   type DaikinQuickStatus,
 } from '../models/daikin-display'
 import type { DaikinDevice } from '../models/daikin'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 import DaikinDeviceDetail from './DaikinDeviceDetail.vue'
+
+interface CardTelemetry {
+  fanSpeed: string | null
+  isFilterDirty: boolean
+  compressorOnOff: string | null
+  inCommunicationError: boolean
+  hasHardFault: boolean
+  roomTemp: number | null
+  setTemp: number | null
+  unit: string
+}
 
 const props = withDefaults(defineProps<{ alarms?: boolean; history?: boolean }>(), { alarms: false, history: false })
 const route = useRoute()
@@ -35,6 +46,7 @@ const quickStatus = ref<DaikinQuickStatus>('ALL')
 const groupMode = ref<'SYSTEM' | 'SPACE'>('SYSTEM')
 const viewMode = ref<'CARD' | 'TABLE'>('CARD')
 const collapsedGroups = ref<Record<string, boolean>>({})
+const cardTelemetry = ref<Record<string, CardTelemetry>>({})
 const searchInput = ref('')
 const keyword = ref('')
 const page = ref(1)
@@ -76,6 +88,34 @@ function spaceNameOf(spaceId: string | null | undefined): string {
   return rawName ? normalizeDaikinSpaceName(rawName) : text('unassignedSpace')
 }
 
+function formatModeAndFan(item: Partial<Pick<DaikinDevice, 'equipmentId' | 'mode'>>): string {
+  const modeText = daikinLabel(item.mode?.value)
+  const fanRaw = item.equipmentId ? cardTelemetry.value[item.equipmentId]?.fanSpeed : null
+  if (!fanRaw) return modeText
+  const fanText = daikinCurrentValue('fanSpeed', fanRaw)
+  if (fanText === '—') return modeText
+  return `${modeText} · ${fanText}`
+}
+
+function formatRoomTemp(item: Partial<Pick<DaikinDevice, 'equipmentId'>>): string {
+  const info = item.equipmentId ? cardTelemetry.value[item.equipmentId] : undefined
+  if (!info || info.roomTemp == null) return '—'
+  return `${info.roomTemp}${info.unit || '°C'}`
+}
+
+function formatSetTemp(item: Partial<Pick<DaikinDevice, 'equipmentId'>>): string {
+  const info = item.equipmentId ? cardTelemetry.value[item.equipmentId] : undefined
+  if (!info || info.setTemp == null) return '—'
+  return `${info.setTemp}${info.unit || '°C'}`
+}
+
+function showHardExceptionTag(item: DaikinDevice): boolean {
+  if (!item.hasActiveException) return false
+  const info = cardTelemetry.value[item.equipmentId]
+  if (info?.isFilterDirty && !info.hasHardFault) return false
+  return true
+}
+
 function toggleGroup(groupKey: string) {
   collapsedGroups.value[groupKey] = !collapsedGroups.value[groupKey]
 }
@@ -104,6 +144,46 @@ function search() {
 
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
+let telemetrySeq = 0
+
+async function hydrateCardTelemetry(items: DaikinDevice[]) {
+  const seq = ++telemetrySeq
+  await Promise.all(items.map(async item => {
+    try {
+      const isOutdoor = item.deviceKind === 'OUTDOOR'
+      const [curRes, roomRes, setRes] = await Promise.all([
+        daikinApi.current(item.equipmentId).catch(() => null),
+        isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'roomTemp').catch(() => null),
+        isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'temperature').catch(() => null),
+      ])
+      if (disposed || seq !== telemetrySeq) return
+      const findField = (name: string) => {
+        const f = curRes?.fields?.find(row => row.fieldName === name)
+        return f && f.status === 'PRESENT' && f.valueVisible ? f.normalizedValue : null
+      }
+      cardTelemetry.value[item.equipmentId] = {
+        fanSpeed: findField('fanSpeed'),
+        isFilterDirty: findField('isFilterDirty') === 'true',
+        compressorOnOff: findField('compressorOnOff'),
+        inCommunicationError: findField('inCommunicationError') === 'true',
+        hasHardFault:
+          findField('inError') === 'true'
+          || findField('inEmergency') === 'true'
+          || findField('inCommunicationError') === 'true'
+          || Boolean(findField('errorCode')),
+        roomTemp: roomRes?.reading?.value ?? null,
+        setTemp: setRes?.reading?.value ?? null,
+        unit: roomRes?.unit || setRes?.unit || '°C',
+      }
+    } catch {
+      // 单台卡片摘要补全失败不阻断主列表渲染。
+    }
+  }))
+}
+
+watch(() => devices.data.value, val => {
+  if (val?.items?.length) void hydrateCardTelemetry(val.items)
+})
 
 function load(cursor?: string, silent = false) {
   if (!building.value) return
@@ -299,33 +379,55 @@ onUnmounted(() => {
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ spaceNameOf(item.spaceId) }}</p>
                     </div>
                     <div class="device-card-tags">
-                      <ElTag v-if="item.hasActiveException" type="danger">{{ text('exception') }}</ElTag>
+                      <ElTag v-if="showHardExceptionTag(item)" type="danger">{{ text('exception') }}</ElTag>
+                      <ElTag v-if="cardTelemetry[item.equipmentId]?.isFilterDirty" type="warning">{{ text('filterReminderTag') }}</ElTag>
                       <ElTag :type="item.stale || !item.active ? 'warning' : 'success'">{{ deviceHealthLabel(item) }}</ElTag>
                     </div>
                   </header>
 
                   <div class="device-card-metrics">
-                    <div class="metric-cell">
-                      <span class="metric-label">{{ text('runStateLabel') }}</span>
-                      <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
-                        {{ item.deviceKind === 'OUTDOOR' ? daikinLabel(item.unitStatus?.value) : (isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel')) }}
-                      </strong>
-                    </div>
-                    <div class="metric-cell">
-                      <span class="metric-label">{{ text('modeLabel') }}</span>
-                      <strong
-                        class="metric-value"
-                        :class="item.deviceKind === 'OUTDOOR' ? 'tone-muted' : `tone-${daikinFieldTone('mode', item.mode?.value)}`"
-                      >
-                        {{ item.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(item.mode?.value) }}
-                      </strong>
-                    </div>
-                    <div class="metric-cell">
-                      <span class="metric-label">{{ text('unitStatusLabel') }}</span>
-                      <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
-                        {{ daikinLabel(item.unitStatus?.value) }}
-                      </strong>
-                    </div>
+                    <template v-if="item.deviceKind === 'OUTDOOR'">
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('unitStatusLabel') }}</span>
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
+                          {{ daikinLabel(item.unitStatus?.value) }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('compressorStateCard') }}</span>
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff)}`">
+                          {{ daikinCurrentValue('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff ?? null) }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('commStatusCardLabel') }}</span>
+                        <strong class="metric-value" :class="cardTelemetry[item.equipmentId]?.inCommunicationError ? 'tone-danger' : 'tone-success'">
+                          {{ text(cardTelemetry[item.equipmentId]?.inCommunicationError ? 'commErrorText' : 'commNormalText') }}
+                        </strong>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('runStateLabel') }}</span>
+                        <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
+                          {{ isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel') }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('modeFanLabel') }}</span>
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('mode', item.mode?.value)}`">
+                          {{ formatModeAndFan(item) }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('roomSetTempLabel') }}</span>
+                        <span class="metric-temp-pair">
+                          <strong class="metric-temp-room" :class="formatRoomTemp(item) === '—' ? 'tone-muted' : 'tone-default'">{{ formatRoomTemp(item) }}</strong>
+                          <span class="metric-temp-sep">{{ ' / ' }}</span>
+                          <span class="metric-temp-set">{{ formatSetTemp(item) }}</span>
+                        </span>
+                      </div>
+                    </template>
                   </div>
 
                   <footer class="device-card-footer">
@@ -375,33 +477,55 @@ onUnmounted(() => {
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ text(item.deviceKind === 'OUTDOOR' ? 'outdoorBadge' : 'indoorBadge') }}</p>
                     </div>
                     <div class="device-card-tags">
-                      <ElTag v-if="item.hasActiveException" type="danger">{{ text('exception') }}</ElTag>
+                      <ElTag v-if="showHardExceptionTag(item)" type="danger">{{ text('exception') }}</ElTag>
+                      <ElTag v-if="cardTelemetry[item.equipmentId]?.isFilterDirty" type="warning">{{ text('filterReminderTag') }}</ElTag>
                       <ElTag :type="item.stale || !item.active ? 'warning' : 'success'">{{ deviceHealthLabel(item) }}</ElTag>
                     </div>
                   </header>
 
                   <div class="device-card-metrics">
-                    <div class="metric-cell">
-                      <span class="metric-label">{{ text('runStateLabel') }}</span>
-                      <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
-                        {{ item.deviceKind === 'OUTDOOR' ? daikinLabel(item.unitStatus?.value) : (isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel')) }}
-                      </strong>
-                    </div>
-                    <div class="metric-cell">
-                      <span class="metric-label">{{ text('modeLabel') }}</span>
-                      <strong
-                        class="metric-value"
-                        :class="item.deviceKind === 'OUTDOOR' ? 'tone-muted' : `tone-${daikinFieldTone('mode', item.mode?.value)}`"
-                      >
-                        {{ item.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(item.mode?.value) }}
-                      </strong>
-                    </div>
-                    <div class="metric-cell">
-                      <span class="metric-label">{{ text('unitStatusLabel') }}</span>
-                      <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
-                        {{ daikinLabel(item.unitStatus?.value) }}
-                      </strong>
-                    </div>
+                    <template v-if="item.deviceKind === 'OUTDOOR'">
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('unitStatusLabel') }}</span>
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
+                          {{ daikinLabel(item.unitStatus?.value) }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('compressorStateCard') }}</span>
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff)}`">
+                          {{ daikinCurrentValue('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff ?? null) }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('commStatusCardLabel') }}</span>
+                        <strong class="metric-value" :class="cardTelemetry[item.equipmentId]?.inCommunicationError ? 'tone-danger' : 'tone-success'">
+                          {{ text(cardTelemetry[item.equipmentId]?.inCommunicationError ? 'commErrorText' : 'commNormalText') }}
+                        </strong>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('runStateLabel') }}</span>
+                        <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
+                          {{ isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel') }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('modeFanLabel') }}</span>
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('mode', item.mode?.value)}`">
+                          {{ formatModeAndFan(item) }}
+                        </strong>
+                      </div>
+                      <div class="metric-cell">
+                        <span class="metric-label">{{ text('roomSetTempLabel') }}</span>
+                        <span class="metric-temp-pair">
+                          <strong class="metric-temp-room" :class="formatRoomTemp(item) === '—' ? 'tone-muted' : 'tone-default'">{{ formatRoomTemp(item) }}</strong>
+                          <span class="metric-temp-sep">{{ ' / ' }}</span>
+                          <span class="metric-temp-set">{{ formatSetTemp(item) }}</span>
+                        </span>
+                      </div>
+                    </template>
                   </div>
 
                   <footer class="device-card-footer">
@@ -437,31 +561,35 @@ onUnmounted(() => {
           <ElTableColumn :label="text('space')" min-width="140">
             <template #default="{ row }">{{ spaceNameOf(row.spaceId) }}</template>
           </ElTableColumn>
-          <ElTableColumn :label="text('onOff')">
+          <ElTableColumn :label="text('runStateLabel')">
             <template #default="{ row }">
               <strong :class="isDaikinDeviceRunning(row) ? 'tone-success' : 'tone-muted'">
-                {{ row.deviceKind === 'OUTDOOR' ? daikinLabel(row.unitStatus?.value) : daikinLabel(row.onOff?.value) }}
+                {{ row.deviceKind === 'OUTDOOR' ? daikinLabel(row.unitStatus?.value) : (isDaikinDeviceRunning(row) ? text('runningLabel') : text('stoppedLabel')) }}
               </strong>
             </template>
           </ElTableColumn>
-          <ElTableColumn :label="text('unitStatusLabel')">
-            <template #default="{ row }">
-              <strong :class="`tone-${daikinFieldTone('unitStatus', row.unitStatus?.value)}`">
-                {{ daikinLabel(row.unitStatus?.value) }}
-              </strong>
-            </template>
-          </ElTableColumn>
-          <ElTableColumn :label="text('mode')">
+          <ElTableColumn :label="text('modeFanLabel')" min-width="130">
             <template #default="{ row }">
               <strong :class="row.deviceKind === 'OUTDOOR' ? 'tone-muted' : `tone-${daikinFieldTone('mode', row.mode?.value)}`">
-                {{ row.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : daikinLabel(row.mode?.value) }}
+                {{ row.deviceKind === 'OUTDOOR' ? text('outdoorNotApplicable') : formatModeAndFan(row) }}
               </strong>
+            </template>
+          </ElTableColumn>
+          <ElTableColumn :label="text('roomSetTempLabel')" min-width="130">
+            <template #default="{ row }">
+              <span v-if="row.deviceKind === 'OUTDOOR'" class="tone-muted">{{ text('outdoorNotApplicable') }}</span>
+              <span v-else class="metric-temp-pair">
+                <strong class="metric-temp-room" :class="formatRoomTemp(row) === '—' ? 'tone-muted' : 'tone-default'">{{ formatRoomTemp(row) }}</strong>
+                <span class="metric-temp-sep">{{ ' / ' }}</span>
+                <span class="metric-temp-set">{{ formatSetTemp(row) }}</span>
+              </span>
             </template>
           </ElTableColumn>
           <ElTableColumn :label="text('state')" min-width="140">
             <template #default="{ row }">
               <ElTag :type="row.stale ? 'warning' : 'success'">{{ text(!row.active ? 'inactive' : row.lastValidAt == null ? 'noObservation' : row.stale ? 'stale' : 'normal') }}</ElTag>
               <ElTag v-if="row.hasActiveException" type="danger">{{ text('exception') }}</ElTag>
+              <ElTag v-if="cardTelemetry[row.equipmentId]?.isFilterDirty" type="warning">{{ text('filterReminderTag') }}</ElTag>
             </template>
           </ElTableColumn>
           <ElTableColumn :label="text('fresh')" min-width="175">
@@ -567,6 +695,9 @@ onUnmounted(() => {
 .metric-cell { display: grid; gap: var(--bec-space-tight); }
 .metric-label { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .metric-value { font-weight: var(--bec-font-weight-heading); }
+.metric-temp-pair { display: inline-flex; align-items: baseline; font-family: var(--bec-font-mono); }
+.metric-temp-room { font-weight: var(--bec-font-weight-heading); }
+.metric-temp-sep, .metric-temp-set { color: var(--bec-color-text-secondary); font-weight: var(--bec-font-weight-heading); }
 .device-card-footer { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); }
 .sync-time { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .exception-pagination { display: flex; gap: var(--bec-space-tight); justify-content: flex-start; }

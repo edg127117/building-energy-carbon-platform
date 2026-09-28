@@ -85,6 +85,8 @@ describe('DaikinMonitoringPanel', () => {
       fields: [
         { fieldName: 'onOff', rawJson: '"on"', normalizedValue: 'on', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
         { fieldName: 'mode', rawJson: '"cooling"', normalizedValue: 'cooling', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'fanSpeed', rawJson: '"high"', normalizedValue: 'high', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
+        { fieldName: 'isFilterDirty', rawJson: 'true', normalizedValue: 'true', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
         { fieldName: 'unitStatus', rawJson: '"operating"', normalizedValue: 'operating', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
         { fieldName: 'modelName', rawJson: '"FSFP71AB"', normalizedValue: 'FSFP71AB', status: 'PRESENT', lastValidAt: 1700000000000, lastAttemptAt: 1700000000000, lastAttemptRawJson: null, valueVisible: true, stale: false, mappingVersion: 1, lastAttemptMappingVersion: 1 },
       ],
@@ -121,6 +123,12 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.text()).toContain('大金内机-B308-1')
     expect(wrapper.text()).toContain('全部设备（2）')
     expect(wrapper.text()).toContain('运行中（1）')
+    expect(wrapper.text()).toContain('模式／风速')
+    expect(wrapper.text()).toContain('制冷 · 高档')
+    expect(wrapper.text()).toContain('室温／设温')
+    expect(wrapper.text()).toContain('24.6°C')
+    expect(wrapper.text()).toContain('25°C')
+    expect(wrapper.text()).toContain('滤网提醒')
     expect(wrapper.find('.device-card.device-card-running').exists()).toBe(true)
 
     await wrapper.find('.device-card').trigger('click')
@@ -130,7 +138,7 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.text()).toContain('室内温度')
     expect(wrapper.text()).toContain('24.6 °C')
     expect(wrapper.text()).toContain('25 °C')
-    expect(wrapper.text()).toContain('运行正常')
+    expect(wrapper.text()).toContain('滤网需更换')
     expect(wrapper.text()).toContain('机组健康、维保与控制器状态')
     expect(wrapper.text()).toContain('设备档案与系统归属')
     expect(wrapper.text()).toContain('FSFP71AB')
