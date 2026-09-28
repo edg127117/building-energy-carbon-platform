@@ -2,18 +2,27 @@ import { onScopeDispose, ref, shallowRef } from 'vue'
 import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
 import { t } from '@/locales'
 
-/** 切建筑、设备或条件后清空旧结果；代际隔离迟到响应，失败不会伪装成空数据。 */
+/** 切建筑、设备或条件后清空旧结果；代际隔离迟到响应，静默刷新时保留当前视图不闪屏。 */
 export function useDaikinResource<T>() {
   const data = shallowRef<T | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   let generation = 0
   function clear() { generation++; data.value = null; loading.value = false; error.value = null }
-  async function run(query: () => Promise<T>) {
+  async function run(query: () => Promise<T>, silent = false) {
     const current = ++generation
-    loading.value = true; error.value = null; data.value = null
+    if (!silent) {
+      loading.value = true
+      data.value = null
+    }
+    error.value = null
     try { const result = await query(); if (current === generation) data.value = result }
-    catch (cause) { if (current === generation) error.value = requestErrorCode(cause) === 'DAIKIN_TEMPERATURE_NOT_BOUND' ? t('dashboard.daikin.temperatureNotBound') : requestErrorMessage(cause) }
+    catch (cause) {
+      if (current === generation) {
+        if (!silent) data.value = null
+        error.value = requestErrorCode(cause) === 'DAIKIN_TEMPERATURE_NOT_BOUND' ? t('dashboard.daikin.temperatureNotBound') : requestErrorMessage(cause)
+      }
+    }
     finally { if (current === generation) loading.value = false }
   }
   onScopeDispose(clear)

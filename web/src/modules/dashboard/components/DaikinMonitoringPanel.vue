@@ -82,14 +82,14 @@ function search() {
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 
-function load(cursor?: string) {
+function load(cursor?: string, silent = false) {
   if (!building.value) return
-  if (props.alarms) void exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor))
-  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, space.value, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'))
+  if (props.alarms) void exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor), silent)
+  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, space.value, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
 }
 
 function refresh() {
-  load()
+  load(undefined, Boolean(devices.data.value || exceptions.data.value))
   refreshTick.value++
 }
 

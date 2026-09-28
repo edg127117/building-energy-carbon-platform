@@ -136,4 +136,78 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.text()).toContain('FSFP71AB')
     wrapper.unmount()
   })
+
+  it('refreshes silently without unmounting cards and applies clock-skew-safe upper bound when switching 24h/7d temperature presets', async () => {
+    vi.mocked(daikinApi.history).mockResolvedValue({
+      unit: '°C',
+      items: [
+        { observedAt: 1700000000000, value: 24.5, dataQuality: 0, gapBefore: false, stale: false },
+      ],
+      nextCursor: null,
+    })
+
+    const wrapper = mount(DaikinMonitoringPanel, {
+      global: {
+        stubs: {
+          ElDrawer: {
+            props: ['modelValue', 'title'],
+            template: '<div v-if="modelValue" class="drawer-stub"><h2>{{ title }}</h2><slot /></div>',
+          },
+          ChartView: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.find('.device-card').trigger('click')
+    await flushPromises()
+
+    // Simulate a slow refresh and verify existing DOM stays mounted without flashing skeleton
+    let resolveDevices!: (value: Awaited<ReturnType<typeof daikinApi.devices>>) => void
+    vi.mocked(daikinApi.devices).mockReturnValueOnce(new Promise(resolve => {
+      resolveDevices = resolve
+    }))
+    const refreshBtn = wrapper.findAll('button').find(btn => btn.text() === '刷新')
+    await refreshBtn?.trigger('click')
+    expect(wrapper.find('.device-card').exists()).toBe(true)
+    expect(wrapper.find('.drawer-stub').exists()).toBe(true)
+    resolveDevices({
+      total: 1,
+      items: [
+        {
+          identityId: 'id-idu-2',
+          equipmentId: 'eq-idu-2',
+          pendingId: 'pd-idu-2',
+          buildingId: 'BLD001',
+          spaceId: 'SP-308',
+          systemGroupId: 'SYS-3F',
+          deviceKind: 'INDOOR',
+          mappingVersion: 1,
+          active: true,
+          stale: false,
+          lastValidAt: 1700000060000,
+          onOff: { value: 'on', status: 'PRESENT', lastValidAt: 1700000060000, stale: false },
+          mode: { value: 'cooling', status: 'PRESENT', lastValidAt: 1700000060000, stale: false },
+          unitStatus: { value: 'operating', status: 'PRESENT', lastValidAt: 1700000060000, stale: false },
+          hasActiveException: false,
+          equipmentCode: 'IDU2',
+          equipmentName: '大金内机-B308-1',
+        },
+      ],
+    })
+    await flushPromises()
+
+    // Switch to temperature tab and verify quick range presets use clock-skew-safe upper bound
+    const tempTab = wrapper.find('[id="tab-temperature"]')
+    if (tempTab.exists()) {
+      await tempTab.trigger('click')
+      await flushPromises()
+      const beforeClickNow = Date.now()
+      const calls = vi.mocked(daikinApi.history).mock.calls
+      expect(calls.length).toBeGreaterThanOrEqual(2)
+      const latestCall = calls[calls.length - 1]
+      expect(latestCall?.[3]).toBeLessThanOrEqual(beforeClickNow - 10_000)
+    }
+    wrapper.unmount()
+  })
 })

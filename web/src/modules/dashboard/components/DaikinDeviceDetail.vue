@@ -54,7 +54,7 @@ const eventCursorStack = ref<Array<string | undefined>>([])
 const currentEventCursor = ref<string | undefined>(undefined)
 const granularity = ref('DAY')
 const tab = ref('state')
-const range = ref<[number, number]>([Date.now() - 86400000, Date.now()])
+const range = ref<[number, number]>([Date.now() - 86400000 - 15_000, Date.now() - 15_000])
 const queriedRange = ref<[number, number] | null>(null)
 const rangeError = ref(false)
 const showCapabilities = ref(false)
@@ -150,11 +150,22 @@ const option = computed<ChartOption>(() => {
   }
 })
 
+function safeQueryEndNow(): number {
+  const serverObserved = Math.max(
+    current.data.value?.lastValidAt ?? 0,
+    roomTempCurrent.data.value?.reading?.observedAt ?? 0,
+    setpointCurrent.data.value?.reading?.observedAt ?? 0,
+    ...(current.data.value?.fields.map(item => item.lastAttemptAt ?? 0) ?? []),
+  )
+  // 规避浏览器与服务端秒级时钟偏差触发 to > serverNow + 1 校验失败，同时确保覆盖最新一次服务端观测。
+  return Math.min(Date.now(), Math.max(serverObserved, Date.now() - 15_000))
+}
+
 function applyQuickRange(preset: '6H' | '24H' | '7D') {
   quickRange.value = preset
-  const now = Date.now()
+  const endNow = safeQueryEndNow()
   const hoursMap = { '6H': 6, '24H': 24, '7D': 168 }
-  range.value = [now - hoursMap[preset] * 3_600_000, now]
+  range.value = [endNow - hoursMap[preset] * 3_600_000, endNow]
   loadTemperature()
 }
 
@@ -178,8 +189,8 @@ function onEventCustomRangeChange(val: [number, number] | null) {
   eventTimeRange.value = [Number(val[0]), Number(val[1])]
 }
 
-function loadCurrent() {
-  void current.run(() => daikinApi.current(props.equipmentId))
+function loadCurrent(silent = false) {
+  void current.run(() => daikinApi.current(props.equipmentId), silent)
 }
 
 function loadEvents(cursor?: string, resetStack = false) {
@@ -205,24 +216,25 @@ function prevEventPage() {
   loadEvents(prev, false)
 }
 
-function loadCurrentTemperatures() {
+function loadCurrentTemperatures(silent = false) {
   if (isOutdoor.value) return
-  void roomTempCurrent.run(() => daikinApi.temperature(props.equipmentId, 'roomTemp'))
-  void setpointCurrent.run(() => daikinApi.temperature(props.equipmentId, 'temperature'))
+  void roomTempCurrent.run(() => daikinApi.temperature(props.equipmentId, 'roomTemp'), silent)
+  void setpointCurrent.run(() => daikinApi.temperature(props.equipmentId, 'temperature'), silent)
 }
 
 function loadTemperature(after?: number) {
   if (after == null) {
     const window = temperatureWindow(range.value, Date.now())
-    if (!window) {
+    const safeEnd = window ? Math.min(window[1], safeQueryEndNow()) : 0
+    if (!window || window[0] >= safeEnd) {
       rangeError.value = true
       roomHistory.clear()
       setHistory.clear()
       return
     }
-    // 滚动保留边界随时钟推进；裁剪首端，后续翻页保持同一查询窗口。
+    // 滚动保留边界随时钟推进；裁剪首尾端，后续翻页保持同一查询窗口。
     rangeError.value = false
-    queriedRange.value = window
+    queriedRange.value = [window[0], safeEnd]
   }
   const selected = queriedRange.value
   if (!selected) return
@@ -237,8 +249,9 @@ function loadRuntime(before?: number) {
 function loadTab() {
   if (tab.value === 'events') loadEvents(undefined, true)
   if (tab.value === 'temperature') {
-    loadCurrentTemperatures()
-    loadTemperature()
+    loadCurrentTemperatures(Boolean(roomTempCurrent.data.value || setpointCurrent.data.value))
+    if (!queriedRange.value) applyQuickRange(quickRange.value)
+    else loadTemperature()
   }
   if (tab.value === 'runtime') loadRuntime()
 }
@@ -246,8 +259,8 @@ function loadTab() {
 watch(tab, loadTab)
 watch(granularity, () => loadRuntime())
 watch(() => props.refreshTick, () => {
-  loadCurrent()
-  loadCurrentTemperatures()
+  loadCurrent(Boolean(current.data.value))
+  loadCurrentTemperatures(Boolean(roomTempCurrent.data.value || setpointCurrent.data.value))
 })
 onMounted(() => {
   loadCurrent()
@@ -396,7 +409,7 @@ onMounted(() => {
 
           <ElAlert v-if="rangeError" :title="text('invalidRange')" type="warning" :closable="false" />
           <ElAlert v-if="roomTempCurrent.error.value" :title="roomTempCurrent.error.value" type="warning" :closable="false" />
-          <ElAlert v-if="roomHistory.error.value" :title="roomHistory.error.value" type="error" :closable="false" />
+          <ElAlert v-if="roomHistory.error.value || setHistory.error.value" :title="roomHistory.error.value || setHistory.error.value || ''" type="error" :closable="false" />
 
           <div class="temp-kpi-grid">
             <div class="temp-kpi-card">
