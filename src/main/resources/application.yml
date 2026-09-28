@@ -297,3 +297,13 @@ audit-governance:
   retention-cleanup-delay: ${AUDIT_RETENTION_CLEANUP_DELAY:PT1H}
   retention-cleanup-batch-size: ${AUDIT_RETENTION_CLEANUP_BATCH_SIZE:500}
   retention-cleanup-max-batches: ${AUDIT_RETENTION_CLEANUP_MAX_BATCHES:20}
+
+# 天气候选模块默认关闭；启用前确认建筑坐标/区县映射和执行账号的现有职责。
+weather:
+  enabled: ${WEATHER_ENABLED:false}
+  open-meteo-enabled: ${WEATHER_OPEN_METEO_ENABLED:false}
+  china-weather-enabled: ${WEATHER_CHINA_WEATHER_ENABLED:false}
+  energy-enabled: ${WEATHER_ENERGY_ENABLED:false}
+  task-actor-id: ${WEATHER_TASK_ACTOR_ID:0}
+  # energy-targets 通过受控部署配置填写 building-id/system-id/point-id/actor-id。
+  energy-targets: []

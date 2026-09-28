@@ -81,3 +81,12 @@ relation-governance:
 # 普通自动化测试不领取碳重算持久化任务；专项测试直接调用服务方法。
 carbon-management:
   recalculation-enabled: false
+
+# 普通测试不得因宿主机部署环境变量而启动天气来源采集。
+weather:
+  enabled: false
+  open-meteo-enabled: false
+  china-weather-enabled: false
+  energy-enabled: false
+  task-actor-id: 0
+  energy-targets: []

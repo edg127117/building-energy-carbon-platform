@@ -7,6 +7,7 @@
 - 当前能力、阶段、风险和下一步：[`PROJECT_STATUS.md`](PROJECT_STATUS.md)；
 - 具体实现：直接相关的代码、测试和专题文档；
 - 监控大屏的内容、布局、交互、下钻及后续复用：[设计与复用规范](docs/designs/monitoring-screen-design-reference.md)；该文档区分独立原型与正式业务能力；
+- 天气后端候选的来源分工、任务、日量边界与启用配置：[天气设计](docs/designs/2026-09-26-weather-energy-research-design.md#11-本次后端落地与启用边界)；前端另行讨论，状态以项目状态文档为准；
 - Git、Hook、PR 和 CI：[`repository-guardrails.md`](docs/development/repository-guardrails.md)。
 
 普通单点任务不要求完整读取本文件或 `PROJECT_STATUS.md`。历史计划只用于解释演进原因，不能代替当前代码和状态文档。
