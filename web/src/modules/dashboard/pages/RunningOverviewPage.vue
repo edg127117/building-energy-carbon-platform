@@ -206,8 +206,6 @@ const hvacSpaceAnalysis = computed(() => {
       const tele = telemetryMap.value[dev.equipmentId]
       if (tele?.dayOnHours != null) {
         runtimeSum += tele.dayOnHours
-      } else if (isDaikinDeviceRunning(dev)) {
-        runtimeSum += 1
       }
       if (dev.deviceKind !== 'OUTDOOR') {
         if (tele?.roomTemp != null) roomTemps.push(tele.roomTemp)
@@ -454,62 +452,43 @@ onMounted(async () => {
 
     <template v-else>
       <div class="kpi-band">
-        <article class="kpi-card">
+        <article class="kpi-card kpi-card-pending">
           <header class="kpi-card-header">
             <span class="kpi-card-title">{{ roText('cardEnergyTitle') }}</span>
-            <ElTag type="info">{{ roText('cardEnergyPendingTag') }}</ElTag>
+            <ElTag type="warning" effect="plain">{{ roText('cardEnergyPendingTag') }}</ElTag>
           </header>
           <div class="kpi-card-body">
             <div class="kpi-metric-main">
               <div class="kpi-value-row">
-                <strong class="kpi-primary-num">{{ '—' }}</strong>
+                <strong class="kpi-primary-num tone-muted">{{ '—' }}</strong>
                 <span class="kpi-unit">{{ roText('cardEnergyUnit') }}</span>
               </div>
               <p class="kpi-sub-note">{{ roText('cardEnergySub') }}</p>
             </div>
-            <div class="mini-bar-chart" aria-hidden="true">
-              <span class="mini-bar bar-1" />
-              <span class="mini-bar bar-2" />
-              <span class="mini-bar bar-3" />
-              <span class="mini-bar bar-4" />
-              <span class="mini-bar bar-5" />
-            </div>
           </div>
           <footer class="kpi-card-footer">
-            <ElButton text type="primary" @click="router.push('/operations/energy/energyItems')">
+            <ElButton text type="primary" @click="router.push('/configuration/space/equipmentSpaces')">
               {{ roText('cardEnergyLink') }}
             </ElButton>
           </footer>
         </article>
 
-        <article class="kpi-card">
+        <article class="kpi-card kpi-card-pending">
           <header class="kpi-card-header">
             <span class="kpi-card-title">{{ roText('cardCarbonTitle') }}</span>
-            <ElTag type="success">{{ roText('cardCarbonPendingTag') }}</ElTag>
+            <ElTag type="warning" effect="plain">{{ roText('cardCarbonPendingTag') }}</ElTag>
           </header>
           <div class="kpi-card-body">
             <div class="kpi-metric-main">
               <div class="kpi-value-row">
-                <strong class="kpi-primary-num">{{ '—' }}</strong>
+                <strong class="kpi-primary-num tone-muted">{{ '—' }}</strong>
                 <span class="kpi-unit">{{ roText('cardCarbonUnit') }}</span>
               </div>
               <p class="kpi-sub-note">{{ roText('cardCarbonSub') }}</p>
             </div>
-            <svg class="mini-area-svg" viewBox="0 0 90 46" aria-hidden="true">
-              <path
-                d="M2,36 L22,28 L42,31 L64,18 L88,22 L88,44 L2,44 Z"
-                fill="color-mix(in srgb, var(--bec-color-success) 18%, transparent)"
-              />
-              <polyline
-                fill="none"
-                stroke="var(--bec-color-success)"
-                stroke-width="2"
-                points="2,36 22,28 42,31 64,18 88,22"
-              />
-            </svg>
           </div>
           <footer class="kpi-card-footer">
-            <ElButton text type="primary" @click="router.push('/operations/carbon/carbonOverview')">
+            <ElButton text type="primary" @click="router.push('/configuration/factors/emissionFactors')">
               {{ roText('cardCarbonLink') }}
             </ElButton>
           </footer>
@@ -1020,14 +999,7 @@ onMounted(async () => {
 .kpi-sub-note { margin: 0; font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
 .kpi-card-footer { display: flex; justify-content: flex-start; border-top: var(--bec-border-width) solid var(--bec-color-border-subtle); padding-top: var(--bec-ref-space-1); }
 
-.mini-bar-chart { display: flex; align-items: flex-end; gap: var(--bec-ref-space-1); height: var(--bec-control-height); }
-.mini-bar { width: var(--bec-space-tight); background: color-mix(in srgb, var(--bec-color-brand-primary) 30%, var(--bec-color-surface-secondary)); border-radius: var(--bec-radius-tag); }
-.bar-1 { height: 45%; }
-.bar-2 { height: 65%; }
-.bar-3 { height: 52%; }
-.bar-4 { height: 82%; }
-.bar-5 { height: 70%; background: var(--bec-color-brand-primary); }
-.mini-area-svg { width: calc(var(--bec-control-height) * 2.4); height: calc(var(--bec-control-height) * 1.2); flex-shrink: 0; }
+.kpi-card-pending { background: color-mix(in srgb, var(--bec-color-surface-secondary) 45%, var(--bec-color-surface)); }
 
 .donut-card-body { display: flex; align-items: center; gap: var(--bec-space-group); }
 .donut-wrap { position: relative; width: calc(var(--bec-control-height) * 2.2); height: calc(var(--bec-control-height) * 2.2); flex-shrink: 0; }

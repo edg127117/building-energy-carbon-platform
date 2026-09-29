@@ -206,7 +206,11 @@ describe('RunningOverviewPage', () => {
 
     expect(wrapper.text()).toContain('综合运行总览')
     expect(wrapper.text()).toContain('建筑综合能耗概览')
+    expect(wrapper.text()).toContain('待配置计量边界')
     expect(wrapper.text()).toContain('建筑碳排放概览')
+    expect(wrapper.text()).toContain('待配置排放因子')
+    expect(wrapper.find('.mini-bar-chart').exists()).toBe(false)
+    expect(wrapper.find('.mini-area-svg').exists()).toBe(false)
     expect(wrapper.text()).toContain('分项用能设备结构占比')
     expect(wrapper.text()).toContain('全局设备运行态势')
     expect(wrapper.text()).toContain('各空间累计开机时长与室内均温强度分析')
