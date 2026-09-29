@@ -382,7 +382,7 @@ onMounted(() => {
         </ElTableColumn>
         <template #empty><ElEmpty :description="t('assetManagement.empty.equipment')" /></template>
       </ElTable>
-      <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="management.equipment.value.page" :page-size="management.equipment.value.size" :total="management.equipment.value.total" @current-change="changePage" /></div>
+      <div class="pagination"><ElPagination background layout="total, prev, pager, next" :current-page="management.equipment.value.page" :page-size="management.equipment.value.size" :total="effectiveCategory ? categoryFilteredItems.length : management.equipment.value.total" @current-change="changePage" /></div>
     </ElCard>
 
     <ElDrawer :model-value="equipmentDrawerOpen" size="min(100%, var(--bec-dialog-width))" class="equipment-detail-drawer" :title="t('assetManagement.equipment.detail')" @update:model-value="equipmentDrawerOpen = false">

@@ -91,10 +91,10 @@ const structureSegments = computed(() => {
   const coldCount = coldSourceAssets.value.length
   const otherCount = rawHvacDevices.value.length ? otherBusinessAssets.value.filter(item => !['IDU', 'ODU'].includes(String(item.typeCode ?? '').toUpperCase())).length : 0
   const total = Math.max(1, hvacCount + meterCount + coldCount + otherCount)
-  const circumference = 201
+  const circumference = 207.3
   const rawList = [
     { key: 'hvac', label: roText('structureHvac'), count: hvacCount, color: 'var(--bec-color-brand-primary)' },
-    { key: 'meter', label: roText('structureMeter'), count: meterCount, color: 'var(--bec-color-info)' },
+    { key: 'meter', label: roText('structureMeter'), count: meterCount, color: 'var(--bec-chart-series-3)' },
     { key: 'cold', label: roText('structureCold'), count: coldCount, color: 'var(--bec-color-success)' },
     { key: 'other', label: roText('structureOther'), count: otherCount, color: 'var(--bec-color-warning)' },
   ]
@@ -158,7 +158,7 @@ const postureStats = computed(() => {
   faultOrStale += inactiveMeters
   const total = Math.max(1, runningOk + deviated + stopped + faultOrStale)
   const healthyRate = Math.round(((runningOk + deviated + stopped) / total) * 1000) / 10
-  const circumference = 201
+  const circumference = 207.3
   const rawList = [
     { key: 'ok', label: roText('postureRunningOk'), count: runningOk, color: 'var(--bec-color-success)', tone: 'tone-success' },
     { key: 'dev', label: roText('postureTempDeviation'), count: deviated, color: 'var(--bec-color-warning)', tone: 'tone-warning' },
@@ -168,6 +168,7 @@ const postureStats = computed(() => {
   let offset = 0
   return {
     healthyRate,
+    deviatedCount: deviated,
     items: rawList.map(seg => {
       const dash = (seg.count / total) * circumference
       const currentOffset = -offset
@@ -229,11 +230,32 @@ const hvacSpaceAnalysis = computed(() => {
       deviatedCount,
     }
   })
-  const maxRuntime = Math.max(1, ...rows.map(r => r.runtimeHours || r.runningCount || 1))
-  return rows.map(r => ({
-    ...r,
-    barHeightPct: Math.max(12, Math.round(((r.runtimeHours || r.runningCount) / maxRuntime) * 100)),
-  }))
+  const maxRuntime = Math.max(12, Math.ceil(Math.max(0, ...rows.map(r => r.runtimeHours)) / 4) * 4)
+  const count = Math.max(1, rows.length)
+  return rows.map((r, index) => {
+    const ratio = r.runtimeHours > 0 ? r.runtimeHours / maxRuntime : (r.runningCount > 0 ? 0.15 : 0.04)
+    const barHeightPct = Math.max(4, Math.min(92, Math.round(ratio * 88)))
+    const tempY = r.avgRoomTemp != null
+      ? Math.max(10, Math.min(88, Math.round(((30 - r.avgRoomTemp) / 10) * 80 + 10)))
+      : null
+    const xPct = Math.round(((index + 0.5) / count) * 1000) / 10
+    return {
+      ...r,
+      maxRuntime,
+      barHeightPct,
+      tempY,
+      xPct,
+    }
+  })
+})
+
+const hvacChartMaxHours = computed(() => hvacSpaceAnalysis.value[0]?.maxRuntime ?? 12)
+
+const hvacTempPolylinePoints = computed(() => {
+  return hvacSpaceAnalysis.value
+    .filter(r => r.tempY != null)
+    .map(r => `${r.xPct},${r.tempY}`)
+    .join(' ')
 })
 
 const hvacSummaryMetrics = computed(() => {
@@ -252,11 +274,32 @@ const hvacSummaryMetrics = computed(() => {
   return { totalRuntime, avgRuntime, avgRoom, avgSet }
 })
 
-const filteredHvacInspectionList = computed(() => {
-  let list = rawHvacDevices.value
-  if (selectedSpaceName.value) {
-    list = list.filter(dev => spaceNameOf(dev.spaceId) === selectedSpaceName.value)
+function hvacDeviceSortRank(dev: DaikinDevice): number {
+  if (dev.hasActiveException || dev.stale || !dev.active) return 0
+  if (isTempDeviated(dev)) return 1
+  if (isDaikinDeviceRunning(dev)) return 2
+  if (dev.deviceKind !== 'OUTDOOR') return 3
+  return 4
+}
+
+const spaceScopedHvacDevices = computed(() => {
+  if (!selectedSpaceName.value) return rawHvacDevices.value
+  return rawHvacDevices.value.filter(dev => spaceNameOf(dev.spaceId) === selectedSpaceName.value)
+})
+
+const hvacFilterCounts = computed(() => {
+  const base = spaceScopedHvacDevices.value
+  return {
+    ALL: base.length,
+    RUNNING: base.filter(dev => isDaikinDeviceRunning(dev)).length,
+    DEVIATED: base.filter(dev => isTempDeviated(dev)).length,
+    EXCEPTION: base.filter(dev => dev.hasActiveException || dev.stale || !dev.active).length,
+    STOPPED: base.filter(dev => !isDaikinDeviceRunning(dev)).length,
   }
+})
+
+const filteredHvacInspectionList = computed(() => {
+  let list = [...spaceScopedHvacDevices.value]
   if (hvacQuickFilter.value === 'RUNNING') {
     list = list.filter(dev => isDaikinDeviceRunning(dev))
   } else if (hvacQuickFilter.value === 'DEVIATED') {
@@ -266,7 +309,7 @@ const filteredHvacInspectionList = computed(() => {
   } else if (hvacQuickFilter.value === 'STOPPED') {
     list = list.filter(dev => !isDaikinDeviceRunning(dev))
   }
-  return list
+  return list.sort((a, b) => hvacDeviceSortRank(a) - hvacDeviceSortRank(b))
 })
 
 const powerSpaceAnalysis = computed(() => {
@@ -497,6 +540,7 @@ onMounted(async () => {
         <article class="kpi-card">
           <header class="kpi-card-header">
             <span class="kpi-card-title">{{ roText('cardStructureTitle') }}</span>
+            <ElTag type="info" effect="plain">{{ roText('cardStructureCenter') }}{{ ' ' }}{{ structureSegments.total }}</ElTag>
           </header>
           <div class="donut-card-body">
             <div class="donut-wrap">
@@ -504,20 +548,20 @@ onMounted(async () => {
                 <circle
                   cx="42"
                   cy="42"
-                  r="32"
+                  r="33"
                   fill="none"
                   stroke="var(--bec-color-surface-secondary)"
-                  stroke-width="10"
+                  stroke-width="8"
                 />
                 <circle
                   v-for="seg in structureSegments.items"
                   :key="seg.key"
                   cx="42"
                   cy="42"
-                  r="32"
+                  r="33"
                   fill="none"
                   :stroke="seg.color"
-                  stroke-width="10"
+                  stroke-width="8"
                   :stroke-dasharray="seg.dasharray"
                   :stroke-dashoffset="seg.dashoffset"
                   transform="rotate(-90 42 42)"
@@ -525,7 +569,6 @@ onMounted(async () => {
               </svg>
               <div class="donut-center">
                 <strong>{{ structureSegments.total }}</strong>
-                <span>{{ roText('cardStructureCenter') }}</span>
               </div>
             </div>
             <div class="donut-legend-grid">
@@ -534,18 +577,23 @@ onMounted(async () => {
                   <span class="legend-dot" :style="{ background: seg.color }" />
                   <span>{{ seg.label }}</span>
                 </div>
-                <strong class="legend-val">{{ seg.pct }}{{ '%' }}{{ '（' }}{{ seg.count }}{{ '）' }}</strong>
+                <strong class="legend-val">{{ seg.pct }}{{ '%' }}</strong>
               </div>
             </div>
           </div>
+          <footer class="kpi-card-footer">
+            <ElButton text type="primary" @click="router.push('/operations/devices/businessDevices')">
+              {{ roText('cardStructureCenter') }}{{ ' →' }}
+            </ElButton>
+          </footer>
         </article>
 
         <article class="kpi-card">
           <header class="kpi-card-header">
             <span class="kpi-card-title">{{ roText('cardPostureTitle') }}</span>
-            <ElButton text type="primary" @click="router.push('/operations/realtime/hvac')">
-              {{ roText('cardPostureLink') }}
-            </ElButton>
+            <ElTag :type="postureStats.deviatedCount > 0 ? 'warning' : 'success'" effect="plain">
+              {{ roText('cardPostureCenter') }}
+            </ElTag>
           </header>
           <div class="donut-card-body">
             <div class="donut-wrap">
@@ -553,20 +601,20 @@ onMounted(async () => {
                 <circle
                   cx="42"
                   cy="42"
-                  r="32"
+                  r="33"
                   fill="none"
                   stroke="var(--bec-color-surface-secondary)"
-                  stroke-width="10"
+                  stroke-width="8"
                 />
                 <circle
                   v-for="seg in postureStats.items"
                   :key="seg.key"
                   cx="42"
                   cy="42"
-                  r="32"
+                  r="33"
                   fill="none"
                   :stroke="seg.color"
-                  stroke-width="10"
+                  stroke-width="8"
                   :stroke-dasharray="seg.dasharray"
                   :stroke-dashoffset="seg.dashoffset"
                   transform="rotate(-90 42 42)"
@@ -574,7 +622,6 @@ onMounted(async () => {
               </svg>
               <div class="donut-center">
                 <strong>{{ postureStats.healthyRate }}{{ '%' }}</strong>
-                <span>{{ roText('cardPostureCenter') }}</span>
               </div>
             </div>
             <div class="donut-legend-grid">
@@ -587,6 +634,11 @@ onMounted(async () => {
               </div>
             </div>
           </div>
+          <footer class="kpi-card-footer">
+            <ElButton text type="primary" @click="router.push('/operations/realtime/hvac')">
+              {{ roText('cardPostureLink') }}
+            </ElButton>
+          </footer>
         </article>
       </div>
 
@@ -643,34 +695,72 @@ onMounted(async () => {
 
           <ElEmpty v-if="!hvacSpaceAnalysis.length" :description="daikinText('none')" />
           <div v-else class="combo-chart-box">
-            <div class="combo-columns">
-              <button
-                v-for="row in hvacSpaceAnalysis"
-                :key="row.spaceName"
-                type="button"
-                class="combo-col-btn"
-                :class="{ 'combo-col-active': selectedSpaceName === row.spaceName }"
-                @click="toggleSpaceSelection(row.spaceName)"
-              >
-                <span class="combo-temp-pill" :class="row.deviatedCount > 0 ? 'tone-warning' : 'tone-default'">
-                  {{ row.avgRoomTemp != null ? `${row.avgRoomTemp}°C` : '—' }}
-                </span>
-                <div class="combo-bar-track">
-                  <div
-                    class="combo-bar-fill"
-                    :class="row.deviatedCount > 0 ? 'bar-fill-warning' : 'bar-fill-primary'"
-                    :style="{ height: `${row.barHeightPct}%` }"
-                  />
-                </div>
-                <strong class="combo-col-val">{{ row.runtimeHours }}{{ 'h' }}</strong>
-                <span class="combo-col-name">{{ row.spaceName }}</span>
-              </button>
-            </div>
-            <footer class="combo-legend-footer">
+            <div class="combo-legend-top">
               <span class="legend-chip"><i class="dot-bar-primary" />{{ roText('legendBarHvac') }}</span>
-              <span class="legend-chip"><i class="dot-line-warning" />{{ roText('legendLineHvac') }}</span>
+              <span class="legend-chip"><i class="dot-line-success" />{{ roText('legendLineHvac') }}</span>
               <span class="legend-chip">{{ roText('legendBaselineHvac') }}</span>
-            </footer>
+            </div>
+            <div class="dual-axis-stage">
+              <div class="y-axis-ticks y-axis-left">
+                <span>{{ hvacChartMaxHours }}{{ ' h' }}</span>
+                <span>{{ Math.round(hvacChartMaxHours * 0.75 * 10) / 10 }}{{ ' h' }}</span>
+                <span>{{ Math.round(hvacChartMaxHours * 0.5 * 10) / 10 }}{{ ' h' }}</span>
+                <span>{{ Math.round(hvacChartMaxHours * 0.25 * 10) / 10 }}{{ ' h' }}</span>
+                <span>{{ '0 h' }}</span>
+              </div>
+              <div class="plot-canvas">
+                <div class="plot-grid-lines" aria-hidden="true">
+                  <span /><span /><span /><span /><span />
+                </div>
+                <svg class="temp-polyline-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                  <polyline
+                    v-if="hvacTempPolylinePoints"
+                    :points="hvacTempPolylinePoints"
+                    fill="none"
+                    stroke="var(--bec-color-success)"
+                    stroke-width="1.6"
+                    vector-effect="non-scaling-stroke"
+                  />
+                </svg>
+                <div class="combo-columns">
+                  <button
+                    v-for="row in hvacSpaceAnalysis"
+                    :key="row.spaceName"
+                    type="button"
+                    class="combo-col-btn"
+                    :class="{ 'combo-col-active': selectedSpaceName === row.spaceName }"
+                    @click="toggleSpaceSelection(row.spaceName)"
+                  >
+                    <div class="col-plot-area">
+                      <div
+                        v-if="row.tempY != null"
+                        class="temp-node-marker"
+                        :class="row.deviatedCount > 0 ? 'node-warning' : 'node-success'"
+                        :style="{ top: `${row.tempY}%` }"
+                      >
+                        <span class="combo-temp-pill">{{ row.avgRoomTemp }}{{ '°C' }}</span>
+                      </div>
+                      <div class="bar-column-wrap">
+                        <strong class="combo-col-val">{{ row.runtimeHours }}{{ 'h' }}</strong>
+                        <div
+                          class="combo-bar-fill"
+                          :class="row.deviatedCount > 0 ? 'bar-fill-warning' : 'bar-fill-primary'"
+                          :style="{ height: `${row.barHeightPct}%` }"
+                        />
+                      </div>
+                    </div>
+                    <span class="combo-col-name">{{ row.spaceName }}</span>
+                  </button>
+                </div>
+              </div>
+              <div class="y-axis-ticks y-axis-right">
+                <span>{{ '30°C' }}</span>
+                <span>{{ '27.5°C' }}</span>
+                <span>{{ '25°C' }}</span>
+                <span>{{ '22.5°C' }}</span>
+                <span>{{ '20°C' }}</span>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -697,16 +787,16 @@ onMounted(async () => {
                 :class="{ 'quick-pill-active': hvacQuickFilter === f[0] }"
                 @click="hvacQuickFilter = f[0]"
               >
-                {{ roText(f[1]) }}
+                {{ roText(f[1]) }}{{ ' (' }}{{ hvacFilterCounts[f[0]] }}{{ ')' }}
               </button>
             </div>
           </header>
 
           <ElTable :data="filteredHvacInspectionList" row-key="equipmentId" :empty-text="daikinText('none')">
-            <ElTableColumn :label="roText('colSpace')" min-width="110">
+            <ElTableColumn :label="roText('colSpace')" width="96">
               <template #default="{ row }">{{ spaceNameOf(row.spaceId) }}</template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colDeviceName')" min-width="165">
+            <ElTableColumn :label="roText('colDeviceName')" min-width="140">
               <template #default="{ row }">
                 <div class="table-device-cell">
                   <span class="status-dot" :class="isDaikinDeviceRunning(row) ? 'dot-running' : 'dot-stopped'" />
@@ -717,12 +807,12 @@ onMounted(async () => {
                 </div>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colModeFan')" min-width="120">
+            <ElTableColumn :label="roText('colModeFan')" width="105">
               <template #default="{ row }">
                 <strong :class="`tone-${daikinFieldTone('mode', row.mode?.value)}`">{{ formatModeAndFan(row) }}</strong>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colTempCompare')" min-width="185">
+            <ElTableColumn :label="roText('colTempCompare')" min-width="155">
               <template #default="{ row }">
                 <span v-if="row.deviceKind === 'OUTDOOR'" class="tone-muted">{{ daikinText('outdoorNotApplicable') }}</span>
                 <div v-else class="temp-compare-cell">
@@ -742,7 +832,7 @@ onMounted(async () => {
                 </div>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colEvaluation')" min-width="135">
+            <ElTableColumn :label="roText('colEvaluation')" width="115">
               <template #default="{ row }">
                 <ElTag v-if="row.hasActiveException" type="danger">{{ roText('evalException') }}</ElTag>
                 <ElTag v-else-if="row.stale" type="warning">{{ roText('evalStale') }}</ElTag>
@@ -753,7 +843,7 @@ onMounted(async () => {
                 <ElTag v-else type="success">{{ roText('evalCompliant') }}</ElTag>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colAction')" width="110">
+            <ElTableColumn :label="roText('colAction')" width="96">
               <template #default="{ row }">
                 <ElButton text type="primary" @click="selectedDaikinId = row.equipmentId">
                   {{ roText('actionViewCurve') }}
@@ -803,11 +893,13 @@ onMounted(async () => {
                 :class="{ 'combo-col-active': selectedSpaceName === row.spaceName }"
                 @click="toggleSpaceSelection(row.spaceName)"
               >
-                <span class="combo-temp-pill tone-primary">{{ '3P ' }}{{ row.threePhasePct }}{{ '%' }}</span>
-                <div class="combo-bar-track">
-                  <div class="combo-bar-fill bar-fill-primary" :style="{ height: `${row.barHeightPct}%` }" />
+                <div class="col-plot-area">
+                  <div class="bar-column-wrap">
+                    <span class="tone-primary">{{ '3P ' }}{{ row.threePhasePct }}{{ '%' }}</span>
+                    <strong class="combo-col-val">{{ row.totalCount }}</strong>
+                    <div class="combo-bar-fill bar-fill-primary" :style="{ height: `${row.barHeightPct}%` }" />
+                  </div>
                 </div>
-                <strong class="combo-col-val">{{ row.totalCount }}</strong>
                 <span class="combo-col-name">{{ row.spaceName }}</span>
               </button>
             </div>
@@ -845,33 +937,33 @@ onMounted(async () => {
           </header>
 
           <ElTable :data="filteredPowerList" row-key="equipmentId" :empty-text="t('assetManagement.powerMonitoring.emptyMeters')">
-            <ElTableColumn :label="roText('colSpace')" min-width="115">
+            <ElTableColumn :label="roText('colSpace')" width="105">
               <template #default="{ row }">{{ row.spaceName || daikinText('unassignedSpace') }}</template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colDeviceName')" min-width="170">
+            <ElTableColumn :label="roText('colDeviceName')" min-width="145">
               <template #default="{ row }">
                 <strong>{{ row.equipmentName }}</strong>
                 <div class="table-code-sub">{{ row.equipmentCode }}</div>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colMeterSpec')" width="130">
+            <ElTableColumn :label="roText('colMeterSpec')" width="105">
               <template #default="{ row }">
                 <ElTag :type="getMeterPhaseType(row) === '3P' ? 'primary' : 'info'" effect="plain">
                   {{ getMeterPhaseType(row) === '3P' ? roText('filterMeter3P') : roText('filterMeter1P') }}
                 </ElTag>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colSystemGroup')" min-width="140">
+            <ElTableColumn :label="roText('colSystemGroup')" min-width="125">
               <template #default="{ row }">{{ row.systemGroupName || t('common.emptyValue') }}</template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colEvaluation')" width="115">
+            <ElTableColumn :label="roText('colEvaluation')" width="96">
               <template #default="{ row }">
                 <ElTag :type="isMeterActive(row) ? 'success' : 'info'">
                   {{ isMeterActive(row) ? roText('evalMeterOnline') : roText('evalMeterDisabled') }}
                 </ElTag>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="roText('colAction')" width="110">
+            <ElTableColumn :label="roText('colAction')" width="92">
               <template #default="{ row }">
                 <ElButton text type="primary" @click="openMeterDrawer(row)">
                   {{ roText('actionViewTrend') }}
@@ -963,7 +1055,7 @@ onMounted(async () => {
 
       <ElDrawer
         v-model="meterDrawerOpen"
-        size="min(var(--bec-drawer-width), 100%)"
+        size="min(var(--bec-dialog-width), 100%)"
         destroy-on-close
         :title="activeMeterDrawer?.equipmentName || roText('meterDrawerTitle')"
       >
@@ -978,95 +1070,111 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.running-overview { display: grid; gap: var(--bec-space-section); min-width: 0; }
+.running-overview { display: grid; gap: var(--bec-space-group); min-width: 0; }
 .overview-header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--bec-space-group); }
 .header-titles h1 { margin: 0; font-size: var(--bec-font-size-system); }
-.header-titles p { margin: var(--bec-space-tight) 0 0; color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); }
+.header-titles p { margin: var(--bec-ref-space-4) 0 0; color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); }
 .header-controls { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-group); }
 .building-selector { display: flex; align-items: center; gap: var(--bec-space-tight); }
 .building-selector .el-select { width: calc(var(--bec-control-height) * 6); }
 .updated-time { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
 
 .kpi-band { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(var(--bec-control-height) * 7), 1fr)); gap: var(--bec-space-group); }
-.kpi-card { display: grid; align-content: space-between; gap: var(--bec-space-tight); padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); box-shadow: var(--bec-shadow-card); }
+.kpi-card { display: grid; align-content: space-between; gap: var(--bec-space-tight); padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-management-radius); box-shadow: var(--bec-shadow-card); }
 .kpi-card-header { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); }
 .kpi-card-title { font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-secondary); }
 .kpi-card-body { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--bec-space-group); }
-.kpi-metric-main { display: grid; gap: var(--bec-ref-space-1); }
-.kpi-value-row { display: flex; align-items: baseline; gap: var(--bec-ref-space-1); }
-.kpi-primary-num { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-heading); font-family: var(--bec-font-mono); color: var(--bec-color-text-primary); }
+.kpi-metric-main { display: grid; gap: var(--bec-ref-space-4); }
+.kpi-value-row { display: flex; align-items: baseline; gap: var(--bec-ref-space-4); }
+.kpi-primary-num { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-heading); font-family: var(--bec-font-family-number); color: var(--bec-color-text-primary); }
 .kpi-unit { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
-.kpi-sub-note { margin: 0; font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
-.kpi-card-footer { display: flex; justify-content: flex-start; border-top: var(--bec-border-width) solid var(--bec-color-border-subtle); padding-top: var(--bec-ref-space-1); }
+.kpi-sub-note { margin: 0; font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); }
+.kpi-card-footer { display: flex; justify-content: flex-end; border-top: var(--bec-border-width) solid var(--bec-color-divider); padding-top: var(--bec-ref-space-8); }
 
 .kpi-card-pending { background: color-mix(in srgb, var(--bec-color-surface-secondary) 45%, var(--bec-color-surface)); }
 
-.donut-card-body { display: flex; align-items: center; gap: var(--bec-space-group); }
-.donut-wrap { position: relative; width: calc(var(--bec-control-height) * 2.2); height: calc(var(--bec-control-height) * 2.2); flex-shrink: 0; }
+.donut-card-body { display: flex; align-items: center; gap: var(--bec-ref-space-12); }
+.donut-wrap { position: relative; width: var(--bec-ref-space-64); height: var(--bec-ref-space-64); flex-shrink: 0; }
 .donut-svg { width: 100%; height: 100%; }
-.donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
-.donut-center strong { font-size: var(--bec-font-size-body); font-family: var(--bec-font-mono); font-weight: var(--bec-font-weight-heading); }
-.donut-center span { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
-.donut-legend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bec-space-tight); flex: 1; min-width: 0; }
-.donut-legend-item { display: grid; gap: var(--bec-ref-space-1); }
-.legend-label-row { display: flex; align-items: center; gap: var(--bec-ref-space-1); font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
-.legend-dot { width: var(--bec-space-tight); height: var(--bec-space-tight); border-radius: var(--bec-radius-tag); flex-shrink: 0; }
-.legend-val { font-size: var(--bec-font-size-small); font-family: var(--bec-font-mono); font-weight: var(--bec-font-weight-heading); }
+.donut-center { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+.donut-center strong { font-size: var(--bec-ref-font-12); font-family: var(--bec-font-family-number); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
+.donut-legend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--bec-ref-space-4) var(--bec-ref-space-8); flex: 1; min-width: 0; }
+.donut-legend-item { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-ref-space-4); min-width: 0; }
+.legend-label-row { display: inline-flex; align-items: center; gap: var(--bec-ref-space-4); font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); white-space: nowrap; }
+.legend-dot { width: var(--bec-ref-space-8); height: var(--bec-ref-space-8); border-radius: var(--bec-radius-tag); flex-shrink: 0; }
+.legend-val { font-size: var(--bec-ref-font-12); font-family: var(--bec-font-family-number); font-weight: var(--bec-font-weight-heading); white-space: nowrap; }
 
-.subsystem-switcher { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-tight); padding: var(--bec-space-tight); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
-.subsystem-tab { display: inline-flex; align-items: center; gap: var(--bec-space-tight); padding: var(--bec-space-tight) var(--bec-space-group); background: transparent; border: var(--bec-border-width) solid transparent; border-radius: var(--bec-radius-tag); cursor: pointer; font-family: inherit; font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-secondary); }
-.subsystem-tab-active { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); }
-.subsystem-tab-pending { opacity: 0.75; }
-.subsystem-tab-badge { padding: 0 var(--bec-ref-space-2); border-radius: var(--bec-radius-tag); background: var(--bec-color-surface-secondary); color: var(--bec-color-text-primary); font-size: var(--bec-font-size-small); font-family: var(--bec-font-mono); }
-.subsystem-tab-active .subsystem-tab-badge { background: color-mix(in srgb, var(--bec-color-on-action) 20%, transparent); color: var(--bec-color-on-action); }
+.subsystem-switcher { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-tight); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-management-radius); box-shadow: var(--bec-shadow-card); }
+.subsystem-tab { display: inline-flex; align-items: center; gap: var(--bec-space-tight); padding: var(--bec-ref-space-8) var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); cursor: pointer; font-family: inherit; font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-secondary); }
+.subsystem-tab-active { background: var(--bec-color-action-soft); border-color: var(--bec-color-brand-primary); color: var(--bec-color-brand-primary); }
+.subsystem-tab-pending { opacity: 0.75; border-style: dashed; }
+.subsystem-tab-badge { padding: 0 var(--bec-ref-space-8); border-radius: var(--bec-radius-tag); background: var(--bec-color-surface); color: var(--bec-color-text-primary); font-size: var(--bec-ref-font-12); font-family: var(--bec-font-family-number); }
+.subsystem-tab-active .subsystem-tab-badge { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); }
 
-.workbench-grid { display: grid; grid-template-columns: 5fr 7fr; gap: var(--bec-space-group); align-items: start; }
-.workbench-left-card, .workbench-right-card { display: grid; gap: var(--bec-space-group); padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); box-shadow: var(--bec-shadow-card); min-width: 0; }
-.workbench-panel-header { display: grid; gap: var(--bec-space-tight); }
+.workbench-grid { display: grid; grid-template-columns: 5fr 7fr; gap: var(--bec-space-group); align-items: stretch; }
+.workbench-left-card, .workbench-right-card { display: grid; align-content: start; gap: var(--bec-space-group); padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-management-radius); box-shadow: var(--bec-shadow-card); min-width: 0; }
+.workbench-panel-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); }
 .workbench-panel-header h2 { margin: 0; font-size: var(--bec-font-size-title); font-weight: var(--bec-font-weight-heading); }
-.workbench-panel-header p { margin: var(--bec-ref-space-1) 0 0; font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
+.workbench-panel-header p { margin: var(--bec-ref-space-4) 0 0; font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); }
 .right-header-row { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); flex-wrap: wrap; }
 
 .summary-strip-3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--bec-space-tight); }
-.summary-mini-box { display: grid; gap: var(--bec-ref-space-1); padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
-.summary-mini-label { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
-.summary-mini-val { font-size: var(--bec-font-size-title); font-family: var(--bec-font-mono); font-weight: var(--bec-font-weight-heading); }
-.summary-mini-sub { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
+.summary-mini-box { display: grid; gap: var(--bec-ref-space-4); padding: var(--bec-ref-space-8) var(--bec-ref-space-12); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
+.summary-mini-label { font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); }
+.summary-mini-val { font-size: var(--bec-font-size-title); font-family: var(--bec-font-family-number); font-weight: var(--bec-font-weight-heading); }
+.summary-mini-sub { font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); }
 
-.combo-chart-box { display: grid; gap: var(--bec-space-group); padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
-.combo-columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(calc(var(--bec-control-height) * 1.6), 1fr)); gap: var(--bec-space-tight); align-items: end; min-height: calc(var(--bec-control-height) * 5.2); }
-.combo-col-btn { display: flex; flex-direction: column; align-items: center; gap: var(--bec-ref-space-1); padding: var(--bec-space-tight); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); cursor: pointer; font-family: inherit; }
-.combo-col-active { border-color: var(--bec-color-brand-primary); box-shadow: var(--bec-shadow-focus); }
-.combo-temp-pill { font-size: var(--bec-font-size-small); font-family: var(--bec-font-mono); font-weight: var(--bec-font-weight-heading); }
-.combo-bar-track { width: var(--bec-space-group); height: calc(var(--bec-control-height) * 3.2); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-tag); display: flex; align-items: flex-end; overflow: hidden; }
-.combo-bar-fill { width: 100%; border-radius: var(--bec-radius-tag); }
-.bar-fill-primary { background: var(--bec-color-brand-primary); }
-.bar-fill-warning { background: var(--bec-color-warning); }
-.combo-col-val { font-size: var(--bec-font-size-small); font-family: var(--bec-font-mono); }
-.combo-col-name { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); text-align: center; word-break: break-all; }
-.combo-legend-footer { display: flex; flex-wrap: wrap; gap: var(--bec-space-group); font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
-.legend-chip { display: inline-flex; align-items: center; gap: var(--bec-ref-space-1); }
-.dot-bar-primary, .dot-line-warning { display: inline-block; width: var(--bec-space-tight); height: var(--bec-space-tight); border-radius: var(--bec-radius-tag); }
+.combo-chart-box { display: grid; gap: var(--bec-ref-space-12); padding: var(--bec-ref-space-12); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-divider); border-radius: var(--bec-radius-card); }
+.combo-legend-top, .combo-legend-footer { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-group); font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); }
+.legend-chip { display: inline-flex; align-items: center; gap: var(--bec-ref-space-4); }
+.dot-bar-primary, .dot-line-warning, .dot-line-success { display: inline-block; width: var(--bec-ref-space-8); height: var(--bec-ref-space-8); border-radius: var(--bec-radius-tag); }
 .dot-bar-primary { background: var(--bec-color-brand-primary); }
 .dot-line-warning { background: var(--bec-color-warning); }
+.dot-line-success { background: var(--bec-color-success); }
 
-.quick-filter-pills { display: flex; flex-wrap: wrap; gap: var(--bec-ref-space-1); }
-.quick-pill { padding: var(--bec-ref-space-1) var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); cursor: pointer; font-family: inherit; font-size: var(--bec-font-size-small); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-secondary); }
+.dual-axis-stage { display: grid; grid-template-columns: auto 1fr auto; gap: var(--bec-ref-space-8); align-items: stretch; min-height: calc(var(--bec-ref-space-64) * 3.8); }
+.y-axis-ticks { display: flex; flex-direction: column; justify-content: space-between; padding-bottom: var(--bec-ref-space-24); font-size: var(--bec-ref-font-12); font-family: var(--bec-font-family-number); color: var(--bec-color-text-secondary); }
+.y-axis-left { text-align: right; }
+.y-axis-right { text-align: left; color: var(--bec-color-success); }
+.plot-canvas { position: relative; display: flex; flex-direction: column; min-width: 0; }
+.plot-grid-lines { position: absolute; inset: 0 0 var(--bec-ref-space-24) 0; display: flex; flex-direction: column; justify-content: space-between; pointer-events: none; }
+.plot-grid-lines span { border-bottom: var(--bec-border-width) dashed var(--bec-color-divider); }
+.plot-grid-lines span:last-child { border-bottom-style: solid; border-bottom-color: var(--bec-color-border); }
+.temp-polyline-svg { position: absolute; inset: 0 0 var(--bec-ref-space-24) 0; width: 100%; height: calc(100% - var(--bec-ref-space-24)); pointer-events: none; z-index: var(--bec-layer-panels); }
+
+.combo-columns { position: relative; display: grid; grid-template-columns: repeat(auto-fit, minmax(var(--bec-ref-space-40), 1fr)); gap: var(--bec-ref-space-4); flex: 1; align-items: stretch; z-index: var(--bec-layer-navigation); }
+.combo-col-btn { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: var(--bec-ref-space-4); padding: var(--bec-ref-space-4) var(--bec-ref-space-4) 0; background: transparent; border: var(--bec-border-width) solid transparent; border-radius: var(--bec-radius-card); cursor: pointer; font-family: inherit; }
+.combo-col-btn:hover, .combo-col-active { background: var(--bec-color-action-soft); border-color: var(--bec-color-brand-primary); }
+.col-plot-area { position: relative; flex: 1; width: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; min-height: calc(var(--bec-ref-space-64) * 3); }
+.bar-column-wrap { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: var(--bec-ref-space-4); }
+.combo-bar-track { width: var(--bec-ref-space-24); height: calc(var(--bec-ref-space-64) * 2.5); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-card); display: flex; align-items: flex-end; overflow: hidden; }
+.combo-bar-fill { width: var(--bec-ref-space-24); border-radius: var(--bec-radius-card) var(--bec-radius-card) 0 0; }
+.bar-fill-primary { background: var(--bec-color-brand-primary); }
+.bar-fill-warning { background: var(--bec-color-warning); }
+.temp-node-marker { position: absolute; left: 50%; transform: translate(-50%, -50%); width: var(--bec-ref-space-8); height: var(--bec-ref-space-8); border-radius: var(--bec-radius-tag); background: var(--bec-color-surface); border: var(--bec-focus-width) solid var(--bec-color-success); z-index: var(--bec-layer-notices); }
+.node-warning { border-color: var(--bec-color-warning); }
+.combo-temp-pill { position: absolute; bottom: var(--bec-ref-space-12); left: 50%; transform: translateX(-50%); white-space: nowrap; font-size: var(--bec-ref-font-12); font-family: var(--bec-font-family-number); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-success); background: var(--bec-color-surface); padding: 0 var(--bec-ref-space-4); border-radius: var(--bec-radius-control); }
+.node-warning .combo-temp-pill { color: var(--bec-color-warning); }
+.combo-col-val { font-size: var(--bec-ref-font-12); font-family: var(--bec-font-family-number); color: var(--bec-color-text-secondary); }
+.combo-col-name { height: var(--bec-ref-space-20); font-size: var(--bec-ref-font-12); color: var(--bec-color-text-primary); font-weight: var(--bec-font-weight-heading); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+
+.quick-filter-pills { display: flex; flex-wrap: wrap; gap: var(--bec-ref-space-8); }
+.quick-pill { padding: var(--bec-ref-space-4) var(--bec-ref-space-12); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); cursor: pointer; font-family: inherit; font-size: var(--bec-ref-font-12); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-secondary); }
 .quick-pill-active { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); border-color: var(--bec-color-action-primary); }
 
 .table-device-cell { display: flex; align-items: center; gap: var(--bec-space-tight); }
-.table-code-sub { font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); font-family: var(--bec-font-mono); }
-.status-dot { display: inline-block; width: var(--bec-space-tight); height: var(--bec-space-tight); border-radius: var(--bec-radius-tag); flex-shrink: 0; }
+.table-code-sub { font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); font-family: var(--bec-font-family-number); }
+.status-dot { display: inline-block; width: var(--bec-ref-space-8); height: var(--bec-ref-space-8); border-radius: var(--bec-radius-tag); flex-shrink: 0; }
 .dot-running { background: var(--bec-color-success); }
 .dot-stopped { background: var(--bec-color-text-disabled); }
 
-.temp-compare-cell { display: grid; gap: var(--bec-ref-space-1); }
-.temp-scale-track { position: relative; height: var(--bec-space-tight); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-tag); overflow: hidden; }
+.temp-compare-cell { display: grid; gap: var(--bec-ref-space-4); }
+.temp-scale-track { position: relative; height: var(--bec-ref-space-8); background: var(--bec-color-surface-secondary); border-radius: var(--bec-radius-tag); overflow: hidden; }
 .temp-scale-fill { height: 100%; border-radius: var(--bec-radius-tag); }
 .scale-success { background: var(--bec-color-success); }
 .scale-warning { background: var(--bec-color-warning); }
-.temp-set-marker { position: absolute; top: 0; bottom: 0; width: var(--bec-border-width); background: var(--bec-color-text-primary); }
-.temp-pair-nums { display: inline-flex; align-items: baseline; font-family: var(--bec-font-mono); font-size: var(--bec-font-size-small); }
+.temp-set-marker { position: absolute; top: 0; bottom: 0; width: var(--bec-focus-width); background: var(--bec-color-text-primary); }
+.temp-pair-nums { display: inline-flex; align-items: baseline; font-family: var(--bec-font-family-number); font-size: var(--bec-ref-font-12); }
 
 .unconfigured-card { padding: var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
 .unconfigured-desc { margin: 0 0 var(--bec-space-group); color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
