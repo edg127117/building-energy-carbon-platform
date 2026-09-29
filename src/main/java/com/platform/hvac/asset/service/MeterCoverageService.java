@@ -80,10 +80,10 @@ public class MeterCoverageService {
             if (meterId.equals(id)) throw invalid("电表不能计量自身");
             // 先排除其他表计，避免两个非法的相互覆盖请求交叉锁住对方表计。
             Equipment candidate = repository.equipment(id, false).orElseThrow(() -> invalid("被测设备不存在或已删除"));
-            if (candidate.meter()) throw invalid("被测对象应为用能设备，不能将另一块表计加入清单");
+            if (!candidate.business()) throw invalid("被测对象必须是已明确分类的用能设备");
             Equipment target = repository.equipment(id, true).orElseThrow(() -> invalid("被测设备不存在或已删除"));
             if (!meter.buildingId().equals(target.buildingId())) throw invalid("被测设备必须与电表属于同一建筑");
-            if (target.meter()) throw invalid("被测对象应为用能设备，不能将另一块表计加入清单");
+            if (!target.business()) throw invalid("被测对象必须是已明确分类的用能设备");
             targets.add(target);
         }
         // 即刻生效，禁止把今天确认的覆盖范围默认为历史事实；时钟回退时拒绝以免区间倒序。

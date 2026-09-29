@@ -68,7 +68,7 @@ vi.mock('@/modules/asset-management/public', async original => {
             spaceName: 'B1制冷机房',
             systemGroupId: 'SYS-COLD',
             systemGroupName: '制冷站系统',
-            typeCode: 'WCR',
+            typeCode: 'WCR', category: 'CHILLER',
             expectedProfileCode: null,
             ratedCapacity: 1200,
             ratedPower: 260,
@@ -93,6 +93,23 @@ vi.mock('@/modules/asset-management/public', async original => {
         ],
       }),
       clear: vi.fn(),
+    }),
+    useMeterCoverage: () => ({
+      listCoverages: ref([
+        {
+          equipmentId: 'EQ-METER-308',
+          revision: 1,
+          effectiveAt: '2026-09-29T10:00:00Z',
+          installationSpaceId: null,
+          installationSpaceName: null,
+          scopeLabel: '3F-6 外机回路',
+          reason: '初始化',
+          targets: [],
+        },
+      ]),
+      listLoading: ref(false),
+      listError: ref(null),
+      loadListCoverages: vi.fn().mockResolvedValue([]),
     }),
   }
 })
@@ -264,9 +281,13 @@ describe('RunningOverviewPage', () => {
     expect(wrapper.text()).toContain('各监测表计累计有功电量与实时功率对比分析')
     expect(wrapper.text()).toContain('单表计实时监测与回路归属巡检列表')
     expect(wrapper.text()).toContain('308空调外机电表')
-    expect(wrapper.text()).toContain('308室')
-    expect(wrapper.text()).toContain('动力配电回路')
+    expect(wrapper.text()).toContain('3F-6 外机回路')
+    expect(wrapper.text()).toContain('待确认')
     expect(wrapper.text()).toContain('128.5 kWh')
+    const powerSummary = wrapper.find('.summary-strip-3')
+    expect(powerSummary.text().match(/待配置计量边界/g)).toHaveLength(2)
+    expect(powerSummary.text()).not.toContain('128.5')
+    expect(powerSummary.text()).not.toContain('2.4')
 
     const viewTrendBtn = wrapper.findAll('button').find(btn => btn.text().includes('查看走势'))
     await viewTrendBtn?.trigger('click')

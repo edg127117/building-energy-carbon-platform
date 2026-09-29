@@ -62,6 +62,25 @@ class MeterCoverageApiContractTest {
     }
 
     @Test
+    void unclassifiedEquipmentCannotBecomeAMeterTarget() {
+        jdbc.update("UPDATE biz_equipment SET equip_category='UNKNOWN' WHERE equip_id='MC_A'");
+        assertThatThrownBy(() -> service.save("MC_M", request(0, List.of("MC_A")), 1L, ADMIN))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已明确分类");
+    }
+
+    @Test
+    void productAndTypeCannotOverrideNonMeterCategory() throws Exception {
+        jdbc.update("UPDATE biz_equipment SET type_code='ELECTRIC_METER_1P', product_id='PRODUCT_IDU_METER_1039', equip_name='电表 METER' WHERE equip_id='MC_A'");
+        mvc.perform(get("/v1/assets/equipment/MC_A/meter-coverage")
+                .header("Authorization", "Bearer " + token))
+                .andExpect(status().isBadRequest());
+        jdbc.update("UPDATE biz_equipment SET equip_name='任意新名称' WHERE equip_id='MC_M'");
+        mvc.perform(get("/v1/assets/equipment/MC_M/meter-coverage")
+                .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+    }
+
+    @Test
     void returnsUnconfiguredWithoutInferringInstallationFromAssetSpace() throws Exception {
         mvc.perform(get("/v1/assets/equipment/MC_M/meter-coverage").header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.revision").value(0))

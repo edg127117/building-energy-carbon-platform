@@ -43,6 +43,17 @@ vi.mock('../../composables/use-equipment-readings', () => {
 })
 
 describe('Meter Realtime Components', () => {
+  it('shows configuration pending instead of a single-phase board for unknown types', () => {
+    const wrapper = mount(MeterRealtimeBoard, {
+      props: { equipment: { equipmentId: 'unknown', category: 'ELECTRIC_METER', typeCode: 'UNKNOWN', equipmentName: '单相电表' } as never },
+      global: { stubs: { SinglePhaseMeterBoard: { template: '<div class="single-phase-view" />' }, ThreePhaseMeterBoard: { template: '<div class="three-phase-view" />' } } },
+    })
+    expect(wrapper.text()).toContain('类型待配置')
+    expect(wrapper.find('.single-phase-view').exists()).toBe(false)
+    expect(wrapper.find('.three-phase-view').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   const mockPoints: AssetPointReading[] = [
     {
       pointId: 'p1',
@@ -170,8 +181,8 @@ describe('Meter Realtime Components', () => {
       equipmentId: 'eq-3p-1',
       equipmentCode: 'MTR_3P_01',
       equipmentName: '进线三相电表',
-      typeCode: '3P_METER',
-      category: 'METER',
+      typeCode: 'ELECTRIC_METER_3P',
+      category: 'ELECTRIC_METER',
       buildingId: 'b-1',
       buildingName: '试点大楼',
       spaceId: null,
@@ -233,8 +244,8 @@ describe('Meter Realtime Components', () => {
       equipmentId: 'eq-3p-1',
       equipmentCode: 'MTR_3P_01',
       equipmentName: '进线三相电表',
-      typeCode: '3P_METER',
-      category: 'METER',
+      typeCode: 'ELECTRIC_METER_3P',
+      category: 'ELECTRIC_METER',
       buildingId: 'b-1',
       buildingName: '试点大楼',
       spaceId: null,

@@ -18,18 +18,17 @@ public class MeterCoverageRepository {
     }
 
     public record Equipment(String id, String buildingId, String code, String name,
-                            String spaceId, String spaceName, boolean meter) {}
+                            String spaceId, String spaceName, boolean meter, boolean business) {}
     public record Revision(String meterId, long revision, long effectiveAt,
                            String installationSpaceId, String installationSpaceName,
                            String label, String reason) {}
 
-    private static final String METER_SQL = """
-            (e.equip_category='ELECTRIC_METER' OR e.type_code IN ('ELECTRIC_METER_1P','ELECTRIC_METER_3P')
-             OR COALESCE(e.product_id,'') IN ('PRODUCT_IDU_METER_1039','PRODUCT_ODU_METER_339'))
-            """;
+    // V66 已迁移存量表计；运行时只接受正式分类，产品 ID 和名称不能绕过分类边界。
+    private static final String METER_SQL = "(e.equip_category='ELECTRIC_METER')";
+    private static final String BUSINESS_SQL = "(e.equip_category IN ('INDOOR_UNIT','OUTDOOR_UNIT','CHILLER','TOWER','PUMP','AHU','BOILER'))";
     private static final String EQUIPMENT_SQL = """
             SELECT e.equip_id,e.building_id,e.equip_code,e.equip_name,e.space_id,s.space_name,
-            """ + " CASE WHEN " + METER_SQL + " THEN 1 ELSE 0 END AS meter FROM biz_equipment e "
+            """ + " CASE WHEN " + METER_SQL + " THEN 1 ELSE 0 END AS meter, CASE WHEN " + BUSINESS_SQL + " THEN 1 ELSE 0 END AS business FROM biz_equipment e "
             + "LEFT JOIN biz_space s ON s.space_id=e.space_id AND s.building_id=e.building_id AND s.del_flag=0 ";
 
     public Optional<Equipment> equipment(String id, boolean lock) {
@@ -37,7 +36,7 @@ public class MeterCoverageRepository {
         if (lock) jdbc.queryForList("SELECT equip_id FROM biz_equipment WHERE equip_id=? FOR UPDATE", id);
         return jdbc.query(EQUIPMENT_SQL + " WHERE e.equip_id=? AND e.del_flag=0" + (lock ? " FOR UPDATE" : ""),
                 (r, n) -> new Equipment(r.getString(1), r.getString(2), r.getString(3),
-                        r.getString(4), r.getString(5), r.getString(6), r.getBoolean(7)), id)
+                        r.getString(4), r.getString(5), r.getString(6), r.getBoolean(7), r.getBoolean(8)), id)
                 .stream().findFirst();
     }
 
@@ -49,7 +48,7 @@ public class MeterCoverageRepository {
     public List<Equipment> candidates(String buildingId, String keyword, int offset, int size) {
         return jdbc.query(EQUIPMENT_SQL + candidateWhere() + " ORDER BY e.equip_code,e.equip_id LIMIT ? OFFSET ?",
                 (r, n) -> new Equipment(r.getString(1), r.getString(2), r.getString(3),
-                        r.getString(4), r.getString(5), r.getString(6), false),
+                        r.getString(4), r.getString(5), r.getString(6), false, true),
                 buildingId, keyword, keyword, size, offset);
     }
 
@@ -59,7 +58,7 @@ public class MeterCoverageRepository {
     }
 
     private String candidateWhere() {
-        return " WHERE e.building_id=? AND e.del_flag=0 AND NOT " + METER_SQL
+        return " WHERE e.building_id=? AND e.del_flag=0 AND " + BUSINESS_SQL
                 + " AND (LOWER(e.equip_name) LIKE ? ESCAPE '!' OR LOWER(e.equip_code) LIKE ? ESCAPE '!')";
     }
 

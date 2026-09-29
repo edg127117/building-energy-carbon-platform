@@ -33,7 +33,7 @@ import { t } from '@/locales'
 import EquipmentEditorDialog from '../components/EquipmentEditorDialog.vue'
 import PointEditorDialog from '../components/PointEditorDialog.vue'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
-import { getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
+import { hasKnownEquipmentCategory, isHvacEquipment, getMeterPhaseLabel, getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
 import MeterCoveragePanel from '../components/meter/MeterCoveragePanel.vue'
 import { useAssetManagement } from '../composables/use-asset-management'
 import { useMeterCoverage } from '../composables/use-meter-coverage'
@@ -86,21 +86,10 @@ const pageDescription = computed(() => {
   return t('assetManagement.equipment.businessDescription')
 })
 
-function isIndoorAc(item: AssetEquipment): boolean {
-  const code = String(item.typeCode ?? '').toUpperCase()
-  const profile = String(item.expectedProfileCode ?? '').toUpperCase()
-  return code === 'IDU' || code.includes('INDOOR') || profile.includes('INDOOR')
-}
-
-function isOutdoorAc(item: AssetEquipment): boolean {
-  const code = String(item.typeCode ?? '').toUpperCase()
-  const profile = String(item.expectedProfileCode ?? '').toUpperCase()
-  return code === 'ODU' || code.includes('OUTDOOR') || profile.includes('OUTDOOR')
-}
-
+function isIndoorAc(item: AssetEquipment): boolean { return item.category === 'INDOOR_UNIT' }
+function isOutdoorAc(item: AssetEquipment): boolean { return item.category === 'OUTDOOR_UNIT' }
 function isColdSourceEquipment(item: AssetEquipment): boolean {
-  const code = String(item.typeCode ?? '').toUpperCase()
-  return ['WCR', 'WCT', 'WCP', 'AHU', 'CHILLER', 'PUMP', 'TOWER'].some(token => code.includes(token))
+  return ['CHILLER', 'TOWER', 'PUMP', 'AHU', 'BOILER'].includes(item.category ?? '')
 }
 
 const categoryFilteredItems = computed(() => {
@@ -211,6 +200,7 @@ async function openEquipment(equipmentId: string, showPoints = false) {
 }
 
 function goRealtimeMonitoring(item: Record<string, unknown>) {
+  if (!isMeterEquipment(item) && !isHvacEquipment(item)) return
   const targetPath = isMeterEquipment(item) ? '/operations/realtime/power' : '/operations/realtime/hvac'
   const queryParams: Record<string, string> = {}
   if (item.equipmentId) queryParams.equipmentId = String(item.equipmentId)
@@ -386,9 +376,9 @@ onMounted(() => {
         <ElTableColumn :label="t('assetManagement.labels.equipmentType')" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">
             <ElTag v-if="isMeterEquipment(row)" :type="getMeterPhaseType(row) === '3P' ? 'primary' : 'info'">
-              {{ getMeterPhaseType(row) === '3P' ? t('assetManagement.equipment.phaseTag3P') : t('assetManagement.equipment.phaseTag1P') }}
+              {{ getMeterPhaseLabel(row) }}
             </ElTag>
-            <span v-else>{{ row.typeCode || t('common.missing') }}</span>
+            <span v-else>{{ hasKnownEquipmentCategory(row) ? row.typeCode : t('assetManagement.equipment.classificationPending') }}</span>
           </template>
         </ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.archiveStatus')" min-width="95"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn>
@@ -398,7 +388,7 @@ onMounted(() => {
             <div class="row-actions">
               <ElButton link type="primary" @click="openEquipment(row.equipmentId)">{{ t('assetManagement.equipment.viewArchive') }}</ElButton>
               <ElButton link type="primary" @click="openEquipment(row.equipmentId, true)">{{ t('assetManagement.equipment.viewPoints') }}</ElButton>
-              <ElButton link type="primary" @click="goRealtimeMonitoring(row)">
+              <ElButton v-if="isMeterEquipment(row) || isHvacEquipment(row)" link type="primary" @click="goRealtimeMonitoring(row)">
                 {{ isMeterEquipment(row) ? t('assetManagement.equipment.goPowerMonitoring') : t('assetManagement.equipment.goHvacMonitoring') }}
               </ElButton>
             </div>
@@ -416,7 +406,7 @@ onMounted(() => {
             <div class="detail-title">
               <h2 :id="titleId">{{ selectedEquipment.equipmentName }}</h2>
               <AssetStatusTag :status="selectedEquipment.status" />
-              <ElButton type="primary" plain @click="goRealtimeMonitoring(selectedEquipment)">
+              <ElButton v-if="isMeterEquipment(selectedEquipment) || isHvacEquipment(selectedEquipment)" type="primary" plain @click="goRealtimeMonitoring(selectedEquipment)">
                 {{ isMeterEquipment(selectedEquipment) ? t('assetManagement.equipment.goPowerMonitoring') : t('assetManagement.equipment.goHvacMonitoring') }}
               </ElButton>
             </div>
@@ -452,7 +442,7 @@ onMounted(() => {
           <div class="detail-content">
             <div v-if="isMeterEquipment(selectedEquipment)" class="static-points-banner">
               <p>{{ t('assetManagement.equipment.staticPointsNote') }}</p>
-              <ElButton type="primary" plain @click="goRealtimeMonitoring(selectedEquipment)">
+              <ElButton v-if="isMeterEquipment(selectedEquipment) || isHvacEquipment(selectedEquipment)" type="primary" plain @click="goRealtimeMonitoring(selectedEquipment)">
                 {{ t('assetManagement.equipment.goPowerMonitoring') }}
               </ElButton>
             </div>
@@ -500,7 +490,7 @@ onMounted(() => {
             <section class="detail-section">
               <h3>{{ t('assetManagement.equipment.technicalParameters') }}</h3>
               <dl class="detail-fields">
-                <div v-if="!isMeterEquipment(selectedEquipment)">
+                <div v-if="isHvacEquipment(selectedEquipment)">
                   <dt>{{ t('assetManagement.labels.ratedCapacity') }}</dt>
                   <dd>{{ formatNumber(selectedEquipment.ratedCapacity) }}</dd>
                 </div>
@@ -508,7 +498,7 @@ onMounted(() => {
                   <dt>{{ t('assetManagement.labels.ratedPower') }}</dt>
                   <dd>{{ formatNumber(selectedEquipment.ratedPower) }}</dd>
                 </div>
-                <div v-if="!isMeterEquipment(selectedEquipment)">
+                <div v-if="isHvacEquipment(selectedEquipment)">
                   <dt>{{ t('assetManagement.labels.designCop') }}</dt>
                   <dd>{{ formatNumber(selectedEquipment.designCop) }}</dd>
                 </div>

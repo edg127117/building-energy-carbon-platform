@@ -41,7 +41,7 @@ vi.mock('../api/meter-coverage', () => ({
 describe('电力监控页面（PowerMonitoringPage）', () => {
   it('仅聚合展示监测采集电表，支持三相 3P / 单相 1P 快捷筛选与右侧实时走势抽屉唤起', async () => {
     const items = [
-      { equipmentId: 'E-IDU', equipmentName: '101室内机', equipmentCode: 'IDU-01', typeCode: 'IDU', spaceName: '101室', status: 'ACTIVE', identities: [], pointSummary: { total: 4, required: 0, configuredRequired: 0 } },
+      { equipmentId: 'E-IDU', equipmentName: '101室内机', equipmentCode: 'IDU-01', typeCode: 'IDU', category: 'INDOOR_UNIT', spaceName: '101室', status: 'ACTIVE', identities: [], pointSummary: { total: 4, required: 0, configuredRequired: 0 } },
       { equipmentId: 'M-3P', equipmentName: '外机三相总表', equipmentCode: 'MTR-3P', typeCode: 'ELECTRIC_METER_3P', category: 'ELECTRIC_METER', spaceName: '楼顶机房', status: 'ACTIVE', identities: [], pointSummary: { total: 12, required: 0, configuredRequired: 0 } },
       { equipmentId: 'M-1P', equipmentName: '101室单相电表', equipmentCode: 'MTR-1P', typeCode: 'ELECTRIC_METER_1P', category: 'ELECTRIC_METER', spaceName: '101室', status: 'ACTIVE', identities: [], pointSummary: { total: 6, required: 0, configuredRequired: 0 } },
     ]

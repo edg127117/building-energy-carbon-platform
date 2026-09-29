@@ -15,46 +15,30 @@ import {
 } from './meter-display'
 
 describe('meter-display helper utilities', () => {
-  describe('isMeterEquipment', () => {
-    it('accurately detects single-phase and three-phase meters', () => {
-      expect(isMeterEquipment({ typeCode: '3P_METER' })).toBe(true)
-      expect(isMeterEquipment({ typeCode: '1P_METER' })).toBe(true)
-      expect(isMeterEquipment({ typeCode: 'ELECTRIC_METER' })).toBe(true)
-      expect(isMeterEquipment({ typeCode: 'AHU', category: 'METER' })).toBe(true)
-      expect(isMeterEquipment({ typeCode: 'IDU', expectedProfileCode: 'PRODUCT_IDU_METER_1039' })).toBe(true)
+  describe('explicit classification', () => {
+    it('uses the same explicit category for list and coverage eligibility', () => {
+      for (const equipment of [
+        { category: 'ELECTRIC_METER', typeCode: 'ELECTRIC_METER_1P' },
+        { category: 'ELECTRIC_METER', equipmentName: 'renamed' },
+      ]) {
+        expect(isMeterEquipment(equipment)).toBe(true)
+        expect(isMeterCoverageEquipment(equipment)).toBe(true)
+      }
+      for (const equipment of [
+        { typeCode: 'IDU', category: 'INDOOR_UNIT', equipmentName: '电表 METER', productId: 'PRODUCT_IDU_METER_1039' },
+        { typeCode: 'ELECTRIC_METER_3P', category: 'OUTDOOR_UNIT' },
+        { typeCode: 'ELECTRIC_METER_3P' },
+        { category: 'ENERGY' }, null,
+      ]) {
+        expect(isMeterEquipment(equipment)).toBe(false)
+        expect(isMeterCoverageEquipment(equipment)).toBe(false)
+      }
     })
-
-    it('returns false for conventional non-meter equipment', () => {
-      expect(isMeterEquipment({ typeCode: 'AHU' })).toBe(false)
-      expect(isMeterEquipment({ typeCode: 'WCP' })).toBe(false)
-      expect(isMeterEquipment({ typeCode: 'WCR' })).toBe(false)
-      expect(isMeterEquipment(null)).toBe(false)
-    })
-  })
-
-  describe('isMeterCoverageEquipment', () => {
-    it('accepts only backend-recognized meter types, category, or product IDs', () => {
-      expect(isMeterCoverageEquipment({ typeCode: 'ELECTRIC_METER_1P' })).toBe(true)
-      expect(isMeterCoverageEquipment({ typeCode: 'ELECTRIC_METER_3P', equipmentName: 'generic' })).toBe(true)
-      expect(isMeterCoverageEquipment({ category: 'ELECTRIC_METER' })).toBe(true)
-      expect(isMeterCoverageEquipment({ productId: 'PRODUCT_IDU_METER_1039' })).toBe(true)
-      expect(isMeterCoverageEquipment({ productId: 'PRODUCT_ODU_METER_339' })).toBe(true)
-      expect(isMeterCoverageEquipment({ typeCode: 'PUMP', equipmentName: 'METER circulation pump' })).toBe(false)
-      expect(isMeterCoverageEquipment({ typeCode: 'AHU', category: 'ENERGY', equipmentName: '电表状态模拟器' })).toBe(false)
-    })
-  })
-
-  describe('getMeterPhaseType', () => {
-    it('identifies 3P vs 1P from typeCode', () => {
-      expect(getMeterPhaseType({ typeCode: '3P_METER' })).toBe('3P')
-      expect(getMeterPhaseType({ typeCode: '1P_METER' })).toBe('1P')
-      expect(getMeterPhaseType({ typeCode: 'ELECTRIC_METER_1P', equipmentName: '三相表' })).toBe('1P')
-      expect(getMeterPhaseType({ typeCode: 'ELECTRIC_METER_3P', equipmentName: '单相表' })).toBe('3P')
-    })
-
-    it('infers 3P from characteristic points when typeCode is ambiguous', () => {
-      expect(getMeterPhaseType({ typeCode: 'METER' }, [{ pointId: '1', pointCode: 'U_A', pointName: '', unit: 'V', value: 220, eventTime: null, receivedTime: null, dataQuality: 0, status: '', usageStatus: '', reason: null }])).toBe('3P')
-      expect(getMeterPhaseType({ typeCode: 'METER' }, [{ pointId: '2', pointCode: 'POWER', pointName: '', unit: 'kW', value: 2.5, eventTime: null, receivedTime: null, dataQuality: 0, status: '', usageStatus: '', reason: null }])).toBe('1P')
+    it('uses explicit phase types and leaves unknown types unconfigured', () => {
+      expect(getMeterPhaseType({ category: 'ELECTRIC_METER', typeCode: 'ELECTRIC_METER_1P', equipmentName: '三相表' })).toBe('1P')
+      expect(getMeterPhaseType({ category: 'ELECTRIC_METER', typeCode: 'ELECTRIC_METER_3P', equipmentName: '单相表' })).toBe('3P')
+      expect(getMeterPhaseType({ category: 'ELECTRIC_METER', typeCode: 'METER', equipmentName: '三相表' })).toBeNull()
+      expect(getMeterPhaseType({ category: 'INDOOR_UNIT', typeCode: 'ELECTRIC_METER_1P' })).toBeNull()
     })
   })
 

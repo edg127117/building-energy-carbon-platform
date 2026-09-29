@@ -18,12 +18,16 @@ import { t } from '@/locales'
 import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import {
   MeterRealtimeBoard,
+  getMeterPhaseLabel,
   extractSinglePhaseMetrics,
   extractThreePhaseMetrics,
   getMeterPhaseType,
+  isMeterCoverageEquipment,
   isMeterEquipment,
+  isHvacEquipment,
   useAssetManagement,
   useEquipmentReadings,
+  useMeterCoverage,
   type AssetEquipment,
 } from '@/modules/asset-management/public'
 import { listAccessibleBuildings } from '../api/hvac'
@@ -68,6 +72,10 @@ const buildings = useDaikinResource<Awaited<ReturnType<typeof listAccessibleBuil
 const daikinDevices = useDaikinResource<Awaited<ReturnType<typeof daikinApi.devices>>>()
 const daikinSpaces = useDaikinResource<Awaited<ReturnType<typeof daikinApi.spaces>>>()
 const assetManagement = useAssetManagement()
+const meterCoverage = useMeterCoverage()
+const meterCoverageById = computed(() =>
+  new Map(meterCoverage.listCoverages.value.map(item => [item.equipmentId, item])),
+)
 
 const buildingId = ref('')
 const lastUpdatedAt = ref<string | null>(null)
@@ -93,8 +101,7 @@ const meterDrawerOpen = ref(false)
 let telemetrySeq = 0
 
 function isColdSourceAsset(item: AssetEquipment): boolean {
-  const code = String(item.typeCode ?? '').toUpperCase()
-  return ['WCR', 'WCT', 'WCP', 'AHU', 'CHILLER', 'PUMP', 'TOWER'].some(token => code.includes(token))
+  return ['CHILLER', 'TOWER', 'PUMP', 'AHU', 'BOILER'].includes(item.category ?? '')
 }
 
 const rawHvacDevices = computed(() => daikinDevices.data.value?.items ?? [])
@@ -102,19 +109,19 @@ const allBuildingAssets = computed(() => assetManagement.equipment.value.items)
 const meterAssets = computed(() => allBuildingAssets.value.filter(item => isMeterEquipment(item)))
 const coldSourceAssets = computed(() => allBuildingAssets.value.filter(item => !isMeterEquipment(item) && isColdSourceAsset(item)))
 const otherBusinessAssets = computed(() =>
-  allBuildingAssets.value.filter(item => !isMeterEquipment(item) && !isColdSourceAsset(item)),
+  allBuildingAssets.value.filter(item => isHvacEquipment(item) && !isColdSourceAsset(item)),
 )
 
 const structureSegments = computed(() => {
   const iduCount = rawHvacDevices.value.length
     ? rawHvacDevices.value.filter(dev => dev.deviceKind !== 'OUTDOOR').length
-    : otherBusinessAssets.value.filter(item => String(item.typeCode ?? '').toUpperCase() === 'IDU').length
+    : otherBusinessAssets.value.filter(item => item.category === 'INDOOR_UNIT').length
   const oduCount = rawHvacDevices.value.length
     ? rawHvacDevices.value.filter(dev => dev.deviceKind === 'OUTDOOR').length
-    : otherBusinessAssets.value.filter(item => String(item.typeCode ?? '').toUpperCase() === 'ODU').length
+    : otherBusinessAssets.value.filter(item => item.category === 'OUTDOOR_UNIT').length
   const coldCount = coldSourceAssets.value.length
   const otherCount = otherBusinessAssets.value.filter(
-    item => !['IDU', 'ODU'].includes(String(item.typeCode ?? '').toUpperCase()),
+    item => !['INDOOR_UNIT', 'OUTDOOR_UNIT'].includes(item.category ?? ''),
   ).length
   const rawTotal = iduCount + oduCount + coldCount + otherCount
   const total = Math.max(1, rawTotal)
@@ -382,7 +389,7 @@ const pagedHvacInspectionList = computed(() => {
 })
 
 const allPowerSpaceRows = computed(() => {
-  return meterAssets.value.map(meter => {
+  return meterAssets.value.filter(meter => getMeterPhaseType(meter) !== null).map(meter => {
     const phase = getMeterPhaseType(meter)
     const tele = meterTelemetryMap.value[meter.equipmentId]
     const energyKwh = tele?.energyKwh ?? 0
@@ -402,13 +409,12 @@ const allPowerSpaceRows = computed(() => {
   })
 })
 
+// 各表覆盖范围尚未确认可加性；总览只统计表计数量，不汇总电量或功率。
 const powerSummaryMetrics = computed(() => {
   const rows = allPowerSpaceRows.value
-  const totalEnergy = Math.round(rows.reduce((sum, r) => sum + r.energyKwh, 0) * 10) / 10
-  const totalPower = Math.round(rows.reduce((sum, r) => sum + r.powerKw, 0) * 100) / 100
   const count3P = rows.filter(r => r.phase === '3P').length
   const count1P = rows.filter(r => r.phase === '1P').length
-  return { totalEnergy, totalPower, count3P, count1P }
+  return { count3P, count1P }
 })
 
 const powerSpaceAnalysis = computed(() => {
@@ -593,11 +599,12 @@ async function hydrateOverviewTelemetry(items: DaikinDevice[]) {
 
 async function hydrateMeterTelemetry(meters: AssetEquipment[]) {
   await Promise.all(meters.map(async meter => {
+    const phase = getMeterPhaseType(meter)
+    if (!phase) return
     try {
       const reader = useEquipmentReadings()
       const res = await reader.load(meter.equipmentId, true)
       if (!res?.points) return
-      const phase = getMeterPhaseType(meter, res.points)
       if (phase === '3P') {
         const m = extractThreePhaseMetrics(res.points)
         meterTelemetryMap.value[meter.equipmentId] = {
@@ -617,6 +624,22 @@ async function hydrateMeterTelemetry(meters: AssetEquipment[]) {
   }))
 }
 
+function formatMeterCoverageScope(raw: AssetEquipment | Record<string, unknown>): string {
+  const row = raw as AssetEquipment
+  if (!isMeterCoverageEquipment(row)) return t('common.missing')
+  if (meterCoverage.listLoading.value) return t('assetManagement.meterCoverage.loading')
+  if (meterCoverage.listError.value) return t('common.missing')
+  return meterCoverageById.value.get(row.equipmentId)?.scopeLabel || t('assetManagement.meterCoverage.unconfigured')
+}
+
+function formatMeterInstallLocation(raw: AssetEquipment | Record<string, unknown>): string {
+  const row = raw as AssetEquipment
+  if (!isMeterCoverageEquipment(row)) return t('common.missing')
+  if (meterCoverage.listLoading.value) return t('assetManagement.meterCoverage.loading')
+  if (meterCoverage.listError.value) return t('common.missing')
+  return meterCoverageById.value.get(row.equipmentId)?.installationSpaceName || t('assetManagement.meterCoverage.toConfirm')
+}
+
 async function loadBuildingOverview() {
   if (!buildingId.value) return
   selectedSpaceName.value = ''
@@ -633,6 +656,10 @@ async function loadBuildingOverview() {
   }
   if (meterAssets.value.length) {
     void hydrateMeterTelemetry(meterAssets.value)
+    const coverageMeterIds = meterAssets.value
+      .filter(item => isMeterCoverageEquipment(item))
+      .map(item => item.equipmentId)
+    void meterCoverage.loadListCoverages(buildingId.value, coverageMeterIds).catch(() => undefined)
   }
 }
 
@@ -1174,13 +1201,13 @@ onMounted(async () => {
             <div class="summary-mini-box">
               <span class="summary-mini-label">{{ roText('metricTotalMeterEnergy') }}</span>
               <strong class="summary-mini-val tone-primary">
-                {{ powerSummaryMetrics.totalEnergy }}{{ ' ' }}<small>{{ roText('kwhUnit') }}</small>
+                {{ roText('cardEnergyPendingTag') }}
               </strong>
             </div>
             <div class="summary-mini-box">
               <span class="summary-mini-label">{{ roText('metricTotalMeterPower') }}</span>
               <strong class="summary-mini-val">
-                {{ powerSummaryMetrics.totalPower }}{{ ' ' }}<small>{{ roText('kwUnit') }}</small>
+                {{ roText('cardEnergyPendingTag') }}
               </strong>
             </div>
           </div>
@@ -1297,14 +1324,14 @@ onMounted(async () => {
               <ElTableColumn :label="roText('colMeterSpec')" width="96">
                 <template #default="{ row }">
                   <ElTag :type="getMeterPhaseType(row) === '3P' ? 'primary' : 'info'" effect="plain">
-                    {{ getMeterPhaseType(row) === '3P' ? roText('filterMeter3P') : roText('filterMeter1P') }}
+                    {{ getMeterPhaseLabel(row) }}
                   </ElTag>
                 </template>
               </ElTableColumn>
-              <ElTableColumn :label="roText('colSpace')" min-width="126">
+              <ElTableColumn :label="t('assetManagement.equipment.meterCoverage')" min-width="126">
                 <template #default="{ row }">
-                  <div>{{ row.spaceName || daikinText('unassignedSpace') }}</div>
-                  <div class="table-code-sub">{{ row.systemGroupName || row.buildingName || '—' }}</div>
+                  <div>{{ formatMeterCoverageScope(row) }}</div>
+                  <div class="table-code-sub">{{ formatMeterInstallLocation(row) }}</div>
                 </template>
               </ElTableColumn>
               <ElTableColumn :label="roText('colMeterRealtime')" min-width="145">

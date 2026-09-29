@@ -8,7 +8,9 @@ export { default as MeterRealtimeBoard } from './components/meter/MeterRealtimeB
 export {
   extractSinglePhaseMetrics,
   extractThreePhaseMetrics,
+  getMeterPhaseLabel,
   getMeterPhaseType,
+  isHvacEquipment,
   isMeterCoverageEquipment,
   isMeterEquipment,
 } from './components/meter/meter-display'

@@ -90,7 +90,7 @@ describe('设备列表筛选', () => {
     expect(wrapper.findAllComponents(ElSelect)[1].props('disabled')).toBe(true)
   })
   it('查看测点直接进入测点标签，再次查看档案恢复台账标签', async () => {
-    const equipment = { equipmentId: 'E1', equipmentName: '测试设备', equipmentCode: 'E-01', typeCode: 'WCR', status: 'ACTIVE', identities: [], pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
+    const equipment = { equipmentId: 'E1', equipmentName: '测试设备', equipmentCode: 'E-01', typeCode: 'WCR', category: 'CHILLER', status: 'ACTIVE', identities: [], pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
     vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [equipment as never] })
     vi.mocked(getEquipment).mockResolvedValue(equipment as never)
     vi.mocked(listEquipmentPoints).mockResolvedValue([])
@@ -107,7 +107,7 @@ describe('设备列表筛选', () => {
   })
 
   it('待建设标签不发送新请求，参数只读且无权限时不展示编辑入口', async () => {
-    const equipment = { equipmentId: 'E1', equipmentName: '测试设备', equipmentCode: 'E-01', typeCode: 'WCR', status: 'ACTIVE', identities: [], ratedCapacity: 0, ratedPower: null, designCop: 5, pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
+    const equipment = { equipmentId: 'E1', equipmentName: '测试设备', equipmentCode: 'E-01', typeCode: 'WCR', category: 'CHILLER', status: 'ACTIVE', identities: [], ratedCapacity: 0, ratedPower: null, designCop: 5, pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
     vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [equipment as never] })
     vi.mocked(getEquipment).mockResolvedValue(equipment as never)
     vi.mocked(listEquipmentPoints).mockResolvedValue([])
@@ -177,10 +177,21 @@ describe('设备列表筛选', () => {
     expect(panel.text()).not.toContain('设计性能系数')
   })
 
+  it('unknown categories keep an archive entry without acquiring monitor or meter functionality from names', async () => {
+    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [{ equipmentId: 'U1', equipmentName: 'METER 空调', typeCode: 'IDU', category: 'UNKNOWN', pointSummary: { total: 0, required: 0, configuredRequired: 0 } } as never] })
+    await wrapper.setProps({ ledgerCategory: 'BUSINESS' })
+    await submit()
+    expect(wrapper.text()).toContain('类型待配置')
+    expect(wrapper.text()).toContain('查看档案')
+    expect(wrapper.text()).not.toContain('去暖通监控查看运行')
+    expect(wrapper.text()).not.toContain('去电力监控查看走势')
+    expect(listMeterCoverages).not.toHaveBeenCalled()
+  })
+
   it('按用能设备台账（BUSINESS）与监测采集设备（METER）分类隔离列表数据', async () => {
     const items = [
-      { equipmentId: 'E-IDU', equipmentName: '101室内机', equipmentCode: 'IDU-01', typeCode: 'IDU', status: 'ACTIVE', identities: [], pointSummary: { total: 4, required: 0, configuredRequired: 0 } },
-      { equipmentId: 'M-3P', equipmentName: '外机三相电表', equipmentCode: 'MTR-3P', typeCode: '3P_METER', status: 'ACTIVE', identities: [], pointSummary: { total: 12, required: 0, configuredRequired: 0 } },
+      { equipmentId: 'E-IDU', equipmentName: '101室内机', equipmentCode: 'IDU-01', typeCode: 'IDU', category: 'INDOOR_UNIT', status: 'ACTIVE', identities: [], pointSummary: { total: 4, required: 0, configuredRequired: 0 } },
+      { equipmentId: 'M-3P', equipmentName: '外机三相电表', equipmentCode: 'MTR-3P', typeCode: 'ELECTRIC_METER_3P', category: 'ELECTRIC_METER', status: 'ACTIVE', identities: [], pointSummary: { total: 12, required: 0, configuredRequired: 0 } },
     ]
     vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 2, items: items as never })
 
