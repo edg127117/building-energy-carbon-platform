@@ -24,7 +24,7 @@ import {
 import { t } from '@/locales'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
 import MeterRealtimeBoard from '../components/meter/MeterRealtimeBoard.vue'
-import { getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
+import { getMeterPhaseLabel, getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
 import { useAssetManagement } from '../composables/use-asset-management'
 import { useMeterCoverage } from '../composables/use-meter-coverage'
 import { flattenSpaces, type AssetEquipmentQuery } from '../models/assets'
@@ -255,7 +255,7 @@ onMounted(() => {
         <ElTableColumn :label="t('assetManagement.powerMonitoring.phaseFilter')" min-width="120">
           <template #default="{ row }">
             <ElTag :type="getMeterPhaseType(row) === '3P' ? 'primary' : 'info'">
-              {{ getMeterPhaseType(row) === '3P' ? t('assetManagement.equipment.phaseTag3P') : t('assetManagement.equipment.phaseTag1P') }}
+              {{ getMeterPhaseLabel(row) }}
             </ElTag>
           </template>
         </ElTableColumn>
@@ -318,7 +318,7 @@ onMounted(() => {
             <div class="detail-title">
               <h2 :id="titleId">{{ selectedEquipment.equipmentName }}</h2>
               <ElTag :type="getMeterPhaseType(selectedEquipment) === '3P' ? 'primary' : 'info'">
-                {{ getMeterPhaseType(selectedEquipment) === '3P' ? t('assetManagement.equipment.phaseTag3P') : t('assetManagement.equipment.phaseTag1P') }}
+                {{ getMeterPhaseLabel(selectedEquipment) }}
               </ElTag>
               <ElButton type="primary" plain @click="goStaticArchive(selectedEquipment)">
                 {{ t('assetManagement.powerMonitoring.viewStaticArchive') }}

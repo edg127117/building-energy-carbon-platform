@@ -16,6 +16,8 @@ import com.platform.hvac.model.entity.BizSystemGroup;
 import com.platform.hvac.service.BizEquipmentService;
 import com.platform.hvac.service.EquipmentCodeAllocator;
 import com.platform.framework.exception.BusinessException;
+import com.platform.iot.onboarding.mapper.BizDeviceProductMapper;
+import com.platform.iot.onboarding.model.entity.BizDeviceProduct;
 import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -39,6 +41,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     private static final int ALLOCATION_ATTEMPTS = 3;
 
     private final BizEquipmentTypeMapper equipmentTypeMapper;
+    private final BizDeviceProductMapper productMapper;
     private final BizSystemGroupMapper systemGroupMapper;
     private final BizSpaceMapper spaceMapper;
     private final EquipmentCodeAllocator codeAllocator;
@@ -82,6 +85,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
         if (type == null || !Integer.valueOf(1).equals(type.getStatus())) {
             throw new BusinessException(400, "设备类型不存在或已停用");
         }
+        validateProduct(equipment);
         validateBuildingRelationships(equipment);
         for (int attempt = 1; attempt <= ALLOCATION_ATTEMPTS; attempt++) {
             equipment.setEquipId(null);
@@ -104,7 +108,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     /**
      * 更新设备可编辑档案并保持内部 ID 之外的受控身份不变。
      *
-     * <p>记录不存在返回 404；恢复原编码、建筑、类型和分类后再校验系统分组与空间，
+     * <p>记录不存在返回 404；恢复原编码、建筑、类型、分类和产品绑定后再校验系统分组与空间，
      * 防止部分更新把设备移入不一致的关系。</p>
      */
     @Override
@@ -115,14 +119,26 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
                 existing.getBuildingId(), existing.getSpaceId(), equipment.getSpaceId());
         relationGuard.rejectChangedProjection(
                 existing.getBuildingId(), existing.getSystemGroupId(), equipment.getSystemGroupId());
-        // 内部身份、建筑、类型和现场编码均为受控字段，普通更新不得改变。
+        // 内部身份、建筑、类型、现场编码和产品绑定均为受控字段，普通更新不得改变。
         equipment.setEquipCode(existing.getEquipCode());
         equipment.setBuildingId(existing.getBuildingId());
         equipment.setTypeCode(existing.getTypeCode());
         equipment.setEquipCategory(existing.getEquipCategory());
+        equipment.setProductId(existing.getProductId());
         validateBuildingRelationships(equipment, existing);
         this.updateById(equipment);
         return Result.success(equipment);
+    }
+
+    private void validateProduct(BizEquipment equipment) {
+        if (!StringUtils.hasText(equipment.getProductId())) return;
+        BizDeviceProduct product = productMapper.selectById(equipment.getProductId());
+        if (product == null || !"ENABLED".equals(product.getStatus())) {
+            throw new BusinessException(400, "产品不存在或未启用，不能用于设备建档");
+        }
+        if (!equipment.getTypeCode().equals(product.getEquipmentTypeCode())) {
+            throw new BusinessException(400, "设备类型与产品类型不一致");
+        }
     }
 
     /** 逻辑删除设备台账；测点配置和 TDengine 数据不在此方法处理。 */

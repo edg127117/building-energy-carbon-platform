@@ -17,8 +17,10 @@ import { t } from '@/locales'
 import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import {
   MeterRealtimeBoard,
+  getMeterPhaseLabel,
   getMeterPhaseType,
   isMeterEquipment,
+  isHvacEquipment,
   useAssetManagement,
   type AssetEquipment,
 } from '@/modules/asset-management/public'
@@ -73,8 +75,7 @@ const meterDrawerOpen = ref(false)
 let telemetrySeq = 0
 
 function isColdSourceAsset(item: AssetEquipment): boolean {
-  const code = String(item.typeCode ?? '').toUpperCase()
-  return ['WCR', 'WCT', 'WCP', 'AHU', 'CHILLER', 'PUMP', 'TOWER'].some(token => code.includes(token))
+  return ['CHILLER', 'TOWER', 'PUMP', 'AHU', 'BOILER'].includes(item.category ?? '')
 }
 
 const rawHvacDevices = computed(() => daikinDevices.data.value?.items ?? [])
@@ -82,7 +83,7 @@ const allBuildingAssets = computed(() => assetManagement.equipment.value.items)
 const meterAssets = computed(() => allBuildingAssets.value.filter(item => isMeterEquipment(item)))
 const coldSourceAssets = computed(() => allBuildingAssets.value.filter(item => !isMeterEquipment(item) && isColdSourceAsset(item)))
 const otherBusinessAssets = computed(() =>
-  allBuildingAssets.value.filter(item => !isMeterEquipment(item) && !isColdSourceAsset(item)),
+  allBuildingAssets.value.filter(item => isHvacEquipment(item) && !isColdSourceAsset(item)),
 )
 
 const structureSegments = computed(() => {
@@ -949,7 +950,7 @@ onMounted(async () => {
             <ElTableColumn :label="roText('colMeterSpec')" width="105">
               <template #default="{ row }">
                 <ElTag :type="getMeterPhaseType(row) === '3P' ? 'primary' : 'info'" effect="plain">
-                  {{ getMeterPhaseType(row) === '3P' ? roText('filterMeter3P') : roText('filterMeter1P') }}
+                  {{ getMeterPhaseLabel(row) }}
                 </ElTag>
               </template>
             </ElTableColumn>

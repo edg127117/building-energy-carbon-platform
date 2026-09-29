@@ -5,7 +5,7 @@ export { useEquipmentReadings } from './composables/use-equipment-readings'
 export { useMeterCoverage } from './composables/use-meter-coverage'
 export { flattenSpaces } from './models/assets'
 export { default as MeterRealtimeBoard } from './components/meter/MeterRealtimeBoard.vue'
-export { getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from './components/meter/meter-display'
+export { isHvacEquipment, getMeterPhaseLabel, getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from './components/meter/meter-display'
 export type { MeterCoverageUpdate, MeterCoverageView, MeterTarget } from './models/meter-coverage'
 export type {
   AssetBuilding,

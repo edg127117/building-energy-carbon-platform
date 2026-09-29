@@ -2,9 +2,6 @@ import { t } from '@/locales'
 import type { AssetPointReading } from '../../models/assets'
 
 // 匹配硬件或名称关键字的正则常量（采用 Unicode 转义，保证前端架构守卫检查通过）
-const RE_METER = /\u7535\u8868/ // 电表
-const RE_3P = /\u4e09\u76f8|\u4e09\u9879/ // 三相 | 三项
-const RE_1P = /\u5355\u76f8|\u5355\u9879/ // 单相 | 单项
 const RE_POWER = /\u529f\u7387|\u6709\u529f/ // 功率 | 有功
 const RE_FACTOR = /\u56e0\u6570/ // 因数
 const RE_VOLTAGE = /\u7535\u538b/ // 电压
@@ -20,142 +17,34 @@ const RE_PHASE_C = /C\u76f8/ // C相
 const RE_TOTAL_POWER = /\u603b\u6709\u529f|\u603b\u529f\u7387|\u8f93\u5165\u529f\u7387/ // 总有功 | 总功率 | 输入功率
 const RE_TOTAL_PF = /\u603b\u529f\u7387\u56e0\u6570|\u529f\u7387\u56e0\u6570/ // 总功率因数 | 功率因数
 
-/**
- * 判断设备是否为电表（单相电表 / 三相电表 / 采集监测电表）。
- * 基于 typeCode、category、expectedProfileCode、equipmentName 或 productName 进行综合判定。
- */
-export function isMeterEquipment(
-  equipment: { typeCode?: string | null; category?: string | null; expectedProfileCode?: string | null; equipmentName?: string | null; productName?: string | null } | Record<string, unknown> | null | undefined,
-): boolean {
-  if (!equipment || typeof equipment !== 'object') return false
-  const eq = equipment as Record<string, unknown>
-  const type = String(eq.typeCode ?? '').toUpperCase()
-  const cat = String(eq.category ?? '').toUpperCase()
-  const profile = String(eq.expectedProfileCode ?? '').toUpperCase()
-  const name = String(eq.equipmentName ?? '').toUpperCase()
-  const prod = String(eq.productName ?? '').toUpperCase()
+type ClassifiedEquipment = { typeCode?: string | null; category?: string | null } | Record<string, unknown> | null | undefined
 
-  return (
-    type.includes('METER') ||
-    type.includes('1P_') ||
-    type.includes('3P_') ||
-    type === '1P' ||
-    type === '3P' ||
-    cat.includes('METER') ||
-    cat.includes('ENERGY') ||
-    profile.includes('METER') ||
-    profile.includes('1039') ||
-    profile.includes('339') ||
-    RE_METER.test(name) ||
-    name.includes('METER') ||
-    RE_METER.test(prod) ||
-    prod.includes('METER')
-  )
+/** 分类以后台档案为准；名称、型号和测点不能赋予设备电表功能。 */
+export function isMeterEquipment(equipment: ClassifiedEquipment): boolean {
+  return equipment?.category === 'ELECTRIC_METER'
 }
 
-const METER_COVERAGE_PRODUCT_IDS = new Set(['PRODUCT_IDU_METER_1039', 'PRODUCT_ODU_METER_339'])
+export const isMeterCoverageEquipment = isMeterEquipment
 
-/** 仅识别后端电表档案接口接受的标识，避免名称误判后把无效设备 ID 送入批量覆盖接口。 */
-export function isMeterCoverageEquipment(
-  equipment: { typeCode?: string | null; category?: string | null; productId?: string | null } | Record<string, unknown> | null | undefined,
-): boolean {
-  if (!equipment || typeof equipment !== 'object') return false
-  const value = equipment as Record<string, unknown>
-  const type = String(value.typeCode ?? '').trim().toUpperCase()
-  if (type === 'ELECTRIC_METER_1P' || type === 'ELECTRIC_METER_3P') return true
-  if (String(value.category ?? '').trim().toUpperCase() === 'ELECTRIC_METER') return true
-  return METER_COVERAGE_PRODUCT_IDS.has(String(value.productId ?? '').trim().toUpperCase())
+export function isHvacEquipment(equipment: ClassifiedEquipment): boolean {
+  return ['INDOOR_UNIT', 'OUTDOOR_UNIT', 'CHILLER', 'TOWER', 'PUMP', 'AHU', 'BOILER'].includes(String(equipment?.category ?? ''))
 }
 
-/**
- * 判定电表的分相类型：三相电表 ('3P') 或 单相电表 ('1P')。
- * 综合设备类型、产品/设备名称及测点特征（如 A/B/C 分相测点）进行准确判定。
- */
-export function getMeterPhaseType(
-  equipment: { typeCode?: string | null; equipmentName?: string | null; productName?: string | null; expectedProfileCode?: string | null } | Record<string, unknown> | null | undefined,
-  points?: AssetPointReading[] | null,
-): '3P' | '1P' {
-  const eq = (equipment ?? {}) as Record<string, unknown>
-  const type = String(eq.typeCode ?? '').toUpperCase()
-  const name = String(eq.equipmentName ?? '')
-  const prod = String(eq.productName ?? '')
-  const profile = String(eq.expectedProfileCode ?? '').toUpperCase()
+export function hasKnownEquipmentCategory(equipment: ClassifiedEquipment): boolean {
+  return isMeterEquipment(equipment) || isHvacEquipment(equipment)
+}
 
-  if (type.includes('3P')) return '3P'
-  if (type.includes('1P')) return '1P'
+/** 未配置分相类型时返回空值，不默认为单相，也不根据名称或测点猜测。 */
+export function getMeterPhaseType(equipment: ClassifiedEquipment): '3P' | '1P' | null {
+  if (!isMeterEquipment(equipment)) return null
+  if (equipment?.typeCode === 'ELECTRIC_METER_3P') return '3P'
+  if (equipment?.typeCode === 'ELECTRIC_METER_1P') return '1P'
+  return null
+}
 
-  // 1. 显式三相标识
-  if (
-    type.includes('THREE_PHASE') ||
-    type.includes('THREEPHASE') ||
-    RE_3P.test(name) ||
-    RE_3P.test(prod) ||
-    profile.includes('339')
-  ) {
-    return '3P'
-  }
-
-  // 2. 测点特征推断（具备 A/B/C 分相测点或总有功功率测点必为三相）
-  if (points && points.length > 0) {
-    const hasThreePhasePoint = points.some(p => {
-      const code = (p.pointCode ?? '').toUpperCase()
-      const pName = p.pointName ?? ''
-      return (
-        code.endsWith('_UA') ||
-        code.endsWith('_U_A') ||
-        code === 'UA' ||
-        code === 'U_A' ||
-        code.endsWith('_UB') ||
-        code.endsWith('_U_B') ||
-        code === 'UB' ||
-        code === 'U_B' ||
-        code.endsWith('_UC') ||
-        code.endsWith('_U_C') ||
-        code === 'UC' ||
-        code === 'U_C' ||
-        code.endsWith('_IA') ||
-        code.endsWith('_I_A') ||
-        code === 'IA' ||
-        code === 'I_A' ||
-        code.endsWith('_IB') ||
-        code.endsWith('_I_B') ||
-        code === 'IB' ||
-        code === 'I_B' ||
-        code.endsWith('_IC') ||
-        code.endsWith('_I_C') ||
-        code === 'IC' ||
-        code === 'I_C' ||
-        code.endsWith('_PA') ||
-        code.endsWith('_P_A') ||
-        code.endsWith('_PB') ||
-        code.endsWith('_P_B') ||
-        code.endsWith('_PC') ||
-        code.endsWith('_P_C') ||
-        code.endsWith('_P_TOTAL') ||
-        code === 'P_TOTAL' ||
-        RE_PHASE_A.test(pName) ||
-        RE_PHASE_B.test(pName) ||
-        RE_PHASE_C.test(pName)
-      )
-    })
-    if (hasThreePhasePoint) {
-      return '3P'
-    }
-  }
-
-  // 3. 显式单相标识
-  if (
-    type.includes('1P') ||
-    type.includes('SINGLE_PHASE') ||
-    type.includes('SINGLEPHASE') ||
-    RE_1P.test(name) ||
-    RE_1P.test(prod) ||
-    profile.includes('1039')
-  ) {
-    return '1P'
-  }
-
-  return '1P'
+export function getMeterPhaseLabel(equipment: ClassifiedEquipment): string {
+  const phase = getMeterPhaseType(equipment)
+  return t(phase === '3P' ? 'assetManagement.equipment.phaseTag3P' : phase === '1P' ? 'assetManagement.equipment.phaseTag1P' : 'assetManagement.equipment.classificationPending')
 }
 
 /**

@@ -18,12 +18,12 @@ const trendHistory = useEquipmentTrendHistory()
 const POLL_INTERVAL_MS = 60_000 // 实时追踪静默轮询间隔：1分钟（适配电表3分钟上报周期，降低无效请求）
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
-const phase = computed(() => getMeterPhaseType(props.equipment, readings.value?.points))
+const phase = computed(() => getMeterPhaseType(props.equipment))
 
 async function fetchReadingsSilently() {
   try {
     const result = await load(props.equipment.equipmentId, Boolean(readings.value))
-    if (result && result.points) {
+    if (result && result.points && phase.value) {
       trendHistory.appendRealtimeReading(result.points, result.generatedAt, props.equipment.equipmentId, phase.value)
     }
   } catch {
@@ -33,6 +33,7 @@ async function fetchReadingsSilently() {
 
 function startPolling() {
   stopPolling()
+  if (!phase.value) return
   trendHistory.init(props.equipment.equipmentId, phase.value)
   fetchReadingsSilently()
   pollTimer = setInterval(fetchReadingsSilently, POLL_INTERVAL_MS)
@@ -66,7 +67,8 @@ onBeforeUnmount(() => {
 <template>
   <div class="meter-realtime-board">
     <!-- 初次加载骨架屏（仅在无任何读数时展示，后续1分钟静默轮询不闪屏） -->
-    <ElSkeleton v-if="loading && !readings" animated :rows="6" class="board-skeleton" />
+    <ElEmpty v-if="!phase" :description="t('assetManagement.equipment.classificationPending')" />
+    <ElSkeleton v-else-if="loading && !readings" animated :rows="6" class="board-skeleton" />
 
     <ElAlert
       v-else-if="error && !readings"
