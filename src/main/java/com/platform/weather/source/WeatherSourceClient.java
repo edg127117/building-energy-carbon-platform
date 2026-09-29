@@ -39,13 +39,20 @@ public class WeatherSourceClient {
     private final OpenMeteoParser openMeteoParser = new OpenMeteoParser();
     private final ChinaWeatherParser chinaWeatherParser = new ChinaWeatherParser();
     private final Clock clock;
+    private final HttpClient http;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WeatherSourceClient.class);
 
     public WeatherSourceClient() {
         this(Clock.systemUTC());
     }
 
     WeatherSourceClient(Clock clock) {
+        this(clock, HTTP);
+    }
+
+    WeatherSourceClient(Clock clock, HttpClient http) {
         this.clock = clock;
+        this.http = http;
     }
 
     public FetchResult fetch(Request request) {
@@ -56,8 +63,9 @@ public class WeatherSourceClient {
                 .timeout(Duration.ofSeconds(30))
                 .header("Accept", request.source() == Source.OPEN_METEO ? "application/json" : "text/html")
                 .GET().build();
+        long started = System.nanoTime();
         try {
-            HttpResponse<byte[]> response = HTTP.send(httpRequest, info -> new BoundedBodySubscriber());
+            HttpResponse<byte[]> response = http.send(httpRequest, info -> new BoundedBodySubscriber());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 int status = response.statusCode();
                 Long retryAfterMillis = response.headers().firstValue("Retry-After")
@@ -70,18 +78,32 @@ public class WeatherSourceClient {
                     ? openMeteoParser.parse(body, request, fetchedAt)
                     : chinaWeatherParser.parse(body, request, fetchedAt);
         } catch (WeatherSourceException exception) {
+            logFailure(request, uri, started, exception.getCode(), exception, exception.getStatus());
             throw exception;
         } catch (java.net.http.HttpTimeoutException | java.net.SocketTimeoutException exception) {
-            throw new WeatherSourceException(WeatherSourceException.Code.SOURCE_TIMEOUT, null, true, null);
+            logFailure(request, uri, started, WeatherSourceException.Code.SOURCE_TIMEOUT, exception, null);
+            throw new WeatherSourceException(WeatherSourceException.Code.SOURCE_TIMEOUT, exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new WeatherSourceException(WeatherSourceException.Code.SOURCE_TIMEOUT, null, true, null);
+            logFailure(request, uri, started, WeatherSourceException.Code.SOURCE_INTERRUPTED, exception, null);
+            throw new WeatherSourceException(WeatherSourceException.Code.SOURCE_INTERRUPTED, exception);
         } catch (IOException exception) {
             if (hasCause(exception, ResponseTooLargeException.class)) {
+                logFailure(request, uri, started, WeatherSourceException.Code.SOURCE_TOO_LARGE, exception, null);
                 throw new WeatherSourceException(WeatherSourceException.Code.SOURCE_TOO_LARGE);
             }
+            logFailure(request, uri, started, WeatherSourceException.Code.SOURCE_HTTP_ERROR, exception, null);
             throw new WeatherSourceException(WeatherSourceException.Code.SOURCE_HTTP_ERROR);
         }
+    }
+
+    /** 只输出固定主机及异常类型，不输出异常消息、完整 URI 或响应正文。 */
+    private void logFailure(Request request, URI uri, long started, WeatherSourceException.Code code,
+                            Exception error, Integer status) {
+        log.warn("Weather source request failed source={} product={} host={} elapsedMs={} code={} type={} status={}",
+                request.source(), request.product(), uri.getHost(),
+                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-started),
+                code, error.getClass().getSimpleName(), status);
     }
 
     private static boolean hasCause(Throwable error, Class<? extends Throwable> type) {

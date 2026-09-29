@@ -30,11 +30,36 @@ final class ChinaWeatherParser {
     private static final Pattern DAY = Pattern.compile("^(\\d{1,2})日.*$");
     private static final Pattern TEMP = Pattern.compile("-?\\d+(?:\\.\\d+)?");
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ChinaWeatherParser.class);
+
     FetchResult parse(String body, Request request, Instant fetchedAt) {
+        try {
+            return parseValidated(body, request, fetchedAt);
+        } catch (WeatherSourceException error) {
+            if (error.getCode() == WeatherSourceException.Code.DATE_AMBIGUOUS) {
+                Document page = Jsoup.parse(body);
+                Element anchor = page.getElementById("zs_7d_update_time");
+                Element week = page.getElementById("7d");
+                String headers = week == null ? "MISSING" : week.select("ul.t > li h1").stream()
+                        .limit(7).map(node -> safeDateEvidence(node.text())).collect(java.util.stream.Collectors.joining("|"));
+                log.warn("Weather page date rejected parser={} fetchedAt={} detail={} anchor={} headers={}",
+                        VERSION, fetchedAt, error.getDetail(),
+                        anchor == null ? "MISSING" : safeDateEvidence(anchor.attr("value")), headers);
+            }
+            throw error;
+        }
+    }
+
+    /** 仅保留有界日期字符作为失败样本，防止外部页面正文或换行进入日志。 */
+    private static String safeDateEvidence(String text) {
+        String bounded = text.substring(0, Math.min(text.length(), 64));
+        return bounded.replaceAll("[^0-9年月日 :./-]", "_");
+    }
+    private FetchResult parseValidated(String body, Request request, Instant fetchedAt) {
         Document document = Jsoup.parse(body);
         Element updated = document.getElementById("zs_7d_update_time");
         if (updated == null || !updated.hasAttr("value")) {
-            throw dateAmbiguous();
+            throw dateAmbiguous(WeatherSourceException.Detail.ANCHOR_MISSING);
         }
         LocalDate anchor;
         try {
@@ -42,10 +67,10 @@ final class ChinaWeatherParser {
                     java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.S"));
             anchor=published.toLocalDate();
         } catch (DateTimeParseException exception) {
-            throw dateAmbiguous();
+            throw dateAmbiguous(WeatherSourceException.Detail.ANCHOR_FORMAT);
         }
         if (!anchor.equals(fetchedAt.atZone(ZONE).toLocalDate())) {
-            throw dateAmbiguous();
+            throw dateAmbiguous(WeatherSourceException.Detail.ANCHOR_DAY_MISMATCH);
         }
         Element forecast = document.getElementById("7d");
         Elements days = forecast == null ? new Elements() : forecast.select("ul.t > li");
@@ -84,7 +109,7 @@ final class ChinaWeatherParser {
     private static void validateDay(Element item, LocalDate expected) {
         Element header = item.selectFirst("h1");
         if (header == null) {
-            throw dateAmbiguous();
+            throw dateAmbiguous(WeatherSourceException.Detail.DAY_HEADER_MISSING);
         }
         Matcher complete = DATE.matcher(header.text());
         if (complete.find()) {
@@ -92,17 +117,17 @@ final class ChinaWeatherParser {
                 LocalDate displayed = LocalDate.of(expected.getYear(), Integer.parseInt(complete.group(1)),
                         Integer.parseInt(complete.group(2)));
                 if (!displayed.equals(expected)) {
-                    throw dateAmbiguous();
+                    throw dateAmbiguous(WeatherSourceException.Detail.DAY_HEADER_MISMATCH);
                 }
                 return;
             } catch (java.time.DateTimeException exception) {
-                throw dateAmbiguous();
+                throw dateAmbiguous(WeatherSourceException.Detail.DAY_HEADER_INVALID);
             }
         }
         Matcher day = DAY.matcher(header.text());
         // 页面列表常只显示日号；顺序和完整更新日共同确定月份与年份，避免按抓取日猜测。
         if (!day.matches() || Integer.parseInt(day.group(1)) != expected.getDayOfMonth()) {
-            throw dateAmbiguous();
+            throw dateAmbiguous(WeatherSourceException.Detail.DAY_HEADER_MISMATCH);
         }
     }
 
@@ -121,8 +146,8 @@ final class ChinaWeatherParser {
         }
     }
 
-    private static WeatherSourceException dateAmbiguous() {
-        return new WeatherSourceException(WeatherSourceException.Code.DATE_AMBIGUOUS);
+    private static WeatherSourceException dateAmbiguous(WeatherSourceException.Detail detail) {
+        return new WeatherSourceException(WeatherSourceException.Code.DATE_AMBIGUOUS, detail);
     }
 
     private static WeatherSourceException structureError() {

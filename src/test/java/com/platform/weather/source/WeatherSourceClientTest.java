@@ -12,8 +12,32 @@ import com.platform.weather.source.WeatherSourceModels.Source;
 import java.time.Instant;
 import org.junit.jupiter.api.Test;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class WeatherSourceClientTest {
     private final WeatherSourceClient client = new WeatherSourceClient();
+
+    @Test
+    void distinguishesConnectionTimeoutRequestTimeoutAndInterruptionWithoutNetwork(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        var http = org.mockito.Mockito.mock(java.net.http.HttpClient.class);
+        var isolated = new WeatherSourceClient(java.time.Clock.systemUTC(), http);
+        var request = new Request(Source.OPEN_METEO, Product.CURRENT,32.0,118.0,null,null,null);
+        Exception[] failures = {new java.net.http.HttpConnectTimeoutException("SECRET_CONNECT"),
+                new java.net.http.HttpTimeoutException("SECRET_TIMEOUT"), new InterruptedException("SECRET_INTERRUPT")};
+        try {
+            for (Exception failure:failures) {
+                org.mockito.Mockito.doThrow(failure).when(http).send(org.mockito.ArgumentMatchers.any(java.net.http.HttpRequest.class),
+                        org.mockito.ArgumentMatchers.<java.net.http.HttpResponse.BodyHandler<byte[]>>any());
+                var error=assertThrows(WeatherSourceException.class, () -> isolated.fetch(request));
+                assertEquals(failure instanceof InterruptedException ? WeatherSourceException.Code.SOURCE_INTERRUPTED
+                        : WeatherSourceException.Code.SOURCE_TIMEOUT,error.getCode());
+                assertEquals(failure,error.getCause());
+            }
+            assertTrue(Thread.currentThread().isInterrupted());
+        } finally { Thread.interrupted(); }
+        org.assertj.core.api.Assertions.assertThat(output.getAll()).contains("type=HttpConnectTimeoutException",
+                "type=HttpTimeoutException", "type=InterruptedException", "elapsedMs=", "host=api.open-meteo.com")
+                .doesNotContain("SECRET_CONNECT", "SECRET_TIMEOUT", "SECRET_INTERRUPT");
+    }
 
     @Test
     void rejectsUnsupportedProductsBeforeMakingAnyRequest() {
