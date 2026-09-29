@@ -102,8 +102,10 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 
 ### 运维设备原始读数
 
-空调内机使用独立 `IDU` 类型及 `INDOOR_UNIT_METER_1039` 产品/协议族，
-[V44](src/env/init/V44__mysql_indoor_unit_meter_template.sql) 只建立七点模板和命名规则，不创建实际设备或身份。
+内机侧电表使用 `INDOOR_UNIT_METER_1039` 产品/协议族，
+[V44](src/env/init/V44__mysql_indoor_unit_meter_template.sql) 曾以 `IDU` 建立七点模板和命名规则；
+[V66](src/env/init/V66__mysql_meter_coverage.sql) 将已确认的内机侧、外机侧电表产品分类纠正为
+`ELECTRIC_METER_1P` / `ELECTRIC_METER_3P`，保留存量设备及测点编码。真正空调内外机仍使用 `IDU` / `ODU`。
 [适配器配置](telemetry-adapter/src/main/resources/db/indoor-unit-meter-1039.example.sql) 默认停用；
 正式接入时再补建筑、房间、设备和 SN 归属，并检查 Topic 的唯一协议匹配。
 
@@ -118,6 +120,14 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 | `EPN` | 反向电能 | kWh |
 
 七点默认 `for_calc=0`，不绑定旧 `WCR1_*` 测点，不自动进入冷水机组公式或能源结算。
+
+表计覆盖档案经 `/api/v1/assets/equipment/{equipmentId}/meter-coverage` 查询及保存；
+`/history` 查询不可改写的版本，`/candidates` 分页选择同建筑被测设备，
+`/api/v1/assets/meter-coverages` 批量读取列表当前档案。权限沿用资产平台管理员。
+安装位置允许待确认，不从原资产空间推断。清单支持一表多设备，表示共同计量，不分摊、不合计；
+变更从保存时刻生效，不套用到既往数据。已删除的被测设备保留快照并标记不可用。
+它不启用整楼关系治理，也不代替已审核的能源语义及计量边界，决策见
+[ADR-0002](docs/adr/0002-meter-coverage-archive.md)。
 
 `GET /api/v1/assets/equipment/{equipmentId}/readings` 沿用资产接口的平台管理员权限，
 从 MySQL 确定设备当前测点及单位，再按建筑、设备和测点身份批量读取 TDengine 中各测点的最新原始事件。

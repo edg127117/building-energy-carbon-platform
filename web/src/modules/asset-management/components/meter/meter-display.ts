@@ -53,6 +53,20 @@ export function isMeterEquipment(
   )
 }
 
+const METER_COVERAGE_PRODUCT_IDS = new Set(['PRODUCT_IDU_METER_1039', 'PRODUCT_ODU_METER_339'])
+
+/** 仅识别后端电表档案接口接受的标识，避免名称误判后把无效设备 ID 送入批量覆盖接口。 */
+export function isMeterCoverageEquipment(
+  equipment: { typeCode?: string | null; category?: string | null; productId?: string | null } | Record<string, unknown> | null | undefined,
+): boolean {
+  if (!equipment || typeof equipment !== 'object') return false
+  const value = equipment as Record<string, unknown>
+  const type = String(value.typeCode ?? '').trim().toUpperCase()
+  if (type === 'ELECTRIC_METER_1P' || type === 'ELECTRIC_METER_3P') return true
+  if (String(value.category ?? '').trim().toUpperCase() === 'ELECTRIC_METER') return true
+  return METER_COVERAGE_PRODUCT_IDS.has(String(value.productId ?? '').trim().toUpperCase())
+}
+
 /**
  * 判定电表的分相类型：三相电表 ('3P') 或 单相电表 ('1P')。
  * 综合设备类型、产品/设备名称及测点特征（如 A/B/C 分相测点）进行准确判定。
@@ -67,9 +81,11 @@ export function getMeterPhaseType(
   const prod = String(eq.productName ?? '')
   const profile = String(eq.expectedProfileCode ?? '').toUpperCase()
 
+  if (type.includes('3P')) return '3P'
+  if (type.includes('1P')) return '1P'
+
   // 1. 显式三相标识
   if (
-    type.includes('3P') ||
     type.includes('THREE_PHASE') ||
     type.includes('THREEPHASE') ||
     RE_3P.test(name) ||

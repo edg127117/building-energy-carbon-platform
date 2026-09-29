@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElAlert,
@@ -24,13 +24,15 @@ import {
 import { t } from '@/locales'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
 import MeterRealtimeBoard from '../components/meter/MeterRealtimeBoard.vue'
-import { getMeterPhaseType, isMeterEquipment } from '../components/meter/meter-display'
+import { getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
 import { useAssetManagement } from '../composables/use-asset-management'
+import { useMeterCoverage } from '../composables/use-meter-coverage'
 import { flattenSpaces, type AssetEquipmentQuery } from '../models/assets'
 
 type PhaseFilter = 'ALL' | '3P' | '1P'
 
 const management = useAssetManagement()
+const meterCoverage = useMeterCoverage()
 const filterScope = useAssetManagement()
 const router = useRouter()
 const route = useRoute()
@@ -40,14 +42,21 @@ const phaseFilter = ref<PhaseFilter>('ALL')
 const filterSpaces = computed(() => flattenSpaces(filterScope.scopeSpaces.value))
 const meterDrawerOpen = ref(false)
 const selectedEquipment = computed(() => management.selectedEquipment.value)
+const meterCoverageById = computed(() => new Map(meterCoverage.listCoverages.value.map(item => [item.equipmentId, item])))
 
 const allMeters = computed(() => management.equipment.value.items.filter(item => isMeterEquipment(item)))
 const threePhaseCount = computed(() => allMeters.value.filter(item => getMeterPhaseType(item) === '3P').length)
 const singlePhaseCount = computed(() => allMeters.value.filter(item => getMeterPhaseType(item) === '1P').length)
-const coveredSpaceCount = computed(() => {
-  const spaces = new Set(allMeters.value.map(item => item.spaceId || item.spaceName).filter(Boolean))
-  return spaces.size
-})
+const coverageLinkCount = computed(() => meterCoverage.listCoverages.value.reduce((total, item) => total + item.targets.length, 0))
+
+watch(
+  [() => management.equipment.value.items, () => management.equipmentQuery.value.buildingId],
+  ([items, buildingId]) => {
+    const meterIds = items.filter(item => isMeterCoverageEquipment(item)).map(item => item.equipmentId)
+    void meterCoverage.loadListCoverages(buildingId, meterIds).catch(() => undefined)
+  },
+  { immediate: true },
+)
 
 const filteredMeters = computed(() => {
   if (phaseFilter.value === 'ALL') return allMeters.value
@@ -147,6 +156,7 @@ onMounted(() => {
     <ElAlert v-if="management.equipmentError.value" :title="management.equipmentError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="management.buildingsError.value" :title="management.buildingsError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="filterScope.scopeError.value" :title="filterScope.scopeError.value.message" type="error" show-icon :closable="false" />
+    <ElAlert v-if="meterCoverage.listError.value" :title="meterCoverage.listError.value.message" type="error" show-icon :closable="false" />
 
     <div class="summary-strip">
       <article class="summary-card">
@@ -171,10 +181,10 @@ onMounted(() => {
         </div>
       </article>
       <article class="summary-card">
-        <span class="summary-label">{{ t('assetManagement.powerMonitoring.activeSpaces') }}</span>
+        <span class="summary-label">{{ t('assetManagement.powerMonitoring.coverageLinks') }}</span>
         <div class="summary-value-row">
-          <strong class="summary-value tone-success">{{ coveredSpaceCount }}</strong>
-          <span class="summary-unit">{{ t('assetManagement.powerMonitoring.spaceUnit') }}</span>
+          <strong class="summary-value tone-success">{{ meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : coverageLinkCount }}</strong>
+          <span class="summary-unit">{{ t('assetManagement.powerMonitoring.linkUnit') }}</span>
         </div>
       </article>
     </div>
@@ -257,6 +267,15 @@ onMounted(() => {
             </div>
           </template>
         </ElTableColumn>
+        <ElTableColumn :label="t('assetManagement.equipment.meterCoverage')" min-width="150">
+          <template #default="{ row }">{{ isMeterCoverageEquipment(row) ? (meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : meterCoverageById.get(row.equipmentId)?.scopeLabel || t('assetManagement.meterCoverage.unconfigured')) : t('common.missing') }}</template>
+        </ElTableColumn>
+        <ElTableColumn :label="t('assetManagement.equipment.meterTargetCount')" width="130">
+          <template #default="{ row }">{{ isMeterCoverageEquipment(row) ? (meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : meterCoverageById.get(row.equipmentId)?.targets.length ?? 0) : t('common.missing') }}</template>
+        </ElTableColumn>
+        <ElTableColumn :label="t('assetManagement.equipment.meterInstallationLocation')" min-width="150">
+          <template #default="{ row }">{{ isMeterCoverageEquipment(row) ? (meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : meterCoverageById.get(row.equipmentId)?.installationSpaceName || t('assetManagement.meterCoverage.toConfirm')) : t('common.missing') }}</template>
+        </ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.system')" prop="systemGroupName" min-width="130" show-overflow-tooltip />
         <ElTableColumn :label="t('assetManagement.equipment.archiveStatus')" min-width="95">
           <template #default="{ row }"><AssetStatusTag :status="row.status" /></template>
@@ -306,7 +325,7 @@ onMounted(() => {
                 {{ t('assetManagement.powerMonitoring.viewStaticArchive') }}
               </ElButton>
             </div>
-            <p>{{ selectedEquipment.equipmentCode || t('common.missing') }}{{ ' · ' }}{{ selectedEquipment.spaceName || t('common.missing') }}</p>
+            <p>{{ t('assetManagement.powerMonitoring.archiveSpaceDetail', { code: selectedEquipment.equipmentCode || t('common.missing'), space: selectedEquipment.spaceName || t('common.missing') }) }}</p>
           </template>
           <h2 v-else :id="titleId">{{ t('assetManagement.powerMonitoring.drawerTitle') }}</h2>
         </div>
