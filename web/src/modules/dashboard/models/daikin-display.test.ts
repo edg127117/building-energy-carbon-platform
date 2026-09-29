@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   daikinLabel, daikinFieldLabel, daikinFieldExplanation, daikinFieldTone,
   daikinCurrentFieldValue, daikinCurrentValue, daikinCurrentFields,
+  daikinOutdoorStatusLabel, daikinOutdoorStatusTone, isDaikinDeviceRunning,
   daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
   groupDaikinDevicesBySystem, groupDaikinDevicesBySpace,
   daikinStructuredDetail, daikinTemperatureSummary, filterDaikinStateEvents,
@@ -215,6 +216,22 @@ describe('manufacturer display boundaries', () => {
       '压缩机启停:关', '机组状态:停止', '设备型号:RUCXYQ40BB',
     ])
     expect(structuredOutdoor.healthRows.map(r => r.key)).toEqual(['unitStatus'])
+
+    const protocolOutdoorDevice: Partial<DaikinDevice> = {
+      deviceKind: 'OUTDOOR',
+      active: true,
+      stale: false,
+      lastValidAt: 1700000000000,
+      hasActiveException: false,
+      onOff: { value: null, status: 'MISSING', lastValidAt: null, stale: false },
+      unitStatus: { value: null, status: 'MISSING', lastValidAt: null, stale: false },
+    }
+    expect(isDaikinDeviceRunning(protocolOutdoorDevice)).toBe(true)
+    expect(isDaikinDeviceRunning(protocolOutdoorDevice, 'off')).toBe(false)
+    expect(daikinOutdoorStatusLabel(protocolOutdoorDevice)).toBe('运行中')
+    expect(daikinOutdoorStatusTone(protocolOutdoorDevice)).toBe('success')
+    expect(daikinOutdoorStatusLabel(protocolOutdoorDevice, 'off')).toBe('已关机')
+    expect(daikinOutdoorStatusTone(protocolOutdoorDevice, 'off')).toBe('muted')
 
     const events = [
       { eventId: 1, fieldName: 'onOff', beforeNormalizedValue: 'off', afterNormalizedValue: 'on', previousObservedAt: 1000, observedAt: 2000, afterGap: false },
