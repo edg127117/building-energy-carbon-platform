@@ -90,6 +90,10 @@ public class WeatherWorker {
                 service.authorizeJob(job);repo.publish(job,data);
             }
         } catch(WeatherSourceException ex) {
+            log.warn("Weather source task failed id={} source={} product={} attempt={} code={} detail={}",
+                    job.id(),job.source(),job.product(),job.attempts(),ex.getCode(),ex.getDetail());
+            // 关闭时的中断不冒充来源故障；保留租约，由恢复后的 worker 按既有过期租约规则接管。
+            if(ex.getCode()==WeatherSourceException.Code.SOURCE_INTERRUPTED)return;
             completeFailure(job,ex.isRetryable(),ex.getCode().name(),ex.getRetryAfterMillis()==null?0:ex.getRetryAfterMillis());
         } catch(BusinessException ex) {
             completeFailure(job,false,ex.getErrorCode()==null?"AUTHORIZATION_OR_CONFIGURATION_CHANGED":ex.getErrorCode(),0);
