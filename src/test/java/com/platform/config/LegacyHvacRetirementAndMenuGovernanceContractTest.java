@@ -107,4 +107,22 @@ class LegacyHvacRetirementAndMenuGovernanceContractTest {
                 "INDICATOR_PUMP_EFF_B1",
                 "INDICATOR_AHU_EFF_B1");
     }
+
+    @Test
+    void reorganizesOperationsMonitoringAndDeviceMenusWithRoleGrantInheritance() throws IOException {
+        String reorganize = Files.readString(INIT.resolve(
+                "V65__mysql_reorganize_operations_monitoring_and_device_menus.sql"));
+
+        assertThat(reorganize).contains(
+                "(305, 300, '综合总览', 'M', '/operations/overview'",
+                "(306, 305, '运行总览', 'C', '/operations/overview/running'",
+                "(310, 300, '实时监控', 'M', '/operations/realtime'",
+                "(311, 310, '暖通空调监控', 'C', '/operations/realtime/hvac'",
+                "(312, 310, '电力监控', 'C', '/operations/realtime/power'",
+                "(252, 230, '用能设备台账', 'C', '/operations/devices/businessDevices'",
+                "(256, 230, '监测采集设备', 'C', '/operations/devices/meters'",
+                "INSERT IGNORE INTO `sys_role_menu` (`role_id`, `menu_id`)",
+                "target.`path` IN ('/operations/overview/running', '/operations/realtime/power')",
+                "target.`path` IN ('/operations/devices/meters', '/operations/realtime/power')");
+    }
 }

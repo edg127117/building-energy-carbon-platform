@@ -3,6 +3,8 @@ export { routes } from './routes'
 export { useAssetManagement } from './composables/use-asset-management'
 export { useEquipmentReadings } from './composables/use-equipment-readings'
 export { flattenSpaces } from './models/assets'
+export { default as MeterRealtimeBoard } from './components/meter/MeterRealtimeBoard.vue'
+export { getMeterPhaseType, isMeterEquipment } from './components/meter/meter-display'
 export type {
   AssetBuilding,
   AssetEquipment,
