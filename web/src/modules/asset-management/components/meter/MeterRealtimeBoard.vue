@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { ElAlert, ElEmpty, ElSkeleton } from '@/shared/ui'
 import { t } from '@/locales'
-import type { AssetEquipmentDetail } from '../../models/assets'
+import type { AssetEquipment } from '../../models/assets'
 import { useEquipmentReadings } from '../../composables/use-equipment-readings'
 import { useEquipmentTrendHistory } from '../../composables/use-equipment-trend-history'
 import SinglePhaseMeterBoard from './SinglePhaseMeterBoard.vue'
@@ -10,7 +10,7 @@ import ThreePhaseMeterBoard from './ThreePhaseMeterBoard.vue'
 import { getMeterPhaseType } from './meter-display'
 
 const props = defineProps<{
-  equipment: AssetEquipmentDetail
+  equipment: AssetEquipment
 }>()
 
 const { readings, loading, error, load, clear: clearReadings } = useEquipmentReadings()

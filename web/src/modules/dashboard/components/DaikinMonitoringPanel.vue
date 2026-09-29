@@ -10,7 +10,8 @@ import { formatDateTime } from '@/shared/utils/format'
 import { listAccessibleBuildings } from '../api/hvac'
 import { daikinApi } from '../api/daikin'
 import {
-  daikinCurrentValue, daikinFieldTone, daikinLabel, daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
+  daikinCurrentValue, daikinFieldTone, daikinLabel, daikinOutdoorStatusLabel, daikinOutdoorStatusTone,
+  daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
   groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning, normalizeDaikinSpaceName,
   type DaikinQuickStatus,
 } from '../models/daikin-display'
@@ -32,6 +33,7 @@ interface CardTelemetry {
 const props = withDefaults(defineProps<{ alarms?: boolean; history?: boolean }>(), { alarms: false, history: false })
 const route = useRoute()
 const text = (key: string) => t(`dashboard.daikin.${key}`)
+const summaryText = (key: string) => t(`dashboard.spaceSummary.${key}`)
 const buildings = useDaikinResource<Awaited<ReturnType<typeof listAccessibleBuildings>>>()
 const devices = useDaikinResource<Awaited<ReturnType<typeof daikinApi.devices>>>()
 const exceptions = useDaikinResource<Awaited<ReturnType<typeof daikinApi.exceptions>>>()
@@ -45,6 +47,10 @@ const exceptionFilter = ref('')
 const quickStatus = ref<DaikinQuickStatus>('ALL')
 const groupMode = ref<'SYSTEM' | 'SPACE'>('SYSTEM')
 const viewMode = ref<'CARD' | 'TABLE'>('CARD')
+const showSpaceSummary = ref(true)
+const spaceSummaryFilter = ref<'ALL' | 'RUNNING' | 'STOPPED'>('ALL')
+const spaceSummaryPage = ref(1)
+const SPACE_SUMMARY_PAGE_SIZE = 6
 const collapsedGroups = ref<Record<string, boolean>>({})
 const cardTelemetry = ref<Record<string, CardTelemetry>>({})
 const searchInput = ref('')
@@ -81,6 +87,73 @@ const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevic
 const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value))
 const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? []))
 const selectedDevice = computed(() => rawDevices.value.find(item => item.equipmentId === selected.value))
+
+const spaceSummaryItems = computed(() => {
+  const groups = groupDaikinDevicesBySpace(rawDevices.value, spaces.data.value ?? [])
+  return groups.map(group => {
+    const opt = spaceFilterOptions.value.find(item => item.label === group.spaceName)
+    const roomTemps: number[] = []
+    const setTemps: number[] = []
+    for (const dev of group.devices) {
+      if (dev.deviceKind === 'OUTDOOR') continue
+      const tele = cardTelemetry.value[dev.equipmentId]
+      if (tele?.roomTemp != null) roomTemps.push(tele.roomTemp)
+      if (tele?.setTemp != null) setTemps.push(tele.setTemp)
+    }
+    const avgRoomTemp = roomTemps.length
+      ? Math.round((roomTemps.reduce((sum, val) => sum + val, 0) / roomTemps.length) * 10) / 10
+      : null
+    const avgSetTemp = setTemps.length
+      ? Math.round((setTemps.reduce((sum, val) => sum + val, 0) / setTemps.length) * 10) / 10
+      : null
+    return {
+      groupKey: group.groupKey,
+      spaceName: group.spaceName,
+      spaceOptionValue: opt?.value ?? '',
+      runningCount: group.runningCount,
+      stoppedCount: Math.max(0, group.devices.length - group.runningCount),
+      avgRoomTemp,
+      avgSetTemp,
+    }
+  }).sort((a, b) => {
+    if (b.runningCount !== a.runningCount) return b.runningCount - a.runningCount
+    const aHasTemp = a.avgRoomTemp != null ? 1 : 0
+    const bHasTemp = b.avgRoomTemp != null ? 1 : 0
+    if (bHasTemp !== aHasTemp) return bHasTemp - aHasTemp
+    return a.spaceName.localeCompare(b.spaceName, 'zh-CN', { numeric: true })
+  })
+})
+
+const spaceSummaryCounts = computed(() => ({
+  ALL: spaceSummaryItems.value.length,
+  RUNNING: spaceSummaryItems.value.filter(item => item.runningCount > 0).length,
+  STOPPED: spaceSummaryItems.value.filter(item => item.runningCount === 0).length,
+}))
+
+const filteredSpaceSummaryItems = computed(() => {
+  if (spaceSummaryFilter.value === 'RUNNING') {
+    return spaceSummaryItems.value.filter(item => item.runningCount > 0)
+  }
+  if (spaceSummaryFilter.value === 'STOPPED') {
+    return spaceSummaryItems.value.filter(item => item.runningCount === 0)
+  }
+  return spaceSummaryItems.value
+})
+
+const pagedSpaceSummaryItems = computed(() => {
+  const start = (spaceSummaryPage.value - 1) * SPACE_SUMMARY_PAGE_SIZE
+  return filteredSpaceSummaryItems.value.slice(start, start + SPACE_SUMMARY_PAGE_SIZE)
+})
+
+function selectSpaceSummaryFilter(filter: 'ALL' | 'RUNNING' | 'STOPPED') {
+  spaceSummaryFilter.value = filter
+  spaceSummaryPage.value = 1
+}
+
+function toggleSpaceChip(spaceOptionValue: string) {
+  if (!spaceOptionValue) return
+  space.value = space.value === spaceOptionValue ? '' : spaceOptionValue
+}
 
 function spaceNameOf(spaceId: string | null | undefined): string {
   if (!spaceId) return text('unassignedSpace')
@@ -318,6 +391,76 @@ onUnmounted(() => {
     <ElEmpty v-else-if="!building && !buildings.error.value" :description="t('dashboard.noBuilding')" />
 
     <template v-if="building && !alarms">
+      <section v-if="spaceSummaryItems.length" class="space-summary-bar">
+        <header class="space-summary-header">
+          <div class="space-summary-title-row">
+            <strong class="space-summary-title">{{ summaryText('title') }}</strong>
+            <div v-if="showSpaceSummary" class="space-summary-pills">
+              <button
+                v-for="tab in ([
+                  ['ALL', 'filterAllSpaces', spaceSummaryCounts.ALL],
+                  ['RUNNING', 'filterRunningSpaces', spaceSummaryCounts.RUNNING],
+                  ['STOPPED', 'filterStoppedSpaces', spaceSummaryCounts.STOPPED],
+                ] as const)"
+                :key="tab[0]"
+                type="button"
+                class="space-filter-pill"
+                :class="{ 'space-filter-pill-active': spaceSummaryFilter === tab[0] }"
+                @click="selectSpaceSummaryFilter(tab[0])"
+              >
+                {{ summaryText(tab[1]) }}{{ ' (' }}{{ tab[2] }}{{ ')' }}
+              </button>
+            </div>
+          </div>
+          <div class="space-summary-actions">
+            <ElPagination
+              v-if="showSpaceSummary && filteredSpaceSummaryItems.length > SPACE_SUMMARY_PAGE_SIZE"
+              v-model:current-page="spaceSummaryPage"
+              :page-size="SPACE_SUMMARY_PAGE_SIZE"
+              :total="filteredSpaceSummaryItems.length"
+              layout="prev, pager, next"
+            />
+            <ElButton v-if="space" text type="primary" @click="space = ''">{{ summaryText('clearSpaceFilter') }}</ElButton>
+            <ElButton text @click="showSpaceSummary = !showSpaceSummary">
+              {{ summaryText(showSpaceSummary ? 'collapse' : 'expand') }}
+            </ElButton>
+          </div>
+        </header>
+        <template v-if="showSpaceSummary">
+          <div v-if="pagedSpaceSummaryItems.length" class="space-summary-grid">
+            <button
+              v-for="item in pagedSpaceSummaryItems"
+              :key="item.groupKey"
+              type="button"
+              class="space-summary-chip"
+              :class="{
+                'space-summary-chip-active': item.spaceOptionValue && space === item.spaceOptionValue,
+              }"
+              @click="toggleSpaceChip(item.spaceOptionValue)"
+            >
+              <div class="space-chip-top">
+                <strong class="space-chip-name">{{ item.spaceName }}</strong>
+                <ElTag v-if="item.runningCount > 0" type="success">{{ summaryText('runningBadge') }}</ElTag>
+                <ElTag v-else type="info">{{ summaryText('stoppedBadge') }}</ElTag>
+              </div>
+              <div class="space-chip-metrics">
+                <span class="tone-success">{{ summaryText('runningPrefix') }}{{ ' ' }}{{ item.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</span>
+                <span>{{ ' · ' }}</span>
+                <span class="tone-muted">{{ summaryText('stoppedPrefix') }}{{ ' ' }}{{ item.stoppedCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</span>
+                <template v-if="item.avgRoomTemp != null">
+                  <span>{{ ' · ' }}</span>
+                  <span>{{ summaryText('avgTempPrefix') }}{{ ' ' }}{{ item.avgRoomTemp }}{{ '°C' }}</span>
+                </template>
+                <template v-if="item.avgSetTemp != null">
+                  <span>{{ ' / ' }}{{ summaryText('setTempPrefix') }}{{ ' ' }}{{ item.avgSetTemp }}{{ '°C' }}</span>
+                </template>
+              </div>
+            </button>
+          </div>
+          <p v-else class="space-summary-empty">{{ summaryText('emptyFilteredSpaces') }}</p>
+        </template>
+      </section>
+
       <div class="device-list">
         <ElAlert v-if="devices.error.value" :title="devices.error.value" type="error" :closable="false" />
         <ElSkeleton v-if="devices.loading.value" :rows="5" animated />
@@ -337,8 +480,8 @@ onUnmounted(() => {
                   </strong>
                   <span v-if="sysGroup.outdoorUnit" class="group-subtitle">
                     {{ sysGroup.outdoorUnit.equipmentCode }}{{ ' · ' }}{{ text('unitStatusLabel') }}{{ '：' }}
-                    <strong :class="`tone-${daikinFieldTone('unitStatus', sysGroup.outdoorUnit.unitStatus?.value)}`">
-                      {{ daikinLabel(sysGroup.outdoorUnit.unitStatus?.value) }}
+                    <strong :class="`tone-${daikinOutdoorStatusTone(sysGroup.outdoorUnit, cardTelemetry[sysGroup.outdoorUnit.equipmentId]?.compressorOnOff)}`">
+                      {{ daikinOutdoorStatusLabel(sysGroup.outdoorUnit, cardTelemetry[sysGroup.outdoorUnit.equipmentId]?.compressorOnOff) }}
                     </strong>
                   </span>
                 </div>
@@ -364,7 +507,7 @@ onUnmounted(() => {
                   :key="item.equipmentId"
                   class="device-card"
                   :class="{
-                    'device-card-running': isDaikinDeviceRunning(item),
+                    'device-card-running': isDaikinDeviceRunning(item, cardTelemetry[item.equipmentId]?.compressorOnOff),
                     'device-card-active': selected === item.equipmentId,
                     'device-card-warning': item.hasActiveException,
                   }"
@@ -373,7 +516,7 @@ onUnmounted(() => {
                   <header class="device-card-header">
                     <div>
                       <div class="device-title-row">
-                        <span class="status-dot" :class="isDaikinDeviceRunning(item) ? 'dot-running' : 'dot-stopped'" />
+                        <span class="status-dot" :class="isDaikinDeviceRunning(item, cardTelemetry[item.equipmentId]?.compressorOnOff) ? 'dot-running' : 'dot-stopped'" />
                         <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
                       </div>
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ spaceNameOf(item.spaceId) }}</p>
@@ -389,8 +532,8 @@ onUnmounted(() => {
                     <template v-if="item.deviceKind === 'OUTDOOR'">
                       <div class="metric-cell">
                         <span class="metric-label">{{ text('unitStatusLabel') }}</span>
-                        <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
-                          {{ daikinLabel(item.unitStatus?.value) }}
+                        <strong class="metric-value" :class="`tone-${daikinOutdoorStatusTone(item, cardTelemetry[item.equipmentId]?.compressorOnOff)}`">
+                          {{ daikinOutdoorStatusLabel(item, cardTelemetry[item.equipmentId]?.compressorOnOff) }}
                         </strong>
                       </div>
                       <div class="metric-cell">
@@ -462,7 +605,7 @@ onUnmounted(() => {
                   :key="item.equipmentId"
                   class="device-card"
                   :class="{
-                    'device-card-running': isDaikinDeviceRunning(item),
+                    'device-card-running': isDaikinDeviceRunning(item, cardTelemetry[item.equipmentId]?.compressorOnOff),
                     'device-card-active': selected === item.equipmentId,
                     'device-card-warning': item.hasActiveException,
                   }"
@@ -471,7 +614,7 @@ onUnmounted(() => {
                   <header class="device-card-header">
                     <div>
                       <div class="device-title-row">
-                        <span class="status-dot" :class="isDaikinDeviceRunning(item) ? 'dot-running' : 'dot-stopped'" />
+                        <span class="status-dot" :class="isDaikinDeviceRunning(item, cardTelemetry[item.equipmentId]?.compressorOnOff) ? 'dot-running' : 'dot-stopped'" />
                         <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
                       </div>
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ text(item.deviceKind === 'OUTDOOR' ? 'outdoorBadge' : 'indoorBadge') }}</p>
@@ -487,8 +630,8 @@ onUnmounted(() => {
                     <template v-if="item.deviceKind === 'OUTDOOR'">
                       <div class="metric-cell">
                         <span class="metric-label">{{ text('unitStatusLabel') }}</span>
-                        <strong class="metric-value" :class="`tone-${daikinFieldTone('unitStatus', item.unitStatus?.value)}`">
-                          {{ daikinLabel(item.unitStatus?.value) }}
+                        <strong class="metric-value" :class="`tone-${daikinOutdoorStatusTone(item, cardTelemetry[item.equipmentId]?.compressorOnOff)}`">
+                          {{ daikinOutdoorStatusLabel(item, cardTelemetry[item.equipmentId]?.compressorOnOff) }}
                         </strong>
                       </div>
                       <div class="metric-cell">
@@ -549,7 +692,7 @@ onUnmounted(() => {
           <ElTableColumn :label="text('equipment')" min-width="180">
             <template #default="{ row }">
               <div class="device-title-row">
-                <span class="status-dot" :class="isDaikinDeviceRunning(row) ? 'dot-running' : 'dot-stopped'" />
+                <span class="status-dot" :class="isDaikinDeviceRunning(row, cardTelemetry[row.equipmentId]?.compressorOnOff) ? 'dot-running' : 'dot-stopped'" />
                 <strong>{{ row.equipmentName || text('unnamed') }}</strong>
               </div>
               <span class="table-sub">{{ row.equipmentCode || row.equipmentId }}</span>
@@ -563,8 +706,8 @@ onUnmounted(() => {
           </ElTableColumn>
           <ElTableColumn :label="text('runStateLabel')">
             <template #default="{ row }">
-              <strong :class="isDaikinDeviceRunning(row) ? 'tone-success' : 'tone-muted'">
-                {{ row.deviceKind === 'OUTDOOR' ? daikinLabel(row.unitStatus?.value) : (isDaikinDeviceRunning(row) ? text('runningLabel') : text('stoppedLabel')) }}
+              <strong :class="isDaikinDeviceRunning(row, cardTelemetry[row.equipmentId]?.compressorOnOff) ? 'tone-success' : 'tone-muted'">
+                {{ row.deviceKind === 'OUTDOOR' ? daikinOutdoorStatusLabel(row, cardTelemetry[row.equipmentId]?.compressorOnOff) : (isDaikinDeviceRunning(row) ? text('runningLabel') : text('stoppedLabel')) }}
               </strong>
             </template>
           </ElTableColumn>
@@ -702,4 +845,20 @@ onUnmounted(() => {
 .sync-time { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .exception-pagination { display: flex; gap: var(--bec-space-tight); justify-content: flex-start; }
 .el-pagination { max-width: 100%; overflow-x: auto; }
+.space-summary-bar { display: grid; gap: var(--bec-space-group); padding: var(--bec-space-group) var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
+.space-summary-header { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-group); flex-wrap: wrap; }
+.space-summary-title-row { display: flex; align-items: center; gap: var(--bec-space-group); flex-wrap: wrap; }
+.space-summary-title { font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
+.space-summary-pills { display: flex; align-items: center; gap: var(--bec-space-tight); flex-wrap: wrap; }
+.space-filter-pill { padding: var(--bec-ref-space-4) var(--bec-ref-space-12); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); cursor: pointer; font-family: inherit; font-size: var(--bec-font-size-small); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-secondary); }
+.space-filter-pill-active { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); border-color: var(--bec-color-action-primary); }
+.space-summary-actions { display: flex; align-items: center; gap: var(--bec-space-tight); flex-wrap: wrap; }
+.space-summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--bec-control-height) * 5.2), 1fr)); gap: var(--bec-space-tight); }
+.space-summary-chip { display: grid; gap: var(--bec-space-tight); text-align: left; padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); cursor: pointer; font-family: inherit; }
+.space-summary-chip-active { border-color: var(--bec-color-brand-primary); box-shadow: var(--bec-shadow-focus); background: color-mix(in srgb, var(--bec-color-brand-primary) 5%, var(--bec-color-surface)); }
+.space-summary-chip-warning { border-color: color-mix(in srgb, var(--bec-color-warning) 50%, var(--bec-color-border)); }
+.space-chip-top { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); }
+.space-chip-name { font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
+.space-chip-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-ref-space-1); font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
+.space-summary-empty { margin: 0; font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
 </style>

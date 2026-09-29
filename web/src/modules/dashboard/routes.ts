@@ -3,6 +3,9 @@ export const routes: RouteRecordRaw[] = [{
   path: 'dashboard', name: 'dashboard', component: () => import('./pages/HvacMonitoringPage.vue'),
   meta: { titleKey: 'dashboard.title', mode: 'office' },
 }, {
+  path: '/operations/overview/running', name: 'running-overview', component: () => import('./pages/RunningOverviewPage.vue'),
+  meta: { titleKey: 'dashboard.runningOverview.title', mode: 'office' },
+}, {
   path: '/operations/alarms/liveAlarms', component: () => import('./pages/DaikinAlarmsPage.vue'),
 }, {
   path: '/operations/alarms/historyAlarms', component: () => import('./pages/DaikinAlarmsPage.vue'),

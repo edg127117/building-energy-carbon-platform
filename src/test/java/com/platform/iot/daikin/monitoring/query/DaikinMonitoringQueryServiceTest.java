@@ -291,6 +291,18 @@ class DaikinMonitoringQueryServiceTest {
                 .satisfies(item -> assertThat(item.recoveredAt()).isEqualTo(NOW - 1_000));
     }
 
+    @Test
+    void allowsRunningOverviewMenuGrantToQueryMonitoringData() {
+        SysMenu overviewMenu = new SysMenu();
+        overviewMenu.setMenuType("C");
+        overviewMenu.setPath("/operations/overview/running");
+        when(menus.selectVisibleMenusByUserId(8L)).thenReturn(List.of(overviewMenu));
+        insertTarget("identity-A", "equipment-A", "BLD-A", "source-A", 1);
+
+        var result = service.devices(8L, OPS, "BLD-A", 1, 20, null, null);
+        assertThat(result.total()).isEqualTo(1);
+    }
+
     private void insertTarget(String identity, String equipment, String building, String source, int mapping) {
         String pending = "pending-" + identity;
         jdbc.update("INSERT INTO biz_equipment VALUES (?,?,'space','system',0,?,?)", equipment, building, equipment, "Room unit");
