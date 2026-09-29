@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ElAlert,
   ElButton,
@@ -33,18 +33,28 @@ import { t } from '@/locales'
 import EquipmentEditorDialog from '../components/EquipmentEditorDialog.vue'
 import PointEditorDialog from '../components/PointEditorDialog.vue'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
-import MeterRealtimeBoard from '../components/meter/MeterRealtimeBoard.vue'
-import { isMeterEquipment } from '../components/meter/meter-display'
+import { getMeterPhaseType, isMeterEquipment } from '../components/meter/meter-display'
 import { useAssetManagement } from '../composables/use-asset-management'
-import { canRunAssetAction, flattenSpaces, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint } from '../models/assets'
+import { canRunAssetAction, flattenSpaces, type AssetEquipment, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint } from '../models/assets'
+
+export type LedgerCategory = 'ALL' | 'BUSINESS' | 'METER'
+type SubCategory = 'ALL' | 'IDU' | 'ODU' | 'COLD_SOURCE' | 'OTHER' | '3P' | '1P'
+
+const props = defineProps<{
+  ledgerCategory?: LedgerCategory
+  title?: string
+  panel?: boolean
+}>()
 
 const management = useAssetManagement()
 const router = useRouter()
+const route = useRoute()
 // 筛选范围与编辑弹窗独立，编辑其他建筑的设备不能替换筛选选项。
 const filterScope = useAssetManagement()
 const filters = reactive<Partial<AssetEquipmentQuery>>({})
 const filterSpaces = computed(() => flattenSpaces(filterScope.scopeSpaces.value))
 const activeDetailTab = ref('archive')
+const subCategory = ref<SubCategory>('ALL')
 const equipmentDrawerOpen = ref(false)
 const equipmentEditorOpen = ref(false)
 const pointEditorOpen = ref(false)
@@ -53,6 +63,83 @@ const editingPoint = ref<AssetPoint | null>(null)
 const selectedEquipment = computed(() => management.selectedEquipment.value)
 const equipmentSubmitting = computed(() => editingEquipment.value ? management.pending.value.has(`equipment:update:${editingEquipment.value.equipmentId}`) : management.pending.value.has('equipment:create'))
 const pointSubmitting = computed(() => editingPoint.value ? management.pending.value.has(`point:update:${editingPoint.value.pointId}`) : false)
+
+const effectiveCategory = computed<LedgerCategory>(() => {
+  if (props.ledgerCategory) return props.ledgerCategory
+  const currentPath = route?.path ?? ''
+  if (currentPath.endsWith('/meters')) return 'METER'
+  if (currentPath.endsWith('/businessDevices')) return 'BUSINESS'
+  return 'ALL'
+})
+
+const pageTitle = computed(() => {
+  if (effectiveCategory.value === 'METER') return t('assetManagement.equipment.meterTitle')
+  return t('assetManagement.equipment.businessTitle')
+})
+
+const pageDescription = computed(() => {
+  if (effectiveCategory.value === 'METER') return t('assetManagement.equipment.meterDescription')
+  return t('assetManagement.equipment.businessDescription')
+})
+
+function isIndoorAc(item: AssetEquipment): boolean {
+  const code = String(item.typeCode ?? '').toUpperCase()
+  const profile = String(item.expectedProfileCode ?? '').toUpperCase()
+  return code === 'IDU' || code.includes('INDOOR') || profile.includes('INDOOR')
+}
+
+function isOutdoorAc(item: AssetEquipment): boolean {
+  const code = String(item.typeCode ?? '').toUpperCase()
+  const profile = String(item.expectedProfileCode ?? '').toUpperCase()
+  return code === 'ODU' || code.includes('OUTDOOR') || profile.includes('OUTDOOR')
+}
+
+function isColdSourceEquipment(item: AssetEquipment): boolean {
+  const code = String(item.typeCode ?? '').toUpperCase()
+  return ['WCR', 'WCT', 'WCP', 'AHU', 'CHILLER', 'PUMP', 'TOWER'].some(token => code.includes(token))
+}
+
+const categoryFilteredItems = computed(() => {
+  const raw = management.equipment.value.items
+  const byLedger = raw.filter(item => {
+    if (effectiveCategory.value === 'METER') return isMeterEquipment(item)
+    if (effectiveCategory.value === 'BUSINESS') return !isMeterEquipment(item)
+    return true
+  })
+  if (subCategory.value === 'ALL') return byLedger
+  if (effectiveCategory.value === 'METER') {
+    return byLedger.filter(item => getMeterPhaseType(item) === subCategory.value)
+  }
+  return byLedger.filter(item => {
+    if (subCategory.value === 'IDU') return isIndoorAc(item)
+    if (subCategory.value === 'ODU') return isOutdoorAc(item)
+    if (subCategory.value === 'COLD_SOURCE') return isColdSourceEquipment(item)
+    if (subCategory.value === 'OTHER') return !isIndoorAc(item) && !isOutdoorAc(item) && !isColdSourceEquipment(item)
+    return true
+  })
+})
+
+const subCategoryOptions = computed<Array<{ key: SubCategory; label: string }>>(() => {
+  if (effectiveCategory.value === 'METER') {
+    return [
+      { key: 'ALL', label: t('assetManagement.equipment.categoryMeterAll') },
+      { key: '3P', label: t('assetManagement.equipment.categoryMeter3P') },
+      { key: '1P', label: t('assetManagement.equipment.categoryMeter1P') },
+    ]
+  }
+  return [
+    { key: 'ALL', label: t('assetManagement.equipment.categoryBusinessAll') },
+    { key: 'IDU', label: t('assetManagement.equipment.categoryIndoor') },
+    { key: 'ODU', label: t('assetManagement.equipment.categoryOutdoor') },
+    { key: 'COLD_SOURCE', label: t('assetManagement.equipment.categoryColdSource') },
+    { key: 'OTHER', label: t('assetManagement.equipment.categoryOtherBusiness') },
+  ]
+})
+
+watch(effectiveCategory, () => {
+  subCategory.value = 'ALL'
+  equipmentDrawerOpen.value = false
+})
 
 async function query() {
   try {
@@ -80,6 +167,7 @@ async function buildingFilterChanged(buildingId: string | undefined) {
 
 async function resetFilters() {
   Object.assign(filters, { buildingId: undefined, spaceId: undefined, systemGroupId: undefined, typeCode: undefined, keyword: undefined })
+  subCategory.value = 'ALL'
   await filterScope.loadScope(undefined)
   await query()
 }
@@ -100,6 +188,14 @@ async function openEquipment(equipmentId: string, showPoints = false) {
   } catch {
     equipmentDrawerOpen.value = false
   }
+}
+
+function goRealtimeMonitoring(item: Record<string, unknown>) {
+  const targetPath = isMeterEquipment(item) ? '/operations/realtime/power' : '/operations/realtime/hvac'
+  const queryParams: Record<string, string> = {}
+  if (item.equipmentId) queryParams.equipmentId = String(item.equipmentId)
+  if (item.buildingId) queryParams.buildingId = String(item.buildingId)
+  void router?.push({ path: targetPath, query: queryParams })
 }
 
 async function openCreateEquipment() {
@@ -183,13 +279,24 @@ function summary(value: { total: number; required: number; configuredRequired: n
 }
 
 onMounted(() => {
-  void Promise.all([management.loadEquipment(), management.ensureBuildingOptions()]).catch(() => undefined)
+  const requestedBuilding = typeof route?.query?.buildingId === 'string' ? route.query.buildingId : undefined
+  if (requestedBuilding) {
+    filters.buildingId = requestedBuilding
+  }
+  void Promise.all([
+    requestedBuilding ? management.setEquipmentQuery({ buildingId: requestedBuilding }) : management.loadEquipment(),
+    management.ensureBuildingOptions(),
+  ]).then(() => {
+    if (typeof route?.query?.equipmentId === 'string' && route.query.equipmentId) {
+      void openEquipment(route.query.equipmentId)
+    }
+  }).catch(() => undefined)
 })
 </script>
 
 <template>
   <section class="equipment-page">
-    <header class="page-heading"><div><h1>{{ t('assetManagement.equipment.title') }}</h1><p>{{ t('assetManagement.equipment.description') }}</p></div><ElButton type="primary" :icon="Plus" @click="openCreateEquipment">{{ t('assetManagement.actions.createEquipment') }}</ElButton></header>
+    <header class="page-heading"><div><h1>{{ pageTitle }}</h1><p>{{ pageDescription }}</p></div><ElButton type="primary" :icon="Plus" @click="openCreateEquipment">{{ t('assetManagement.actions.createEquipment') }}</ElButton></header>
     <ElAlert v-if="management.equipmentError.value" :title="management.equipmentError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="management.buildingsError.value" :title="management.buildingsError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="filterScope.scopeError.value" :title="filterScope.scopeError.value.message" type="error" show-icon :closable="false" />
@@ -223,23 +330,52 @@ onMounted(() => {
       </ElForm>
     </ElCard>
     <ElCard shadow="never" class="list-panel">
-      <template #header><div class="list-heading"><h2>{{ t('assetManagement.equipment.list') }}</h2><span class="list-count">{{ t('assetManagement.equipment.count', { total: management.equipment.value.total }) }}</span></div></template>
+      <template #header>
+        <div class="list-heading">
+          <div class="list-heading-left">
+            <h2>{{ effectiveCategory === 'METER' ? t('assetManagement.equipment.meterList') : t('assetManagement.equipment.list') }}</h2>
+            <div class="category-pills" role="group" :aria-label="t('assetManagement.equipment.filters')">
+              <button
+                v-for="opt in subCategoryOptions"
+                :key="opt.key"
+                type="button"
+                class="category-pill"
+                :class="{ 'category-pill-active': subCategory === opt.key }"
+                @click="subCategory = opt.key"
+              >
+                {{ opt.label }}
+              </button>
+            </div>
+          </div>
+          <span class="list-count">
+            {{ t(effectiveCategory === 'METER' ? 'assetManagement.equipment.meterCount' : 'assetManagement.equipment.count', { total: categoryFilteredItems.length }) }}
+          </span>
+        </div>
+      </template>
       <ElSkeleton v-if="management.equipmentLoading.value && !management.equipment.value.items.length" animated :rows="5" />
-      <ElTable v-else v-loading="management.equipmentLoading.value" :data="management.equipment.value.items" row-key="equipmentId" class="equipment-table">
+      <ElTable v-else v-loading="management.equipmentLoading.value" :data="categoryFilteredItems" row-key="equipmentId" class="equipment-table">
         <ElTableColumn type="index" :label="t('assetManagement.equipment.index')" width="60" :index="index => (management.equipment.value.page - 1) * management.equipment.value.size + index + 1" />
         <ElTableColumn :label="t('assetManagement.labels.equipmentName')" min-width="190"><template #default="{ row }"><div class="equipment-name"><span class="equipment-icon"><Cpu aria-hidden="true" /></span><ElButton link class="name-link" @click="openEquipment(row.equipmentId)">{{ row.equipmentName }}</ElButton></div></template></ElTableColumn>
         <ElTableColumn :label="t('assetManagement.labels.equipmentCode')" prop="equipmentCode" min-width="130" show-overflow-tooltip />
         <ElTableColumn :label="t('assetManagement.equipment.location')" min-width="160"><template #default="{ row }"><div class="location-cell"><span>{{ row.spaceName || t('common.missing') }}</span><span class="secondary">{{ row.buildingName || t('common.missing') }}</span></div></template></ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.system')" prop="systemGroupName" min-width="120" show-overflow-tooltip />
-        <ElTableColumn :label="t('assetManagement.labels.equipmentType')" prop="typeCode" min-width="110" show-overflow-tooltip />
+        <ElTableColumn :label="t('assetManagement.labels.equipmentType')" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">
+            <ElTag v-if="isMeterEquipment(row)" :type="getMeterPhaseType(row) === '3P' ? 'primary' : 'info'">
+              {{ getMeterPhaseType(row) === '3P' ? t('assetManagement.equipment.phaseTag3P') : t('assetManagement.equipment.phaseTag1P') }}
+            </ElTag>
+            <span v-else>{{ row.typeCode || t('common.missing') }}</span>
+          </template>
+        </ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.archiveStatus')" min-width="95"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.pointSummary')" min-width="150"><template #default="{ row }"><div class="point-summary"><span>{{ t('assetManagement.equipment.pointCount', { total: row.pointSummary.total }) }}</span><span class="secondary">{{ summary(row.pointSummary) }}</span></div></template></ElTableColumn>
-        <ElTableColumn :label="t('assetManagement.equipment.actions')" min-width="190" fixed="right">
+        <ElTableColumn :label="t('assetManagement.equipment.actions')" min-width="260" fixed="right">
           <template #default="{ row }">
             <div class="row-actions">
               <ElButton link type="primary" @click="openEquipment(row.equipmentId)">{{ t('assetManagement.equipment.viewArchive') }}</ElButton>
-              <ElButton link type="primary" @click="openEquipment(row.equipmentId, true)">
-                {{ isMeterEquipment(row) ? t('assetManagement.meter.viewMeterPoints') : t('assetManagement.equipment.viewPoints') }}
+              <ElButton link type="primary" @click="openEquipment(row.equipmentId, true)">{{ t('assetManagement.equipment.viewPoints') }}</ElButton>
+              <ElButton link type="primary" @click="goRealtimeMonitoring(row)">
+                {{ isMeterEquipment(row) ? t('assetManagement.equipment.goPowerMonitoring') : t('assetManagement.equipment.goHvacMonitoring') }}
               </ElButton>
             </div>
           </template>
@@ -253,7 +389,13 @@ onMounted(() => {
       <template #header="{ titleId }">
         <div class="detail-heading">
           <template v-if="selectedEquipment && !management.equipmentContextLoading.value">
-            <div class="detail-title"><h2 :id="titleId">{{ selectedEquipment.equipmentName }}</h2><AssetStatusTag :status="selectedEquipment.status" /></div>
+            <div class="detail-title">
+              <h2 :id="titleId">{{ selectedEquipment.equipmentName }}</h2>
+              <AssetStatusTag :status="selectedEquipment.status" />
+              <ElButton type="primary" plain @click="goRealtimeMonitoring(selectedEquipment)">
+                {{ isMeterEquipment(selectedEquipment) ? t('assetManagement.equipment.goPowerMonitoring') : t('assetManagement.equipment.goHvacMonitoring') }}
+              </ElButton>
+            </div>
             <p>{{ selectedEquipment.equipmentCode || t('common.missing') }}</p>
           </template>
           <h2 v-else :id="titleId">{{ t('assetManagement.equipment.detail') }}</h2>
@@ -282,13 +424,15 @@ onMounted(() => {
             </section>
           </div>
         </ElTabPane>
-        <ElTabPane name="points" :label="isMeterEquipment(selectedEquipment) ? t('assetManagement.meter.meterPointsTab') : t('assetManagement.equipment.points')">
+        <ElTabPane name="points" :label="t('assetManagement.equipment.points')">
           <div class="detail-content">
-            <MeterRealtimeBoard
-              v-if="isMeterEquipment(selectedEquipment)"
-              :equipment="selectedEquipment"
-            />
-            <section v-else class="drawer-section">
+            <div v-if="isMeterEquipment(selectedEquipment)" class="static-points-banner">
+              <p>{{ t('assetManagement.equipment.staticPointsNote') }}</p>
+              <ElButton type="primary" plain @click="goRealtimeMonitoring(selectedEquipment)">
+                {{ t('assetManagement.equipment.goPowerMonitoring') }}
+              </ElButton>
+            </div>
+            <section class="drawer-section">
               <h3>{{ t('assetManagement.equipment.points') }}</h3>
               <ElTable :data="management.points.value" row-key="pointId">
                 <ElTableColumn :label="t('assetManagement.labels.pointName')" prop="pointName" min-width="160" />
@@ -319,7 +463,7 @@ onMounted(() => {
         </ElTabPane>
         <ElTabPane name="connection" :label="t('assetManagement.equipment.connectionTab')">
           <div class="detail-content">
-            <ElButton v-if="selectedEquipment.identities.some(identity => identity.identityType === 'DAIKIN_UNIT')" @click="router.push({ path: '/operations/realtime/hvac', query: { equipmentId: selectedEquipment.equipmentId, buildingId: selectedEquipment.buildingId } })">{{ t('dashboard.daikin.detail') }}</ElButton>
+            <ElButton v-if="selectedEquipment.identities.some(identity => identity.identityType === 'DAIKIN_UNIT')" @click="goRealtimeMonitoring(selectedEquipment)">{{ t('dashboard.daikin.detail') }}</ElButton>
             <section class="detail-section"><h3>{{ t('assetManagement.equipment.protocolInformation') }}</h3><dl class="detail-fields"><div><dt>{{ t('assetManagement.labels.expectedProfile') }}</dt><dd>{{ selectedEquipment.expectedProfileCode || t('common.missing') }}</dd></div></dl></section>
             <section class="drawer-section"><h3>{{ t('assetManagement.equipment.identities') }}</h3><ElTable :data="selectedEquipment.identities" row-key="identityId"><ElTableColumn :label="t('assetManagement.labels.identityType')" prop="identityType" min-width="130" /><ElTableColumn :label="t('assetManagement.labels.identity')" prop="identityValue" min-width="180" /><ElTableColumn :label="t('assetManagement.labels.expectedProfile')" prop="expectedProfileCode" min-width="140" /><ElTableColumn :label="t('assetManagement.labels.status')" min-width="100"><template #default="{ row }"><AssetStatusTag :status="row.status" /></template></ElTableColumn><template #empty><ElEmpty :description="t('assetManagement.empty.identities')" /></template></ElTable></section>
           </div>
@@ -327,12 +471,23 @@ onMounted(() => {
         <ElTabPane name="parameters" :label="t('assetManagement.equipment.technicalParameters')">
           <div class="detail-content">
             <section class="detail-section">
-              <h3>{{ t('assetManagement.equipment.technicalParameters') }}</h3><dl class="detail-fields">
-                <div><dt>{{ t('assetManagement.labels.ratedCapacity') }}</dt><dd>{{ formatNumber(selectedEquipment.ratedCapacity) }}</dd></div>
-                <div><dt>{{ t('assetManagement.labels.ratedPower') }}</dt><dd>{{ formatNumber(selectedEquipment.ratedPower) }}</dd></div>
-                <div><dt>{{ t('assetManagement.labels.designCop') }}</dt><dd>{{ formatNumber(selectedEquipment.designCop) }}</dd></div>
+              <h3>{{ t('assetManagement.equipment.technicalParameters') }}</h3>
+              <dl class="detail-fields">
+                <div v-if="!isMeterEquipment(selectedEquipment)">
+                  <dt>{{ t('assetManagement.labels.ratedCapacity') }}</dt>
+                  <dd>{{ formatNumber(selectedEquipment.ratedCapacity) }}</dd>
+                </div>
+                <div>
+                  <dt>{{ t('assetManagement.labels.ratedPower') }}</dt>
+                  <dd>{{ formatNumber(selectedEquipment.ratedPower) }}</dd>
+                </div>
+                <div v-if="!isMeterEquipment(selectedEquipment)">
+                  <dt>{{ t('assetManagement.labels.designCop') }}</dt>
+                  <dd>{{ formatNumber(selectedEquipment.designCop) }}</dd>
+                </div>
               </dl>
             </section>
+            <p v-if="isMeterEquipment(selectedEquipment)" class="parameter-note">{{ t('assetManagement.equipment.meterParametersNote') }}</p>
             <p class="parameter-note">{{ t('assetManagement.forms.parametersReadOnly') }}</p>
           </div>
         </ElTabPane>
@@ -355,8 +510,7 @@ onMounted(() => {
 <style scoped>
 .equipment-page { display: grid; gap: var(--bec-space-section); min-width: 0; }
 .page-heading, .row-actions { display: flex; align-items: center; gap: var(--bec-space-group); }
-.page-heading { justify-content: space-between; }
-.page-heading { align-items: flex-start; }
+.page-heading { justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
 h1, h2, h3, p { margin: 0; }
 h1 { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-heading); }
 h2 { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-weight-heading); }
@@ -370,8 +524,12 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .filter-grid :deep(.el-select) { width: 100%; }
 .filter-actions { display: flex; justify-content: flex-end; gap: var(--bec-space-tight); margin-top: var(--bec-space-section); }
 .filter-actions :deep(.el-button + .el-button), .row-actions :deep(.el-button + .el-button) { margin-left: 0; }
-.list-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-group); }
+.list-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--bec-space-group); }
+.list-heading-left { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-group); }
 .list-heading h2 { font-size: var(--bec-management-title-font-size); }
+.category-pills { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-space-tight); }
+.category-pill { padding: var(--bec-ref-space-4) var(--bec-space-group); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-tag); background: var(--bec-color-surface-secondary); color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); font-weight: var(--bec-font-weight-heading); cursor: pointer; }
+.category-pill-active { background: var(--bec-color-action-primary); color: var(--bec-color-on-action); border-color: var(--bec-color-action-primary); }
 .list-count, .secondary { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .list-panel :deep(.el-card__header) { padding: var(--bec-space-group) var(--bec-space-section); }
 .list-panel :deep(.el-card__body) { padding: 0; }
@@ -385,7 +543,6 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .name-link :deep(span) { overflow-wrap: anywhere; }
 .location-cell, .point-summary { display: grid; gap: var(--bec-ref-space-4); }
 .drawer-actions { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); margin-bottom: 0; }
-.page-heading { flex-wrap: wrap; }
 .list-panel .pagination { padding: var(--bec-space-group) var(--bec-space-section); overflow-x: auto; }
 .pagination { display: flex; justify-content: flex-end; padding-top: var(--bec-space-group); }
 
@@ -409,6 +566,7 @@ p { color: var(--bec-color-text-secondary); max-width: var(--bec-text-measure); 
 .detail-fields > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 3fr); gap: var(--bec-space-group); }
 .detail-fields dt { color: var(--bec-color-text-secondary); }
 .detail-fields dd { margin: 0; overflow-wrap: anywhere; }
+.static-points-banner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--bec-space-group); padding: var(--bec-space-group); background: var(--bec-color-action-soft); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-management-radius); }
 .parameter-note { padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border-radius: var(--bec-management-radius); }
 .detail-pending { min-height: var(--bec-chart-height); display: grid; place-items: center; color: var(--bec-color-text-secondary); }
 .detail-content .drawer-section { margin-top: 0; }

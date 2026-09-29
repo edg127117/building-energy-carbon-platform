@@ -17,6 +17,18 @@ export const routes: RouteRecordRaw[] = [
     path: '/operations/devices/businessDevices',
     name: 'equipment-points',
     component: () => import('./pages/EquipmentPointPage.vue'),
-    meta: { titleKey: 'assetManagement.equipment.title', mode: 'office', requiresPlatformAdmin: true },
+    meta: { titleKey: 'assetManagement.equipment.businessTitle', mode: 'office', requiresPlatformAdmin: true },
+  },
+  {
+    path: '/operations/devices/meters',
+    name: 'meter-equipment-points',
+    component: () => import('./pages/EquipmentPointPage.vue'),
+    meta: { titleKey: 'assetManagement.equipment.meterTitle', mode: 'office', requiresPlatformAdmin: true },
+  },
+  {
+    path: '/operations/realtime/power',
+    name: 'power-monitoring',
+    component: () => import('./pages/PowerMonitoringPage.vue'),
+    meta: { titleKey: 'assetManagement.powerMonitoring.title', mode: 'office' },
   },
 ]

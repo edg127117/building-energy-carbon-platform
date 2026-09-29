@@ -32,6 +32,7 @@ interface CardTelemetry {
 const props = withDefaults(defineProps<{ alarms?: boolean; history?: boolean }>(), { alarms: false, history: false })
 const route = useRoute()
 const text = (key: string) => t(`dashboard.daikin.${key}`)
+const summaryText = (key: string) => t(`dashboard.spaceSummary.${key}`)
 const buildings = useDaikinResource<Awaited<ReturnType<typeof listAccessibleBuildings>>>()
 const devices = useDaikinResource<Awaited<ReturnType<typeof daikinApi.devices>>>()
 const exceptions = useDaikinResource<Awaited<ReturnType<typeof daikinApi.exceptions>>>()
@@ -45,6 +46,7 @@ const exceptionFilter = ref('')
 const quickStatus = ref<DaikinQuickStatus>('ALL')
 const groupMode = ref<'SYSTEM' | 'SPACE'>('SYSTEM')
 const viewMode = ref<'CARD' | 'TABLE'>('CARD')
+const showSpaceSummary = ref(true)
 const collapsedGroups = ref<Record<string, boolean>>({})
 const cardTelemetry = ref<Record<string, CardTelemetry>>({})
 const searchInput = ref('')
@@ -81,6 +83,51 @@ const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevic
 const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value))
 const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? []))
 const selectedDevice = computed(() => rawDevices.value.find(item => item.equipmentId === selected.value))
+
+const spaceSummaryItems = computed(() => {
+  const groups = groupDaikinDevicesBySpace(rawDevices.value, spaces.data.value ?? [])
+  return groups.map(group => {
+    const opt = spaceFilterOptions.value.find(item => item.label === group.spaceName)
+    const roomTemps: number[] = []
+    const setTemps: number[] = []
+    let deviatedCount = 0
+    for (const dev of group.devices) {
+      if (dev.deviceKind === 'OUTDOOR') continue
+      const tele = cardTelemetry.value[dev.equipmentId]
+      if (tele?.roomTemp != null) roomTemps.push(tele.roomTemp)
+      if (tele?.setTemp != null) setTemps.push(tele.setTemp)
+      if (
+        isDaikinDeviceRunning(dev)
+        && tele?.roomTemp != null
+        && tele?.setTemp != null
+        && Math.abs(tele.roomTemp - tele.setTemp) >= 2
+      ) {
+        deviatedCount++
+      }
+    }
+    const avgRoomTemp = roomTemps.length
+      ? Math.round((roomTemps.reduce((sum, val) => sum + val, 0) / roomTemps.length) * 10) / 10
+      : null
+    const avgSetTemp = setTemps.length
+      ? Math.round((setTemps.reduce((sum, val) => sum + val, 0) / setTemps.length) * 10) / 10
+      : null
+    return {
+      groupKey: group.groupKey,
+      spaceName: group.spaceName,
+      spaceOptionValue: opt?.value ?? '',
+      runningCount: group.runningCount,
+      stoppedCount: Math.max(0, group.devices.length - group.runningCount),
+      deviatedCount,
+      avgRoomTemp,
+      avgSetTemp,
+    }
+  })
+})
+
+function toggleSpaceChip(spaceOptionValue: string) {
+  if (!spaceOptionValue) return
+  space.value = space.value === spaceOptionValue ? '' : spaceOptionValue
+}
 
 function spaceNameOf(spaceId: string | null | undefined): string {
   if (!spaceId) return text('unassignedSpace')
@@ -318,6 +365,51 @@ onUnmounted(() => {
     <ElEmpty v-else-if="!building && !buildings.error.value" :description="t('dashboard.noBuilding')" />
 
     <template v-if="building && !alarms">
+      <section v-if="spaceSummaryItems.length" class="space-summary-bar">
+        <header class="space-summary-header">
+          <strong class="space-summary-title">{{ summaryText('title') }}</strong>
+          <div class="space-summary-actions">
+            <ElButton v-if="space" text type="primary" @click="space = ''">{{ summaryText('clearSpaceFilter') }}</ElButton>
+            <ElButton text @click="showSpaceSummary = !showSpaceSummary">
+              {{ summaryText(showSpaceSummary ? 'collapse' : 'expand') }}
+            </ElButton>
+          </div>
+        </header>
+        <div v-if="showSpaceSummary" class="space-summary-grid">
+          <button
+            v-for="item in spaceSummaryItems"
+            :key="item.groupKey"
+            type="button"
+            class="space-summary-chip"
+            :class="{
+              'space-summary-chip-active': item.spaceOptionValue && space === item.spaceOptionValue,
+              'space-summary-chip-warning': item.deviatedCount > 0,
+            }"
+            @click="toggleSpaceChip(item.spaceOptionValue)"
+          >
+            <div class="space-chip-top">
+              <strong class="space-chip-name">{{ item.spaceName }}</strong>
+              <ElTag v-if="item.deviatedCount > 0" type="warning">
+                {{ summaryText('deviationPrefix') }}{{ ' ' }}{{ item.deviatedCount }}{{ ' ' }}{{ text('unitCountSuffix') }}
+              </ElTag>
+              <ElTag v-else-if="item.runningCount > 0" type="success">{{ summaryText('complianceGood') }}</ElTag>
+            </div>
+            <div class="space-chip-metrics">
+              <span class="tone-success">{{ summaryText('runningPrefix') }}{{ ' ' }}{{ item.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</span>
+              <span>{{ ' · ' }}</span>
+              <span class="tone-muted">{{ summaryText('stoppedPrefix') }}{{ ' ' }}{{ item.stoppedCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</span>
+              <template v-if="item.avgRoomTemp != null">
+                <span>{{ ' · ' }}</span>
+                <span>{{ summaryText('avgTempPrefix') }}{{ ' ' }}{{ item.avgRoomTemp }}{{ '°C' }}</span>
+              </template>
+              <template v-if="item.avgSetTemp != null">
+                <span>{{ ' / ' }}{{ summaryText('setTempPrefix') }}{{ ' ' }}{{ item.avgSetTemp }}{{ '°C' }}</span>
+              </template>
+            </div>
+          </button>
+        </div>
+      </section>
+
       <div class="device-list">
         <ElAlert v-if="devices.error.value" :title="devices.error.value" type="error" :closable="false" />
         <ElSkeleton v-if="devices.loading.value" :rows="5" animated />
@@ -702,4 +794,15 @@ onUnmounted(() => {
 .sync-time { color: var(--bec-color-text-secondary); font-size: var(--bec-font-size-small); }
 .exception-pagination { display: flex; gap: var(--bec-space-tight); justify-content: flex-start; }
 .el-pagination { max-width: 100%; overflow-x: auto; }
+.space-summary-bar { display: grid; gap: var(--bec-space-group); padding: var(--bec-space-group) var(--bec-panel-padding); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
+.space-summary-header { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-group); flex-wrap: wrap; }
+.space-summary-title { font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
+.space-summary-actions { display: flex; align-items: center; gap: var(--bec-space-tight); }
+.space-summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(var(--bec-control-height) * 6), 1fr)); gap: var(--bec-space-tight); }
+.space-summary-chip { display: grid; gap: var(--bec-space-tight); text-align: left; padding: var(--bec-space-tight) var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); cursor: pointer; font-family: inherit; }
+.space-summary-chip-active { border-color: var(--bec-color-brand-primary); box-shadow: var(--bec-shadow-focus); background: color-mix(in srgb, var(--bec-color-brand-primary) 5%, var(--bec-color-surface)); }
+.space-summary-chip-warning { border-color: color-mix(in srgb, var(--bec-color-warning) 50%, var(--bec-color-border)); }
+.space-chip-top { display: flex; align-items: center; justify-content: space-between; gap: var(--bec-space-tight); }
+.space-chip-name { font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
+.space-chip-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-ref-space-1); font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
 </style>

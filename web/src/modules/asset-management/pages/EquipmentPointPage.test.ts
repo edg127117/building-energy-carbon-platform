@@ -121,7 +121,7 @@ describe('设备列表筛选', () => {
     expect(listEquipmentPoints).toHaveBeenCalledTimes(1)
   })
 
-  it('对于三相/单相电表设备，操作列展示“查看测点与走势”，抽屉呈现“实时测点与走势”并加载专业看板', async () => {
+  it('监测采集设备（电表）在静态台账抽屉中展示静态测点表、隐藏暖通专属参数并提供电力监控跳转入口', async () => {
     const meter = {
       equipmentId: 'M1',
       equipmentName: '变压器进线三相电表',
@@ -129,20 +129,65 @@ describe('设备列表筛选', () => {
       typeCode: '3P_METER',
       status: 'ACTIVE',
       identities: [],
+      ratedCapacity: 120,
+      ratedPower: 15,
+      designCop: 4.2,
       pointSummary: { total: 12, required: 0, configuredRequired: 0 },
       allowedActions: [],
     }
     vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [meter as never] })
     vi.mocked(getEquipment).mockResolvedValue(meter as never)
-    vi.mocked(listEquipmentPoints).mockResolvedValue([])
+    vi.mocked(listEquipmentPoints).mockResolvedValue([
+      { pointId: 'P1', pointName: '正向有功总电能', pointCode: 'EPP', unit: 'kWh', required: true, forCalculation: true } as never,
+    ])
 
     await submit()
-    const meterActionBtn = wrapper.findAllComponents(ElButton).find(button => button.text() === '查看测点与走势')
-    expect(meterActionBtn).toBeDefined()
-    await meterActionBtn!.trigger('click')
+    const powerJumpBtn = wrapper.findAllComponents(ElButton).find(button => button.text() === '去电力监控查看走势')
+    expect(powerJumpBtn).toBeDefined()
+
+    const pointsBtn = wrapper.findAllComponents(ElButton).find(button => button.text() === '查看测点')
+    expect(pointsBtn).toBeDefined()
+    await pointsBtn!.trigger('click')
     await flushPromises()
 
     expect(wrapper.findComponent(ElTabs).props('modelValue')).toBe('points')
-    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toContain('实时测点与走势')
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).toContain('设备测点')
+    expect(wrapper.text()).toContain('正向有功总电能')
+    expect(wrapper.text()).toContain('当前仅展示静态测点配置与计算标识')
+
+    await wrapper.findAll('[role="tab"]').find(tab => tab.text() === '技术参数')!.trigger('click')
+    await flushPromises()
+    const panel = wrapper.find('#pane-parameters')
+    expect(panel.text()).toContain('额定功率15')
+    expect(panel.text()).not.toContain('额定容量')
+    expect(panel.text()).not.toContain('设计性能系数')
+  })
+
+  it('按用能设备台账（BUSINESS）与监测采集设备（METER）分类隔离列表数据', async () => {
+    const items = [
+      { equipmentId: 'E-IDU', equipmentName: '101室内机', equipmentCode: 'IDU-01', typeCode: 'IDU', status: 'ACTIVE', identities: [], pointSummary: { total: 4, required: 0, configuredRequired: 0 } },
+      { equipmentId: 'M-3P', equipmentName: '外机三相电表', equipmentCode: 'MTR-3P', typeCode: '3P_METER', status: 'ACTIVE', identities: [], pointSummary: { total: 12, required: 0, configuredRequired: 0 } },
+    ]
+    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 2, items: items as never })
+
+    const businessWrapper = mount(EquipmentPointPage, {
+      props: { ledgerCategory: 'BUSINESS' },
+      global: { directives: { loading: {} } },
+    })
+    await flushPromises()
+    expect(businessWrapper.find('h1').text()).toBe('用能设备台账')
+    expect(businessWrapper.text()).toContain('101室内机')
+    expect(businessWrapper.text()).not.toContain('外机三相电表')
+    businessWrapper.unmount()
+
+    const meterWrapper = mount(EquipmentPointPage, {
+      props: { ledgerCategory: 'METER' },
+      global: { directives: { loading: {} } },
+    })
+    await flushPromises()
+    expect(meterWrapper.find('h1').text()).toBe('监测采集设备')
+    expect(meterWrapper.text()).toContain('外机三相电表')
+    expect(meterWrapper.text()).not.toContain('101室内机')
+    meterWrapper.unmount()
   })
 })
