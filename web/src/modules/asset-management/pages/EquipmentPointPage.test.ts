@@ -192,6 +192,9 @@ describe('设备列表筛选', () => {
     expect(businessWrapper.find('h1').text()).toBe('用能设备台账')
     expect(businessWrapper.text()).toContain('101室内机')
     expect(businessWrapper.text()).not.toContain('外机三相电表')
+    for (const label of ['覆盖范围', '被测设备数量', '电表安装位置']) {
+      expect(businessWrapper.text()).not.toContain(label)
+    }
     businessWrapper.unmount()
 
     const meterWrapper = mount(EquipmentPointPage, {
@@ -202,10 +205,20 @@ describe('设备列表筛选', () => {
     expect(meterWrapper.find('h1').text()).toBe('监测采集设备')
     expect(meterWrapper.text()).toContain('外机三相电表')
     expect(meterWrapper.text()).not.toContain('101室内机')
+    for (const label of ['覆盖范围', '被测设备数量', '电表安装位置']) {
+      expect(meterWrapper.text()).toContain(label)
+    }
+    await meterWrapper.setProps({ ledgerCategory: 'BUSINESS' })
+    await flushPromises()
+    expect(meterWrapper.text()).toContain('101室内机')
+    for (const label of ['覆盖范围', '被测设备数量', '电表安装位置']) {
+      expect(meterWrapper.text()).not.toContain(label)
+    }
     meterWrapper.unmount()
   })
 
   it('批量展示表计独立安装位置与一表多设备数量', async () => {
+    await wrapper.setProps({ ledgerCategory: 'METER' })
     const meter = { equipmentId: 'M1', equipmentName: '总表', equipmentCode: 'M-1', typeCode: 'ELECTRIC_METER_3P', category: 'ELECTRIC_METER', status: 'ACTIVE', identities: [], pointSummary: { total: 0, required: 0, configuredRequired: 0 }, allowedActions: [] }
     vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 20, total: 1, items: [meter as never] })
     vi.mocked(listMeterCoverages).mockResolvedValue([{ equipmentId: 'M1', revision: 2, effectiveAt: '2026-09-29T10:00:00Z', installationSpaceId: 'S1', installationSpaceName: '专用配电间', scopeLabel: '冷站总表范围', reason: '初始化', targets: [
