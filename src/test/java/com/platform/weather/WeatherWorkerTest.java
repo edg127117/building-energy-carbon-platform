@@ -23,6 +23,16 @@ class WeatherWorkerTest {
     @Test void disabledWorkerDoesNotTouchExternalResources() {
         try { worker.tick();verifyNoInteractions(repo,source,ts,energy); } finally { worker.close(); }
     }
+    @Test void interruptionLeavesLeaseForRecoveryInsteadOfRecordingSourceFailure(org.springframework.boot.test.system.CapturedOutput output) {
+        Job j=job("dataset");
+        when(repo.dataset("dataset")).thenThrow(new WeatherSourceException(WeatherSourceException.Code.SOURCE_INTERRUPTED));
+        try {
+            worker.execute(j);
+            verify(repo,never()).finish(any(),anyString(),anyString(),anyLong());
+            verify(repo,never()).publish(any(),any());
+            org.assertj.core.api.Assertions.assertThat(output.getAll()).contains("id=job", "attempt=1", "code=SOURCE_INTERRUPTED");
+        } finally { worker.close(); }
+    }
     @Test void preparedDatasetReplaysWithoutFetchingAgain() {
         Job j=job("dataset");var data=new Dataset("dataset","b",Source.OPEN_METEO,Product.HISTORY_HOURLY,Instant.now(),"PREPARED","table",null);
         when(repo.dataset("dataset")).thenReturn(data);

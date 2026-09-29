@@ -5,11 +5,26 @@ public final class WeatherSourceException extends RuntimeException {
     public enum Code {
         REQUEST_INVALID,
         SOURCE_TIMEOUT,
+        SOURCE_INTERRUPTED,
         SOURCE_HTTP_ERROR,
         SOURCE_TOO_LARGE,
         STRUCTURE_ERROR,
         DATE_AMBIGUOUS
     }
+
+    public enum Detail {
+        NONE, ANCHOR_MISSING, ANCHOR_FORMAT, ANCHOR_DAY_MISMATCH,
+        DAY_HEADER_MISSING, DAY_HEADER_MISMATCH, DAY_HEADER_INVALID
+    }
+
+    private Detail detail = Detail.NONE;
+
+    public WeatherSourceException(Code code, Detail detail) {
+        this(code);
+        this.detail = detail;
+    }
+
+    public Detail getDetail() { return detail; }
 
     private final Code code;
     private final Integer status;

@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
 
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 class ChinaWeatherParserTest {
     private static final Instant FETCHED_AT = Instant.parse("2026-09-28T08:30:00Z");
     private final ChinaWeatherParser parser = new ChinaWeatherParser();
@@ -50,6 +51,32 @@ class ChinaWeatherParserTest {
         WeatherSourceException structureError = assertThrows(WeatherSourceException.class,
                 () -> parser.parse(sixDays, request(), FETCHED_AT));
         assertEquals(WeatherSourceException.Code.STRUCTURE_ERROR, structureError.getCode());
+    }
+
+    @Test
+    void dateRejectionExplainsBranchAndLogsOnlyBoundedEvidence(org.springframework.boot.test.system.CapturedOutput output) throws IOException {
+        String original = resource();
+        String[] bodies = {
+            original.replace("zs_7d_update_time", "missing_anchor"),
+            original.replace("2026-09-28 12:00:00.0", "SECRET_TOKEN\nBAD_DATE"),
+            original.replace("2026-09-28 12:00:00.0", "2026-09-27 12:00:00.0"),
+            original.replace("<h1>", "<h2>").replace("</h1>", "</h2>"),
+            original.replace("28日", "27日")
+        };
+        var details = new WeatherSourceException.Detail[] {
+            WeatherSourceException.Detail.ANCHOR_MISSING, WeatherSourceException.Detail.ANCHOR_FORMAT,
+            WeatherSourceException.Detail.ANCHOR_DAY_MISMATCH, WeatherSourceException.Detail.DAY_HEADER_MISSING,
+            WeatherSourceException.Detail.DAY_HEADER_MISMATCH
+        };
+        for (int i=0;i<bodies.length;i++) {
+            String body=bodies[i];
+            var error=assertThrows(WeatherSourceException.class, () -> parser.parse(body,request(),FETCHED_AT));
+            assertEquals(details[i],error.getDetail());
+            assertEquals(WeatherSourceException.Code.DATE_AMBIGUOUS,error.getCode());
+        }
+        org.assertj.core.api.Assertions.assertThat(output.getAll())
+                .contains("anchor=2026-09-27 12:00:00.0", "detail=ANCHOR_FORMAT", "headers=", "parser=weather-com-cn-7d-v1")
+                .doesNotContain("SECRET_TOKEN", "BAD_DATE");
     }
 
     private static Request request() {
