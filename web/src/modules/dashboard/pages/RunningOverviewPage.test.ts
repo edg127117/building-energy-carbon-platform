@@ -80,6 +80,37 @@ vi.mock('@/modules/asset-management/public', async original => {
       initialize: vi.fn().mockResolvedValue(undefined),
       setEquipmentQuery: vi.fn().mockResolvedValue(undefined),
     }),
+    useEquipmentReadings: () => ({
+      readings: ref(null),
+      loading: ref(false),
+      error: ref(null),
+      load: vi.fn().mockResolvedValue({
+        equipmentId: 'EQ-METER-308',
+        generatedAt: '2026-09-29T00:00:00Z',
+        points: [
+          { pointCode: 'P_TOTAL', pointName: '总有功功率', unit: 'kW', value: 2.4 },
+          { pointCode: 'EPP', pointName: '正向有功总电能', unit: 'kWh', value: 128.5 },
+        ],
+      }),
+      clear: vi.fn(),
+    }),
+    useMeterCoverage: () => ({
+      listCoverages: ref([
+        {
+          equipmentId: 'EQ-METER-308',
+          revision: 1,
+          effectiveAt: '2026-09-29T10:00:00Z',
+          installationSpaceId: null,
+          installationSpaceName: null,
+          scopeLabel: '3F-6 外机回路',
+          reason: '初始化',
+          targets: [],
+        },
+      ]),
+      listLoading: ref(false),
+      listError: ref(null),
+      loadListCoverages: vi.fn().mockResolvedValue([]),
+    }),
   }
 })
 
@@ -213,12 +244,28 @@ describe('RunningOverviewPage', () => {
     expect(wrapper.find('.mini-bar-chart').exists()).toBe(false)
     expect(wrapper.find('.mini-area-svg').exists()).toBe(false)
     expect(wrapper.text()).toContain('分项用能设备结构占比')
+    expect(wrapper.text()).toContain('用能设备 3 台')
+    expect(wrapper.text()).toContain('空调室内机')
+    expect(wrapper.text()).toContain('空调室外机')
+    expect(wrapper.text()).toContain('另含监测电表 1 块')
     expect(wrapper.text()).toContain('全局设备运行态势')
+    expect(wrapper.text()).toContain('当前开机率')
+    expect(wrapper.text()).toContain('开机在运 2/2 台')
+    expect(wrapper.text()).toContain('设定温度基准线')
+    expect(wrapper.find('.set-temp-polyline').exists()).toBe(true)
+    expect(wrapper.find('.space-picker-bar').exists()).toBe(true)
+    expect(wrapper.find('.workbench-card-footer').exists()).toBe(true)
     expect(wrapper.text()).toContain('各空间累计开机时长与室内均温强度分析')
-    expect(wrapper.text()).toContain('单设备实时运行与设定温度达标巡检列表')
+    expect(wrapper.text()).toContain('单设备实时运行与测点状态巡检列表')
+    expect(wrapper.text()).toContain('今日累计运行时长')
+    expect(wrapper.text()).toContain('全楼 2 台累加 · 今日 2 台有运行')
+    expect(wrapper.text()).toContain('单机日均运行时长')
+    expect(wrapper.text()).toContain('按全楼 2 台设备均值折算')
     expect(wrapper.text()).toContain('大金内机-B308-1')
     expect(wrapper.text()).toContain('大金内机-B307-1')
-    expect(wrapper.text()).toContain('温差较大 (+3.2°C)')
+    expect(wrapper.text()).toContain('设24°C')
+    expect(wrapper.text()).toContain('(+3.2°C)')
+    expect(wrapper.text()).toContain('运行正常')
 
     const spaceButtons = wrapper.findAll('.combo-col-btn')
     expect(spaceButtons.length).toBe(2)
@@ -231,9 +278,16 @@ describe('RunningOverviewPage', () => {
     await powerTab?.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('各区域表计配置与三相主回路覆盖分析')
+    expect(wrapper.text()).toContain('各监测表计累计有功电量与实时功率对比分析')
     expect(wrapper.text()).toContain('单表计实时监测与回路归属巡检列表')
     expect(wrapper.text()).toContain('308空调外机电表')
+    expect(wrapper.text()).toContain('3F-6 外机回路')
+    expect(wrapper.text()).toContain('待确认')
+    expect(wrapper.text()).toContain('128.5 kWh')
+    const powerSummary = wrapper.find('.summary-strip-3')
+    expect(powerSummary.text().match(/待配置计量边界/g)).toHaveLength(2)
+    expect(powerSummary.text()).not.toContain('128.5')
+    expect(powerSummary.text()).not.toContain('2.4')
 
     const viewTrendBtn = wrapper.findAll('button').find(btn => btn.text().includes('查看走势'))
     await viewTrendBtn?.trigger('click')
