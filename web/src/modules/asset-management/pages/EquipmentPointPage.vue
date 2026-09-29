@@ -33,8 +33,10 @@ import { t } from '@/locales'
 import EquipmentEditorDialog from '../components/EquipmentEditorDialog.vue'
 import PointEditorDialog from '../components/PointEditorDialog.vue'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
-import { getMeterPhaseType, isMeterEquipment } from '../components/meter/meter-display'
+import { getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
+import MeterCoveragePanel from '../components/meter/MeterCoveragePanel.vue'
 import { useAssetManagement } from '../composables/use-asset-management'
+import { useMeterCoverage } from '../composables/use-meter-coverage'
 import { canRunAssetAction, flattenSpaces, type AssetEquipment, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint } from '../models/assets'
 
 export type LedgerCategory = 'ALL' | 'BUSINESS' | 'METER'
@@ -47,6 +49,7 @@ const props = defineProps<{
 }>()
 
 const management = useAssetManagement()
+const meterCoverage = useMeterCoverage()
 const router = useRouter()
 const route = useRoute()
 // 筛选范围与编辑弹窗独立，编辑其他建筑的设备不能替换筛选选项。
@@ -63,6 +66,7 @@ const editingPoint = ref<AssetPoint | null>(null)
 const selectedEquipment = computed(() => management.selectedEquipment.value)
 const equipmentSubmitting = computed(() => editingEquipment.value ? management.pending.value.has(`equipment:update:${editingEquipment.value.equipmentId}`) : management.pending.value.has('equipment:create'))
 const pointSubmitting = computed(() => editingPoint.value ? management.pending.value.has(`point:update:${editingPoint.value.pointId}`) : false)
+const meterCoverageById = computed(() => new Map(meterCoverage.listCoverages.value.map(item => [item.equipmentId, item])))
 
 const effectiveCategory = computed<LedgerCategory>(() => {
   if (props.ledgerCategory) return props.ledgerCategory
@@ -118,6 +122,15 @@ const categoryFilteredItems = computed(() => {
     return true
   })
 })
+
+watch(
+  [categoryFilteredItems, () => management.equipmentQuery.value.buildingId],
+  ([items, buildingId]) => {
+    const meterIds = items.filter(item => isMeterCoverageEquipment(item)).map(item => item.equipmentId)
+    void meterCoverage.loadListCoverages(buildingId, meterIds).catch(() => undefined)
+  },
+  { immediate: true },
+)
 
 const subCategoryOptions = computed<Array<{ key: SubCategory; label: string }>>(() => {
   if (effectiveCategory.value === 'METER') {
@@ -185,6 +198,13 @@ async function openEquipment(equipmentId: string, showPoints = false) {
   equipmentDrawerOpen.value = true
   try {
     await management.selectEquipment(equipmentId)
+    const equipment = management.selectedEquipment.value
+    if (equipment && isMeterEquipment(equipment)) {
+      await filterScope.loadScope(equipment.buildingId).catch(() => undefined)
+    }
+    if (selectedEquipment.value && isMeterEquipment(selectedEquipment.value)) {
+      await filterScope.loadScope(selectedEquipment.value.buildingId).catch(() => undefined)
+    }
   } catch {
     equipmentDrawerOpen.value = false
   }
@@ -302,6 +322,7 @@ onMounted(() => {
     <ElAlert v-if="filterScope.scopeError.value" :title="filterScope.scopeError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="management.scopeError.value" :title="management.scopeError.value.message" type="error" show-icon :closable="false" />
     <ElAlert v-if="management.operationError.value" :title="management.operationError.value.message" type="error" show-icon :closable="false" />
+    <ElAlert v-if="meterCoverage.listError.value" :title="meterCoverage.listError.value.message" type="error" show-icon :closable="false" />
     <ElCard shadow="never" class="filter-panel">
       <ElForm label-position="top" :aria-label="t('assetManagement.equipment.filters')" @submit.prevent="query">
         <div class="filter-grid">
@@ -357,7 +378,10 @@ onMounted(() => {
         <ElTableColumn type="index" :label="t('assetManagement.equipment.index')" width="60" :index="index => (management.equipment.value.page - 1) * management.equipment.value.size + index + 1" />
         <ElTableColumn :label="t('assetManagement.labels.equipmentName')" min-width="190"><template #default="{ row }"><div class="equipment-name"><span class="equipment-icon"><Cpu aria-hidden="true" /></span><ElButton link class="name-link" @click="openEquipment(row.equipmentId)">{{ row.equipmentName }}</ElButton></div></template></ElTableColumn>
         <ElTableColumn :label="t('assetManagement.labels.equipmentCode')" prop="equipmentCode" min-width="130" show-overflow-tooltip />
-        <ElTableColumn :label="t('assetManagement.equipment.location')" min-width="160"><template #default="{ row }"><div class="location-cell"><span>{{ row.spaceName || t('common.missing') }}</span><span class="secondary">{{ row.buildingName || t('common.missing') }}</span></div></template></ElTableColumn>
+        <ElTableColumn :label="t(effectiveCategory === 'METER' ? 'assetManagement.equipment.building' : 'assetManagement.equipment.location')" min-width="160"><template #default="{ row }"><div class="location-cell"><span v-if="!isMeterEquipment(row)">{{ row.spaceName || t('common.missing') }}</span><span class="secondary">{{ row.buildingName || t('common.missing') }}</span></div></template></ElTableColumn>
+        <ElTableColumn v-if="effectiveCategory === 'METER'" :label="t('assetManagement.equipment.meterCoverage')" min-width="160"><template #default="{ row }">{{ isMeterCoverageEquipment(row) ? (meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : meterCoverageById.get(row.equipmentId)?.scopeLabel || t('assetManagement.meterCoverage.unconfigured')) : t('common.missing') }}</template></ElTableColumn>
+        <ElTableColumn v-if="effectiveCategory === 'METER'" :label="t('assetManagement.equipment.meterTargetCount')" width="130"><template #default="{ row }">{{ isMeterCoverageEquipment(row) ? (meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : meterCoverageById.get(row.equipmentId)?.targets.length ?? 0) : t('common.missing') }}</template></ElTableColumn>
+        <ElTableColumn v-if="effectiveCategory === 'METER'" :label="t('assetManagement.equipment.meterInstallationLocation')" min-width="150"><template #default="{ row }">{{ isMeterCoverageEquipment(row) ? (meterCoverage.listLoading.value ? t('assetManagement.meterCoverage.loading') : meterCoverage.listError.value ? t('common.missing') : meterCoverageById.get(row.equipmentId)?.installationSpaceName || t('assetManagement.meterCoverage.toConfirm')) : t('common.missing') }}</template></ElTableColumn>
         <ElTableColumn :label="t('assetManagement.equipment.system')" prop="systemGroupName" min-width="120" show-overflow-tooltip />
         <ElTableColumn :label="t('assetManagement.labels.equipmentType')" min-width="120" show-overflow-tooltip>
           <template #default="{ row }">
@@ -416,9 +440,9 @@ onMounted(() => {
               </dl>
             </section>
             <section class="detail-section">
-              <h3>{{ t('assetManagement.equipment.installationInformation') }}</h3><dl class="detail-fields">
+              <h3>{{ t(isMeterEquipment(selectedEquipment) ? 'assetManagement.equipment.archiveSpaceInformation' : 'assetManagement.equipment.installationInformation') }}</h3><dl class="detail-fields">
                 <div><dt>{{ t('assetManagement.labels.building') }}</dt><dd>{{ selectedEquipment.buildingName || t('common.missing') }}</dd></div>
-                <div><dt>{{ t('assetManagement.labels.space') }}</dt><dd>{{ selectedEquipment.spaceName || t('common.missing') }}</dd></div>
+                <div v-if="!isMeterEquipment(selectedEquipment)"><dt>{{ t('assetManagement.labels.space') }}</dt><dd>{{ selectedEquipment.spaceName || t('common.missing') }}</dd></div>
                 <div><dt>{{ t('assetManagement.labels.system') }}</dt><dd>{{ selectedEquipment.systemGroupName || t('common.missing') }}</dd></div>
               </dl>
             </section>
@@ -460,6 +484,9 @@ onMounted(() => {
               </ElTable>
             </section>
           </div>
+        </ElTabPane>
+        <ElTabPane v-if="isMeterCoverageEquipment(selectedEquipment)" name="meter-coverage" :label="t('assetManagement.equipment.meterCoverageTab')">
+          <div class="detail-content"><MeterCoveragePanel :equipment-id="selectedEquipment.equipmentId" :spaces="filterScope.scopeSpaces.value" @saved="meterCoverage.loadListCoverages(management.equipmentQuery.value.buildingId, management.equipment.value.items.filter(isMeterEquipment).map(item => item.equipmentId)).catch(() => undefined)" /></div>
         </ElTabPane>
         <ElTabPane name="connection" :label="t('assetManagement.equipment.connectionTab')">
           <div class="detail-content">

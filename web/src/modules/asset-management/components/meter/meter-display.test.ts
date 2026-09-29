@@ -11,6 +11,7 @@ import {
   getPointDisplayName,
   getQualityInfo,
   isMeterEquipment,
+  isMeterCoverageEquipment,
 } from './meter-display'
 
 describe('meter-display helper utilities', () => {
@@ -31,10 +32,24 @@ describe('meter-display helper utilities', () => {
     })
   })
 
+  describe('isMeterCoverageEquipment', () => {
+    it('accepts only backend-recognized meter types, category, or product IDs', () => {
+      expect(isMeterCoverageEquipment({ typeCode: 'ELECTRIC_METER_1P' })).toBe(true)
+      expect(isMeterCoverageEquipment({ typeCode: 'ELECTRIC_METER_3P', equipmentName: 'generic' })).toBe(true)
+      expect(isMeterCoverageEquipment({ category: 'ELECTRIC_METER' })).toBe(true)
+      expect(isMeterCoverageEquipment({ productId: 'PRODUCT_IDU_METER_1039' })).toBe(true)
+      expect(isMeterCoverageEquipment({ productId: 'PRODUCT_ODU_METER_339' })).toBe(true)
+      expect(isMeterCoverageEquipment({ typeCode: 'PUMP', equipmentName: 'METER circulation pump' })).toBe(false)
+      expect(isMeterCoverageEquipment({ typeCode: 'AHU', category: 'ENERGY', equipmentName: '电表状态模拟器' })).toBe(false)
+    })
+  })
+
   describe('getMeterPhaseType', () => {
     it('identifies 3P vs 1P from typeCode', () => {
       expect(getMeterPhaseType({ typeCode: '3P_METER' })).toBe('3P')
       expect(getMeterPhaseType({ typeCode: '1P_METER' })).toBe('1P')
+      expect(getMeterPhaseType({ typeCode: 'ELECTRIC_METER_1P', equipmentName: '三相表' })).toBe('1P')
+      expect(getMeterPhaseType({ typeCode: 'ELECTRIC_METER_3P', equipmentName: '单相表' })).toBe('3P')
     })
 
     it('infers 3P from characteristic points when typeCode is ambiguous', () => {
