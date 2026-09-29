@@ -259,10 +259,9 @@ onMounted(() => {
             </ElTag>
           </template>
         </ElTableColumn>
-        <ElTableColumn :label="t('assetManagement.equipment.location')" min-width="160">
+        <ElTableColumn :label="t('assetManagement.equipment.building')" min-width="160">
           <template #default="{ row }">
             <div class="location-cell">
-              <span>{{ row.spaceName || t('common.missing') }}</span>
               <span class="secondary">{{ row.buildingName || t('common.missing') }}</span>
             </div>
           </template>
@@ -325,7 +324,7 @@ onMounted(() => {
                 {{ t('assetManagement.powerMonitoring.viewStaticArchive') }}
               </ElButton>
             </div>
-            <p>{{ t('assetManagement.powerMonitoring.archiveSpaceDetail', { code: selectedEquipment.equipmentCode || t('common.missing'), space: selectedEquipment.spaceName || t('common.missing') }) }}</p>
+            <p>{{ t('assetManagement.powerMonitoring.buildingDetail', { code: selectedEquipment.equipmentCode || t('common.missing'), building: selectedEquipment.buildingName || t('common.missing') }) }}</p>
           </template>
           <h2 v-else :id="titleId">{{ t('assetManagement.powerMonitoring.drawerTitle') }}</h2>
         </div>

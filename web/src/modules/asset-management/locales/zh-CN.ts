@@ -56,6 +56,7 @@ export default {
     keywordPlaceholder: '请输入设备名称或编码',
     system: '所属系统',
     location: '档案空间 / 建筑',
+    building: '所属建筑',
     archiveStatus: '档案状态',
     pointSummary: '测点配置',
     pointCount: '{total} 个测点',
@@ -110,7 +111,7 @@ export default {
     viewStaticArchive: '查看静态档案',
     drawerTitle: '电表实时监测与负荷走势',
     emptyMeters: '当前筛选条件下暂无监测采集电表',
-    archiveSpaceDetail: '{code} · 档案空间：{space}',
+    buildingDetail: '{code} · 所属建筑：{building}',
   },
   actions: {
     query: '查询',
