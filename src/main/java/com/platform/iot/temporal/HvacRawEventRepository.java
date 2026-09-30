@@ -26,6 +26,12 @@ public interface HvacRawEventRepository {
         throw new UnsupportedOperationException("Point history query is unavailable");
     }
 
+    /** 电表正向累计量的有界原始事件页；来源身份由分析服务逐日核验。 */
+    default List<RawTelemetryEvent> findMeterPointHistory(String buildingId, String equipmentId, String pointId,
+            long startInclusive, long endExclusive, Long afterExclusive, int limit) {
+        throw new UnsupportedOperationException("Meter point history query is unavailable");
+    }
+
     /**
      * 写入或覆盖同一测点、同一设备采集时间的事件，并区分新行、完全重复和冲突更新。
      */

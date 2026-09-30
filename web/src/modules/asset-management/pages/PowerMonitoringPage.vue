@@ -24,6 +24,7 @@ import {
 import { t } from '@/locales'
 import AssetStatusTag from '../components/AssetStatusTag.vue'
 import MeterRealtimeBoard from '../components/meter/MeterRealtimeBoard.vue'
+import MeterElectricityAnalysis from '../components/meter/MeterElectricityAnalysis.vue'
 import { getMeterPhaseLabel, getMeterPhaseType, isMeterCoverageEquipment, isMeterEquipment } from '../components/meter/meter-display'
 import { useAssetManagement } from '../composables/use-asset-management'
 import { useMeterCoverage } from '../composables/use-meter-coverage'
@@ -36,6 +37,8 @@ const meterCoverage = useMeterCoverage()
 const filterScope = useAssetManagement()
 const router = useRouter()
 const route = useRoute()
+const viewMode = ref<'monitor' | 'analysis'>(route?.query?.view === 'analysis' ? 'analysis' : 'monitor')
+const analysisMeterId = ref(typeof route?.query?.equipmentId === 'string' ? route.query.equipmentId : '')
 
 const filters = reactive<Partial<AssetEquipmentQuery>>({})
 const phaseFilter = ref<PhaseFilter>('ALL')
@@ -117,6 +120,11 @@ async function openMeterRealtime(equipmentId: string) {
   }
 }
 
+function openMeterAnalysis(equipmentId: string) {
+  analysisMeterId.value = equipmentId
+  viewMode.value = 'analysis'
+}
+
 function goStaticArchive(item: Record<string, unknown>) {
   const queryParams: Record<string, string> = {}
   if (item.equipmentId) queryParams.equipmentId = String(item.equipmentId)
@@ -134,7 +142,7 @@ onMounted(() => {
     management.ensureBuildingOptions(),
     requestedBuilding ? filterScope.loadScope(requestedBuilding) : Promise.resolve(),
   ]).then(() => {
-    if (typeof route?.query?.equipmentId === 'string' && route.query.equipmentId) {
+    if (viewMode.value === 'monitor' && typeof route?.query?.equipmentId === 'string' && route.query.equipmentId) {
       void openMeterRealtime(route.query.equipmentId)
     }
   }).catch(() => undefined)
@@ -145,20 +153,23 @@ onMounted(() => {
   <section class="power-monitoring-page">
     <header class="page-heading">
       <div>
-        <h1>{{ t('assetManagement.powerMonitoring.title') }}</h1>
-        <p>{{ t('assetManagement.powerMonitoring.description') }}</p>
+        <h1>{{ t(viewMode === 'analysis' ? 'assetManagement.electricity.title' : 'assetManagement.powerMonitoring.title') }}</h1>
+        <p>{{ t(viewMode === 'analysis' ? 'assetManagement.electricity.description' : 'assetManagement.powerMonitoring.description') }}</p>
       </div>
-      <ElButton :icon="RefreshCw" :loading="management.equipmentLoading.value" @click="query">
-        {{ t('assetManagement.associations.refresh') }}
-      </ElButton>
+      <div class="view-actions">
+        <ElButton :type="viewMode === 'monitor' ? 'primary' : 'default'" @click="viewMode = 'monitor'">{{ t('assetManagement.powerMonitoring.title') }}</ElButton>
+        <ElButton :type="viewMode === 'analysis' ? 'primary' : 'default'" @click="viewMode = 'analysis'">{{ t('assetManagement.electricity.title') }}</ElButton>
+        <ElButton v-if="viewMode === 'monitor'" :icon="RefreshCw" :loading="management.equipmentLoading.value" @click="query">{{ t('assetManagement.associations.refresh') }}</ElButton>
+      </div>
     </header>
 
-    <ElAlert v-if="management.equipmentError.value" :title="management.equipmentError.value.message" type="error" show-icon :closable="false" />
-    <ElAlert v-if="management.buildingsError.value" :title="management.buildingsError.value.message" type="error" show-icon :closable="false" />
-    <ElAlert v-if="filterScope.scopeError.value" :title="filterScope.scopeError.value.message" type="error" show-icon :closable="false" />
-    <ElAlert v-if="meterCoverage.listError.value" :title="meterCoverage.listError.value.message" type="error" show-icon :closable="false" />
+    <MeterElectricityAnalysis v-if="viewMode === 'analysis'" :meters="allMeters" :initial-meter-id="analysisMeterId" />
+    <ElAlert v-if="viewMode === 'monitor' && management.equipmentError.value" :title="management.equipmentError.value.message" type="error" show-icon :closable="false" />
+    <ElAlert v-if="viewMode === 'monitor' && management.buildingsError.value" :title="management.buildingsError.value.message" type="error" show-icon :closable="false" />
+    <ElAlert v-if="viewMode === 'monitor' && filterScope.scopeError.value" :title="filterScope.scopeError.value.message" type="error" show-icon :closable="false" />
+    <ElAlert v-if="viewMode === 'monitor' && meterCoverage.listError.value" :title="meterCoverage.listError.value.message" type="error" show-icon :closable="false" />
 
-    <div class="summary-strip">
+    <div v-if="viewMode === 'monitor'" class="summary-strip">
       <article class="summary-card">
         <span class="summary-label">{{ t('assetManagement.powerMonitoring.totalMeters') }}</span>
         <div class="summary-value-row">
@@ -189,7 +200,7 @@ onMounted(() => {
       </article>
     </div>
 
-    <ElCard shadow="never" class="filter-panel">
+    <ElCard v-if="viewMode === 'monitor'" shadow="never" class="filter-panel">
       <ElForm label-position="top" :aria-label="t('assetManagement.equipment.filters')" @submit.prevent="query">
         <div class="filter-grid">
           <ElFormItem :label="t('assetManagement.labels.building')">
@@ -233,7 +244,7 @@ onMounted(() => {
       </ElForm>
     </ElCard>
 
-    <ElCard shadow="never" class="list-panel">
+    <ElCard v-if="viewMode === 'monitor'" shadow="never" class="list-panel">
       <template #header>
         <div class="list-heading">
           <h2>{{ t('assetManagement.equipment.meterList') }}</h2>
@@ -285,6 +296,9 @@ onMounted(() => {
               <ElButton link type="primary" @click="openMeterRealtime(row.equipmentId)">
                 {{ t('assetManagement.powerMonitoring.viewRealtimeAndTrend') }}
               </ElButton>
+              <ElButton link type="primary" @click="openMeterAnalysis(row.equipmentId)">
+                {{ t('assetManagement.electricity.title') }}
+              </ElButton>
               <ElButton link type="primary" @click="goStaticArchive(row)">
                 {{ t('assetManagement.powerMonitoring.viewStaticArchive') }}
               </ElButton>
@@ -306,6 +320,7 @@ onMounted(() => {
     </ElCard>
 
     <ElDrawer
+      v-if="viewMode === 'monitor'"
       :model-value="meterDrawerOpen"
       size="min(100%, var(--bec-dialog-width))"
       class="meter-realtime-drawer"
@@ -341,6 +356,8 @@ onMounted(() => {
 <style scoped>
 .power-monitoring-page { display: grid; gap: var(--bec-space-section); min-width: 0; }
 .page-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: var(--bec-space-group); }
+.view-actions { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); }
+.view-actions :deep(.el-button + .el-button) { margin-left: 0; }
 h1, h2, p { margin: 0; }
 h1 { font-size: var(--bec-font-size-system); font-weight: var(--bec-font-weight-heading); }
 h2 { font-size: var(--bec-font-size-navigation); font-weight: var(--bec-font-weight-heading); }
