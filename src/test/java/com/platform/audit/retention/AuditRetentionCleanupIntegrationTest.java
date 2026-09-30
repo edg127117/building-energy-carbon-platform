@@ -96,7 +96,7 @@ class AuditRetentionCleanupIntegrationTest {
         String pendingId = audit("PENDING_REVIEW", fixedNow.minusYears(1), draft.requestId());
         holdService.create(ADMIN_ID, Set.of("PLATFORM_ADMIN"), new AuditEvidenceHoldService.CreateHold(
                 "SYSTEM_SECURITY", heldId, null, null, null, null, null, null,
-                "INV-001", "安全调查未结案", "内部调查单", fixedNow.plusMonths(1)));
+                "INV-001", "安全调查未结案", "内部调查单", LocalDateTime.now().plusMonths(1)));
 
         AuditRetentionPolicy policy = policyService.apply(
                 new AuditRetentionPolicyService.RetentionPolicyCommand("SECURITY_EVENT", "SYSTEM_SECURITY",
