@@ -42,10 +42,19 @@ watch([selectedId, days], () => { void load() }, { immediate: true })
 const orderedDays = computed(() => [...(result.value?.days ?? [])].reverse())
 const latest = computed(() => orderedDays.value[0] ?? null)
 const availableCount = computed(() => result.value?.days.filter(day => day.status === 'AVAILABLE').length ?? 0)
+const measuredKwh = computed(() => result.value?.periodSummary.measuredKwh ?? null)
+const hasMeasuredShare = computed(() => measuredKwh.value != null && measuredKwh.value > 0)
+const sharedSpace = computed(() => {
+  const targets = result.value?.currentCoverage.targets ?? []
+  const first = targets[0]
+  return first?.spaceId && first.spaceName && targets.every(target => target.spaceId === first.spaceId)
+    ? first.spaceName : null
+})
+const scopeName = computed(() => sharedSpace.value || result.value?.currentCoverage.scopeLabel || result.value?.equipmentName || '')
 const breakdownOption = computed<ChartOption>(() => ({
   tooltip: { show: false },
   series: [{ type: 'pie', radius: ['64%', '84%'], center: ['50%', '50%'], silent: true,
-    label: { show: false }, data: [{ value: 1, itemStyle: { color: 'var(--bec-color-border)' } }],
+    label: { show: false }, data: [{ value: 1, itemStyle: { color: hasMeasuredShare.value ? 'var(--bec-color-action-primary)' : 'var(--bec-color-border)' } }],
   }],
 }))
 const chartOption = computed<ChartOption>(() => ({
@@ -148,13 +157,14 @@ function statusText(reason: string) {
             <p class="breakdown-period">{{ t('assetManagement.electricity.lastDays', { days }) }}</p>
             <div class="breakdown-ring">
               <ChartView class="breakdown-chart" :option="breakdownOption" :accessible-label="t('assetManagement.electricity.subitemShare')" />
-              <span class="breakdown-center">{{ t('assetManagement.electricity.zeroPercentPlaceholder') }}<small>{{ t('assetManagement.electricity.awaitingSubmeter') }}</small></span>
+              <span class="breakdown-center">{{ hasMeasuredShare ? '100%' : measuredKwh == null ? '—' : '0 kWh' }}<small>{{ t('assetManagement.electricity.singleMeterMeasured') }}</small></span>
             </div>
-            <p class="breakdown-note">{{ t('assetManagement.electricity.noSubitemData') }}</p>
+            <p class="breakdown-note">{{ t('assetManagement.electricity.periodAvailable', { available: result.periodSummary.availableDays, requested: result.periodSummary.requestedDays }) }}</p>
+            <p class="breakdown-note">{{ t('assetManagement.electricity.sharedScopeNote') }}</p>
             <h3>{{ t('assetManagement.electricity.subitemDetails') }}</h3>
-            <div v-for="target in result.currentCoverage.targets" :key="target.equipmentId" class="subitem-row">
-              <span class="subitem-name">{{ target.equipmentName }}<small>{{ t('assetManagement.electricity.awaitingSubmeter') }}</small></span>
-              <span class="subitem-values">{{ t('assetManagement.electricity.zeroKwhPlaceholder') }}<small>{{ t('assetManagement.electricity.zeroPercentPlaceholder') }}</small></span>
+            <div v-if="result.currentCoverage.targets.length" class="subitem-row">
+              <span class="subitem-name">{{ scopeName }}<small>{{ t('assetManagement.electricity.sharedTargets', { count: result.currentCoverage.targets.length }) }}</small></span>
+              <span class="subitem-values">{{ formatNumber(measuredKwh) }} {{ result.unit }}<small>{{ hasMeasuredShare ? '100%' : '—' }}</small></span>
             </div>
             <p v-if="!result.currentCoverage.targets.length" class="breakdown-note">{{ t('assetManagement.electricity.noTargets') }}</p>
           </div>

@@ -76,6 +76,6 @@ public class MeterElectricityService {
                 : MeterElectricityCalculator.calculate(events, today, days, point.getPointId(), quality, context);
         return new MeterElectricityContracts.View(meterId, meter.code(), meter.name(), meter.buildingId(),
                 point.getPointCode(), "kWh", MeterElectricityCalculator.ZONE.getId(), 6,
-                coverage.current(meterId, roles), daily);
+                coverage.current(meterId, roles), daily, MeterElectricityCalculator.summarize(daily));
     }
 }

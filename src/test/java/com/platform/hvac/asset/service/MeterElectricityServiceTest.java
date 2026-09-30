@@ -58,6 +58,9 @@ class MeterElectricityServiceTest {
             assertThat(day.status()).isEqualTo("MISSING");
         });
         assertThat(result.currentCoverage().scopeLabel()).isEqualTo("B314 三台内机");
+        assertThat(result.periodSummary().measuredKwh()).isNull();
+        assertThat(result.periodSummary().availableDays()).isZero();
+        assertThat(result.periodSummary().requestedDays()).isEqualTo(7);
         verify(rawEvents, atLeastOnce()).findMeterPointHistory(eq("BLD001"), eq("M-027"),
                 eq("EPP-027"), anyLong(), anyLong(), isNull(), eq(1000));
     }

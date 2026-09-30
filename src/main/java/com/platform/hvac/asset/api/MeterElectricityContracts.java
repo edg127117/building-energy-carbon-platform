@@ -11,8 +11,11 @@ public final class MeterElectricityContracts {
                       Long startSampleTime, Long endSampleTime,
                       Double changeKwh, Double changePercent) { }
 
+    /** 仅累计可计算的自然日；availableDays 小于 requestedDays 时不是完整区间总量。 */
+    public record PeriodSummary(Double measuredKwh, int availableDays, int requestedDays) { }
+
     public record View(String equipmentId, String equipmentCode, String equipmentName,
                        String buildingId, String pointCode, String unit, String timeZone,
                        int boundaryWindowMinutes, MeterCoverageContracts.View currentCoverage,
-                       List<Day> days) { }
+                       List<Day> days, PeriodSummary periodSummary) { }
 }

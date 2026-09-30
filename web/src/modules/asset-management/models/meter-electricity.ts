@@ -22,4 +22,5 @@ export type MeterElectricityView = {
   boundaryWindowMinutes: number
   currentCoverage: MeterCoverageView
   days: MeterElectricityDay[]
+  periodSummary: { measuredKwh: number | null; availableDays: number; requestedDays: number }
 }

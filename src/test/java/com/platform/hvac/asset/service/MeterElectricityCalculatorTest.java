@@ -1,5 +1,6 @@
 package com.platform.hvac.asset.service;
 
+import com.platform.hvac.asset.api.MeterElectricityContracts.Day;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.PolicySource;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
@@ -72,6 +73,22 @@ class MeterElectricityCalculatorTest {
                 event(2026, 9, 29, 23, 58, 13)), today, 1, "point-1", quality, context);
         assertThat(blocked.getFirst().status()).isEqualTo("QUALITY_BLOCKED");
         assertThat(blocked.getFirst().kwh()).isNull();
+    }
+
+    @Test
+    void sumsOnlyAvailableDaysAndDoesNotTurnMissingDaysIntoZero() {
+        var summary = MeterElectricityCalculator.summarize(List.of(
+                new Day(today.minusDays(3), 1.91, "AVAILABLE", "NEAR_MIDNIGHT_SAMPLES", 1L, 2L, null, null),
+                new Day(today.minusDays(2), null, "MISSING", "BOUNDARY_SAMPLE_MISSING", null, null, null, null),
+                new Day(today.minusDays(1), 2.09, "AVAILABLE", "NEAR_MIDNIGHT_SAMPLES", 3L, 4L, null, null)));
+        assertThat(summary.measuredKwh()).isEqualTo(4.0);
+        assertThat(summary.availableDays()).isEqualTo(2);
+        assertThat(summary.requestedDays()).isEqualTo(3);
+
+        var empty = MeterElectricityCalculator.summarize(List.of(
+                new Day(today.minusDays(1), null, "MISSING", "BOUNDARY_SAMPLE_MISSING", null, null, null, null)));
+        assertThat(empty.measuredKwh()).isNull();
+        assertThat(empty.availableDays()).isZero();
     }
 
     private static RawTelemetryEvent event(int year, int month, int day, int hour, int minute, double value) {

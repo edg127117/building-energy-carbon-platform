@@ -1,6 +1,7 @@
 package com.platform.hvac.asset.service;
 
 import com.platform.hvac.asset.api.MeterElectricityContracts.Day;
+import com.platform.hvac.asset.api.MeterElectricityContracts.PeriodSummary;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
@@ -20,6 +21,15 @@ final class MeterElectricityCalculator {
     static final long BOUNDARY_WINDOW_MS = 6 * 60_000L;
 
     private MeterElectricityCalculator() { }
+
+    static PeriodSummary summarize(List<Day> days) {
+        List<Day> available = days.stream()
+                .filter(day -> "AVAILABLE".equals(day.status()) && day.kwh() != null)
+                .toList();
+        Double measuredKwh = available.isEmpty() ? null
+                : available.stream().mapToDouble(Day::kwh).sum();
+        return new PeriodSummary(measuredKwh, available.size(), days.size());
+    }
 
     static List<Day> calculate(List<RawTelemetryEvent> events, LocalDate today, int days,
                                String pointId, QualityUsagePolicyResolver quality,
