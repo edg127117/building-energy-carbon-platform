@@ -21,6 +21,16 @@ class WeatherControllerTest {
     WeatherQueryService query=mock(WeatherQueryService.class);
     MockMvc mvc=MockMvcBuilders.standaloneSetup(new WeatherController(service,query)).setControllerAdvice(new GlobalExceptionHandler(mock(com.platform.audit.SecurityAuditService.class))).build();
     UsernamePasswordAuthenticationToken auth=new UsernamePasswordAuthenticationToken(new JwtUserPrincipal(1L,"test"),null,List.of(new SimpleGrantedAuthority("ROLE_PLATFORM_ADMIN")));
+    @Test void candidatesAndManagementAreReadOnlyAndBuildingScoped() throws Exception {
+        when(service.targets(eq(1L),any(),eq("b"))).thenReturn(List.of());
+        when(service.management(eq(1L),any(),eq("b"))).thenReturn(new WeatherModels.ManagementView(true,true,false,null));
+        mvc.perform(get("/v1/weather/buildings/b/energy-comparison/targets").principal(auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data").isArray());
+        mvc.perform(get("/v1/weather/buildings/b/management").principal(auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.canCalculateEnergy").value(false));
+        verify(service).targets(1L,java.util.Set.of("PLATFORM_ADMIN"),"b");
+        verifyNoInteractions(query);
+    }
     @Test void sourceJobIsAcceptedAndDoesNotCallReadOrSource() throws Exception {
         when(service.submit(eq(1L),any(),eq("key"),any())).thenReturn(List.of());
         mvc.perform(post("/v1/weather/jobs").principal(auth).header("Idempotency-Key","key").contentType(MediaType.APPLICATION_JSON)

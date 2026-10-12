@@ -13,10 +13,23 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DaikinDeviceClientBeansTest {
     @Test
+    void testProfileCannotCreateRealClientsEvenWhenExternalConfigurationEnablesThem() {
+        new org.springframework.boot.test.context.runner.ApplicationContextRunner()
+                .withInitializer(context -> context.getEnvironment().setActiveProfiles("test"))
+                .withPropertyValues("daikin.device-client.enabled=true", "daikin.control.enabled=true", "daikin.control.wire-confirmed=true")
+                .withUserConfiguration(DaikinDeviceClientBeans.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).doesNotHaveBean(DaikinSession.class);
+                    assertThat(context).doesNotHaveBean(com.platform.iot.daikin.control.DaikinControlGateway.class);
+                });
+    }
+
+    @Test
     void onlyConfiguredSourceReceivesProductionClientWithoutMakingRequest() {
         var properties = properties();
         var provider = new DaikinDeviceClientBeans().daikinCatalogClientProvider(properties,
-                new ObjectMapper());
+                session(properties));
         assertThat(provider.clientFor("other-source")).isEmpty();
         assertThat(provider.clientFor("registered-source")).isPresent();
     }
@@ -26,12 +39,12 @@ class DaikinDeviceClientBeansTest {
         var properties = properties();
         properties.setBaseUri(URI.create("http://vendor.example.test"));
         assertThatThrownBy(() -> new DaikinDeviceClientBeans()
-                .daikinCatalogClientProvider(properties, new ObjectMapper()))
+                .daikinCatalogClientProvider(properties, session(properties)))
                 .isInstanceOf(IllegalArgumentException.class);
         properties.setBaseUri(URI.create("https://vendor.example.test"));
         properties.setPassword(null);
         assertThatThrownBy(() -> new DaikinDeviceClientBeans()
-                .daikinCatalogClientProvider(properties, new ObjectMapper()))
+                .daikinCatalogClientProvider(properties, session(properties)))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -55,6 +68,11 @@ class DaikinDeviceClientBeansTest {
                 .decode("registered-source", DaikinDeviceKey.Kind.INDOOR, payload, Instant.EPOCH)
                 .devices().getFirst().fields();
         assertThat(disabled.get("roomTemp").status()).isEqualTo(DaikinFieldValue.Status.UNCONFIRMED);
+    }
+
+    private static DaikinSession session(DaikinDeviceClientProperties properties) {
+        return new DaikinDeviceClientBeans().daikinSession(properties, new ObjectMapper(),
+                new com.platform.iot.daikin.control.DaikinControlProperties());
     }
 
     private static DaikinDeviceClientProperties properties() {

@@ -7,7 +7,7 @@
 - 当前能力、阶段、风险和下一步：[`PROJECT_STATUS.md`](PROJECT_STATUS.md)；
 - 具体实现：直接相关的代码、测试和专题文档；
 - 监控大屏的内容、布局、交互、下钻及后续复用：[设计与复用规范](docs/designs/monitoring-screen-design-reference.md)；该文档区分独立原型与正式业务能力；
-- 天气后端候选的来源分工、任务、日量边界与启用配置：[天气设计](docs/designs/2026-09-26-weather-energy-research-design.md#11-本次后端落地与启用边界)；前端另行讨论，状态以项目状态文档为准；
+- 天气候选的来源分工、任务、日量边界与启用配置：[天气后端设计](docs/designs/2026-09-26-weather-energy-research-design.md#11-本次后端落地与启用边界)；三个前端入口、权限及展示边界见[天气前端设计](docs/designs/2026-09-29-weather-frontend-design.md)，验收状态以项目状态文档为准；
 - Git、Hook、PR 和 CI：[`repository-guardrails.md`](docs/development/repository-guardrails.md)。
 
 普通单点任务不要求完整读取本文件或 `PROJECT_STATUS.md`。历史计划只用于解释演进原因，不能代替当前代码和状态文档。
@@ -23,7 +23,7 @@
 
 产品阶段依次为数据监测与后台基础架构、可视化实现、虚拟数据测试及次级应用点完善；当前进度只在 [`PROJECT_STATUS.md`](PROJECT_STATUS.md) 维护。
 
-平台范围以监测、预处理、建模、分析、诊断和展示为主。远程控制、命令下发、响应执行、策略生成与策略下发不属于当前版本。负荷预测、能源审计、运行模式管理及完整自动报告暂缓，启用前必须重新确认范围和输入条件。
+平台范围以监测、预处理、建模、分析、诊断和展示为主。远程控制、命令下发、响应执行、策略生成与策略下发不属于当前正式版本；经独立批准的[大金单台人工控制](docs/designs/2026-10-11-daikin-manual-control-design.md)仅作为默认关闭的离线活动候选，自动策略及批量控制继续排除。负荷预测、能源审计、运行模式管理及完整自动报告暂缓，启用前必须重新确认范围和输入条件。
 
 GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成软件实现、专业确认和必要的硬件/现场验证后，才能声明该条款已满足。
 
@@ -43,6 +43,8 @@ GB/T 47474—2026 用于需求拆解和验收依据；只有相应条款完成�
 平台采用 Spring Boot 单体后端与 Vue 前端。未经证据证明存在独立部署、扩缩容或故障隔离收益，不拆微服务或仓库。
 
 大金只读接入位于 `com.platform.iot.daikin`：`client` 负责认证、只读路径和受限 HTTP 传输，`mapping` 规范化内外机字段，`catalog` 校验完整目录，`onboarding` 将可信完整目录登记至既有待接入区，并维护来源、项目建筑映射及版本。来源注册不包含凭据或目标 URL；设备读取客户端须显式启用，仅装配已联调的认证、内机及外机清单封装。完整目录入口是内部应用契约，调用者须先完成分页/总数校验并提供可靠轮次时间；`sync` 将目录读取与入库串接为持久化后台任务，不接收浏览器上传厂家目录。
+
+独立批准的人工控制候选位于 `daikin.control`，通过 `/api/v1/hvac-control` 提供单台内机选项、操作、历史、只读核验、现场确认、关闭记录及独立解除隔离；设备详情增加简易控制页签。后端要求当前账号/建筑权限、正式设备身份、关系摘要和动作取值开放清单及实时能力；常规控制须职责，默认关闭的 `test-access-enabled` 允许测试管理员复用现有授权。V68/V69 保存幂等操作、设备/控制器占用、稳定样本、读租约和审计；未知结果不重发，关闭记录不释放隔离，云端稳定后仍需现场确认。`DaikinSession` 供读取和控制共享认证及单进程限流，旧读取门面的白名单保持只读。`daikin.control.enabled` 与 `wire-confirmed` 均默认关闭，普通 test profile 不装配真实传输；真实协议及现场启用边界见[人工控制设计](docs/designs/2026-10-11-daikin-manual-control-design.md)。
 
 设备接入继续复用 `DeviceOnboardingService`、台账与公共审批。大金状态型产品和绑定通过增量契约支持零数值测点，旧数值绑定规则保留；绑定完成的身份仍停用，启用另走既有审批，身份配置生效不代表正式数据已采集。`/api/v1/daikin/directory` 提供管理员来源登记和项目建筑映射，`/api/v1/device-products/typed-state` 创建状态产品草稿，`/api/v1/operations/device-onboarding` 提供菜单及建筑范围受控的厂家待接入查询、状态维护和逐设备幂等绑定申请；审核执行进入统一敏感变更申请页面。V47/V48 新增目录结构、外机类型和内外机状态产品草稿，不迁移菜单、不自动启用产品，不写温度/状态历史。后续实施边界见[只读接入设计](docs/designs/2026-09-15-daikin-readonly-integration-design.md)，完成状态以 `PROJECT_STATUS.md` 为准。
 
@@ -225,6 +227,8 @@ V58 将旧 HVAC 设备、19 测点、别名、指标、采集与质量治理策�
 前端采用 `index.html → src/app/main.ts` 唯一入口，旧页面、旧全局样式、旧请求客户端及 Ant Design/Tailwind 实现不再保留。进入 `web` 后运行 `npm ci`、`npm run dev`；`npm run build` 构建唯一入口到 `web/dist`。
 
 平台恢复会话时重新向后端核验身份和授权，不信任本地缓存角色。数据库菜单树决定工作区、分组、叶子顺序和显示名称；客户端只接受与本地注册表完全一致的规范叶子路径，并校验其工作区和父分组。目录不自动授予子页面，管理员角色也不自动扩权；旧路径不再由前端重定向或映射。迁入管理页面还需保留平台管理员角色检查；前端导航限制不能替代后端接口鉴权和建筑范围校验。菜单缓存使用 V2 命名空间，避免菜单升级后读取旧层级。
+
+天气模块位于 `web/src/modules/weather`。智慧运维的“天气数据”提供 `/operations/weather/overview` 和 `/operations/weather/history`，简单日电量对照放在历史页内；配置入口为 `/configuration/ingestion/weather`。V67 登记菜单与正式角色入口。`GET /api/v1/weather/buildings/{building}/management` 返回当前建筑的操作能力及管理员可编辑的最新位置版本，提交仍复核权限；`energy-comparison/targets` 复用有效计量关系和累计 kWh 测点资格，只读候选对象，不触发日量计算。页面只显示后端日均及日电量，缺失数据不补零，日期按北京时间解释。
 
 敏感变更申请统一位于“能碳配置管理平台 → 用户与权限 → 敏感变更申请”（`/configuration/access/changeRequests`）。V61 为已有角色授权该页面入口；我的申请只返回本人数据，审核和执行仍需后端 `BACKOFFICE_CHANGE_REVIEWER` 职责。进行中与历史申请分开分页，历史记录保留审计；批量审核并执行适用于待办中的设备绑定或身份启用申请，两类分开选择，逐项调用原审核与执行接口。大金已绑定设备可在待接入列表批量提交身份启用申请，逐台核对绑定状态并保留失败结果。
 

@@ -1,9 +1,10 @@
-import { House, Activity, Zap, Leaf, Cpu, Bell, Wrench, ChartNoAxesCombined,
+import { House, Activity, Zap, Leaf, Cpu, Bell, Wrench, ChartNoAxesCombined, Cloud,
   Cable, Network, Sigma, Layers, SlidersHorizontal, ShieldCheck, Settings2, Monitor } from '@/shared/ui'
 
 /** 图标只表达已有分组，不参与菜单归属或授权判断。 */
 export const groupIcons = {
   'workspaces.overview': House, 'workspaces.realtime': Activity,
+  'workspaces.weather': Cloud,
   'workspaces.energy': Zap, 'workspaces.carbon': Leaf, 'workspaces.devices': Cpu,
   'workspaces.alarms': Bell, 'workspaces.maintenance': Wrench, 'workspaces.reports': ChartNoAxesCombined,
   'workspaces.ingestion': Cable, 'workspaces.space': Network, 'workspaces.indicators': Sigma,

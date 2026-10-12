@@ -23,6 +23,14 @@ public class WeatherController {
     }
     @GetMapping("/buildings/{building}/overview")
     public Result<Overview> overview(Authentication a,@PathVariable String building) { return Result.success(query.overview(SecurityUser.userId(a),SecurityUser.roles(a),building)); }
+    @GetMapping("/buildings/{building}/management")
+    public Result<ManagementView> management(Authentication a, @PathVariable String building) {
+        return Result.success(service.management(SecurityUser.userId(a), SecurityUser.roles(a), building));
+    }
+    @GetMapping("/buildings/{building}/energy-comparison/targets")
+    public Result<java.util.List<ComparisonTarget>> targets(Authentication a, @PathVariable String building) {
+        return Result.success(service.targets(SecurityUser.userId(a), SecurityUser.roles(a), building));
+    }
     @GetMapping("/buildings/{building}/hourly")
     public Result<java.util.List<WeatherSeries>> hourly(Authentication a,@PathVariable String building,@RequestParam Product product,@RequestParam Instant from,@RequestParam Instant to) {
         return Result.success(query.hourly(SecurityUser.userId(a),SecurityUser.roles(a),building,product,from,to));

@@ -9,6 +9,11 @@ import { useSession } from '@/modules/auth/public'
 import { pages, authorizedPages } from '@/app/navigation/catalog'
 import type { GrantedMenu } from '@/modules/auth/public'
 
+// 本文件验证真实路由与授权守卫；天气页面渲染由模块及浏览器验收覆盖。
+vi.mock('@/modules/weather/pages/OverviewPage.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('@/modules/weather/pages/HistoryPage.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('@/modules/weather/pages/IngestionPage.vue', () => ({ default: { template: '<div />' } }))
+
 beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
 afterEach(() => vi.unstubAllGlobals())
 function menuTree(paths: string[]): GrantedMenu[] {
@@ -89,7 +94,8 @@ describe('office and monitor composition', () => {
     expect(router.currentRoute.value.path).toBe('/403')
   })
   it('registers all confirmed pages without granting them by role', () => {
-    expect(pages).toHaveLength(49)
+    expect(pages).toHaveLength(52)
+    expect(pages.filter(page => page.path.includes('/weather'))).toHaveLength(3)
     expect(pages.some(page => page.path === '/configuration/ingestion/protocols')).toBe(true)
     expect(pages.some(page => page.path === '/configuration/access/changeRequests')).toBe(true)
     expect(new Set(pages.map(page => page.path)).size).toBe(pages.length)
@@ -98,6 +104,21 @@ describe('office and monitor composition', () => {
     expect(authorizedPages(session.menus)).toHaveLength(pages.length)
     session.menus[0].children![0].visible = 0
     expect(authorizedPages(session.menus)).toHaveLength(pages.length - 1)
+  })
+  it('requires weather leaf grants and limits the ingestion page to management roles', async () => {
+    const router = createPlatformRouter(createMemoryHistory())
+    const session = authorize()
+    session.user!.roles = ['BUILDING_OWNER']
+    await router.push('/operations/weather/history')
+    expect(router.currentRoute.value.path).toBe('/operations/weather/history')
+    await router.push('/configuration/ingestion/weather')
+    expect(router.currentRoute.value.path).toBe('/403')
+    session.user!.roles = ['ENERGY_MANAGER']
+    await router.push('/configuration/ingestion/weather')
+    expect(router.currentRoute.value.path).toBe('/configuration/ingestion/weather')
+    session.menus = []
+    await router.push('/operations/weather/overview')
+    expect(router.currentRoute.value.path).toBe('/403')
   })
   it('retains administrator checks for migrated management pages in addition to menu grants', async () => {
     const router = createPlatformRouter(createMemoryHistory())

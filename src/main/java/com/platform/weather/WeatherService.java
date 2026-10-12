@@ -41,6 +41,25 @@ public class WeatherService {
     public void runner(long user,Collection<String> roles,String building) {
         energyAuth.requireRunner(user,roles);scope.checkAccess(user,roles,building);
     }
+    /** 能力读取无写入副作用；配置编辑使用最新版本，避免未来生效版本造成持续版本冲突。 */
+    public ManagementView management(long user, Collection<String> roles, String building) {
+        reader(user, roles, building);
+        boolean admin = roles.contains("PLATFORM_ADMIN");
+        boolean calculate = false;
+        if (roles.contains("ENERGY_MANAGER") || admin) {
+            try {
+                energyAuth.requireRunner(user, roles);
+                calculate = true;
+            } catch (BusinessException exception) {
+                if (!Integer.valueOf(403).equals(exception.getCode())) throw exception;
+            }
+        }
+        return new ManagementView(admin, admin, calculate, admin ? repo.latestBinding(building) : null);
+    }
+    public List<ComparisonTarget> targets(long user, Collection<String> roles, String building) {
+        reader(user, roles, building);
+        return energy.listEligibleTargets(user, roles, building);
+    }
     static void range(LocalDate start,LocalDate end,int max) {
         if(start==null || end==null || start.isBefore(HISTORY_START) || end.isBefore(start) || ChronoUnit.DAYS.between(start,end)>=max)
             throw new BusinessException(400,"INVALID_DATE_RANGE","日期范围无效或超过限制");

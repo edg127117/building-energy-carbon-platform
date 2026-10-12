@@ -17,6 +17,7 @@ import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.relation.RelationGovernanceService;
+import com.platform.relation.RelationGovernanceProperties;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentView;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentsView;
 import com.platform.relation.api.RelationContracts.QueryMetadata;
@@ -50,6 +51,7 @@ class DailyElectricityAdapterTest {
     private QualityUsagePolicyResolver quality;
     private NativeQuantityAggregationService aggregation;
     private DailyElectricityAdapter adapter;
+    private RelationGovernanceProperties relationProperties;
 
     @BeforeEach
     void setUp() {
@@ -59,9 +61,10 @@ class DailyElectricityAdapterTest {
         relations = mock(RelationGovernanceService.class);
         quality = mock(QualityUsagePolicyResolver.class);
         aggregation = mock(NativeQuantityAggregationService.class);
-        adapter = new DailyElectricityAdapter(raw, catalog, configs, relations, quality, aggregation);
+        relationProperties = new RelationGovernanceProperties();
+        adapter = new DailyElectricityAdapter(raw, catalog, configs, relations, quality, aggregation, relationProperties);
 
-        when(relations.effectiveMeteringAssignments(7L, List.of("ENERGY_MANAGER"), "B1", 1, 500))
+        when(relations.effectiveMeteringAssignments(7L, List.of("ENERGY_MANAGER"), "B1", 1, 100))
                 .thenReturn(assignments());
         when(configs.findByPointId("P1")).thenReturn(Optional.of(config()));
         when(catalog.find("B1", Set.of("P1"))).thenReturn(List.of(profile()));
@@ -75,6 +78,63 @@ class DailyElectricityAdapterTest {
                 .thenReturn(new NativeQuantityAggregationService.GovernedEvidence(List.of(), List.of()));
         when(aggregation.aggregateCumulative(any())).thenReturn(new NativeQuantityAggregationService.NativeQuantityResult(
                 new BigDecimal("12.50"), "kWh", BigDecimal.ONE, 0, List.of("P1@1"), List.of(), List.of(), List.of(), true));
+    }
+
+    @Test
+    void listsOnlyQualifiedObjectsWithoutReadingTelemetry() {
+        when(relations.effectiveMeteringAssignments(eq(7L), eq(List.of("ENERGY_MANAGER")), eq("B1"), anyInt(), anyInt()))
+                .thenAnswer(call -> {
+                    int size=call.getArgument(4);
+                    if(size<1 || size>relationProperties.getMaxPageSize()) throw new BusinessException(400,"RELATION_VALIDATION_FAILED","分页参数不合法");
+                    return assignments();
+                });
+        var targets=adapter.listEligibleTargets(7L,List.of("ENERGY_MANAGER"),"B1");
+        assertThat(targets).hasSize(1);
+        assertThat(targets.getFirst().pointId()).isEqualTo("P1");
+        assertThat(targets.getFirst().systemId()).isEqualTo("S1");
+        verifyNoInteractions(raw,quality,aggregation);
+    }
+
+    @Test
+    void configuredSmallRelationPagesAreAllReadAndAmbiguityIsNotLost() {
+        relationProperties.setMaxPageSize(1);
+        var original=assignments();
+        when(relations.effectiveMeteringAssignments(eq(7L),eq(List.of("ENERGY_MANAGER")),eq("B1"),anyInt(),anyInt()))
+                .thenAnswer(call -> {
+                    int page=call.getArgument(3),size=call.getArgument(4);
+                    assertThat(size).isEqualTo(1);
+                    assertThat(page).isBetween(1,2);
+                    return new MeteringAssignmentsView(original.metadata(),page,size,2,original.items());
+                });
+        assertThat(adapter.listEligibleTargets(7L,List.of("ENERGY_MANAGER"),"B1")).isEmpty();
+        verify(relations).effectiveMeteringAssignments(7L,List.of("ENERGY_MANAGER"),"B1",2,1);
+        verifyNoInteractions(raw,quality,aggregation);
+    }
+
+    @Test
+    void candidateListRejectsCrossBuildingAndMissingConfiguration() {
+        when(configs.findByPointId("P1")).thenReturn(Optional.empty());
+        assertThat(adapter.listEligibleTargets(7L,List.of("ENERGY_MANAGER"),"B1")).isEmpty();
+        verifyNoInteractions(raw,quality,aggregation);
+    }
+
+    @Test
+    void candidateListDoesNotHideAuthorizationFailureAsEmptyData() {
+        doThrow(new BusinessException(403,"RELATION_FORBIDDEN","denied")).when(relations)
+                .effectiveMeteringAssignments(7L,List.of("ENERGY_MANAGER"),"B1",1,100);
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->adapter.listEligibleTargets(7L,List.of("ENERGY_MANAGER"),"B1"))
+                .isInstanceOf(BusinessException.class);
+        verifyNoInteractions(raw,quality,aggregation,configs,catalog);
+    }
+
+    @Test
+    void candidateListDoesNotDeduplicateAmbiguousAssignmentsIntoEligibility() {
+        var original=assignments();
+        when(relations.effectiveMeteringAssignments(7L,List.of("ENERGY_MANAGER"),"B1",1,100))
+                .thenReturn(new MeteringAssignmentsView(original.metadata(),1,100,2,
+                        List.of(original.items().getFirst(),original.items().getFirst())));
+        assertThat(adapter.listEligibleTargets(7L,List.of("ENERGY_MANAGER"),"B1")).isEmpty();
+        verifyNoInteractions(raw,quality,aggregation);
     }
 
     @Test
@@ -209,8 +269,8 @@ class DailyElectricityAdapterTest {
     void rejectsDatesBeforeTheCurrentRelationVersionBecameEffective() {
         var metadata = new QueryMetadata("B1", "RV1", 1, DAY.plusDays(1).atStartOfDay(), 3,
                 0, false, 0, 0, 0, 0);
-        when(relations.effectiveMeteringAssignments(7L, List.of("ENERGY_MANAGER"), "B1", 1, 500))
-                .thenReturn(new MeteringAssignmentsView(metadata, 1, 500, 1, assignments().items()));
+        when(relations.effectiveMeteringAssignments(7L, List.of("ENERGY_MANAGER"), "B1", 1, 100))
+                .thenReturn(new MeteringAssignmentsView(metadata, 1, 100, 1, assignments().items()));
 
         var result = adapter.calculate(7L, List.of("ENERGY_MANAGER"), "B1", "S1", "P1", DAY, DAY).getFirst();
 
@@ -236,7 +296,7 @@ class DailyElectricityAdapterTest {
                 "MB1", "BND1", "购电表", "ELECTRICITY", "CONFIRMED", "ACTIVE",
                 "MN1", "P1", "PC1", "购电表", "INDEPENDENT", "INBOUND", "CONFIRMED",
                 "N1", "SYSTEM", "S1", "S1", "系统");
-        return new MeteringAssignmentsView(metadata, 1, 500, 1, List.of(assignment));
+        return new MeteringAssignmentsView(metadata, 1, 100, 1, List.of(assignment));
     }
 
     private static PointProfile profile() {

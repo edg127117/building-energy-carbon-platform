@@ -17,6 +17,7 @@ import {
   temperatureSeries, runtimePeriodTime, temperatureWindow,
 } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
+import HvacControlPanel from './HvacControlPanel.vue'
 
 const props = withDefaults(defineProps<{
   equipmentId: string
@@ -378,6 +379,10 @@ onMounted(() => {
             </section>
           </div>
           <ElEmpty v-else-if="!current.loading.value && !current.error.value" :description="text('empty')" />
+        </ElTabPane>
+
+        <ElTabPane v-if="!isOutdoor" :label="text('controlTab')" name="control">
+          <HvacControlPanel v-if="tab === 'control'" :equipment-id="equipmentId" :refresh-tick="refreshTick" />
         </ElTabPane>
 
         <ElTabPane :label="text('temperature')" name="temperature">

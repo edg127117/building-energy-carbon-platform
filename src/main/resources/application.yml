@@ -307,3 +307,10 @@ weather:
   task-actor-id: ${WEATHER_TASK_ACTOR_ID:0}
   # energy-targets 通过受控部署配置填写 building-id/system-id/point-id/actor-id。
   energy-targets: []
+
+# 人工控制候选保持双重关闭；设备开放清单和动态职责也必须显式配置。
+daikin:
+  control:
+    enabled: ${DAIKIN_CONTROL_ENABLED:false}
+    wire-confirmed: ${DAIKIN_CONTROL_WIRE_CONFIRMED:false}
+    test-access-enabled: ${DAIKIN_CONTROL_TEST_ACCESS_ENABLED:false}

@@ -1,4 +1,5 @@
 export default {
+  weather: '天气数据',
   select: '选择工作区', selectHint: '请选择要进入的工作系统', switch: '切换系统',
   companyLogo: '腾芯筑能科技', enter: '进入系统',
   openMenu: '打开系统菜单', moreActions: '更多操作',

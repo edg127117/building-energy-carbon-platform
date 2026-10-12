@@ -18,6 +18,7 @@ import com.platform.iot.qualityusage.QualityUsageSnapshotUnavailableException;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.relation.RelationGovernanceService;
+import com.platform.relation.RelationGovernanceProperties;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentView;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentsView;
 import com.platform.security.FormalRole;
@@ -64,6 +65,7 @@ public class DailyElectricityAdapter {
     private final EnergyActivityPointCatalog pointCatalog;
     private final DataPointConfigProvider pointConfigs;
     private final RelationGovernanceService relations;
+    private final RelationGovernanceProperties relationProperties;
     private final QualityUsagePolicyResolver qualityResolver;
     private final NativeQuantityAggregationService aggregation;
 
@@ -73,13 +75,15 @@ public class DailyElectricityAdapter {
             DataPointConfigProvider pointConfigs,
             RelationGovernanceService relations,
             QualityUsagePolicyResolver qualityResolver,
-            NativeQuantityAggregationService aggregation) {
+            NativeQuantityAggregationService aggregation,
+            RelationGovernanceProperties relationProperties) {
         this.rawEvents = rawEvents;
         this.pointCatalog = pointCatalog;
         this.pointConfigs = pointConfigs;
         this.relations = relations;
         this.qualityResolver = qualityResolver;
         this.aggregation = aggregation;
+        this.relationProperties = relationProperties;
     }
 
     public List<DailyResult> calculate(
@@ -286,6 +290,45 @@ public class DailyElectricityAdapter {
         return new ObjectSnapshot(true, relation, null);
     }
 
+    /**
+     * 候选只读取当前关系与测点口径，不读取遥测或计算日量。整批关系必须来自同一版本；
+     * 资格仍由正式查询/补算再次验证，避免下拉加载后发生的关系变更绕过校验。
+     */
+    public List<com.platform.weather.WeatherModels.ComparisonTarget> listEligibleTargets(
+            long userId, Collection<String> roles, String buildingId) {
+        if (!hasReaderRole(roles)) {
+            throw new BusinessException(403, "ENERGY_AGGREGATION_FORBIDDEN", "当前角色不能读取日电量");
+        }
+        EffectiveAssignments effective = loadEffectiveAssignments(userId, roles, buildingId);
+        if (effective == null) {
+            throw new BusinessException(409, "WEATHER_TARGETS_CHANGED", "计量关系正在变化，请刷新重试");
+        }
+        List<com.platform.weather.WeatherModels.ComparisonTarget> targets = new ArrayList<>();
+        // 重复关系保留到 resolveRelation 判定，不因下拉去重而把歧义关系变成合格对象。
+        for (String pointId : effective.assignments().stream().map(MeteringAssignmentView::pointId)
+                .filter(Objects::nonNull).distinct().sorted().toList()) {
+            PointRuntimeConfig point = pointConfigs.findByPointId(pointId).orElse(null);
+            if (point == null || blank(point.systemGroupId()) || !buildingId.equals(point.buildingId())) continue;
+            PointProfile profile = pointCatalog.find(buildingId, Set.of(pointId)).stream()
+                    .filter(item -> pointId.equals(item.pointId())).findFirst().orElse(null);
+            if (!validPoint(buildingId, point.systemGroupId(), pointId, profile, point)) continue;
+            RelationSnapshot relation = resolveRelation(effective, buildingId, point.systemGroupId(), pointId, point, profile);
+            if (relation == null) continue;
+            MeteringAssignmentView assignment = effective.assignments().stream()
+                    .filter(item -> pointId.equals(item.pointId()) && "ASSIGNED".equals(item.allocationStatus())
+                            && "ELECTRICITY".equals(item.energyType()) && "ACTIVE".equals(item.boundaryStatus())
+                            && "CONFIRMED".equals(item.boundaryConfirmationStatus())
+                            && "CONFIRMED".equals(item.meterConfirmationStatus()) && "INBOUND".equals(item.meterDirection())
+                            && targetMatches(item, point.systemGroupId(), point.equipId())).findFirst().orElseThrow();
+            targets.add(new com.platform.weather.WeatherModels.ComparisonTarget(point.systemGroupId(), point.equipId(),
+                    pointId, point.pointCode(), point.pointName(), assignment.targetObjectName(),
+                    assignment.meteringBoundaryName(), profile.unit(), effective.versionId()));
+        }
+        targets.sort(java.util.Comparator.comparing(com.platform.weather.WeatherModels.ComparisonTarget::systemId)
+                .thenComparing(com.platform.weather.WeatherModels.ComparisonTarget::pointId));
+        return List.copyOf(targets);
+    }
+
     private RelationSnapshot resolveRelation(
             EffectiveAssignments effective, String buildingId, String systemId, String pointId,
             PointRuntimeConfig config, PointProfile profile) {
@@ -314,9 +357,11 @@ public class DailyElectricityAdapter {
         Long effectiveFrom = null;
         int page = 1;
         long total;
+        // 关系查询遵守自身可配置上限；原始遥测的 500 条分页不能复用于关系接口。
+        int assignmentPageSize = Math.min(100, relationProperties.getMaxPageSize());
         do {
             MeteringAssignmentsView response = relations.effectiveMeteringAssignments(
-                    userId, roles, buildingId, page, HISTORY_PAGE_SIZE);
+                    userId, roles, buildingId, page, assignmentPageSize);
             if (response == null || response.metadata() == null || response.items() == null) return null;
             if (versionId == null) versionId = response.metadata().versionId();
             if (!Objects.equals(versionId, response.metadata().versionId())) return null;

@@ -51,9 +51,9 @@ public class WeatherTimeseries {
                     sample.values().get("precipitation"),sample.values().get("shortwave_radiation"),
                     sample.values().get("wind_speed_10m"),sample.values().get("wind_direction_10m"),payload);
         }
-        // 不只检查写调用成功：读回行数及载荷，避免半批数据被发布。
+        // 逐行比较时间、字段和值，避免半批数据发布；JSON 对象字段顺序不属于数据差异，不能用序列化哈希判断。
         var actual=read(data);
-        if(!codec.hash(actual).equals(codec.hash(data.result().samples().stream().sorted(Comparator.comparing(Sample::time)).toList())))
+        if(!actual.equals(data.result().samples().stream().sorted(Comparator.comparing(Sample::time)).toList()))
             throw new IllegalStateException("WEATHER_WRITE_VERIFICATION_FAILED");
     }
     public List<Sample> read(Dataset data) {

@@ -40,6 +40,8 @@ class WeatherRepositoryTest {
         var next=repo.saveBinding("building",1,"c",new BindingRequest("next",33d,119d,null,"DISTRICT",day.plusDays(1).atStartOfDay(ZONE).toInstant(),1,true));
         assertThat(repo.effective("building",day.atStartOfDay(ZONE).toInstant()).id()).isEqualTo(first.id());
         assertThat(repo.effective("building",day.plusDays(1).atStartOfDay(ZONE).toInstant()).id()).isEqualTo(next.id());
+        assertThat(repo.latestBinding("building").id()).isEqualTo(next.id());
+        assertThat(repo.latestBinding("unconfigured")).isNull();
     }
     @Test void sourceLaneSerializesJobsAndExpiredWorkerCannotPublish() {
         enqueue("one");enqueue("two");long now=System.currentTimeMillis();
