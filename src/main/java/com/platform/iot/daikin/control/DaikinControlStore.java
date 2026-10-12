@@ -223,11 +223,20 @@ public class DaikinControlStore {
         // 不走吞掉写入异常的安全拒绝日志服务：发送意图的审计失败必须一起回滚，禁止实际下发。
         audit.append(new AuditEvidence("SYSTEM_SECURITY", row.buildingId(), actor == 0 ? "SYSTEM" : "USER", actor == 0 ? null : actor,
                 "HVAC_CONTROL_" + op.status().name(), "HVAC_CONTROL_OPERATION", op.operationId(), row.revision(), null,
-                null, "action=" + op.action() + ";value=" + op.value() + ";observed=" + op.observedValue()
+                null, "status=" + op.status() + ";action=" + op.action() + ";value=" + op.value() + ";observed=" + op.observedValue()
                         + ";stableCount=" + op.stableCount() + ";cloudStable=" + op.cloudStable() + ";reason=" + op.closedReason(),
                 // 统一审计表沿用服务端本地 DATETIME 口径；操作表/API 仍保存无歧义的 epoch 毫秒。
-                op.status().name(), op.reasonCode(), row.traceId(), LocalDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault()),
+                auditResult(op.status()), op.reasonCode(), row.traceId(), LocalDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault()),
                 auditProperties.getEnvironmentMode(), false));
+    }
+
+    // 通用审计沿用 V25 的结果枚举；控制阶段保留在动作名和摘要，不将受理或未知结果称为物理执行结论。
+    private static String auditResult(Status status) {
+        return switch (status) {
+            case REJECTED, NOT_SENT -> "REJECTED";
+            case UNKNOWN, UNCONFIRMED -> "FAILED";
+            case PREPARING, SENDING, ACCEPTED, OBSERVED_MATCH, OBSERVED_STABLE, CONFIRMED, CLOSED -> "SUCCESS";
+        };
     }
 
     private Row map(ResultSet rs, int n) throws SQLException {

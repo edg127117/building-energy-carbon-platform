@@ -59,6 +59,8 @@ class ControlFixture {
         setup += auditSchema.substring(auditSchema.indexOf("CREATE TABLE sys_security_audit_event"), auditSchema.indexOf("ALTER TABLE biz_collection"));
         new ResourceDatabasePopulator(new ByteArrayResource(setup.getBytes(StandardCharsets.UTF_8)),
                 new ClassPathResource("daikin-control-test.sql")).execute(ds);
+        // 对齐真实 V25 的审计结果约束，不能用无 CHECK 的 H2 夹具放过领域状态误写。
+        jdbc.execute("ALTER TABLE sys_security_audit_event ADD CONSTRAINT chk_security_audit_result CHECK (result IN ('SUCCESS','REJECTED','DENIED','FAILED'))");
         jdbc.update("INSERT INTO sys_user VALUES (7,1,0),(8,1,0),(9,1,0),(10,1,0)");
         jdbc.update("INSERT INTO user_roles VALUES (7,'ENERGY_MANAGER'),(8,'BUILDING_OWNER'),(9,'PLATFORM_ADMIN'),(10,'THIRD_PARTY')");
         jdbc.update("INSERT INTO sys_user_building VALUES (7,'building'),(8,'building'),(10,'building')");
