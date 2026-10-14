@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryHistory } from 'vue-router'
 import { mount, flushPromises } from '@vue/test-utils'
 import { useSession, type GrantedMenu } from '@/modules/auth/public'
 import { createPlatformRouter } from '@/app/router'
 import WorkspaceSelection from './WorkspaceSelection.vue'
+
+const controlApi = vi.hoisted(() => ({ deviceGrantAccess: vi.fn() }))
+vi.mock('@/modules/dashboard/api/hvac-control', () => ({ hvacControlApi: controlApi }))
 
 function menuTree(paths: string[]): GrantedMenu[] {
   let id = 0
@@ -36,6 +39,10 @@ async function render(paths: string[]) {
 }
 
 describe('workspace entry cards', () => {
+  beforeEach(() => {
+    controlApi.deviceGrantAccess.mockReset()
+    controlApi.deviceGrantAccess.mockResolvedValue({ canManage: false, testOpenControls: false })
+  })
   const paths = ['/monitor/monitoring', '/operations/overview/running', '/configuration/access/users']
   it.each([1, 2, 3])('renders only %i authorized links with one focus target per card', async count => {
     const { wrapper } = await render(paths.slice(0, count))
@@ -58,6 +65,14 @@ describe('workspace entry cards', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('访问权限加载失败')
     expect(wrapper.findAll('.system-link')).toHaveLength(0)
+    wrapper.unmount()
+  })
+  it('测试开放时为无角色账号显示唯一暖通业务入口', async () => {
+    controlApi.deviceGrantAccess.mockResolvedValue({ canManage: true, testOpenControls: true })
+    const { wrapper } = await render([])
+
+    expect(wrapper.findAll('.system-link')).toHaveLength(1)
+    expect(wrapper.find('.system-link').attributes('href')).toBe('/operations/realtime/hvac')
     wrapper.unmount()
   })
   it('keeps logout failure visible and does not navigate away', async () => {

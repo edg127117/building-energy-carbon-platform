@@ -4,7 +4,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 
 /**
- * 厂家认证及只读路径白名单；枚举外部不能提供 URL，运行时长 POST 仍不包含控制语义。
+ * 固定厂家路径白名单；控制端点 publicRead=false，旧读取入口无法调用 PUT。
  */
 public enum DaikinEndpoint {
     TOKEN("POST", "/token", false, false),
@@ -17,7 +17,12 @@ public enum DaikinEndpoint {
     OUTUNITS("GET", "/v2/equipments/outunit", true, false),
     OUTUNIT("GET", "/v2/equipments/outunit/%s", true, true),
     INUNIT_RUNTIME("POST", "/v2/runtime/inunit", true, false),
-    OUTUNIT_RUNTIME("POST", "/v2/runtime/outunit", true, false);
+    OUTUNIT_RUNTIME("POST", "/v2/runtime/outunit", true, false),
+    CONTROL_ON_OFF("PUT", "/v2/operations/onOff/%s", false, true),
+    CONTROL_TEMPERATURE("PUT", "/v2/operations/temperature/%s", false, true),
+    CONTROL_MODE("PUT", "/v2/operations/mode/%s", false, true),
+    CONTROL_AIR_FLOW("PUT", "/v2/operations/airFlow/%s", false, true),
+    CONTROL_FAN_SPEED("PUT", "/v2/operations/fanSpeed/%s", false, true);
 
     private final String method;
     private final String pathTemplate;

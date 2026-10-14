@@ -15,6 +15,7 @@ export const pages: PageEntry[] = [
   ...screens.map(screen => ({ id: screen.id, system: 'monitor' as const, groupKey: screen.titleKey, titleKey: screen.titleKey, path: screen.path })),
   ...group('operations', 'overview', ['running']),
   ...group('operations', 'realtime', ['hvac', 'power', 'lighting', 'renewable']),
+  ...['overview', 'history'].map(key => ({ id: `operations-weather-${key}`, system: 'operations' as const, groupKey: 'workspaces.weather', titleKey: `weather.${key}Title`, path: `/operations/weather/${key}` })),
   ...group('operations', 'energy', ['energyItems', 'energyZones', 'trend', 'baselineAnalysis', 'diagnosis']),
   ...group('operations', 'carbon', ['carbonOverview', 'carbonDetails', 'trend', 'reduction', 'assets']),
   ...group('operations', 'devices', ['businessDevices', 'pendingDevices', 'meters']),
@@ -22,6 +23,7 @@ export const pages: PageEntry[] = [
   ...group('operations', 'maintenance', ['plans', 'orders', 'faults']),
   ...group('operations', 'reports', ['energyReports', 'carbonReports']),
   ...group('configuration', 'ingestion', ['products', 'protocols', 'collection', 'interfaces']),
+  { id: 'configuration-ingestion-weather', system: 'configuration', groupKey: 'workspaces.ingestion', titleKey: 'weather.ingestionTitle', path: '/configuration/ingestion/weather' },
   ...group('configuration', 'space', ['buildings', 'spaces', 'systemGroups', 'equipmentSpaces']),
   ...group('configuration', 'indicators', ['indicatorList', 'formulas']),
   ...group('configuration', 'factors', ['emissionFactors', 'factorVersions']),
@@ -31,7 +33,7 @@ export const pages: PageEntry[] = [
 ]
 
 /** 数据库树决定授权、分组和顺序；页面注册表只负责校验规范路径及提供前端组件元数据。 */
-export function authorizedPages(menus: GrantedMenu[]): PageEntry[] {
+export function authorizedPages(menus: GrantedMenu[], testOpenControls = false): PageEntry[] {
   const registry = new Map(pages.map(page => [page.path, page]))
   const matched: PageEntry[] = []
   const grantedPaths = new Set<string>()
@@ -59,5 +61,11 @@ export function authorizedPages(menus: GrantedMenu[]): PageEntry[] {
     }
   }
   visit(menus)
+  // 测试开放仅补入暖通控制入口；路由仍须先确认已登录，其他模块继续只认菜单叶子授权。
+  const hvacControlPath = '/operations/realtime/hvac'
+  if (testOpenControls && !grantedPaths.has(hvacControlPath)) {
+    const hvacControlPage = registry.get(hvacControlPath)
+    if (hvacControlPage) matched.push(hvacControlPage)
+  }
   return matched
 }

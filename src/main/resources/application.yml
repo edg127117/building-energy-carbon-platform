@@ -307,3 +307,14 @@ weather:
   task-actor-id: ${WEATHER_TASK_ACTOR_ID:0}
   # energy-targets 通过受控部署配置填写 building-id/system-id/point-id/actor-id。
   energy-targets: []
+
+# 控制默认关闭；测试全开放须显式声明 TEST 环境，测试部署可持续启用，不依赖限时窗口。
+daikin:
+  control:
+    enabled: ${DAIKIN_CONTROL_ENABLED:false}
+    wire-confirmed: ${DAIKIN_CONTROL_WIRE_CONFIRMED:false}
+    test-access-enabled: ${DAIKIN_CONTROL_TEST_ACCESS_ENABLED:false}
+    test-open-controls: ${DAIKIN_CONTROL_TEST_OPEN_CONTROLS:false}
+    fast-readback-timeout-millis: ${DAIKIN_CONTROL_FAST_READBACK_TIMEOUT_MILLIS:60000}
+    test-equipment-ids: ${DAIKIN_CONTROL_TEST_EQUIPMENT_IDS:}
+    test-window-expires-at: ${DAIKIN_CONTROL_TEST_WINDOW_EXPIRES_AT:0}

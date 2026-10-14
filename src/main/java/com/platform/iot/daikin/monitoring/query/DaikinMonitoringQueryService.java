@@ -22,7 +22,7 @@ import java.util.Set;
 import static com.platform.iot.daikin.monitoring.query.DaikinMonitoringQueryDtos.*;
 
 /**
- * 大金监测查询的数据权限边界。每次请求同时校验实时监测（暖通空调监控或运行总览）叶子菜单和当前建筑授权；SQL继续按
+ * 大金监测查询的数据权限边界。默认校验实时监测叶子菜单和当前建筑授权；已批准的 TEST 开放模式只在本模块放行有效登录账号。SQL继续按
  * 采集时归属快照过滤事件与设备异常，来源异常通过本建筑监测目标建立可见关联；
  * 独立运行统计还允许通过当前正式绑定与项目映射关联，不要求已启动分钟采集。
  */
@@ -37,19 +37,31 @@ public class DaikinMonitoringQueryService {
     private final BuildingScopeService buildings;
     private final SysMenuMapper menus;
     private final Clock clock;
+    private final com.platform.iot.daikin.control.DaikinControlAccess controlAccess;
 
-    @Autowired
     public DaikinMonitoringQueryService(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc,
                                         BuildingScopeService buildings, SysMenuMapper menus) {
-        this(jdbc, buildings, menus, Clock.systemUTC());
+        this(jdbc, buildings, menus, Clock.systemUTC(), null);
+    }
+
+    @Autowired
+    public DaikinMonitoringQueryService(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc, BuildingScopeService buildings,
+                                        SysMenuMapper menus, com.platform.iot.daikin.control.DaikinControlAccess controlAccess) {
+        this(jdbc, buildings, menus, Clock.systemUTC(), controlAccess);
     }
 
     DaikinMonitoringQueryService(JdbcTemplate jdbc, BuildingScopeService buildings,
                                  SysMenuMapper menus, Clock clock) {
+        this(jdbc, buildings, menus, clock, null);
+    }
+
+    DaikinMonitoringQueryService(JdbcTemplate jdbc, BuildingScopeService buildings, SysMenuMapper menus,
+                                 Clock clock, com.platform.iot.daikin.control.DaikinControlAccess controlAccess) {
         this.jdbc = Objects.requireNonNull(jdbc);
         this.buildings = Objects.requireNonNull(buildings);
         this.menus = Objects.requireNonNull(menus);
         this.clock = Objects.requireNonNull(clock);
+        this.controlAccess = controlAccess;
     }
 
     public List<SpaceOption> spaces(Long userId, Set<String> roles, String buildingId) {
@@ -211,7 +223,7 @@ public class DaikinMonitoringQueryService {
                 WHERE e.equip_id=? AND e.del_flag=0 LIMIT 2
                 """, (rs, row) -> new RuntimeScope(rs.getString(1), rs.getString(2), rs.getInt(3)), equipmentId);
         if (rows.size() != 1) throw forbidden();
-        buildings.checkAccess(userId, roles, rows.getFirst().buildingId());
+        checkBuildingAccess(userId, roles, rows.getFirst().buildingId());
         return rows.getFirst();
     }
 
@@ -289,11 +301,11 @@ public class DaikinMonitoringQueryService {
         // 报警叶子只授权对应异常列表，不扩展为设备状态、温度或运行统计权限。
         if (userId == null || roles == null) throw forbidden();
         String alarmMenu = active ? "/operations/alarms/liveAlarms" : "/operations/alarms/historyAlarms";
-        if (!roles.contains("PLATFORM_ADMIN") && menus.selectVisibleMenusByUserId(userId).stream()
+        if (!testOpen(userId) && !roles.contains("PLATFORM_ADMIN") && menus.selectVisibleMenusByUserId(userId).stream()
                 .noneMatch(menu -> "C".equals(menu.getMenuType())
                         && (alarmMenu.equals(menu.getPath()) || HVAC_MENUS.contains(menu.getPath())))) throw forbidden();
         requireId(buildingId, "buildingId");
-        buildings.checkAccess(userId, roles, buildingId);
+        checkBuildingAccess(userId, roles, buildingId);
         requireLimit(limit);
         Cursor after = decodeCursor(cursor);
         String timeColumn = active ? "x.last_detected_at_ms" : "x.recovered_at_ms";
@@ -368,24 +380,35 @@ public class DaikinMonitoringQueryService {
                 rs.getString(4), rs.getInt(5), nullableLong(rs, 6),
                 rs.getInt(7) == 1 && rs.getInt(8) == 1, rs.getString(9)), equipmentId);
         if (rows.isEmpty()) {
-            if (!roles.contains("PLATFORM_ADMIN")) throw forbidden();
+            if (!testOpen(userId) && !roles.contains("PLATFORM_ADMIN")) throw forbidden();
             throw error(404, "DAIKIN_MONITORING_EQUIPMENT_NOT_FOUND", "监测设备不存在");
         }
         if (rows.size() != 1) {
-            if (!roles.contains("PLATFORM_ADMIN")) throw forbidden();
+            if (!testOpen(userId) && !roles.contains("PLATFORM_ADMIN")) throw forbidden();
             throw error(409, "DAIKIN_MONITORING_IDENTITY_CONFLICT", "监测设备身份冲突");
         }
-        buildings.checkAccess(userId, roles, rows.get(0).buildingId());
+        checkBuildingAccess(userId, roles, rows.get(0).buildingId());
         return rows.get(0);
     }
 
     private void requireBuilding(Long userId, Set<String> roles, String buildingId) {
         requireMenu(userId, roles);
         requireId(buildingId, "buildingId");
-        buildings.checkAccess(userId, roles, buildingId);
+        checkBuildingAccess(userId, roles, buildingId);
     }
 
+    /** 空调 TEST 例外只在本模块生效，其他接口继续使用公共建筑授权服务。 */
+    private boolean testOpen(Long userId) {
+        if (controlAccess == null || !controlAccess.testOpenControls()) return false;
+        if (userId == null) throw forbidden();
+        controlAccess.requireAccount(userId);
+        return true;
+    }
+    private void checkBuildingAccess(Long userId, Set<String> roles, String buildingId) {
+        if (!testOpen(userId)) buildings.checkAccess(userId, roles, buildingId);
+    }
     private void requireMenu(Long userId, Set<String> roles) {
+        if (testOpen(userId)) return;
         if (userId == null || roles == null) throw forbidden();
         if (roles.contains("PLATFORM_ADMIN")) return;
         if (menus.selectVisibleMenusByUserId(userId).stream()

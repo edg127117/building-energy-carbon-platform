@@ -10,13 +10,14 @@ import { routes as accessRoutes } from '@/modules/access-control/public'
 import { routes as assetRoutes } from '@/modules/asset-management/public'
 import { routes as deviceRoutes } from '@/modules/device-onboarding/public'
 import { routes as protocolRoutes } from '@/modules/protocol-configuration/public'
-import { routes as dashboardRoutes } from '@/modules/dashboard/public'
+import { routes as dashboardRoutes, useHvacControlAccess } from '@/modules/dashboard/public'
 import { routes as trendRoutes } from '@/modules/trend-analysis/public'
+import { routes as weatherRoutes } from '@/modules/weather/public'
 import { screens } from '@/modules/large-screen/public'
 import { t } from '@/locales'
 
 // 页面能力按职责落位；既有资产权限保持不变，菜单迁移不授予额外业务角色。
-const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes]
+const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes, ...weatherRoutes]
 function businessRoute(page: (typeof pages)[number]) {
   if (page.path === '/operations/realtime/hvac') return dashboardRoutes[0]
   if (page.path === '/operations/energy/trend') return trendRoutes[0]
@@ -51,7 +52,17 @@ export function createPlatformRouter(history: RouterHistory = createWebHashHisto
   router.beforeEach(async to => {
     if (to.meta.public) return true
     const session = useSession()
-    try { await session.refresh(); authorizedPages(session.menus) } catch {
+    const controlAccess = useHvacControlAccess()
+    try {
+      await session.refresh()
+      if (!session.user) {
+        controlAccess.clear()
+        return '/login'
+      }
+      await controlAccess.refresh()
+      authorizedPages(session.menus, controlAccess.testOpenControls.value)
+    } catch {
+      controlAccess.clear()
       session.menus = []; session.failed = true
       if (!session.token) return '/login'
       if (to.path !== '/systems') return { path: '/systems', query: { error: 'access' } }
@@ -60,7 +71,7 @@ export function createPlatformRouter(history: RouterHistory = createWebHashHisto
     if (!session.user) return '/login'
     if (to.meta.requiresPlatformAdmin && !session.user.roles.includes('PLATFORM_ADMIN')) return '/403'
     if (to.meta.requiresRelationManager && !session.user.roles.some(role => ['ENERGY_MANAGER', 'PLATFORM_ADMIN'].includes(role))) return '/403'
-    if (to.meta.system && !authorizedPages(session.menus).some(page => page.path === to.path)) return '/403'
+    if (to.meta.system && !authorizedPages(session.menus, controlAccess.testOpenControls.value).some(page => page.path === to.path)) return '/403'
     return true
   })
   return router

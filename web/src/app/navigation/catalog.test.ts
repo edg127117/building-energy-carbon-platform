@@ -41,6 +41,11 @@ describe('navigation authorization mapping', () => {
     expect(authorizedPages([menu('/operations', { menuType: 'M' })])).toEqual([])
   })
 
+  it('测试开放只补充暖通控制叶子，不把其他业务页面加入菜单', () => {
+    expect(authorizedPages([], true).map(page => page.path)).toEqual(['/operations/realtime/hvac'])
+    expect(authorizedPages([], false)).toEqual([])
+  })
+
   it('rejects duplicate and unregistered canonical paths', () => {
     expect(() => authorizedPages(tree('configuration', 'access', [
       menu('/configuration/access/users'),

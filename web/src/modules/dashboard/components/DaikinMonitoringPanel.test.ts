@@ -1,16 +1,23 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { listAccessibleBuildings } from '../api/hvac'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { daikinApi } from '../api/daikin'
+import { hvacControlApi } from '../api/hvac-control'
 import DaikinMonitoringPanel from './DaikinMonitoringPanel.vue'
+import type { HvacControlOperation } from '../models/hvac-control'
+import DaikinDeviceDetail from './DaikinDeviceDetail.vue'
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {} }),
 }))
 
-vi.mock('../api/hvac', async original => ({
-  ...(await original<typeof import('../api/hvac')>()),
-  listAccessibleBuildings: vi.fn(),
+const controlAccess = vi.hoisted(() => ({ testOpenControls: { value: false }, loaded: { value: true }, refresh: vi.fn() }))
+
+vi.mock('../api/hvac-control', () => ({
+  hvacControlApi: { buildings: vi.fn() },
+}))
+
+vi.mock('../composables/use-hvac-control-access', () => ({
+  useHvacControlAccess: () => controlAccess,
 }))
 
 vi.mock('../api/daikin', () => ({
@@ -26,10 +33,17 @@ vi.mock('../api/daikin', () => ({
   },
 }))
 
+vi.mock('./HvacDeviceGrantPanel.vue', () => ({
+  default: { name: 'HvacDeviceGrantPanel', template: '<section data-testid="device-grant-panel" />' },
+}))
+
 describe('DaikinMonitoringPanel', () => {
+  afterEach(() => vi.useRealTimers())
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(listAccessibleBuildings).mockResolvedValue([
+    controlAccess.testOpenControls.value = false
+    controlAccess.loaded.value = true
+    vi.mocked(hvacControlApi.buildings).mockResolvedValue([
       { buildingId: 'BLD001', buildingName: '测试大楼' },
     ] as never)
     vi.mocked(daikinApi.spaces).mockResolvedValue([
@@ -104,6 +118,122 @@ describe('DaikinMonitoringPanel', () => {
     }))
   })
 
+  const completedForMonitor = (): HvacControlOperation => ({
+    operationId: 'OP-1', equipmentId: 'eq-idu-2', action: 'ON_OFF', value: 'off', status: 'CLOUD_VERIFIED',
+    reasonCode: 'FAST_TARGET_READBACK_MATCH', vendorCode: '10000', observedValue: 'off',
+    createdAt: 1, updatedAt: 2, closedReason: null, deadlineAt: 120001, stableCount: 0,
+    stableSince: null, lastReadAt: 1_700_000_010_000, unitStatus: 'stopped', isolated: false, cloudStable: false, verificationPolicy: 'TEST_FAST_V1',
+  })
+  async function openMonitorForRetry() {
+    vi.useFakeTimers()
+    const wrapper = mount(DaikinMonitoringPanel, { global: { stubs: {
+      ElDrawer: { props: ['modelValue'], template: '<div v-if="modelValue" class="drawer-stub"><slot /></div>' },
+      ChartView: true,
+    } } })
+    await flushPromises()
+    await wrapper.find('.device-card').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('分钟采集滞后时后台重查，收到较新监测就停止，不等待下一轮页面刷新', async () => {
+    const wrapper = await openMonitorForRetry()
+    const original = await vi.mocked(daikinApi.devices).mock.results[0]!.value
+    const fresh = { ...original, items: original.items.map((device: typeof original.items[number]) => device.deviceKind === 'INDOOR'
+      ? { ...device, lastValidAt: 1_700_000_011_000, onOff: { ...device.onOff!, value: 'off' }, unitStatus: { ...device.unitStatus!, value: 'stopped' } }
+      : device) }
+    vi.mocked(daikinApi.devices).mockResolvedValueOnce(original).mockResolvedValueOnce(fresh)
+    wrapper.findComponent(DaikinDeviceDetail).vm.$emit('controlCompleted', completedForMonitor())
+    await flushPromises()
+    expect(wrapper.find('.device-card-running').exists()).toBe(true)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushPromises()
+    expect(wrapper.find('.device-card-running').exists()).toBe(false)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(3)
+    wrapper.unmount()
+  })
+
+  it('关闭抽屉后取消该设备的后台重查', async () => {
+    const wrapper = await openMonitorForRetry()
+    wrapper.findComponent(DaikinDeviceDetail).vm.$emit('controlCompleted', completedForMonitor())
+    await flushPromises()
+    const calls = vi.mocked(daikinApi.devices).mock.calls.length
+    wrapper.findComponent(DaikinDeviceDetail).vm.$emit('close')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(calls)
+    wrapper.unmount()
+  })
+
+  it('刷新失败保留旧卡片，后台重查有上限且不无限轮询', async () => {
+    const wrapper = await openMonitorForRetry()
+    vi.mocked(daikinApi.devices).mockRejectedValueOnce(new Error('offline read failed'))
+    wrapper.findComponent(DaikinDeviceDetail).vm.$emit('controlCompleted', completedForMonitor())
+    await flushPromises()
+    expect(wrapper.find('.device-card-running').exists()).toBe(true)
+    await vi.advanceTimersByTimeAsync(70_000)
+    const calls = vi.mocked(daikinApi.devices).mock.calls.length
+    expect(calls).toBeLessThanOrEqual(15) // 初始加载、最多 13 轮控制后读取及正常分钟刷新。
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(calls)
+    wrapper.unmount()
+  })
+
+  it('控制完成静默重读监测卡片和详情，保持抽屉且不把请求目标直接写入监测', async () => {
+    const wrapper = mount(DaikinMonitoringPanel, {
+      global: { stubs: {
+        ElDrawer: { props: ['modelValue', 'title'], template: '<div v-if="modelValue" class="drawer-stub"><h2>{{ title }}</h2><slot /></div>' },
+        ChartView: true,
+        HvacControlPanel: { name: 'HvacControlPanel', props: ['equipmentId', 'refreshTick'], emits: ['completed'], template: '<section data-testid="control-stub" />' },
+      } },
+    })
+    await flushPromises()
+    const initial = await vi.mocked(daikinApi.devices).mock.results[0]!.value
+    const originalCurrent = await vi.mocked(daikinApi.current).mock.results[0]!.value
+    await wrapper.find('.device-card').trigger('click')
+    await flushPromises()
+    await wrapper.find('#tab-control').trigger('click')
+    await flushPromises()
+    const panel = wrapper.findComponent({ name: 'HvacControlPanel' })
+    const completed: HvacControlOperation = {
+      operationId: 'OP-1', equipmentId: 'eq-idu-2', action: 'ON_OFF', value: 'off', status: 'CLOUD_VERIFIED',
+      reasonCode: 'FAST_TARGET_READBACK_MATCH', vendorCode: '10000', observedValue: 'off',
+      createdAt: 1, updatedAt: 2, closedReason: null, deadlineAt: 120001, stableCount: 0,
+      stableSince: null, lastReadAt: 2, unitStatus: 'stopped', isolated: false, cloudStable: false, verificationPolicy: 'TEST_FAST_V1',
+    }
+    const listCalls = vi.mocked(daikinApi.devices).mock.calls.length
+    const detailCalls = vi.mocked(daikinApi.current).mock.calls.length
+    panel.vm.$emit('completed', { ...completed, equipmentId: 'another-device' })
+    await flushPromises()
+    expect(daikinApi.devices).toHaveBeenCalledTimes(listCalls)
+    expect(daikinApi.current).toHaveBeenCalledTimes(detailCalls)
+    let finishList!: (value: typeof initial) => void
+    vi.mocked(daikinApi.devices).mockImplementationOnce(() => new Promise(resolve => { finishList = resolve }))
+    vi.mocked(daikinApi.current).mockResolvedValue({ ...originalCurrent, fields: originalCurrent.fields.map((field: typeof originalCurrent.fields[number]) =>
+      field.fieldName === 'onOff' ? { ...field, normalizedValue: 'off', rawJson: '"off"' } : field) })
+    const temperatureCalls = vi.mocked(daikinApi.temperature).mock.calls.length
+    panel.vm.$emit('completed', completed)
+    await flushPromises()
+    expect(daikinApi.devices).toHaveBeenCalledTimes(listCalls + 1)
+    expect(daikinApi.current).toHaveBeenCalledTimes(detailCalls + 1)
+    expect(daikinApi.temperature).toHaveBeenCalledTimes(temperatureCalls + 2)
+    expect(wrapper.find('.device-card-running').exists()).toBe(true)
+    expect(wrapper.find('.drawer-stub').exists()).toBe(true)
+    expect(wrapper.findComponent({ name: 'HvacControlPanel' }).props('refreshTick')).toBe(0)
+    finishList({ ...initial, items: initial.items.map((device: typeof initial.items[number]) => device.deviceKind === 'INDOOR'
+      ? { ...device, onOff: { ...device.onOff!, value: 'off' }, unitStatus: { ...device.unitStatus!, value: 'stopped' } }
+      : device) })
+    await flushPromises()
+    expect(wrapper.find('.device-card-running').exists()).toBe(false)
+    expect(wrapper.find('.device-card').text()).toContain('已关机')
+    expect(wrapper.find('.device-card').text()).toContain('25°C')
+    expect(wrapper.find('.drawer-stub').text()).toContain('关')
+    wrapper.unmount()
+  })
+
   it('renders system grouping, quick status pills, semantic tones, and opens right-side drawer on card click', async () => {
     const wrapper = mount(DaikinMonitoringPanel, {
       global: {
@@ -129,6 +259,7 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.text()).toContain('24.6°C')
     expect(wrapper.text()).toContain('25°C')
     expect(wrapper.text()).toContain('滤网提醒')
+    expect(wrapper.find('[data-testid="device-grant-panel"]').exists()).toBe(true)
     expect(wrapper.find('.device-card.device-card-running').exists()).toBe(true)
 
     await wrapper.find('.device-card').trigger('click')
@@ -142,6 +273,20 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.text()).toContain('机组健康、维保与控制器状态')
     expect(wrapper.text()).toContain('设备档案与系统归属')
     expect(wrapper.text()).toContain('FSFP71AB')
+    wrapper.unmount()
+  })
+
+  it('测试开放时使用控制建筑源并隐藏逐台批量许可面板', async () => {
+    controlAccess.testOpenControls.value = true
+    const wrapper = mount(DaikinMonitoringPanel, {
+      global: { stubs: { ChartView: true } },
+    })
+    await flushPromises()
+
+    expect(hvacControlApi.buildings).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="device-grant-panel"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('测试控制已开放')
+    expect(wrapper.text()).toContain('无需逐台配置')
     wrapper.unmount()
   })
 

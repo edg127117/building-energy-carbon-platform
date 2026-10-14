@@ -6,6 +6,10 @@ import com.platform.iot.daikin.catalog.DaikinCatalogReader;
 import com.platform.iot.daikin.mapping.DaikinDevicePageDecoder;
 import com.platform.iot.daikin.model.DaikinDeviceKey;
 import com.platform.iot.daikin.sync.DaikinCatalogClientProvider;
+import com.platform.iot.daikin.control.DaikinControlGateway;
+import com.platform.iot.daikin.control.DaikinControlProperties;
+import com.platform.iot.daikin.control.DaikinControlGrantReader;
+import com.platform.iot.daikin.control.DaikinControlAccess;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -17,12 +21,14 @@ import java.util.Optional;
 
 /** 只把显式登记的稳定来源接到厂家；缺失配置使启动失败，不回退到任意 URL 或测试客户端。 */
 @Configuration
+// 普通测试只能手工装配模拟 transport，宿主机启用环境变量也不能引入真实 HTTP 客户端。
+@org.springframework.context.annotation.Profile("!test")
 @EnableConfigurationProperties(DaikinDeviceClientProperties.class)
 public class DaikinDeviceClientBeans {
     @Bean
     @ConditionalOnProperty(prefix = "daikin.device-client", name = "enabled", havingValue = "true")
-    DaikinCatalogClientProvider daikinCatalogClientProvider(DaikinDeviceClientProperties properties,
-                                                            ObjectMapper mapper) {
+    DaikinSession daikinSession(DaikinDeviceClientProperties properties, ObjectMapper mapper,
+                                DaikinControlProperties controls) {
         DaikinDeviceKey.requireIdentity(properties.getSourceId());
         var credentials = new DaikinClientConfiguration.Credentials(properties.getAppId(),
                 properties.getPassword(), properties.getSignatureSalt(), properties.getCommunicationKey());
@@ -30,12 +36,36 @@ public class DaikinDeviceClientBeans {
                 Duration.ofSeconds(5), Duration.ofSeconds(10), Duration.ofSeconds(1),
                 Duration.ofMinutes(1), 1024 * 1024, 4, 4);
         Clock clock = Clock.systemUTC();
-        var client = new DaikinReadonlyClient(configuration, new DaikinV2DeviceWireCodec(mapper),
-                new DaikinHttpTransport.Jdk(configuration.connectTimeout()), mapper, clock);
-        var catalog = new DaikinCatalogClient(client,
-                new DaikinCatalogReader(deviceDecoder(properties), clock, 1000, 100000));
+        DaikinWireCodec codec = controls.isEnabled() && controls.isWireConfirmed()
+                ? new DaikinControlWireCodec(mapper) : new DaikinV2DeviceWireCodec(mapper);
+        return new DaikinSession(configuration, codec, new DaikinHttpTransport.Jdk(configuration.connectTimeout()), mapper, clock);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "daikin.device-client", name = "enabled", havingValue = "true")
+    DaikinCatalogClientProvider daikinCatalogClientProvider(DaikinDeviceClientProperties properties, DaikinSession session) {
+        var catalog = new DaikinCatalogClient(new DaikinReadonlyClient(session),
+                new DaikinCatalogReader(deviceDecoder(properties), Clock.systemUTC(), 1000, 100000));
         String sourceId = properties.getSourceId();
         return requestedSource -> sourceId.equals(requestedSource) ? Optional.of(catalog) : Optional.empty();
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "daikin.device-client", name = "enabled", havingValue = "true")
+    DaikinControlGrantReader daikinControlGrantReader(DaikinDeviceClientProperties properties, DaikinSession session) {
+        var reader = new DaikinControlClient(properties.getSourceId(), session, properties.isTemperatureCelsiusConfirmed());
+        // 与监测共享读取预算，但不向开放管理服务暴露 send；控制网关仍需原双开关。
+        return new DaikinControlGrantReader() {
+            public boolean supports(String sourceId) { return reader.supports(sourceId); }
+            public DaikinControlGateway.Snapshot read(DaikinControlAccess.Target target) { return reader.read(target); }
+        };
+    }
+
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression(
+            "${daikin.device-client.enabled:false} && ${daikin.control.enabled:false} && ${daikin.control.wire-confirmed:false}")
+    DaikinControlGateway daikinControlGateway(DaikinDeviceClientProperties properties, DaikinSession session) {
+        return new DaikinControlClient(properties.getSourceId(), session, properties.isTemperatureCelsiusConfirmed());
     }
 
     static DaikinDevicePageDecoder deviceDecoder(DaikinDeviceClientProperties properties) {

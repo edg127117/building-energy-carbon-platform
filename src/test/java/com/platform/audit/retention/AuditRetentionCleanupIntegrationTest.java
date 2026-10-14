@@ -96,7 +96,8 @@ class AuditRetentionCleanupIntegrationTest {
         String pendingId = audit("PENDING_REVIEW", fixedNow.minusYears(1), draft.requestId());
         holdService.create(ADMIN_ID, Set.of("PLATFORM_ADMIN"), new AuditEvidenceHoldService.CreateHold(
                 "SYSTEM_SECURITY", heldId, null, null, null, null, null, null,
-                "INV-001", "安全调查未结案", "内部调查单", fixedNow.plusMonths(1)));
+                // 清理仍使用固定月末验证自然月边界；保全创建按真实时钟校验，不能随日期推移变成过期夹具。
+                "INV-001", "安全调查未结案", "内部调查单", LocalDateTime.now().plusMonths(1)));
 
         AuditRetentionPolicy policy = policyService.apply(
                 new AuditRetentionPolicyService.RetentionPolicyCommand("SECURITY_EVENT", "SYSTEM_SECURITY",

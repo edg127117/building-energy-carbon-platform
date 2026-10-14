@@ -44,6 +44,10 @@ public class WeatherRepository {
     public List<Binding> bindings() {
         return jdbc.query("SELECT * FROM biz_weather_binding_version ORDER BY building_id,version_no",this::mapBinding);
     }
+    public Binding latestBinding(String building) {
+        return one("SELECT * FROM biz_weather_binding_version WHERE building_id=? ORDER BY version_no DESC LIMIT 1",
+                this::mapBinding, building);
+    }
     public com.platform.framework.web.PageResponse<Binding> locations(Set<String> allowed,int page,int size,Instant now) {
         if(allowed!=null&&allowed.isEmpty())return new com.platform.framework.web.PageResponse<>(page,size,0,List.of());
         List<Object> args=new ArrayList<>(List.of(now.toEpochMilli(),now.toEpochMilli()));

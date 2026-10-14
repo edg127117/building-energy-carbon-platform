@@ -57,6 +57,12 @@ public final class WeatherModels {
     public record Forecast(Source preferredSource, Source selectedSource, String fallbackReason,
             String status, String updateStatus, Instant fetchedAt, String datasetId, String coverage, Provenance provenance, List<DaySlot> days) {}
     public record Overview(Binding location, WeatherSeries current, Forecast forecast) {}
+    /** 页面能力仅作操作提示，提交时仍复核职责；最新配置可晚于当前生效配置。 */
+    public record ManagementView(boolean canManageLocation, boolean canFetchWeather,
+            boolean canCalculateEnergy, Binding latestBinding) {}
+    public record ComparisonTarget(String systemId, String equipmentId, String pointId,
+            String pointCode, String pointName, String targetObjectName,
+            String meteringBoundaryName, String unit, String relationVersion) {}
     public record ComparisonDay(LocalDate date, com.platform.weather.energy.DailyElectricityAdapter.DailyResult energy, Double weatherValue,
             String weatherUnit, int validHours, String weatherStatus, String datasetId) {
         @com.fasterxml.jackson.annotation.JsonProperty("energyStatus")

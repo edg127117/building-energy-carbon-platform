@@ -14,7 +14,8 @@ export {
 export type { FormInstance, FormRules, TableColumnCtx, TreeInstance } from 'element-plus'
 export { default as zhCn } from 'element-plus/es/locale/lang/zh-cn'
 export {
-  ArrowLeft, Boxes, Building2, Check, ChevronDown, CircleAlert, CircleCheck,
+  Sun, CloudSun, CloudDrizzle, CloudRain, CloudRainWind, CloudSnow, CloudLightning, CloudFog, Snowflake, Wind, CircleHelp,
+  ArrowLeft, Boxes, Building2, Check, ChevronDown, CircleAlert, CircleCheck, Cloud,
   CircleX, Clock, Cpu, Eye, FileClock, Info, Link2, LogOut, Maximize, Menu,
   Minimize, Monitor, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw,
   RotateCcw, Search, Settings2, ShieldCheck, Trash2, User, Users, WifiOff, X,

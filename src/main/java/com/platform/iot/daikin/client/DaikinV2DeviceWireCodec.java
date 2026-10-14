@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * 大金 V2 设备清单的实际 wire 格式：明文业务参数参与签名，完整 JSON 加密后作为
- * POST 请求体或 GET 无键查询串。仅装配已联调的认证及内外机清单，控制和统计不在此边界。
+ * POST 请求体或 GET 无键查询串。装配认证、内外机清单及单内机只读预检，控制和统计不在此边界。
  */
 public final class DaikinV2DeviceWireCodec implements DaikinWireCodec {
     private final ObjectMapper mapper;
@@ -33,6 +33,7 @@ public final class DaikinV2DeviceWireCodec implements DaikinWireCodec {
                 if (!page.matches("[1-9][0-9]{0,3}")) throw invalid();
                 payload.put("page", Integer.parseInt(page));
             }
+            case INUNIT -> { /* 单内机只读预检使用空参数，不扩展 PUT 能力。 */ }
             default -> throw invalid();
         }
         if (logicalParameters == null || logicalParameters.size() != payload.size()) throw invalid();

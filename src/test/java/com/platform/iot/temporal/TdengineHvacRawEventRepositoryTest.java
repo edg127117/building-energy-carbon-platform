@@ -107,6 +107,17 @@ class TdengineHvacRawEventRepositoryTest {
     }
 
     @Test
+    void meterHistoryUsesConfirmedIdentityAndDoesNotApplyDaikinSourceFilter() {
+        when(template.queryForList(startsWith("SELECT *"))).thenReturn(List.of());
+        repository.findMeterPointHistory("BLD001", "METER001", "EPP001", 1000, 9000, 2000L, 501);
+        var sql = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(template).queryForList(sql.capture());
+        assertThat(sql.getValue()).contains("building_id='BLD001'", "equip_id='METER001'",
+                "point_id='EPP001'", "ORDER BY ts ASC LIMIT 501")
+                .doesNotContain("DAIKIN_V2");
+    }
+
+    @Test
     void equipmentTrendIsScopedAndDownsampledInsideTdengine() {
         when(template.queryForList(contains("AVG(val) AS average_value"))).thenReturn(List.of(Map.of(
                 "point_id", "POINT001",

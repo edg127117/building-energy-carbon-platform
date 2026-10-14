@@ -21,6 +21,35 @@ class WeatherServiceTest {
     SysRoleMapper roles=mock(SysRoleMapper.class);
     DailyElectricityAdapter energy=mock(DailyElectricityAdapter.class);
     WeatherService service=new WeatherService(repo,scope,authorization,users,roles,energy);
+    @Test void managementRequiresDynamicDutyEvenForAdmin() {
+        doThrow(new BusinessException(403,"forbidden")).when(authorization).requireRunner(1L,List.of("PLATFORM_ADMIN"));
+        var result=service.management(1,List.of("PLATFORM_ADMIN"),"b");
+        assertThat(result.canManageLocation()).isTrue();
+        assertThat(result.canCalculateEnergy()).isFalse();
+        verify(repo).latestBinding("b");
+    }
+    @Test void managementScopeDenialPrecedesMetadataReads() {
+        doThrow(new BusinessException(403,"denied")).when(scope).checkAccess(1L,List.of("PLATFORM_ADMIN"),"other");
+        assertThatThrownBy(()->service.management(1,List.of("PLATFORM_ADMIN"),"other")).isInstanceOf(BusinessException.class);
+        verifyNoInteractions(repo);
+    }
+    @Test void energyManagerCapabilityDoesNotGrantLocationOrSourceAccess() {
+        var result=service.management(1,List.of("ENERGY_MANAGER"),"b");
+        assertThat(result.canCalculateEnergy()).isTrue();
+        assertThat(result.canManageLocation()).isFalse();
+        assertThat(result.canFetchWeather()).isFalse();
+        assertThat(result.latestBinding()).isNull();
+        verifyNoInteractions(repo);
+    }
+    @Test void managementDoesNotMaskDutyServiceFailureAsDenied() {
+        doThrow(new BusinessException(500,"unavailable")).when(authorization).requireRunner(1L,List.of("ENERGY_MANAGER"));
+        assertThatThrownBy(()->service.management(1,List.of("ENERGY_MANAGER"),"b")).isInstanceOf(BusinessException.class);
+    }
+    @Test void targetsRequireBuildingScopeBeforeLoadingCandidates() {
+        doThrow(new BusinessException(403,"denied")).when(scope).checkAccess(1L,List.of("BUILDING_OWNER"),"other");
+        assertThatThrownBy(()->service.targets(1,List.of("BUILDING_OWNER"),"other")).isInstanceOf(BusinessException.class);
+        verifyNoInteractions(energy);
+    }
     @Test void ownerCannotSubmitSourceJobs() {
         var request=new FetchRequest("building",Source.OPEN_METEO,Product.HISTORY_DAILY,LocalDate.of(2026,1,1),LocalDate.of(2026,1,2));
         assertThatThrownBy(()->service.submit(1,List.of("BUILDING_OWNER"),"key",request)).isInstanceOf(BusinessException.class);

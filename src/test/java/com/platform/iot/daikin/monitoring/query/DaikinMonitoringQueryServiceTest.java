@@ -303,6 +303,22 @@ class DaikinMonitoringQueryServiceTest {
         assertThat(result.total()).isEqualTo(1);
     }
 
+    @Test
+    void testOpenHvacQueriesBypassMenuAndBuildingGrantOnlyForActiveAccounts() {
+        var access=mock(com.platform.iot.daikin.control.DaikinControlAccess.class);
+        when(access.testOpenControls()).thenReturn(true);
+        var open=new DaikinMonitoringQueryService(jdbc,buildings,menus,
+                Clock.fixed(Instant.ofEpochMilli(NOW),ZoneOffset.UTC),access);
+        insertTarget("identity-open","equipment-open","BLD-OPEN","source-open",1);
+        var result=open.devices(10L,Set.of(),"BLD-OPEN",1,20,null,null);
+        assertThat(result.total()).isEqualTo(1);
+        verify(access,atLeastOnce()).requireAccount(10L);
+        verifyNoInteractions(buildings,menus);
+        doThrow(new BusinessException(403,"账号不可用")).when(access).requireAccount(10L);
+        assertThatThrownBy(()->open.devices(10L,Set.of(),"BLD-OPEN",1,20,null,null))
+                .isInstanceOf(BusinessException.class);
+    }
+
     private void insertTarget(String identity, String equipment, String building, String source, int mapping) {
         String pending = "pending-" + identity;
         jdbc.update("INSERT INTO biz_equipment VALUES (?,?,'space','system',0,?,?)", equipment, building, equipment, "Room unit");

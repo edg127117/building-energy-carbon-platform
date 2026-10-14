@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 
 # This server's test release is served by 18080 -> 18081. Port 80 belongs to a separate site.
 base=/home/user1/deployments/building-energy-carbon-test
 service=building-energy-carbon-test-platform.service
 nginx_config="$base/shared/nginx-user.conf"
 port80_link=/var/www/iot-platform/current
+control_config_tool="$(dirname "$(readlink -f "$0")")/daikin_test_deployment_config.py"
 
 assert_test_route() {
   grep -Eq '^[[:space:]]*listen[[:space:]]+18080;' "$nginx_config"
@@ -45,11 +47,17 @@ release="$base/releases/$name"
 [[ "$(sha256sum "$archive" | cut -d' ' -f1)" == "$expected_archive" ]] || { echo ARCHIVE_HASH_MISMATCH >&2; exit 1; }
 
 switched=false
+control_backup=
 rollback() {
   code=$?
   trap - ERR
+  if [[ -n "$control_backup" && -f "$control_backup" ]]; then
+    python3 "$control_config_tool" restore "$control_backup" || true
+  fi
   if [[ "$switched" == true ]]; then
     ln -s "$previous" "$base/.rollback-$name-$$" && mv -Tf "$base/.rollback-$name-$$" "$base/current" || true
+  fi
+  if [[ "$switched" == true || -n "$control_backup" ]]; then
     systemctl restart "$service" || true
   fi
   echo "TEST_DEPLOY_FAILED code=$code" >&2
@@ -85,6 +93,11 @@ find "$stage" -type f -exec chmod 0644 {} +
 service_user=$(systemctl show "$service" --property=User --value)
 [[ -n "$service_user" && "$service_user" != root ]] || { echo INVALID_SERVICE_USER >&2; exit 1; }
 runuser -u "$service_user" -- bash -c 'cd "$1" && test -r building-energy-carbon-platform.jar && test -r web/index.html' _ "$stage"
+# 测试发布统一开放控制；外置配置在更新时保留，失败则恢复本次发布前值。
+[[ -f "$control_config_tool" ]] || { echo TEST_CONFIG_TOOL_MISSING >&2; exit 1; }
+control_backup_dir=$(mktemp -d "$base/backups/control-$name-XXXXXX")
+control_backup="$control_backup_dir/control-before.env"
+python3 "$control_config_tool" prepare "$control_backup"
 mv "$stage" "$release"
 ln -s "$release" "$base/.next-$name-$$"
 mv -Tf "$base/.next-$name-$$" "$base/current"
@@ -101,6 +114,7 @@ done
 [[ "$(curl -fsS --max-time 5 http://127.0.0.1:18080/ | sha256sum | cut -d' ' -f1)" == "$web_hash" ]]
 [[ "$(readlink "$port80_link" 2>/dev/null || true)" == "$previous_port80" ]]
 assert_test_route
+python3 "$control_config_tool" verify
 
 trap - ERR
 echo "BUILDING_ENERGY_CARBON_TEST_DEPLOY_OK commit=$commit"
