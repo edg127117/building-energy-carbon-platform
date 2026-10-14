@@ -33,7 +33,7 @@ class DaikinControlApiTest {
     @Test void optionsSubmitPollHistoryAndReadbackHaveStableContract() throws Exception {
         var response = mvc.perform(get("/v1/hvac-control/devices/equipment/options").principal(auth))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.canControl").value(true))
-                .andExpect(jsonPath("$.data.actions.length()").value(5)).andReturn();
+                .andExpect(jsonPath("$.data.actions.length()").value(5)).andExpect(jsonPath("$.data.currentTemperature").value(24)).andReturn();
         String revision = f.json.readTree(response.getResponse().getContentAsString()).path("data").path("revision").asText();
         var command = f.json.createObjectNode().put("action", "ON_OFF").put("value", "on").put("idempotencyKey", "request-123").put("revision", revision);
         var submitted = mvc.perform(post("/v1/hvac-control/devices/equipment/operations").principal(auth)
@@ -44,13 +44,12 @@ class DaikinControlApiTest {
                 .andExpect(jsonPath("$.data.vendorCode").value("10000"));
         f.stabilize(f.service);
         mvc.perform(get("/v1/hvac-control/devices/equipment/operations").principal(auth)).andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.total").value(1)).andExpect(jsonPath("$.data.items[0].status").value("OBSERVED_STABLE"))
-                .andExpect(jsonPath("$.data.items[0].isolated").value(true))
+                .andExpect(jsonPath("$.data.total").value(1)).andExpect(jsonPath("$.data.items[0].status").value("CLOUD_VERIFIED"))
+                .andExpect(jsonPath("$.data.items[0].isolated").value(false))
                 .andExpect(jsonPath("$.data.items[0].cloudStable").value(true));
         mvc.perform(post("/v1/hvac-control/operations/" + id + "/confirm").principal(auth)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\"模拟现场确认已开机且无联动\"}"))
-                .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("CONFIRMED"))
-                .andExpect(jsonPath("$.data.isolated").value(false));
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("HVAC_CONTROL_ONSITE_CONFIRMATION_REQUIRED"));
         assertThat(f.gateway.writes).hasValue(1);
     }
 

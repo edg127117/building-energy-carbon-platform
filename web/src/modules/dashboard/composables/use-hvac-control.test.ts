@@ -15,7 +15,7 @@ vi.mock('../api/hvac-control', () => ({
 import { useHvacControl } from './use-hvac-control'
 
 const optionsFor = (equipmentId: string, activeOperationId: string | null = null) => ({
-  equipmentId, canControl: true, reasonCode: null, revision: 'r-1', activeOperationId,
+  equipmentId, canControl: true, testOpenControls: false, reasonCode: null, revision: 'r-1', activeOperationId,
   actions: [{ action: 'ON_OFF', allowed: true, reasonCode: null, values: ['on', 'off'], minimum: null, maximum: null }],
 })
 const historyFor = (equipmentId: string) => ({ page: 1, size: 20, total: 0, items: [] as never[], equipmentId })
@@ -27,7 +27,7 @@ const operationFor = (
   operationId: `op-${equipmentId}`, equipmentId, action: 'ON_OFF' as const, value: 'on', status,
   reasonCode: null, vendorCode: null, observedValue: null, createdAt: 1, updatedAt: 2, closedReason: null,
   deadlineAt: null, stableCount: 0, stableSince: null, lastReadAt: null, unitStatus: null,
-  isolated: !['OBSERVED_MATCH', 'CONFIRMED', 'REJECTED', 'NOT_SENT'].includes(status), cloudStable: status === 'OBSERVED_STABLE' || status === 'CONFIRMED',
+  isolated: !['OBSERVED_MATCH', 'CONFIRMED', 'REJECTED', 'NOT_SENT'].includes(status), cloudStable: status === 'OBSERVED_STABLE' || status === 'CONFIRMED', verificationPolicy: 'LEGACY_STABLE',
   ...overrides,
 })
 const deferred = <T>() => {
@@ -83,6 +83,33 @@ describe('离线控制状态资源', () => {
     })
     expect(control.activeOperation.value?.value).toBe('on')
     expect(control.history.value.items[0]?.status).toBe('PREPARING')
+    scope.stop()
+  })
+
+  it('提交前拒绝当前许可之外的枚举值、非整数和稀疏设温值', async () => {
+    api.options.mockResolvedValue({
+      ...optionsFor('A'),
+      actions: [
+        { action: 'ON_OFF', allowed: true, reasonCode: null, values: ['off'], minimum: null, maximum: null },
+        { action: 'TEMPERATURE', allowed: true, reasonCode: null, values: ['20', '24'], minimum: 18, maximum: 30 },
+      ],
+    })
+    const scope = effectScope()
+    const control = scope.run(() => useHvacControl(ref('A')))!
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await control.submit('ON_OFF', 'on')
+    await control.submit('TEMPERATURE', '21')
+    await control.submit('TEMPERATURE', '24.5')
+    await control.submit('TEMPERATURE', '31')
+    expect(api.createOperation).not.toHaveBeenCalled()
+    expect(control.error.value).toContain('许可范围')
+
+    await control.submit('TEMPERATURE', '24')
+    expect(api.createOperation).toHaveBeenCalledWith('A', {
+      action: 'TEMPERATURE', value: '24', idempotencyKey: 'test-control-key', revision: 'r-1',
+    })
     scope.stop()
   })
 
@@ -143,6 +170,76 @@ describe('离线控制状态资源', () => {
     expect(api.operation).not.toHaveBeenCalled()
   })
 
+  it('云端核验终态自动结束轮询并刷新控制选项，但不把未知记录自动结束', async () => {
+    api.createOperation.mockResolvedValue(operationFor('A', 'CLOUD_VERIFIED', { isolated: false, cloudStable: true }))
+    const scope = effectScope()
+    const control = scope.run(() => useHvacControl(ref('A')))!
+    await Promise.resolve()
+    await Promise.resolve()
+    vi.useFakeTimers()
+
+    await control.submit('ON_OFF', 'on')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(control.activeOperation.value?.status).toBe('CLOUD_VERIFIED')
+    expect(control.hasInFlightOperation.value).toBe(false)
+    expect(api.options).toHaveBeenCalledTimes(2)
+
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(api.operation).not.toHaveBeenCalled()
+    scope.stop()
+  })
+
+  it('云端核验后的权限快照未返回时拒绝复用旧 revision 提交', async () => {
+    const refreshedOptions = deferred<ReturnType<typeof optionsFor>>()
+    api.options
+      .mockResolvedValueOnce(optionsFor('A'))
+      .mockReturnValueOnce(refreshedOptions.promise)
+    api.createOperation.mockResolvedValue(operationFor('A', 'CLOUD_VERIFIED', { isolated: false, cloudStable: true }))
+    const scope = effectScope()
+    const control = scope.run(() => useHvacControl(ref('A')))!
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await control.submit('ON_OFF', 'on')
+    expect(control.optionsRefreshing.value).toBe(true)
+    await control.submit('ON_OFF', 'off')
+    expect(api.createOperation).toHaveBeenCalledTimes(1)
+    expect(control.error.value).toContain('正在同步云端核验后的控制权限')
+
+    refreshedOptions.resolve(optionsFor('A'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(control.optionsRefreshing.value).toBe(false)
+    scope.stop()
+  })
+
+  it('云端核验后的权限快照失败会丢弃旧选项，重新加载后才允许再次提交', async () => {
+    api.options
+      .mockResolvedValueOnce(optionsFor('A'))
+      .mockRejectedValueOnce(new Error('snapshot unavailable'))
+      .mockResolvedValueOnce(optionsFor('A'))
+    api.createOperation
+      .mockResolvedValueOnce(operationFor('A', 'CLOUD_VERIFIED', { isolated: false, cloudStable: true }))
+      .mockResolvedValueOnce(operationFor('A', 'REJECTED'))
+    const scope = effectScope()
+    const control = scope.run(() => useHvacControl(ref('A')))!
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await control.submit('ON_OFF', 'on')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(control.options.value).toBeNull()
+    await control.submit('ON_OFF', 'off')
+    expect(api.createOperation).toHaveBeenCalledTimes(1)
+
+    await control.refresh()
+    await control.submit('ON_OFF', 'off')
+    expect(api.createOperation).toHaveBeenCalledTimes(2)
+    scope.stop()
+  })
+
   it('状态轮询覆盖 300 秒观察窗，并在 110 次安全上限后停止', async () => {
     const scope = effectScope()
     const control = scope.run(() => useHvacControl(ref('A')))!
@@ -155,6 +252,49 @@ describe('离线控制状态资源', () => {
     expect(api.operation).toHaveBeenCalledTimes(110)
     await vi.advanceTimersByTimeAsync(6_000)
     expect(api.operation).toHaveBeenCalledTimes(110)
+    scope.stop()
+  })
+
+  it('TEST_FAST_V1 每秒读取状态，并按服务端期限确定轮询预算', async () => {
+    api.createOperation.mockResolvedValue(operationFor('A', 'ACCEPTED', {
+      verificationPolicy: 'TEST_FAST_V1', createdAt: 1_000, deadlineAt: 61_000,
+    }))
+    api.operation.mockResolvedValue(operationFor('A', 'ACCEPTED', {
+      verificationPolicy: 'TEST_FAST_V1', createdAt: 1_000, deadlineAt: 61_000,
+    }))
+    const scope = effectScope()
+    const control = scope.run(() => useHvacControl(ref('A')))!
+    await Promise.resolve()
+    await Promise.resolve()
+    vi.useFakeTimers()
+
+    await control.submit('ON_OFF', 'on')
+    await vi.advanceTimersByTimeAsync(3_000)
+
+    expect(api.operation).toHaveBeenCalledTimes(3)
+    scope.stop()
+  })
+
+  it('TEST_FAST_V1 的结果未知仍按服务端期限只读最新回显，且不重发写请求', async () => {
+    api.createOperation.mockResolvedValue(operationFor('A', 'UNKNOWN', {
+      verificationPolicy: 'TEST_FAST_V1', createdAt: 1_000, deadlineAt: 61_000,
+    }))
+    api.operation.mockResolvedValue(operationFor('A', 'UNKNOWN', {
+      verificationPolicy: 'TEST_FAST_V1', createdAt: 1_000, deadlineAt: 61_000, observedValue: 'on',
+    }))
+    const scope = effectScope()
+    const control = scope.run(() => useHvacControl(ref('A')))!
+    await Promise.resolve()
+    await Promise.resolve()
+    vi.useFakeTimers()
+
+    await control.submit('ON_OFF', 'on')
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(control.activeOperation.value?.status).toBe('UNKNOWN')
+    expect(control.activeOperation.value?.observedValue).toBe('on')
+    expect(api.operation).toHaveBeenCalledTimes(5)
+    expect(api.createOperation).toHaveBeenCalledTimes(1)
     scope.stop()
   })
 

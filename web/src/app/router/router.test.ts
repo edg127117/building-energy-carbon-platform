@@ -9,13 +9,35 @@ import { useSession } from '@/modules/auth/public'
 import { pages, authorizedPages } from '@/app/navigation/catalog'
 import type { GrantedMenu } from '@/modules/auth/public'
 
+const controlAccess = vi.hoisted(() => ({
+  testOpenControls: { value: false }, refresh: vi.fn(), clear: vi.fn(),
+}))
+vi.mock('@/modules/dashboard/public', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/modules/dashboard/public')>()
+  return {
+    ...actual,
+    routes: [{ path: 'dashboard', name: 'dashboard', component: { template: '<div data-testid="hvac-route-stub" />' } }],
+    useHvacControlAccess: () => controlAccess,
+  }
+})
+
 // 本文件验证真实路由与授权守卫；天气页面渲染由模块及浏览器验收覆盖。
 vi.mock('@/modules/weather/pages/OverviewPage.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('@/modules/weather/pages/HistoryPage.vue', () => ({ default: { template: '<div />' } }))
 vi.mock('@/modules/weather/pages/IngestionPage.vue', () => ({ default: { template: '<div />' } }))
 
-beforeEach(() => { localStorage.clear(); setActivePinia(createPinia()) })
-afterEach(() => vi.unstubAllGlobals())
+beforeEach(() => {
+  localStorage.clear()
+  setActivePinia(createPinia())
+  vi.stubEnv('VITE_API_BASE', '')
+  vi.stubEnv('VITE_WS_BASE', '')
+  controlAccess.testOpenControls.value = false
+  controlAccess.refresh.mockReset()
+  controlAccess.refresh.mockResolvedValue(undefined)
+  controlAccess.clear.mockReset()
+  controlAccess.clear.mockImplementation(() => { controlAccess.testOpenControls.value = false })
+})
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 function menuTree(paths: string[]): GrantedMenu[] {
   let id = 0
   const roots = new Map<string, GrantedMenu>()
@@ -91,6 +113,18 @@ describe('office and monitor composition', () => {
     const session = authorize()
     session.menus = []
     await router.push('/monitor/monitoring')
+    expect(router.currentRoute.value.path).toBe('/403')
+  })
+  it('测试开放仅允许无角色有效账号进入暖通入口，其他菜单仍被拒绝', async () => {
+    const router = createPlatformRouter(createMemoryHistory())
+    const session = authorize()
+    session.menus = []
+    controlAccess.testOpenControls.value = true
+
+    await router.push('/operations/realtime/hvac')
+    expect(router.currentRoute.value.path).toBe('/operations/realtime/hvac')
+
+    await router.push('/operations/weather/overview')
     expect(router.currentRoute.value.path).toBe('/403')
   })
   it('registers all confirmed pages without granting them by role', () => {

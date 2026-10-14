@@ -50,8 +50,8 @@ class DaikinControlOfflineFlowTest {
             var op = service.submit(7, "equipment", new Submit(Action.valueOf(pair[0]), pair[1], "offline-" + pair[0], options.revision()), "offline-trace");
             assertThat(op.status()).isEqualTo(Status.ACCEPTED);
             f.stabilize(service);
-            assertThat(service.get(7, op.operationId()).status()).isEqualTo(Status.OBSERVED_STABLE);
-            assertThat(service.confirm(7, op.operationId(), "模拟现场确认目标及其他内机状态").status()).isEqualTo(Status.CONFIRMED);
+            assertThat(service.get(7, op.operationId()).status()).isEqualTo(Status.CLOUD_VERIFIED);
+            assertThat(service.get(7, op.operationId()).isolated()).isFalse();
         }
         assertThat(writes).hasValue(5);
         assertThat(service.history(7, "equipment", 1, 20).total()).isEqualTo(5);

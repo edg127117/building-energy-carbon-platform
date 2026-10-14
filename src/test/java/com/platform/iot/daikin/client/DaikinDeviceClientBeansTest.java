@@ -13,6 +13,28 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DaikinDeviceClientBeansTest {
     @Test
+    void controlOffCanConfigureGrantsThroughReadonlyBeanWithoutRegisteringWriteGateway() {
+        new org.springframework.boot.test.context.runner.ApplicationContextRunner()
+                .withBean(ObjectMapper.class, ObjectMapper::new)
+                .withBean(com.platform.iot.daikin.control.DaikinControlProperties.class,
+                        com.platform.iot.daikin.control.DaikinControlProperties::new)
+                .withPropertyValues("daikin.device-client.enabled=true", "daikin.device-client.source-id=registered-source",
+                        "daikin.device-client.base-uri=https://vendor.example.test", "daikin.device-client.app-id=test-app",
+                        "daikin.device-client.password=test-password", "daikin.device-client.signature-salt=test-sign-salt",
+                        "daikin.device-client.communication-key=0123456789abcdef")
+                .withUserConfiguration(DaikinDeviceClientBeans.class)
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    assertThat(context).hasSingleBean(com.platform.iot.daikin.control.DaikinControlGrantReader.class);
+                    assertThat(context).doesNotHaveBean(com.platform.iot.daikin.control.DaikinControlGateway.class);
+                    var reader = context.getBean(com.platform.iot.daikin.control.DaikinControlGrantReader.class);
+                    assertThat(reader.supports("registered-source")).isTrue();
+                    assertThat(reader.supports("other-source")).isFalse();
+                    assertThat(reader).isNotInstanceOf(com.platform.iot.daikin.control.DaikinControlGateway.class);
+                });
+    }
+
+    @Test
     void testProfileCannotCreateRealClientsEvenWhenExternalConfigurationEnablesThem() {
         new org.springframework.boot.test.context.runner.ApplicationContextRunner()
                 .withInitializer(context -> context.getEnvironment().setActiveProfiles("test"))
@@ -22,6 +44,7 @@ class DaikinDeviceClientBeansTest {
                     assertThat(context).hasNotFailed();
                     assertThat(context).doesNotHaveBean(DaikinSession.class);
                     assertThat(context).doesNotHaveBean(com.platform.iot.daikin.control.DaikinControlGateway.class);
+                    assertThat(context).doesNotHaveBean(com.platform.iot.daikin.control.DaikinControlGrantReader.class);
                 });
     }
 

@@ -26,6 +26,8 @@ public class DaikinControlService {
     private final DaikinControlStore store;
     private final List<DaikinControlGateway> gateways;
     private final Clock clock;
+    private final java.util.concurrent.ConcurrentHashMap<String, CachedSnapshot> snapshots = new java.util.concurrent.ConcurrentHashMap<>();
+    private record CachedSnapshot(DaikinControlGateway.Snapshot value, long at) { }
 
     @Autowired
     public DaikinControlService(DaikinControlProperties properties, DaikinControlAccess access, DaikinControlPolicy policy,
@@ -45,18 +47,20 @@ public class DaikinControlService {
         String active = store.active(equipment);
         if (!properties.isEnabled()) return disabled(equipment, "DISABLED", active);
         if (active != null) return disabled(equipment, "BUSY", active);
+        if (testWindowClosing()) return disabled(equipment, "TEST_WINDOW_CLOSING", null);
         try {
             var target = access.target(equipment);
             if (store.controllerBusy(target)) return disabled(equipment, "CONTROLLER_BUSY", null);
-            store.requireSourceReady(target.sourceId(), clock.millis());
-            var snapshot = gateway(target).read(target);
+            boolean fast = access.testOpenControls();
+            if (!fast) store.requireSourceReady(target.sourceId(), clock.millis());
+            var snapshot = snapshot(target, fast);
             // 取数期间可能撤权或迁移设备；返回结果前也复核，不泄露旧授权范围的实时数据。
             access.requireControl(user, equipment);
             if (!access.target(equipment).equals(target)) throw error(409, "REVISION_CHANGED");
-            var actions = policy.options(target, snapshot);
+            var actions = fast ? policy.testOptions(target, snapshot) : policy.options(target, snapshot);
             boolean allowed = actions.stream().anyMatch(ActionOption::allowed);
             return new Options(equipment, allowed, allowed ? null : actions.getFirst().reasonCode(),
-                    policy.revision(target, snapshot), actions, null);
+                    fast ? policy.testRevision(target) : policy.revision(target, snapshot), actions, null, temperature(snapshot), fast);
         } catch (BusinessException e) { return disabled(equipment, reason(e), active); }
         catch (RuntimeException e) { return disabled(equipment, "PREFLIGHT_UNAVAILABLE", active); }
     }
@@ -68,23 +72,26 @@ public class DaikinControlService {
         var previous = store.existing(user, request.idempotencyKey(), hash);
         if (previous != null) return visible(user, previous).view();
         requireEnabled();
+        if (testWindowClosing()) throw error(409, "TEST_WINDOW_CLOSING");
         var target = access.target(equipment);
         var gateway = gateway(target);
-        var reservation = store.reserve(user, target, request, hash, traceId, clock.millis());
+        boolean fast = access.testOpenControls();
+        var reservation = store.reserve(user, target, request, hash, traceId, clock.millis(), fast);
         if (!reservation.created()) return visible(user, reservation.row()).view();
         String id = reservation.row().view().operationId();
         String before;
         String baseline;
         try {
-            var snapshot = gateway.read(target);
-            if (!request.revision().equals(policy.revision(target, snapshot))) throw error(409, "REVISION_CHANGED");
-            policy.validate(request.action(), request.value(), policy.options(target, snapshot));
-            before = policy.observed(target, snapshot, request.action());
-            baseline = policy.settings(target, snapshot);
+            var snapshot = snapshot(target, fast);
+            if (!request.revision().equals(fast ? policy.testRevision(target) : policy.revision(target, snapshot))) throw error(409, "REVISION_CHANGED");
+            policy.validate(request.action(), request.value(), fast ? policy.testOptions(target, snapshot) : policy.options(target, snapshot));
+            baseline = fast ? policy.testSettings(target, snapshot) : policy.settings(target, snapshot);
+            before = fast ? policy.testObserved(baseline, request.action()) : policy.observed(target, snapshot, request.action());
             requireEnabled();
             access.requireControl(user, equipment);
             if (!access.target(equipment).equals(target)) throw error(409, "REVISION_CHANGED");
-            store.requireSourceReady(target.sourceId(), clock.millis());
+            if (fast != access.testOpenControls()) throw error(409, "REVISION_CHANGED");
+            if (!fast) store.requireSourceReady(target.sourceId(), clock.millis());
             if (clock.millis() - reservation.row().view().createdAt() >= 30_000) throw error(409, "PREFLIGHT_EXPIRED");
         } catch (RuntimeException failure) {
             return store.transition(id, Set.of(Status.PREPARING), Status.NOT_SENT,
@@ -92,27 +99,28 @@ public class DaikinControlService {
                     null, null, null, null, user, clock.millis()).view();
         }
         // 此事务成功是唯一发送许可。进程在提交后退出也只会被恢复为 UNKNOWN，不再调用 send。
-        var sending = store.markSending(id, before, baseline, user, clock.millis());
+        var sending = store.markSending(id, before, baseline, user, clock.millis(), fast ? properties.getFastReadbackTimeoutMillis() : 300_000);
         if (sending.view().status() != Status.SENDING) return sending.view();
         DaikinControlGateway.Reply reply;
+        snapshots.remove(target.fingerprint());
         try { reply = gateway.send(target, request.action(), request.value()); }
         catch (RuntimeException failure) {
             return store.transition(id, Set.of(Status.SENDING), Status.UNKNOWN, "SEND_RESULT_UNKNOWN",
-                    null, null, clock.millis() + 15_000, null, user, clock.millis()).view();
+                    null, null, clock.millis() + (fast ? 0 : 15_000), null, user, clock.millis()).view();
         }
         if (reply == null || reply.code() == null || !reply.code().matches("[0-9]{5,6}")) {
             return store.transition(id, Set.of(Status.SENDING), Status.UNKNOWN, "SEND_RESULT_UNKNOWN",
-                    null, null, clock.millis() + 15_000, null, user, clock.millis()).view();
+                    null, null, clock.millis() + (fast ? 0 : 15_000), null, user, clock.millis()).view();
         }
         boolean accepted = "10000".equals(reply.code());
         if (!accepted && !REJECTION_CODES.contains(reply.code())) {
             return store.transition(id, Set.of(Status.SENDING), Status.UNKNOWN, "SEND_RESULT_UNKNOWN", reply.code(),
-                    null, clock.millis() + 15_000, null, user, clock.millis()).view();
+                    null, clock.millis() + (fast ? 0 : 15_000), null, user, clock.millis()).view();
         }
         // 写结果失败时保留 SENDING；不能因为本地事务失败重新执行外部副作用。
         return store.transition(id, Set.of(Status.SENDING), accepted ? Status.ACCEPTED : Status.REJECTED,
                 accepted ? null : "VENDOR_" + reply.code(), reply.code(), null,
-                accepted ? clock.millis() + 15_000 : null, null, user, clock.millis()).view();
+                accepted ? clock.millis() + (fast ? 0 : 15_000) : null, null, user, clock.millis()).view();
     }
 
     public Operation get(long user, String id) { return visible(user, store.get(id)).view(); }
@@ -172,7 +180,7 @@ public class DaikinControlService {
                             "PREFLIGHT_EXPIRED", null, null, null, null, 0, clock.millis());
                 } else if (row.view().status() == Status.SENDING) {
                     store.transition(row.view().operationId(), Set.of(Status.SENDING), Status.UNKNOWN,
-                            "SEND_RESULT_UNKNOWN", null, null, clock.millis() + 15_000, null, 0, clock.millis());
+                            "SEND_RESULT_UNKNOWN", null, null, clock.millis() + (DaikinControlPolicy.isFastBaseline(row.baseline()) ? 0 : 15_000), null, 0, clock.millis());
                 } else if (CHECKABLE.contains(row.view().status())) check(store.get(row.view().operationId()), 0);
             } catch (RuntimeException e) {
                 org.slf4j.LoggerFactory.getLogger(getClass()).warn("空调控制只读恢复失败，记录保留: operationId={}", row.view().operationId());
@@ -187,25 +195,28 @@ public class DaikinControlService {
         String settings = null;
         String unitStatus = null;
         boolean matches = false;
+        boolean fast = DaikinControlPolicy.isFastBaseline(row.baseline());
         try {
             requireEnabled();
             // 已发送操作由系统继续有界只读核验；人员撤权阻止新控制和查询，不遗弃在途结果。
             if (actor != 0) visible(actor, row);
-            var target = access.target(row.view().equipmentId());
-            if (!target.equals(row.target())) throw error(409, "REVISION_CHANGED");
-            store.requireSourceReady(target.sourceId(), clock.millis());
+            var target = fast ? access.candidate(row.view().equipmentId()) : access.legacyTarget(row.view().equipmentId());
+            if (!target.equals(fast ? DaikinControlAccess.identity(row.target()) : row.target())) throw error(409, "REVISION_CHANGED");
+            if (!fast) store.requireSourceReady(target.sourceId(), clock.millis());
             var snapshot = gateway(target).read(target);
-            settings = policy.settings(target, snapshot);
-            observed = policy.observed(target, snapshot, row.view().action());
+            if (fast) snapshots.put(target.fingerprint(), new CachedSnapshot(snapshot, clock.millis()));
+            settings = fast ? policy.testSettings(target, snapshot) : policy.settings(target, snapshot);
+            observed = fast ? policy.testObserved(settings, row.view().action()) : policy.observed(target, snapshot, row.view().action());
             unitStatus = snapshot.unit().path("unitStatus").asText();
-            matches = policy.matches(row.baseline(), settings, row.view().action(), row.view().value());
+            matches = fast ? policy.testMatches(settings, row.view().action(), row.view().value()) : policy.matches(row.baseline(), settings, row.view().action(), row.view().value());
             if (actor != 0) visible(actor, row);
-            if (!access.target(row.view().equipmentId()).equals(target)) throw error(409, "REVISION_CHANGED");
+            if (!(fast ? access.candidate(row.view().equipmentId()) : access.legacyTarget(row.view().equipmentId())).equals(target)) throw error(409, "REVISION_CHANGED");
         } catch (RuntimeException e) {
             observed = null; settings = null; unitStatus = null; matches = false;
             failure = e instanceof BusinessException business ? reason(business) : "READBACK_UNAVAILABLE";
         }
-        return store.observe(row, settings, observed, unitStatus, matches, failure, requestedAt, actor, clock.millis());
+        return fast ? store.observeFast(row, settings, observed, unitStatus, matches, failure, requestedAt, actor, clock.millis())
+                : store.observe(row, settings, observed, unitStatus, matches, failure, requestedAt, actor, clock.millis());
     }
 
     private DaikinControlStore.Row visible(long user, DaikinControlStore.Row row) {
@@ -214,14 +225,34 @@ public class DaikinControlService {
         return row;
     }
     private void requireEnabled() { if (!properties.isEnabled()) throw error(503, "DISABLED"); }
+    private boolean testWindowClosing() {
+        return !access.testOpenControls() && properties.isTestAccessEnabled() && properties.getTestWindowExpiresAt()>0
+                && clock.millis()>=properties.getTestWindowExpiresAt()-300_000;
+    }
+
+    private DaikinControlGateway.Snapshot snapshot(DaikinControlAccess.Target target, boolean fast) {
+        if (!fast) return gateway(target).read(target);
+        var cached = snapshots.get(target.fingerprint());
+        long now = clock.millis();
+        if (cached != null && now >= cached.at() && now - cached.at() < 5_000) return cached.value();
+        var value = gateway(target).read(target);
+        if (snapshots.size() >= 1000) snapshots.clear();
+        snapshots.put(target.fingerprint(), new CachedSnapshot(value, clock.millis()));
+        return value;
+    }
     private DaikinControlGateway gateway(DaikinControlAccess.Target target) {
         var available = gateways.stream().filter(g -> g.supports(target.sourceId())).toList();
         if (available.size() != 1) throw error(503, "PROVIDER_UNAVAILABLE");
         return available.getFirst();
     }
-    private static Options disabled(String equipment, String reason, String active) {
+    private Options disabled(String equipment, String reason, String active) {
         return new Options(equipment, false, reason, null, Arrays.stream(Action.values())
-                .map(a -> new ActionOption(a, false, reason, List.of(), null, null)).toList(), active);
+                .map(a -> new ActionOption(a, false, reason, List.of(), null, null)).toList(), active, null, access.testOpenControls());
+    }
+    private Integer temperature(DaikinControlGateway.Snapshot snapshot) {
+        var value = snapshot.unit().get("temperature");
+        return value != null && value.canConvertToExactIntegral() && value.intValue() >= 16 && value.intValue() <= 32
+                ? value.intValue() : null;
     }
     private static void validate(Submit request) {
         if (request == null || request.action() == null || request.value() == null || request.value().isBlank() || request.value().length() > 40

@@ -7,7 +7,9 @@ import {
   canHvacControlConfirm,
   canHvacControlRecheck,
   canHvacControlRelease,
+  isHvacControlFastVerification,
   isHvacControlPollingStatus,
+  isHvacControlActionValueAllowed,
   occupiesHvacControlSlot,
   type HvacControlAction,
   type HvacControlOperation,
@@ -16,9 +18,10 @@ import {
 } from '../models/hvac-control'
 
 const HISTORY_SIZE = 20
-const POLL_INTERVAL_MILLIS = 3_000
-// 300 秒观察及最后核验由服务端时钟决定；前端只保留 110 次轮询上限，不按本机时间伪造超时或漏掉期限后的结果。
-const MAX_STATUS_POLLS = 110
+const LEGACY_POLL_INTERVAL_MILLIS = 3_000
+const TEST_FAST_POLL_INTERVAL_MILLIS = 1_000
+// 旧稳定采样的观察及最后核验由服务端时钟决定；前端只保留 110 次轮询上限，不按本机时间伪造超时或漏掉期限后的结果。
+const LEGACY_MAX_STATUS_POLLS = 110
 const emptyHistory = (): HvacControlOperationPage => ({ page: 1, size: HISTORY_SIZE, total: 0, items: [] })
 
 export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
@@ -27,6 +30,7 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
   const activeOperation = shallowRef<HvacControlOperation | null>(null)
   const loading = ref(false)
   const refreshing = ref(false)
+  const optionsRefreshing = ref(false)
   const error = ref<string | null>(null)
   const historyForbidden = ref(false)
   const historyLoading = ref(false)
@@ -72,6 +76,21 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
       }
     }
   }
+  async function refreshOptions(owner: number, target: string) {
+    optionsRefreshing.value = true
+    try {
+      const next = await hvacControlApi.options(target)
+      if (owns(owner, target)) options.value = next
+    } catch (reason) {
+      if (owns(owner, target)) {
+        // 云端核验后旧 revision 不能再用于新控制请求；失败时清空它，等待下一次服务端快照。
+        options.value = null
+        error.value = requestErrorMessage(reason)
+      }
+    } finally {
+      if (owns(owner, target)) optionsRefreshing.value = false
+    }
+  }
   function acceptOperation(value: HvacControlOperation, owner: number, target: string): HvacControlOperation | null {
     if (!owns(owner, target)) return null
     if (value.equipmentId !== target) {
@@ -79,19 +98,36 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
       return null
     }
     replaceOperation(value)
-    schedulePolling(value, owner, target)
+    if (value.status === 'CLOUD_VERIFIED' && !value.isolated) {
+      stopPolling()
+      // 云端核验终态由服务端判定；刷新能力快照以获取其后的版本和权威设温，不把它描述成现场物理确认。
+      void refreshOptions(owner, target)
+    } else {
+      schedulePolling(value, owner, target)
+    }
     return value
+  }
+  function pollInterval(operation: HvacControlOperation): number {
+    return isHvacControlFastVerification(operation) ? TEST_FAST_POLL_INTERVAL_MILLIS : LEGACY_POLL_INTERVAL_MILLIS
+  }
+  function pollLimit(operation: HvacControlOperation): number {
+    if (!isHvacControlFastVerification(operation)) return LEGACY_MAX_STATUS_POLLS
+    // 快速回显的轮询预算只读取服务端期限，不用浏览器时钟伪造 60 秒超时状态。
+    if (operation.deadlineAt != null && operation.createdAt > 0 && operation.deadlineAt >= operation.createdAt) {
+      return Math.max(1, Math.ceil((operation.deadlineAt - operation.createdAt) / TEST_FAST_POLL_INTERVAL_MILLIS) + 1)
+    }
+    return LEGACY_MAX_STATUS_POLLS
   }
   function schedulePolling(operation: HvacControlOperation, owner: number, target: string) {
     stopPolling()
-    if (!owns(owner, target) || !isHvacControlPollingStatus(operation.status) || pollCount >= MAX_STATUS_POLLS
+    if (!owns(owner, target) || !isHvacControlPollingStatus(operation.status) || pollCount >= pollLimit(operation)
       || (operation.status === 'UNKNOWN' && operation.cloudStable)) return
     pollTimer = setTimeout(() => {
       pollTimer = undefined
       if (!owns(owner, target)) return
       pollCount++
       void loadOperation(operation.operationId, owner, target)
-    }, POLL_INTERVAL_MILLIS)
+    }, pollInterval(operation))
   }
   async function loadOperation(operationId: string, owner: number, target: string) {
     try {
@@ -112,6 +148,7 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
     const target = targetId()
     stopPolling()
     pollCount = 0
+    optionsRefreshing.value = false
     if (!target) {
       options.value = null
       history.value = emptyHistory()
@@ -195,6 +232,10 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
     }
   }
   async function submit(action: HvacControlAction, value: string) {
+    if (optionsRefreshing.value) {
+      error.value = t('dashboard.daikin.control.optionsRefreshing')
+      return null
+    }
     const capability = options.value
     const selected = capability?.actions.find(item => item.action === action)
     if (!capability?.canControl || !selected?.allowed) {
@@ -205,8 +246,13 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
       error.value = t('dashboard.daikin.control.revisionMissing')
       return null
     }
-    if (!value.trim()) {
+    const normalizedValue = value.trim()
+    if (!normalizedValue) {
       error.value = t('dashboard.daikin.control.valueRequired')
+      return null
+    }
+    if (!isHvacControlActionValueAllowed(selected, normalizedValue)) {
+      error.value = t('dashboard.daikin.control.valueUnavailable')
       return null
     }
     if (occupiesHvacControlSlot(activeOperation.value)) {
@@ -214,12 +260,12 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
       return null
     }
     const target = targetId()
-    const identity = JSON.stringify([target, action, value, capability.revision])
+    const identity = JSON.stringify([target, action, normalizedValue, capability.revision])
     const idempotencyKey = submitIdempotencyKeys.get(identity) ?? newHvacControlIdempotencyKey()
     submitIdempotencyKeys.set(identity, idempotencyKey)
     return mutate(`submit:${target}`, async () => {
       const operation = await hvacControlApi.createOperation(target, {
-        action, value, idempotencyKey, revision: capability.revision!,
+        action, value: normalizedValue, idempotencyKey, revision: capability.revision!,
       })
       submitIdempotencyKeys.delete(identity)
       return operation
@@ -298,6 +344,7 @@ export function useHvacControl(equipmentId: MaybeRefOrGetter<string>) {
     activeOperation,
     loading,
     refreshing,
+    optionsRefreshing,
     error,
     historyForbidden,
     historyLoading,

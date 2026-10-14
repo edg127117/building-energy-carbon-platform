@@ -8,6 +8,8 @@ import com.platform.iot.daikin.model.DaikinDeviceKey;
 import com.platform.iot.daikin.sync.DaikinCatalogClientProvider;
 import com.platform.iot.daikin.control.DaikinControlGateway;
 import com.platform.iot.daikin.control.DaikinControlProperties;
+import com.platform.iot.daikin.control.DaikinControlGrantReader;
+import com.platform.iot.daikin.control.DaikinControlAccess;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -46,6 +48,17 @@ public class DaikinDeviceClientBeans {
                 new DaikinCatalogReader(deviceDecoder(properties), Clock.systemUTC(), 1000, 100000));
         String sourceId = properties.getSourceId();
         return requestedSource -> sourceId.equals(requestedSource) ? Optional.of(catalog) : Optional.empty();
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "daikin.device-client", name = "enabled", havingValue = "true")
+    DaikinControlGrantReader daikinControlGrantReader(DaikinDeviceClientProperties properties, DaikinSession session) {
+        var reader = new DaikinControlClient(properties.getSourceId(), session, properties.isTemperatureCelsiusConfirmed());
+        // 与监测共享读取预算，但不向开放管理服务暴露 send；控制网关仍需原双开关。
+        return new DaikinControlGrantReader() {
+            public boolean supports(String sourceId) { return reader.supports(sourceId); }
+            public DaikinControlGateway.Snapshot read(DaikinControlAccess.Target target) { return reader.read(target); }
+        };
     }
 
     @Bean

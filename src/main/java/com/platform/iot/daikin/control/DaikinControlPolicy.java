@@ -20,6 +20,88 @@ public class DaikinControlPolicy {
             "automaticCooling", "automaticHeating", "ventilationMonitorOnly");
     private static final List<String> FANS = List.of("low", "middle", "high", "automatic", "middleLow", "middleHigh");
     private static final List<String> FLOWS = List.of("airFlowZero", "airFlowOne", "airFlowTwo", "airFlowThree", "airFlowFour", "airFlowSeven", "airFlowAuto");
+    public static final String TEST_FAST = "TEST_FAST_V1";
+
+    /** 测试只采用协议/厂家能力；不读取逐设备许可、主从人工摘要或风向确认标记。 */
+    public List<ActionOption> testOptions(DaikinControlAccess.Target target, DaikinControlGateway.Snapshot snapshot) {
+        String blocked = testBlocked(target, snapshot);
+        if (blocked != null) return Arrays.stream(Action.values()).map(a -> denied(a, blocked)).toList();
+        JsonNode unit = snapshot.unit();
+        return List.of(enumeration(Action.ON_OFF, unit.get("onOffModeSetList"), List.of("on", "off")),
+                testTemperature(unit), enumeration(Action.MODE, unit.get("modeSetList"), MODES),
+                new ActionOption(Action.AIR_FLOW, true, null, FLOWS, null, null),
+                enumeration(Action.FAN_SPEED, unit.get("fanSpeedSetList"), FANS));
+    }
+
+    public String testRevision(DaikinControlAccess.Target target) {
+        // 当前值、许可和关联关系变化不使测试页面失效，正式身份改变仍必须重新取得选项。
+        return DaikinControlAccess.hash(DaikinControlAccess.identity(target).fingerprint() + "|" + TEST_FAST);
+    }
+
+    public String testSettings(DaikinControlAccess.Target target, DaikinControlGateway.Snapshot snapshot) {
+        String blocked = testBlocked(target, snapshot);
+        if (blocked != null) throw error(409, blocked);
+        var values = json.createObjectNode();
+        for (Action action : Action.values()) {
+            String value = rawObserved(snapshot.unit(), action);
+            if (value != null) values.put(action.name(), value);
+        }
+        values.put("unitStatus", snapshot.unit().path("unitStatus").asText());
+        values.put("_executionPolicy", TEST_FAST);
+        return values.toString();
+    }
+
+    /** 只核验本次字段；现场关机不使调温失败，也不触发补发开机或恢复其他字段。 */
+    public boolean testMatches(String settings, Action action, String requested) {
+        try {
+            JsonNode current = json.readTree(settings);
+            if (!requested.equals(current.path(action.name()).asText())) return false;
+            return action != Action.ON_OFF || ("on".equals(requested) ? "operating" : "stopped").equals(current.path("unitStatus").asText());
+        } catch (java.io.IOException | IllegalArgumentException ex) { return false; }
+    }
+
+    public static boolean isFastBaseline(String baseline) {
+        if (baseline == null) return false;
+        try { return TEST_FAST.equals(new com.fasterxml.jackson.databind.ObjectMapper().readTree(baseline).path("_executionPolicy").asText()); }
+        catch (java.io.IOException ex) { return false; }
+    }
+
+    public String testObserved(String settings, Action action) {
+        try { return json.readTree(settings).path(action.name()).asText(null); }
+        catch (java.io.IOException ex) { return null; }
+    }
+
+    private String rawObserved(JsonNode unit, Action action) {
+        var value = unit.get(action.observedField);
+        if (action == Action.TEMPERATURE) {
+            Integer n = integer(value);
+            return n != null && n >= 16 && n <= 32 ? n.toString() : null;
+        }
+        List<String> allowed = switch (action) {
+            case ON_OFF -> List.of("on", "off"); case MODE -> MODES; case FAN_SPEED -> FANS; case AIR_FLOW -> FLOWS;
+            default -> List.of();
+        };
+        return value != null && value.isTextual() && allowed.contains(value.textValue()) ? value.textValue() : null;
+    }
+
+    private String testBlocked(DaikinControlAccess.Target target, DaikinControlGateway.Snapshot snapshot) {
+        if (!identityMatches(target, snapshot)) return "IDENTITY_CONFLICT";
+        JsonNode controller = snapshot.controller();
+        if (!bool(controller.get("isConnectionUp"), true) || !bool(controller.get("inForcedStop"), false)
+                || controller.hasNonNull("decommissioned") && !controller.path("decommissioned").asText().isBlank())
+            return "CONTROLLER_UNAVAILABLE";
+        return null;
+    }
+
+    private ActionOption testTemperature(JsonNode unit) {
+        String mode = unit.path("mode").asText();
+        if (Set.of("cooling", "automaticCooling", "heating", "automaticHeating").contains(mode)) return temperature(unit);
+        JsonNode range = unit.path("DefaultSetpointRange");
+        Integer min = integer(range.get("min")), max = integer(range.get("max")), step = integer(range.get("step"));
+        if (min == null || max == null || step == null || step != 1 || min > max) return denied(Action.TEMPERATURE, "TEMPERATURE_RANGE_UNKNOWN");
+        min = Math.max(16, min); max = Math.min(32, max);
+        return min <= max ? new ActionOption(Action.TEMPERATURE, true, null, List.of(), min, max) : denied(Action.TEMPERATURE, "TEMPERATURE_RANGE_UNKNOWN");
+    }
 
     public List<ActionOption> options(DaikinControlAccess.Target target, DaikinControlGateway.Snapshot snapshot) {
         String blocked = blocked(target, snapshot);

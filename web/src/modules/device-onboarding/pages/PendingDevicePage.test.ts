@@ -7,6 +7,11 @@ import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
 import TemperatureBatchDialog from '../components/TemperatureBatchDialog.vue'
 import PendingDevicePage from './PendingDevicePage.vue'
+// 业务 API 在下方逐项模拟；共享组件的未模拟读取也必须在测试内失败，不能退回真实 HTTP。
+vi.mock('@/infrastructure/http/public', async importOriginal => {
+  const actual = await importOriginal<typeof import('@/infrastructure/http/public')>()
+  return { ...actual, requestApi: vi.fn().mockRejectedValue(new Error('离线测试不执行未模拟的 HTTP 请求')) }
+})
 const routeState = vi.hoisted(() => ({ view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
 vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { id: 1, roles: ['PLATFORM_ADMIN'] } }) }))

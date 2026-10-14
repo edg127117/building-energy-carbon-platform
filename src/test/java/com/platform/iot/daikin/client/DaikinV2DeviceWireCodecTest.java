@@ -65,13 +65,21 @@ class DaikinV2DeviceWireCodecTest {
 
     @Test
     void refusesUnconfirmedOperationsAndInvalidPageWithoutProducingRequest() {
-        assertThatThrownBy(() -> codec.encode(DaikinEndpoint.INUNIT, Map.of(), credentials,
+        assertThatThrownBy(() -> codec.encode(DaikinEndpoint.CONTROL_TEMPERATURE, Map.of("temperature", "26"), credentials,
                 "test-token", now)).isInstanceOf(DaikinClientException.class);
         assertThatThrownBy(() -> codec.encode(DaikinEndpoint.INUNITS, Map.of("page", "0"),
                 credentials, "test-token", now)).isInstanceOf(DaikinClientException.class);
         assertThatThrownBy(() -> codec.encode(DaikinEndpoint.INUNITS,
                 Map.of("page", "1", "extra", "x"), credentials, "test-token", now))
                 .isInstanceOf(DaikinClientException.class);
+    }
+
+    @Test void singleUnitReadonlyPreflightUsesEmptyEncryptedParametersAndRejectsExtraFields() {
+        var request = codec.encode(DaikinEndpoint.INUNIT, Map.of(), credentials, "test-token", now);
+        assertThat(DaikinProtocolCrypto.decrypt(request.encryptedQuery(), credentials.encryptionKey())).isEqualTo("{}");
+        assertThat(request.body()).isEmpty();
+        assertThatThrownBy(() -> codec.encode(DaikinEndpoint.INUNIT, Map.of("vendorId", "other"), credentials,
+                "test-token", now)).isInstanceOf(DaikinClientException.class);
     }
 
     @Test

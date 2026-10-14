@@ -27,10 +27,24 @@ class DaikinControlSecurityTest {
     @Test void defaultsAndAnonymousRequestsCannotCreateExternalIo() throws Exception {
         assertThat(properties.isEnabled()).isFalse(); assertThat(properties.isWireConfirmed()).isFalse();
         assertThat(properties.isTestAccessEnabled()).isFalse();
+        assertThat(properties.isTestOpenControls()).isFalse();
         assertThat(context.getBeansOfType(DaikinControlGateway.class)).isEmpty();
         assertThat(context.getBeansOfType(DaikinSession.class)).isEmpty();
+        assertThat(context.getBeansOfType(DaikinControlGrantReader.class)).isEmpty();
         mvc.perform(post("/v1/hvac-control/devices/EQUIP_WCR_B1/operations").contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.errorCode").value("HVAC_CONTROL_UNAUTHORIZED"));
+        mvc.perform(post("/v1/hvac-control/device-grants/batch").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.errorCode").value("HVAC_CONTROL_UNAUTHORIZED"));
+        mvc.perform(get("/v1/hvac-control/device-grants/access"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/hvac-control/buildings")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/v1/hvac-control/operations/unknown/recovery/continue").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(get("/v1/hvac-control/devices/EQUIP_WCR_B1/recovery")).andExpect(status().isUnauthorized());
+        mvc.perform(post("/v1/hvac-control/operations/unknown/recovery/observe").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/v1/hvac-control/operations/unknown/recovery/complete").contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test void existingAdministratorReceivesNoImplicitControlDuty() throws Exception {

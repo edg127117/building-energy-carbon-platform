@@ -18,6 +18,7 @@ import {
 } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 import HvacControlPanel from './HvacControlPanel.vue'
+import type { HvacControlOperation } from '../models/hvac-control'
 
 const props = withDefaults(defineProps<{
   equipmentId: string
@@ -26,6 +27,7 @@ const props = withDefaults(defineProps<{
   deviceKind?: string | null
   spaceName?: string | null
   refreshTick: number
+  monitorRefreshTick?: number
   visible?: boolean
 }>(), {
   equipmentName: null,
@@ -33,8 +35,9 @@ const props = withDefaults(defineProps<{
   deviceKind: null,
   spaceName: null,
   visible: true,
+  monitorRefreshTick: 0,
 })
-defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: []; controlCompleted: [operation: HvacControlOperation] }>()
 
 const text = (key: string) => t(`dashboard.daikin.${key}`)
 const date = (value: number | null) => value == null ? t('common.missing') : formatDateTime(value)
@@ -223,6 +226,13 @@ function loadCurrentTemperatures(silent = false) {
   void setpointCurrent.run(() => daikinApi.temperature(props.equipmentId, 'temperature'), silent)
 }
 
+function controlCompleted(operation: HvacControlOperation) {
+  if (operation.equipmentId !== props.equipmentId || !props.visible) return
+  loadCurrent(true)
+  loadCurrentTemperatures(true)
+  emit('controlCompleted', operation)
+}
+
 function loadTemperature(after?: number) {
   if (after == null) {
     const window = temperatureWindow(range.value, Date.now())
@@ -259,7 +269,7 @@ function loadTab() {
 
 watch(tab, loadTab)
 watch(granularity, () => loadRuntime())
-watch(() => props.refreshTick, () => {
+watch(() => [props.refreshTick, props.monitorRefreshTick], () => {
   loadCurrent(Boolean(current.data.value))
   loadCurrentTemperatures(Boolean(roomTempCurrent.data.value || setpointCurrent.data.value))
 })
@@ -382,7 +392,7 @@ onMounted(() => {
         </ElTabPane>
 
         <ElTabPane v-if="!isOutdoor" :label="text('controlTab')" name="control">
-          <HvacControlPanel v-if="tab === 'control'" :equipment-id="equipmentId" :refresh-tick="refreshTick" />
+          <HvacControlPanel v-if="tab === 'control'" :equipment-id="equipmentId" :refresh-tick="refreshTick" @completed="controlCompleted" />
         </ElTabPane>
 
         <ElTabPane :label="text('temperature')" name="temperature">

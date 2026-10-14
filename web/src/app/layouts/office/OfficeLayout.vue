@@ -10,10 +10,12 @@ import WorkspaceBrand from '@/app/navigation/WorkspaceBrand.vue'
 import { groupIcons } from '@/app/navigation/icons'
 import { authorizedPages, workspaces } from '@/app/navigation/catalog'
 import { useSession } from '@/modules/auth/public'
+import { useHvacControlAccess } from '@/modules/dashboard/public'
 import { useShellStore } from '@/app/providers/shell-store'
 import { t } from '@/locales'
 const shell = useShellStore()
 const session = useSession()
+const controlAccess = useHvacControlAccess()
 const route = useRoute()
 const router = useRouter()
 const content = ref<HTMLElement | null>(null)
@@ -36,7 +38,7 @@ const menuContainerProps = computed(() => narrowScreen.value ? {
   title: t('workspaces.groups'), direction: 'ltr', size: 'min(320px, 90vw)',
 } : { 'aria-label': t('workspaces.groups') })
 const currentSystem = computed(() => workspaces.find(system => system.id === route.meta.system))
-const visiblePages = computed(() => authorizedPages(session.menus).filter(page => page.system === route.meta.system))
+const visiblePages = computed(() => authorizedPages(session.menus, controlAccess.testOpenControls.value).filter(page => page.system === route.meta.system))
 const groups = computed(() => [...new Set(visiblePages.value.map(page => page.groupKey))])
 const activeGroups = computed(() => visiblePages.value.filter(page => page.path === route.path).map(page => page.groupKey))
 const iconFor = (group: string) => groupIcons[group as keyof typeof groupIcons]

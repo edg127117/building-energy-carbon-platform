@@ -26,15 +26,13 @@ class DaikinControlServiceTest {
         assertThat(f.service.submit(7, "equipment", request, "another-trace").operationId()).isEqualTo(op.operationId());
         assertThat(f.service.options(7, "equipment").reasonCode()).isEqualTo("BUSY");
         f.stabilize(f.service);
-        assertThat(f.service.get(7, op.operationId()).status()).isEqualTo(Status.OBSERVED_STABLE);
-        assertThat(f.store.active("equipment")).isEqualTo(op.operationId());
-        var confirmed = f.service.confirm(7, op.operationId(), "模拟现场确认目标执行且未联动其他内机");
-        assertThat(confirmed.status()).isEqualTo(Status.CONFIRMED);
+        var confirmed = f.service.get(7, op.operationId());
+        assertThat(confirmed.status()).isEqualTo(Status.CLOUD_VERIFIED);
         assertThat(confirmed.observedValue()).isEqualTo(value);
         assertThat(f.store.active("equipment")).isNull();
         assertThat(f.gateway.writes).hasValue(1);
         assertThat(f.jdbc.queryForList("SELECT action_type FROM sys_security_audit_event", String.class))
-                .contains("HVAC_CONTROL_SENDING", "HVAC_CONTROL_OBSERVED_STABLE", "HVAC_CONTROL_CONFIRMED");
+                .contains("HVAC_CONTROL_SENDING", "HVAC_CONTROL_CLOUD_VERIFIED").doesNotContain("HVAC_CONTROL_CONFIRMED");
         assertThat(f.jdbc.queryForObject("SELECT MAX(operation_time) FROM sys_security_audit_event", java.sql.Timestamp.class).toLocalDateTime())
                 .isEqualTo(java.time.LocalDateTime.ofInstant(f.clock.instant(), java.time.ZoneId.systemDefault()));
         assertThat(f.service.history(7, "equipment", 1, 10).items()).containsExactly(confirmed);

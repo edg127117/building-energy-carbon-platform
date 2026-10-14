@@ -69,6 +69,10 @@ public class DaikinControlStore {
     }
 
     public Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now) {
+        return reserve(user, target, request, hash, trace, now, false);
+    }
+
+    public Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now, boolean fast) {
         return tx.execute(status -> {
             // 来源行串行化占用创建；物理键唯一约束继续防止两条平台身份控制同一厂家 URL。
             jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE", target.sourceId());
@@ -78,15 +82,16 @@ public class DaikinControlStore {
                     Integer.class, target.physicalKey()) > 0) throw error(409, "BUSY");
             // 同一来源行锁跨实例有效；同时检查历史占用，避免升级前尚未建立控制器槽的记录漏过隔离。
             if (controllerBusy(target)) throw error(409, "CONTROLLER_BUSY");
-            requireSourceReady(target.sourceId(), now);
+            if (!fast) requireSourceReady(target.sourceId(), now);
             String id = id();
             jdbc.update("""
                     INSERT INTO biz_daikin_control_operation(operation_id,equipment_id,building_id,operator_id,source_id,
                      physical_key,target_json,action,requested_value,idempotency_key,request_hash,revision,status,
-                     created_at,updated_at,next_check_at,trace_id)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'PREPARING',?,?,?,?)
+                     created_at,updated_at,next_check_at,trace_id,baseline_json)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'PREPARING',?,?,?,?,?)
                     """, id, target.equipmentId(), target.buildingId(), user, target.sourceId(), target.physicalKey(), encode(target),
-                    request.action().name(), request.value(), request.idempotencyKey(), hash, request.revision(), now, now, now + 30_000, trace);
+                    request.action().name(), request.value(), request.idempotencyKey(), hash, request.revision(), now, now, now + 30_000, trace,
+                    fast ? "{\"_executionPolicy\":\"TEST_FAST_V1\"}" : null);
             jdbc.update("INSERT INTO biz_daikin_control_slot(physical_key,operation_id) VALUES (?,?)", target.physicalKey(), id);
             jdbc.update("INSERT INTO biz_daikin_control_controller_slot(controller_key,operation_id) VALUES (?,?)", target.controllerKey(), id);
             Row row = get(id);
@@ -98,6 +103,81 @@ public class DaikinControlStore {
     public void requireSourceReady(String source, long now) {
         var rows = jdbc.queryForList("SELECT paused_until FROM biz_daikin_control_source WHERE source_id=?", Long.class, source);
         if (!rows.isEmpty() && rows.getFirst() > now) throw error(429, "SOURCE_PAUSED");
+    }
+
+    /** 开放配置复用来源锁，避免更换许可使在途核验失效；配置与审计在每台设备事务中提交。 */
+    public long openGrant(long actor, DaikinControlAccess.Target target, String relationship, String actions,
+                          String reason, String trace, DaikinControlAccess access, long started, java.time.Clock clock) {
+        return tx.execute(status -> {
+            jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE", target.sourceId());
+            jdbc.queryForList("SELECT equip_id FROM biz_equipment WHERE equip_id=? FOR UPDATE", target.equipmentId());
+            long now = clock.millis();
+            access.requireGrantAdmin(actor);
+            access.requireRead(actor, target.equipmentId());
+            if (!access.candidate(target.equipmentId()).equals(target)) throw error(409, "REVISION_CHANGED");
+            if (now - started >= 30_000) throw error(409, "PREFLIGHT_EXPIRED");
+            if (controllerBusy(target)) throw error(409, "CONTROLLER_BUSY");
+            requireSourceReady(target.sourceId(), now);
+            var previous = jdbc.queryForList("SELECT * FROM biz_daikin_control_grant WHERE equipment_id=? FOR UPDATE", target.equipmentId());
+            // 保留旧确认说明与确认人，未选动作继承许可时仍可追溯原依据；摘要先放证据，避免长动作列表挤掉它。
+            String beforeSummary = previous.isEmpty() ? null : "evidence=" + previous.getFirst().get("evidence")
+                    + ";version=" + previous.getFirst().get("version") + ";confirmedBy=" + previous.getFirst().get("confirmed_by")
+                    + ";confirmedAt=" + previous.getFirst().get("confirmed_at")
+                    + ";relationship=" + previous.getFirst().get("relationship_hash")
+                    + ";actionsHash=" + DaikinControlAccess.hash(java.util.Objects.toString(previous.getFirst().get("approved_actions"), ""));
+            long version = previous.isEmpty() ? 1 : ((Number) previous.getFirst().get("version")).longValue();
+            String merged = actions;
+            boolean airFlow = false;
+            boolean same = false;
+            if (!previous.isEmpty()) {
+                var p = previous.getFirst();
+                same = target.identityId().equals(p.get("identity_id")) && target.sourceId().equals(p.get("source_id"))
+                        && target.vendorId().equals(p.get("vendor_id")) && target.buildingId().equals(p.get("building_id"))
+                        && target.mappingVersion() == ((Number) p.get("mapping_version")).intValue()
+                        && relationship.equals(p.get("relationship_hash"));
+                // 身份和关系不变时保留未选动作许可；关系变化不继承旧风向或其他动作的确认。
+                if (same) {
+                    try {
+                        var old = json.readTree((String) p.get("approved_actions"));
+                        var requested = json.readTree(actions);
+                        if (old != null && old.isObject()) {
+                            var object = (com.fasterxml.jackson.databind.node.ObjectNode) old;
+                            requested.fields().forEachRemaining(entry -> object.set(entry.getKey(), entry.getValue()));
+                            merged = object.toString();
+                        }
+                    } catch (JsonProcessingException | IllegalArgumentException e) { throw error(409, "ACTION_UNCONFIRMED"); }
+                    airFlow = flag(p.get("air_flow_confirmed"));
+                }
+                same = same && flag(p.get("enabled"))
+                        && merged.equals(p.get("approved_actions")) && reason.equals(p.get("evidence"));
+                if (!same) version++;
+            }
+            if (previous.isEmpty()) {
+                jdbc.update("""
+                        INSERT INTO biz_daikin_control_grant(equipment_id,identity_id,source_id,vendor_id,building_id,mapping_version,
+                         enabled,air_flow_confirmed,version,confirmed_by,confirmed_at,evidence,relationship_hash,approved_actions)
+                        VALUES (?,?,?,?,?,?,TRUE,FALSE,?,?,?,?,?,?)
+                        """, target.equipmentId(), target.identityId(), target.sourceId(), target.vendorId(), target.buildingId(),
+                        target.mappingVersion(), version, actor, now, reason, relationship, merged);
+            } else if (!same) {
+                jdbc.update("""
+                        UPDATE biz_daikin_control_grant SET identity_id=?,source_id=?,vendor_id=?,building_id=?,mapping_version=?,
+                         enabled=TRUE,air_flow_confirmed=?,version=?,confirmed_by=?,confirmed_at=?,evidence=?,relationship_hash=?,approved_actions=?
+                        WHERE equipment_id=?
+                        """, target.identityId(), target.sourceId(), target.vendorId(), target.buildingId(), target.mappingVersion(),
+                        airFlow, version, actor, now, reason, relationship, merged, target.equipmentId());
+            }
+            audit.append(new AuditEvidence("SYSTEM_SECURITY", target.buildingId(), "USER", actor, "HVAC_CONTROL_GRANT_OPEN",
+                    "HVAC_CONTROL_GRANT", target.equipmentId(), Long.toString(version), null, beforeSummary,
+                    "reason=" + reason + ";actions=" + actions + ";relationship=" + relationship
+                            + ";mergedActionsHash=" + DaikinControlAccess.hash(merged), "SUCCESS", null, trace,
+                    LocalDateTime.ofInstant(Instant.ofEpochMilli(now), ZoneId.systemDefault()), auditProperties.getEnvironmentMode(), false));
+            return version;
+        });
+    }
+
+    private static boolean flag(Object value) {
+        return Boolean.TRUE.equals(value) || value instanceof Number number && number.intValue() == 1;
     }
 
     public Row transition(String id, Set<Status> expected, Status next, String reason, String vendorCode,
@@ -112,8 +192,8 @@ public class DaikinControlStore {
                     before_value=CASE WHEN ?='SENDING' THEN ? ELSE before_value END WHERE operation_id=?
                     """, next.name(), reason, vendorCode, observed, now, nextCheck, closeReason,
                     next.name(), now, next.name(), observed, id);
-            if (Set.of(Status.REJECTED, Status.NOT_SENT).contains(next)) releaseSlots(id);
-            if (Set.of("10003", "10008").contains(vendorCode == null ? "" : vendorCode)) {
+            if (Set.of(Status.REJECTED, Status.NOT_SENT, Status.CLOUD_VERIFIED).contains(next)) releaseSlots(id);
+            if (!DaikinControlPolicy.isFastBaseline(row.baseline()) && Set.of("10003", "10008").contains(vendorCode == null ? "" : vendorCode)) {
                 jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE", row.target().sourceId());
                 if (jdbc.update("UPDATE biz_daikin_control_source SET paused_until=? WHERE source_id=?", now + 60_000, row.target().sourceId()) == 0)
                     jdbc.update("INSERT INTO biz_daikin_control_source(source_id,paused_until) VALUES (?,?)", row.target().sourceId(), now + 60_000);
@@ -138,10 +218,41 @@ public class DaikinControlStore {
     }
 
     public Row markSending(String id, String before, String baseline, long actor, long now) {
+        return markSending(id, before, baseline, actor, now, 300_000);
+    }
+
+    public Row markSending(String id, String before, String baseline, long actor, long now, long timeout) {
         return tx.execute(status -> {
             jdbc.update("UPDATE biz_daikin_control_operation SET baseline_json=?,deadline_at=? WHERE operation_id=? AND status='PREPARING'",
-                    baseline, now + 300_000, id);
+                    baseline, now + timeout, id);
             return transition(id, Set.of(Status.PREPARING), Status.SENDING, null, null, before, now + 30_000, null, actor, now);
+        });
+    }
+
+    /** 单次目标回显即可完成测试新操作；旧记录不迁入此策略，未知响应始终不升级成功。 */
+    public Row observeFast(Row claimed, String settings, String observed, String unitStatus, boolean matches,
+                           String failure, long requestedAt, long actor, long now) {
+        return tx.execute(status -> {
+            String id = claimed.view().operationId();
+            Row row = jdbc.query("SELECT * FROM biz_daikin_control_operation WHERE operation_id=? FOR UPDATE", this::map, id).getFirst();
+            if (!DaikinControlPolicy.isFastBaseline(row.baseline())) throw error(409, "REVISION_CHANGED");
+            if (row.leaseVersion() != claimed.leaseVersion() || row.view().status() != claimed.view().status() || row.leaseUntil() <= now)
+                return row;
+            boolean expired = row.view().deadlineAt() == null || now >= row.view().deadlineAt();
+            boolean verified = !expired && matches && failure == null && row.view().status() == Status.ACCEPTED
+                    && "10000".equals(row.view().vendorCode());
+            Status next = verified ? Status.CLOUD_VERIFIED : expired && row.view().status() == Status.ACCEPTED ? Status.UNCONFIRMED : row.view().status();
+            String reason = failure != null ? failure : row.view().status() == Status.UNKNOWN ? "SEND_RESULT_UNKNOWN"
+                    : verified ? "FAST_TARGET_READBACK_MATCH" : expired ? "FAST_TARGET_NOT_CONFIRMED" : "FAST_WAITING_READBACK";
+            jdbc.update("INSERT INTO biz_daikin_control_sample(sample_id,operation_id,requested_at,read_at,device_sample_at,settings_json,matches_target,reason_code) VALUES(?,?,?,?,NULL,?,?,?)",
+                    id(), id, requestedAt, now, settings, matches, reason);
+            // 沿用旧列但不声称多次稳定；策略标记持久化在 baseline_json 并通过 API 明确返回。
+            jdbc.update("UPDATE biz_daikin_control_operation SET stable_count=?,stable_since=NULL,last_read_at=?,unit_status=?,cloud_stable=FALSE,lease_until=0 WHERE operation_id=?",
+                    matches ? 1 : 0, now, unitStatus, id);
+            long elapsed = row.sentAt() == null ? 0 : Math.max(0, now - row.sentAt());
+            long interval = elapsed < 15_000 ? 2_000 : elapsed < 30_000 ? 5_000 : 10_000;
+            Long nextAt = !expired && !verified && next != Status.CLOSED ? Math.min(now + interval, row.view().deadlineAt()) : null;
+            return transition(id, Set.of(row.view().status()), next, reason, null, observed, nextAt, null, actor, now);
         });
     }
 
@@ -163,10 +274,16 @@ public class DaikinControlStore {
             boolean expired = row.view().deadlineAt() == null || now >= row.view().deadlineAt();
             Status current = row.view().status();
             Status next = current;
+            // 历史人工确认记录重新核验时可能回到 ACCEPTED；保留事件证据，升级不能把它自动解锁。
+            boolean autoFinish = stable && !expired && current == Status.ACCEPTED && "10000".equals(row.view().vendorCode())
+                    && jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_event WHERE operation_id=? AND status='OBSERVED_STABLE'",
+                    Integer.class, id) == 0;
             if (Set.of(Status.ACCEPTED, Status.OBSERVED_STABLE).contains(current))
-                next = stable && (!expired || current == Status.OBSERVED_STABLE) ? Status.OBSERVED_STABLE
+                next = autoFinish ? Status.CLOUD_VERIFIED
+                        : stable && (!expired || current == Status.OBSERVED_STABLE) ? Status.OBSERVED_STABLE
                         : expired ? Status.UNCONFIRMED : Status.ACCEPTED;
             String reason = failure != null ? failure : current == Status.UNKNOWN ? "SEND_RESULT_UNKNOWN"
+                    : next == Status.CLOUD_VERIFIED ? "CLOUD_VERIFIED_AUTO_FINISHED"
                     : next == Status.CLOSED ? row.view().reasonCode() : stable ? "CLOUD_STABLE_AWAITING_ONSITE"
                     : expired ? "READBACK_NOT_CONFIRMED" : matches ? "MATCH_OBSERVED" : "READBACK_MISMATCH";
             jdbc.update("""
@@ -178,6 +295,8 @@ public class DaikinControlStore {
                     WHERE operation_id=?
                     """, count, since, now, unitStatus, stable, id);
             Long nextAt = !expired && !stable && current != Status.CLOSED ? Math.min(now + 30_000, row.view().deadlineAt()) : null;
+            // 仅明确受理且期限内稳定的正常操作自动结束；未知/超时与历史人工确认记录保留原恢复边界。
+            // transition 的占用释放、样本和审计均在本事务中，审计失败不会留下半完成状态。
             return transition(id, Set.of(current), next, reason, null, observed, nextAt, null, actor, now);
         });
     }
@@ -195,6 +314,124 @@ public class DaikinControlStore {
             releaseSlots(id);
             return get(finished.view().operationId());
         });
+    }
+
+    public record RecoveryEvidence(String settings, int count, Long since, Long lastReadAt, String proof, boolean canRecover) { }
+
+    /** 恢复样本与普通目标相符样本分开；摘要绑定当前管理员、正式身份和旧目标，不借用其他人的证据。 */
+    public RecoveryEvidence recoveryEvidence(Row row, DaikinControlAccess.Target identity, long actor, long now) {
+        // 毫秒相同仍以恢复证据为准；同刻失败优先使旧证明失效，不能由随机样本 ID 决定结果。
+        var samples=jdbc.queryForList("SELECT sample_id,read_at,settings_json,reason_code FROM biz_daikin_control_sample WHERE operation_id=? ORDER BY read_at DESC,CASE WHEN reason_code LIKE 'RECOVERY_FAILED_%' THEN 2 WHEN reason_code LIKE 'RECOVERY_%' THEN 1 ELSE 0 END DESC,sample_id DESC LIMIT 20",
+                row.view().operationId());
+        if(samples.isEmpty()) return new RecoveryEvidence(null,0,null,null,null,false);
+        var head=samples.getFirst(); long last=((Number)head.get("read_at")).longValue();
+        // 普通回读不是新基线恢复的采样；不能用它阻止首个恢复读或借用其稳定计数。
+        if(!(head.get("reason_code") instanceof String reason) || !reason.startsWith("RECOVERY_"))
+            return new RecoveryEvidence(null,0,null,null,null,false);
+        String settings=(String)head.get("settings_json");
+        String key=recoveryKey(row,identity,actor,settings);
+        if(settings==null || !key.equals(head.get("reason_code"))) return new RecoveryEvidence(null,0,null,last,null,false);
+        int count=1; long since=last, accepted=last;
+        for(int i=1;i<samples.size();i++) {
+            var sample=samples.get(i); long at=((Number)sample.get("read_at")).longValue();
+            if(!key.equals(sample.get("reason_code")) || !settings.equals(sample.get("settings_json")) || accepted-at>60_000) break;
+            if(accepted-at>=30_000) { count++; since=at; accepted=at; }
+        }
+        boolean stable=count>=3 && last-since>=60_000 && now>=last && now-last<30_000;
+        String proof=DaikinControlAccess.hash(key+"|"+head.get("sample_id")+"|"+since+"|"+count);
+        return new RecoveryEvidence(settings,count,since,last,proof,stable);
+    }
+
+    public RecoveryEvidence observeRecovery(Row claimed, DaikinControlAccess.Target identity, long actor,
+                                             String settings, boolean matchesOld, String failure, String trace,
+                                             long requestedAt, java.time.Clock clock, DaikinControlAccess access) {
+        return tx.execute(status -> {
+            Row row=lockRecovery(claimed,identity,actor,requestedAt,clock,access);
+            long now=clock.millis();
+            String code=failure==null?recoveryKey(row,identity,actor,settings):"RECOVERY_FAILED_"+actor;
+            recoverySample(row,settings,matchesOld,code,requestedAt,now);
+            jdbc.update("UPDATE biz_daikin_control_operation SET lease_until=0 WHERE operation_id=?",row.view().operationId());
+            recoveryAudit(row,actor,now,"HVAC_CONTROL_RECOVERY_READ",settings,failure,trace,null);
+            return recoveryEvidence(row,identity,actor,now);
+        });
+    }
+
+    /** 新基线不是旧命令成功证据；样本、异常关闭、双方占用释放和审计必须一起提交。 */
+    public Row finishCurrentRecovery(Row claimed, DaikinControlAccess.Target identity, long actor, String proof,
+                                     String settings, boolean matchesOld, String reason, String trace, long requestedAt,
+                                     java.time.Clock clock, DaikinControlAccess access) {
+        return tx.execute(status -> {
+            Row row=lockRecovery(claimed,identity,actor,requestedAt,clock,access); long now=clock.millis();
+            var evidence=recoveryEvidence(row,identity,actor,now);
+            if(!evidence.canRecover() || !proof.equals(evidence.proof())) throw error(409,"RECOVERY_PROOF_EXPIRED");
+            if(!settings.equals(evidence.settings())) throw error(409,"RECOVERY_BASELINE_MISMATCH");
+            recoverySample(row,settings,matchesOld,recoveryKey(row,identity,actor,settings),requestedAt,now);
+            // 不覆盖旧关闭说明；新的现场恢复说明独立写审计，原请求、旧样本及云端目标稳定标记均保留。
+            transition(row.view().operationId(),Set.of(row.view().status()),Status.CLOSED,"RECOVERY_CURRENT_BASELINE_RELEASED",
+                    null,row.view().observedValue(),null,row.view().closedReason()==null?reason:null,actor,now);
+            releaseSlots(row.view().operationId());
+            jdbc.update("UPDATE biz_daikin_control_operation SET lease_until=0 WHERE operation_id=?",row.view().operationId());
+            recoveryAudit(row,actor,now,"HVAC_CONTROL_RECOVERY_RELEASE",settings,null,trace,reason);
+            return get(row.view().operationId());
+        });
+    }
+
+    private Row lockRecovery(Row claimed, DaikinControlAccess.Target identity, long actor, long requestedAt,
+                             java.time.Clock clock, DaikinControlAccess access) {
+        return lockRecovery(claimed, identity, actor, requestedAt, clock, access, false);
+    }
+
+    public Row finishTestRecovery(Row claimed, DaikinControlAccess.Target identity, long actor, String settings,
+                                  boolean matchesOld, String reason, String trace, long requestedAt,
+                                  java.time.Clock clock, DaikinControlAccess access) {
+        return tx.execute(status -> {
+            Row row = lockRecovery(claimed, identity, actor, requestedAt, clock, access, true);
+            long now = clock.millis();
+            recoverySample(row, settings, matchesOld, "TEST_CURRENT_STATE_READ", requestedAt, now);
+            transition(row.view().operationId(), Set.of(row.view().status()), Status.CLOSED, "TEST_CURRENT_STATE_RELEASED",
+                    null, row.view().observedValue(), null, row.view().closedReason() == null ? reason : null, actor, now);
+            releaseSlots(row.view().operationId());
+            jdbc.update("UPDATE biz_daikin_control_operation SET lease_until=0 WHERE operation_id=?", row.view().operationId());
+            recoveryAudit(row, actor, now, "HVAC_CONTROL_TEST_CONTINUE", settings, null, trace, reason);
+            return get(row.view().operationId());
+        });
+    }
+
+    private Row lockRecovery(Row claimed, DaikinControlAccess.Target identity, long actor, long requestedAt,
+                             java.time.Clock clock, DaikinControlAccess access, boolean simple) {
+        // 与开放和新操作共用来源锁，先锁来源/设备再锁操作，网络读取不占用事务。
+        jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE",identity.sourceId());
+        jdbc.queryForList("SELECT equip_id FROM biz_equipment WHERE equip_id=? FOR UPDATE",identity.equipmentId());
+        Row row=jdbc.query("SELECT * FROM biz_daikin_control_operation WHERE operation_id=? FOR UPDATE",this::map,claimed.view().operationId()).getFirst();
+        long now=clock.millis();
+        if (simple) {
+            if (!access.testOpenControls()) throw error(403, "FORBIDDEN");
+            DaikinControlRecoveryService.requireTestRecoverable(row);
+        } else DaikinControlRecoveryService.requireRecoverable(row,now);
+        access.requireGrantAdmin(actor); access.requireRead(actor,identity.equipmentId());
+        if(!identity.equals(access.candidate(identity.equipmentId())) || !identity.equals(DaikinControlAccess.identity(row.target()))
+                || row.leaseVersion()!=claimed.leaseVersion() || row.view().status()!=claimed.view().status()) throw error(409,"REVISION_CHANGED");
+        if(now-requestedAt>=30_000 || now<requestedAt || row.leaseUntil()<=now) throw error(409,"PREFLIGHT_EXPIRED");
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot WHERE physical_key=? AND operation_id=?",
+                Integer.class,identity.physicalKey(),row.view().operationId())!=1) throw error(409,"REVISION_CHANGED");
+        if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_controller_slot WHERE controller_key=? AND operation_id<>?",
+                Integer.class,identity.controllerKey(),row.view().operationId())>0) throw error(409,"CONTROLLER_BUSY");
+        if (!simple) requireSourceReady(identity.sourceId(),now);
+        return row;
+    }
+    private static String recoveryKey(Row row, DaikinControlAccess.Target identity, long actor, String settings) {
+        return "RECOVERY_"+DaikinControlAccess.hash(actor+"|"+row.view().operationId()+"|"+row.target().fingerprint()+"|"+identity.fingerprint()+"|"+settings);
+    }
+    private void recoverySample(Row row, String settings, boolean matchesOld, String reason, long requested, long now) {
+        jdbc.update("INSERT INTO biz_daikin_control_sample(sample_id,operation_id,requested_at,read_at,device_sample_at,settings_json,matches_target,reason_code) VALUES(?,?,?,?,NULL,?,?,?)",
+                id(),row.view().operationId(),requested,now,settings,matchesOld,reason);
+    }
+    private void recoveryAudit(Row row, long actor, long now, String action, String settings, String failure, String trace, String reason) {
+        audit.append(new AuditEvidence("SYSTEM_SECURITY",row.buildingId(),"USER",actor,action,"HVAC_CONTROL_OPERATION",row.view().operationId(),
+                row.revision(),null,"status="+row.view().status()+";originalAction="+row.view().action()+";originalValue="+row.view().value()+";oldReason="+row.view().closedReason(),
+                "reason="+reason+";currentSettings="+settings+";oldTargetUnchanged=true;resultIsRecoveryOnly=true",
+                failure==null?"SUCCESS":"FAILED",failure,trace,LocalDateTime.ofInstant(Instant.ofEpochMilli(now),ZoneId.systemDefault()),
+                auditProperties.getEnvironmentMode(),false));
     }
 
     private void releaseSlots(String id) {
@@ -235,7 +472,7 @@ public class DaikinControlStore {
         return switch (status) {
             case REJECTED, NOT_SENT -> "REJECTED";
             case UNKNOWN, UNCONFIRMED -> "FAILED";
-            case PREPARING, SENDING, ACCEPTED, OBSERVED_MATCH, OBSERVED_STABLE, CONFIRMED, CLOSED -> "SUCCESS";
+            case PREPARING, SENDING, ACCEPTED, OBSERVED_MATCH, OBSERVED_STABLE, CLOUD_VERIFIED, CONFIRMED, CLOSED -> "SUCCESS";
         };
     }
 
@@ -246,7 +483,7 @@ public class DaikinControlStore {
                 rs.getObject("deadline_at", Long.class), rs.getInt("stable_count"), rs.getObject("stable_since", Long.class),
                 rs.getObject("last_read_at", Long.class), rs.getString("unit_status"),
                 jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot WHERE operation_id=?", Integer.class, rs.getString("operation_id")) > 0,
-                rs.getBoolean("cloud_stable"));
+                rs.getBoolean("cloud_stable"), DaikinControlPolicy.isFastBaseline(rs.getString("baseline_json")) ? DaikinControlPolicy.TEST_FAST : "LEGACY_STABLE");
         try {
             return new Row(view, rs.getLong("operator_id"), rs.getString("building_id"), json.readValue(rs.getString("target_json"), DaikinControlAccess.Target.class),
                     rs.getString("revision"), rs.getString("request_hash"), rs.getObject("sent_at", Long.class),

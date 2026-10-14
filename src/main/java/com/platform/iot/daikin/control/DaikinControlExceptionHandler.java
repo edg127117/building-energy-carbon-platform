@@ -10,7 +10,7 @@ import java.util.Map;
 
 /** 控制请求解码失败返回稳定400，不回显含未知字段的原始请求。 */
 @Order(-1)
-@RestControllerAdvice(assignableTypes = DaikinControlController.class)
+@RestControllerAdvice(assignableTypes = {DaikinControlController.class, DaikinControlGrantController.class, DaikinControlRecoveryController.class})
 public class DaikinControlExceptionHandler {
     @ExceptionHandler(HttpMessageNotReadableException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)

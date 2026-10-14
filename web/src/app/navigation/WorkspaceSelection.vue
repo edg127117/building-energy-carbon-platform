@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSession } from '@/modules/auth/public'
+import { useHvacControlAccess } from '@/modules/dashboard/public'
 import { t } from '@/locales'
 import { ElAlert, ElButton, ArrowRight } from '@/shared/ui'
 import WorkspaceBrand from './WorkspaceBrand.vue'
@@ -9,12 +10,14 @@ import HeaderDivider from '@/shared/components/HeaderDivider.vue'
 import { workspaceIcons } from './icons'
 import { authorizedPages, workspaces } from './catalog'
 const session = useSession()
+const controlAccess = useHvacControlAccess()
 const router = useRouter()
 const route = useRoute()
 const failure = ref(false)
 const logoutFailed = ref(false)
 const busy = ref(false)
-const available = computed(() => workspaces.filter(system => authorizedPages(session.menus).some(page => page.system === system.id)))
+const visiblePages = computed(() => authorizedPages(session.menus, controlAccess.testOpenControls.value))
+const available = computed(() => workspaces.filter(system => visiblePages.value.some(page => page.system === system.id)))
 async function retry() {
   busy.value = true
   try { await session.refresh(); failure.value = false; await router.replace('/systems') }
@@ -36,7 +39,7 @@ async function logout() {
       </section>
       <ElAlert v-else-if="!available.length" :title="t('workspaces.noAccess')" type="info" :closable="false" />
       <nav v-else :aria-label="t('workspaces.select')">
-        <RouterLink v-for="system in available" :key="system.id" :to="authorizedPages(session.menus).find(page => page.system === system.id)!.path" class="system-link">
+        <RouterLink v-for="system in available" :key="system.id" :to="visiblePages.find(page => page.system === system.id)!.path" class="system-link">
           <component :is="workspaceIcons[system.id]" class="system-icon" aria-hidden="true" />
           <strong>{{ t(system.titleKey) }}</strong>
           <span class="enter">{{ t('workspaces.enter') }}<ArrowRight aria-hidden="true" /></span>

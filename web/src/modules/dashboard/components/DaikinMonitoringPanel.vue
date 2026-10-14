@@ -7,8 +7,8 @@ import {
 } from '@/shared/ui'
 import { t } from '@/locales'
 import { formatDateTime } from '@/shared/utils/format'
-import { listAccessibleBuildings } from '../api/hvac'
 import { daikinApi } from '../api/daikin'
+import { hvacControlApi } from '../api/hvac-control'
 import {
   daikinCurrentValue, daikinFieldTone, daikinLabel, daikinOutdoorStatusLabel, daikinOutdoorStatusTone,
   daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
@@ -16,8 +16,11 @@ import {
   type DaikinQuickStatus,
 } from '../models/daikin-display'
 import type { DaikinDevice } from '../models/daikin'
+import type { HvacControlOperation } from '../models/hvac-control'
 import { useDaikinResource } from '../composables/use-daikin-resource'
+import { useHvacControlAccess } from '../composables/use-hvac-control-access'
 import DaikinDeviceDetail from './DaikinDeviceDetail.vue'
+import HvacDeviceGrantPanel from './HvacDeviceGrantPanel.vue'
 
 interface CardTelemetry {
   fanSpeed: string | null
@@ -34,7 +37,8 @@ const props = withDefaults(defineProps<{ alarms?: boolean; history?: boolean }>(
 const route = useRoute()
 const text = (key: string) => t(`dashboard.daikin.${key}`)
 const summaryText = (key: string) => t(`dashboard.spaceSummary.${key}`)
-const buildings = useDaikinResource<Awaited<ReturnType<typeof listAccessibleBuildings>>>()
+const controlAccess = useHvacControlAccess()
+const buildings = useDaikinResource<Awaited<ReturnType<typeof hvacControlApi.buildings>>>()
 const devices = useDaikinResource<Awaited<ReturnType<typeof daikinApi.devices>>>()
 const exceptions = useDaikinResource<Awaited<ReturnType<typeof daikinApi.exceptions>>>()
 const spaces = useDaikinResource<Awaited<ReturnType<typeof daikinApi.spaces>>>()
@@ -58,6 +62,7 @@ const keyword = ref('')
 const page = ref(1)
 const selected = ref<string | null>(null)
 const refreshTick = ref(0)
+const monitorRefreshTick = ref(0)
 
 const spaceFilterOptions = computed(() => {
   const map = new Map<string, { value: string; label: string; spaceIds: string[] }>()
@@ -87,6 +92,7 @@ const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevic
 const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value))
 const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? []))
 const selectedDevice = computed(() => rawDevices.value.find(item => item.equipmentId === selected.value))
+const buildingName = computed(() => buildings.data.value?.find(item => item.buildingId === building.value)?.buildingName ?? building.value)
 
 const spaceSummaryItems = computed(() => {
   const groups = groupDaikinDevicesBySpace(rawDevices.value, spaces.data.value ?? [])
@@ -218,6 +224,11 @@ function search() {
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 let telemetrySeq = 0
+let controlRefreshTimer: ReturnType<typeof setTimeout> | undefined
+let controlRefreshOperation: HvacControlOperation | null = null
+let controlRefreshPass = 0
+const CONTROL_MONITOR_REFRESH_INTERVAL = 5_000
+const CONTROL_MONITOR_REFRESH_RETRIES = 12
 
 async function hydrateCardTelemetry(items: DaikinDevice[]) {
   const seq = ++telemetrySeq
@@ -261,14 +272,47 @@ watch(() => devices.data.value, val => {
 function load(cursor?: string, silent = false) {
   if (!building.value) return
   const backendSpaceId = selectedSpaceOption.value && selectedSpaceOption.value.spaceIds.length > 1 ? '' : space.value
-  if (props.alarms) void exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor), silent)
-  else void devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, backendSpaceId, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
+  if (props.alarms) return exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor), silent)
+  return devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, backendSpaceId, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
 }
 
 function refresh() {
   load(undefined, Boolean(devices.data.value || exceptions.data.value))
   refreshTick.value++
 }
+
+function refreshAfterControl(operation: HvacControlOperation) {
+  if (operation.equipmentId !== selected.value) return
+  stopControlRefresh()
+  controlRefreshOperation = operation
+  controlRefreshPass = 0
+  void refreshControlMonitoring(operation)
+}
+
+function stopControlRefresh() {
+  clearTimeout(controlRefreshTimer)
+  controlRefreshTimer = undefined
+  controlRefreshOperation = null
+}
+
+async function refreshControlMonitoring(operation: HvacControlOperation) {
+  controlRefreshPass++
+  await load(undefined, true)
+  if (disposed || controlRefreshOperation !== operation || selected.value !== operation.equipmentId) return
+  const monitoredAt = devices.data.value?.items.find(item => item.equipmentId === operation.equipmentId)?.lastValidAt
+  // 控制回读与分钟采集独立：最多追加 12 次只读重查，不用目标值填充旧监测，也不阻塞下一次人工操作。
+  if (!devices.error.value && (operation.lastReadAt == null || (monitoredAt != null && monitoredAt >= operation.lastReadAt))) {
+    monitorRefreshTick.value++
+    stopControlRefresh()
+  } else if (controlRefreshPass <= CONTROL_MONITOR_REFRESH_RETRIES) {
+    controlRefreshTimer = setTimeout(() => { void refreshControlMonitoring(operation) }, CONTROL_MONITOR_REFRESH_INTERVAL)
+  } else {
+    monitorRefreshTick.value++
+    stopControlRefresh()
+  }
+}
+
+watch([building, selected], stopControlRefresh)
 
 watch(building, () => {
   space.value = ''
@@ -292,11 +336,12 @@ watch(page, () => {
 })
 
 onMounted(async () => {
-  await buildings.run(listAccessibleBuildings)
+  if (!props.alarms) await controlAccess.refresh()
+  await buildings.run(hvacControlApi.buildings)
   if (disposed) return
   const requestedBuilding = typeof route.query.buildingId === 'string' ? route.query.buildingId : ''
   building.value = buildings.data.value?.find(item => item.buildingId === requestedBuilding)?.buildingId ?? buildings.data.value?.[0]?.buildingId ?? ''
-  // 深链接只选已授权建筑；设备接口仍独立校验真实归属和菜单。
+  // 深链接只选控制监测范围内建筑；设备接口仍独立校验真实归属和菜单。
   if (!props.alarms && building.value === requestedBuilding && typeof route.query.equipmentId === 'string') {
     await Promise.resolve()
     if (!disposed) selected.value = route.query.equipmentId
@@ -309,6 +354,7 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true
   clearInterval(timer)
+  stopControlRefresh()
 })
 </script>
 
@@ -391,6 +437,14 @@ onUnmounted(() => {
     <ElEmpty v-else-if="!building && !buildings.error.value" :description="t('dashboard.noBuilding')" />
 
     <template v-if="building && !alarms">
+      <ElAlert v-if="controlAccess.testOpenControls.value" :title="text('deviceGrant.testOpenTitle')" :description="text('deviceGrant.testOpenNotice')" type="info" :closable="false" />
+      <HvacDeviceGrantPanel
+        v-else-if="controlAccess.loaded.value"
+        :building-name="buildingName"
+        :devices="filteredDevices"
+        :space-options="spaceFilterOptions"
+      />
+
       <section v-if="spaceSummaryItems.length" class="space-summary-bar">
         <header class="space-summary-header">
           <div class="space-summary-title-row">
@@ -761,8 +815,10 @@ onUnmounted(() => {
         :device-kind="selectedDevice?.deviceKind"
         :space-name="spaceNameOf(selectedDevice?.spaceId)"
         :refresh-tick="refreshTick"
+        :monitor-refresh-tick="monitorRefreshTick"
         :visible="Boolean(selected)"
         @close="selected = null"
+        @control-completed="refreshAfterControl"
       />
     </template>
 

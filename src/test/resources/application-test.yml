@@ -31,6 +31,7 @@ daikin:
     enabled: false
     wire-confirmed: false
     test-access-enabled: false
+    test-open-controls: false
   retention:
     cleanup-enabled: false
   runtime:

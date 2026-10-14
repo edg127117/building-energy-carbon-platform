@@ -5,7 +5,7 @@ export const HVAC_CONTROL_ACTIONS = ['ON_OFF', 'TEMPERATURE', 'MODE', 'AIR_FLOW'
 export type HvacControlAction = typeof HVAC_CONTROL_ACTIONS[number]
 
 export const HVAC_CONTROL_OPERATION_STATUSES = [
-  'PREPARING', 'SENDING', 'ACCEPTED', 'OBSERVED_MATCH', 'OBSERVED_STABLE', 'CONFIRMED', 'REJECTED', 'NOT_SENT', 'UNKNOWN', 'UNCONFIRMED', 'CLOSED',
+  'PREPARING', 'SENDING', 'ACCEPTED', 'OBSERVED_MATCH', 'OBSERVED_STABLE', 'CLOUD_VERIFIED', 'CONFIRMED', 'REJECTED', 'NOT_SENT', 'UNKNOWN', 'UNCONFIRMED', 'CLOSED',
 ] as const
 export type HvacControlOperationStatus = typeof HVAC_CONTROL_OPERATION_STATUSES[number]
 
@@ -18,13 +18,105 @@ export interface HvacControlActionOption {
   maximum: number | null
 }
 
+/**
+ * 仅按服务端本次预检返回的许可值启用提交；服务端仍是最终授权和前置核验边界。
+ */
+export function isHvacControlActionValueAllowed(option: HvacControlActionOption, value: string): boolean {
+  if (!option.allowed || !value) return false
+  if (option.action !== 'TEMPERATURE') return option.values.includes(value)
+
+  if (!/^\d{2}$/.test(value)) return false
+  const temperature = Number(value)
+  if (!Number.isInteger(temperature)) return false
+
+  const hasRange = option.minimum != null && option.maximum != null
+  if (hasRange && (option.minimum! > option.maximum! || temperature < option.minimum! || temperature > option.maximum!)) return false
+  return option.values.length > 0 ? option.values.includes(value) : hasRange
+}
+
 export interface HvacControlOptions {
   equipmentId: string
   canControl: boolean
+  testOpenControls: boolean
   reasonCode: string | null
   revision: string | null
   actions: HvacControlActionOption[]
   activeOperationId: string | null
+  // 旧服务端响应可能尚未返回该字段；有值时才作为设温输入的权威初值。
+  currentTemperature?: number | null
+}
+
+export type HvacControlGrantAction = Extract<HvacControlAction, 'ON_OFF' | 'TEMPERATURE'>
+
+export interface HvacControlDeviceGrantAccess {
+  canManage: boolean
+  testOpenControls: boolean
+}
+
+export interface HvacControlBuilding {
+  buildingId: string
+  buildingName: string
+}
+
+export type HvacControlOnOff = 'on' | 'off'
+
+/**
+ * 历史隔离恢复只适用于服务端判定的单台旧异常；页面不能把它当成普通控制或推断默认现场值。
+ */
+export interface HvacControlRecovery {
+  operation: HvacControlOperation | null
+  eligible: boolean
+  simpleRecovery: boolean
+  reasonCode: string | null
+}
+
+export interface HvacControlRecoveryObserveRequest {
+  onOff: HvacControlOnOff
+  temperature: number
+}
+
+export interface HvacControlRecoveryObservation {
+  operationId: string
+  onOff: string | null
+  temperature: number | null
+  mode: string | null
+  fanSpeed: string | null
+  airFlow: string | null
+  unitStatus: string | null
+  stableCount: number
+  stableSince: number | null
+  lastReadAt: number | null
+  canRecover: boolean
+  proof: string | null
+  reasonCode: string | null
+}
+
+export interface HvacControlRecoveryCompleteRequest extends HvacControlRecoveryObserveRequest {
+  proof: string
+  reason: string
+  onsiteConfirmed: true
+}
+
+export interface HvacControlRecoveryContinueRequest {
+  reason: string
+}
+
+export interface HvacControlDeviceGrantBatchRequest {
+  equipmentIds: string[]
+  actions: HvacControlGrantAction[]
+  evidence: string
+}
+
+export interface HvacControlDeviceGrantBatchItem {
+  equipmentId: string
+  opened: boolean
+  reasonCode: string | null
+  version: number | null
+  actions: HvacControlActionOption[]
+}
+
+export interface HvacControlDeviceGrantBatchResult {
+  items: HvacControlDeviceGrantBatchItem[]
 }
 
 export interface HvacControlOperation {
@@ -46,6 +138,7 @@ export interface HvacControlOperation {
   unitStatus: string | null
   isolated: boolean
   cloudStable: boolean
+  verificationPolicy: string
 }
 
 export interface HvacControlOperationPage {
@@ -64,6 +157,13 @@ export interface HvacControlCommand {
 
 export function isHvacControlPollingStatus(status: HvacControlOperationStatus): boolean {
   return status === 'PREPARING' || status === 'SENDING' || status === 'ACCEPTED' || status === 'UNKNOWN'
+}
+
+/**
+ * TEST_FAST_V1 只核验本次控制字段的一次云端回显；不能把旧稳定采样或 cloudStable 文案套用到它。
+ */
+export function isHvacControlFastVerification(operation: Pick<HvacControlOperation, 'verificationPolicy'>): boolean {
+  return operation.verificationPolicy === 'TEST_FAST_V1'
 }
 
 export function needsHvacControlResolution(status: HvacControlOperationStatus): boolean {

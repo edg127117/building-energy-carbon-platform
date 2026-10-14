@@ -88,7 +88,7 @@ class ControlFixture {
         var menus = mock(SysMenuMapper.class);
         var menu = new SysMenu(); menu.setMenuType("C"); menu.setPath("/operations/realtime/hvac");
         when(menus.selectVisibleMenusByUserId(anyLong())).thenReturn(List.of(menu));
-        access = new DaikinControlAccess(jdbc, new JdbcBackendDutyService(jdbc, auditProperties), roles, menus, props);
+        access = new DaikinControlAccess(jdbc, new JdbcBackendDutyService(jdbc, auditProperties), roles, menus, props, auditProperties);
         AuditEvidenceWriter writer = new JdbcSecurityAuditEvidenceWriter(jdbc, new AuditSummarySanitizer());
         store = new DaikinControlStore(jdbc, new TransactionTemplate(new DataSourceTransactionManager(ds)), json,
                 evidence -> { if (auditFails) throw new IllegalStateException("simulated audit failure"); writer.append(evidence); }, auditProperties);

@@ -17,7 +17,7 @@ class DaikinControlStabilityTest {
     ControlFixture f;
     @BeforeEach void setup() throws Exception { f = new ControlFixture(); }
 
-    @Test void earlyMatchThenRevertResetsStreakAndCannotReleaseBeforeOnsiteConfirmation() {
+    @Test void earlyMatchThenRevertResetsStreakAndOnlyStableReadbackAutomaticallyReleases() {
         var op = f.submit(Action.TEMPERATURE, "26");
         f.clock.advance(15_000); f.service.reconcile();
         assertThat(f.store.get(op.operationId()).view().stableCount()).isEqualTo(1);
@@ -28,11 +28,11 @@ class DaikinControlStabilityTest {
         f.gateway.unit.put("temperature", 26);
         for (int i = 0; i < 5; i++) { f.clock.advance(30_000); f.service.reconcile(); }
         var stable = f.service.get(7, op.operationId());
-        assertThat(stable.status()).isEqualTo(Status.OBSERVED_STABLE);
-        assertThat(stable.isolated()).isTrue();
+        assertThat(stable.status()).isEqualTo(Status.CLOUD_VERIFIED);
+        assertThat(stable.isolated()).isFalse();
         assertThat(stable.lastReadAt() - stable.stableSince()).isGreaterThanOrEqualTo(60_000);
         assertThat(f.jdbc.queryForObject("SELECT COUNT(device_sample_at) FROM biz_daikin_control_sample", Integer.class)).isZero();
-        assertThat(f.service.confirm(7, op.operationId(), "离线模拟现场确认设温且无其他联动").isolated()).isFalse();
+        assertThat(f.store.active("equipment")).isNull();
         assertThat(f.gateway.writes).hasValue(1);
     }
 
@@ -44,7 +44,7 @@ class DaikinControlStabilityTest {
         assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.ACCEPTED);
         f.gateway.unit.put("onOff", "on").put("unitStatus", "operating");
         for (int i = 0; i < 3; i++) { f.clock.advance(30_000); f.service.reconcile(); }
-        assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.OBSERVED_STABLE);
+        assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.CLOUD_VERIFIED);
         assertThat(f.gateway.writes).hasValue(1);
     }
 
@@ -92,9 +92,9 @@ class DaikinControlStabilityTest {
         var op = f.submit(Action.TEMPERATURE, "26");
         f.jdbc.update("UPDATE sys_user SET status=0 WHERE id=7");
         f.stabilize(f.service);
-        assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.OBSERVED_STABLE);
+        assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.CLOUD_VERIFIED);
         assertThatThrownBy(() -> f.service.get(7, op.operationId())).isInstanceOf(BusinessException.class);
-        assertThat(f.store.get(op.operationId()).view().isolated()).isTrue();
+        assertThat(f.store.get(op.operationId()).view().isolated()).isFalse();
         assertThat(f.gateway.writes).hasValue(1);
         assertThat(f.jdbc.queryForList("SELECT actor_type FROM sys_security_audit_event", String.class)).contains("SYSTEM");
     }
@@ -135,6 +135,7 @@ class DaikinControlStabilityTest {
 
     @Test void onsiteConfirmationRechecksFreshSnapshotAndRefusesRevertedValue() {
         var op = f.submit(Action.TEMPERATURE, "26");
+        makeLegacyOnsiteRecord(op);
         f.stabilize(f.service);
         f.gateway.unit.put("temperature", 24);
         assertThatThrownBy(() -> f.service.confirm(7, op.operationId(), "声称现场确认但读取已经反复"))
@@ -159,6 +160,7 @@ class DaikinControlStabilityTest {
 
     @Test void longGapInvalidatesOldStableEvidenceAndConfirmationNeedsNewStreak() {
         var op = f.submit(Action.TEMPERATURE, "26");
+        makeLegacyOnsiteRecord(op);
         f.stabilize(f.service);
         f.clock.advance(120_000);
         assertThatThrownBy(() -> f.service.confirm(7, op.operationId(), "旧稳定记录不能代替新的现场证据"))
@@ -200,10 +202,15 @@ class DaikinControlStabilityTest {
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo("HVAC_CONTROL_CONTROLLER_BUSY"));
         var restarted = new DaikinControlService(f.props, f.access, f.policy, f.store, List.of(f.gateway), f.clock);
         f.stabilize(restarted);
-        assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.OBSERVED_STABLE);
-        assertThat(f.store.active("equipment")).isEqualTo(op.operationId());
-        restarted.confirm(7, op.operationId(), "模拟现场确认解除控制器占用");
+        assertThat(f.store.get(op.operationId()).view().status()).isEqualTo(Status.CLOUD_VERIFIED);
+        assertThat(f.store.active("equipment")).isNull();
         assertThat(f.store.reserve(7, other, new Submit(Action.TEMPERATURE, "26", "request-456", request.revision()), "different-hash", "trace", f.clock.millis()).created()).isTrue();
         assertThat(f.gateway.writes).hasValue(1);
+    }
+
+    private void makeLegacyOnsiteRecord(Operation op) {
+        // 模拟升级前已经处于人工确认阶段的记录；新版不替它自动解除占用。
+        f.store.transition(op.operationId(), java.util.Set.of(Status.ACCEPTED), Status.OBSERVED_STABLE,
+                "CLOUD_STABLE_AWAITING_ONSITE", null, op.observedValue(), f.clock.millis() + 15_000, null, 0, f.clock.millis());
     }
 }
