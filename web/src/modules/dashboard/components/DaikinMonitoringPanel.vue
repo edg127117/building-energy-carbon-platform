@@ -15,7 +15,7 @@ import {
   groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning, normalizeDaikinSpaceName,
   type DaikinQuickStatus,
 } from '../models/daikin-display'
-import type { DaikinDevice } from '../models/daikin'
+import type { DaikinDevice, DeviceCurrent } from '../models/daikin'
 import type { HvacControlBatch, HvacControlOperation } from '../models/hvac-control'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 import { useHvacControlAccess } from '../composables/use-hvac-control-access'
@@ -360,10 +360,33 @@ function selectQuickStatus(status: DaikinQuickStatus) {
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 let telemetrySeq = 0
+let listRequestSeq = 0
+let listRequests = 0
+let statusRefreshQueued = false
+let nextTelemetryAt = 0
+const telemetryObservedAt = new Map<string, number>()
+const telemetryPending = new Map<string, number>()
+
+function cardStatus(snapshot: DeviceCurrent) {
+  const findField = (name: string) => {
+    const field = snapshot.fields.find(row => row.fieldName === name)
+    return field?.status === 'PRESENT' && field.valueVisible ? field.normalizedValue : null
+  }
+  return {
+    fanSpeed: findField('fanSpeed'),
+    isFilterDirty: findField('isFilterDirty') === 'true',
+    compressorOnOff: findField('compressorOnOff'),
+    inCommunicationError: findField('inCommunicationError') === 'true',
+    hasHardFault: findField('inError') === 'true' || findField('inEmergency') === 'true'
+      || findField('inCommunicationError') === 'true' || Boolean(findField('errorCode')),
+  }
+}
 
 async function hydrateCardTelemetry(items: DaikinDevice[]) {
-  const seq = ++telemetrySeq
+  const seq = telemetrySeq
   await Promise.all(items.map(async item => {
+    if (telemetryPending.get(item.equipmentId) === seq) return
+    telemetryPending.set(item.equipmentId, seq)
     try {
       const isOutdoor = item.deviceKind === 'OUTDOOR'
       const [curRes, roomRes, setRes] = await Promise.all([
@@ -372,47 +395,82 @@ async function hydrateCardTelemetry(items: DaikinDevice[]) {
         isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'temperature').catch(() => null),
       ])
       if (disposed || seq !== telemetrySeq) return
-      const findField = (name: string) => {
-        const f = curRes?.fields?.find(row => row.fieldName === name)
-        return f && f.status === 'PRESENT' && f.valueVisible ? f.normalizedValue : null
-      }
+      const prior = cardTelemetry.value[item.equipmentId]
+      const statusFresh = curRes && (curRes.lastValidAt ?? 0) >= (telemetryObservedAt.get(item.equipmentId) ?? 0)
       cardTelemetry.value[item.equipmentId] = {
-        fanSpeed: findField('fanSpeed'),
-        isFilterDirty: findField('isFilterDirty') === 'true',
-        compressorOnOff: findField('compressorOnOff'),
-        inCommunicationError: findField('inCommunicationError') === 'true',
-        hasHardFault:
-          findField('inError') === 'true'
-          || findField('inEmergency') === 'true'
-          || findField('inCommunicationError') === 'true'
-          || Boolean(findField('errorCode')),
+        ...(statusFresh ? cardStatus(curRes) : prior ?? {
+          fanSpeed: null, isFilterDirty: false, compressorOnOff: null, inCommunicationError: false, hasHardFault: false,
+        }),
         roomTemp: roomRes?.reading?.value ?? null,
         setTemp: setRes?.reading?.value ?? null,
         unit: roomRes?.unit || setRes?.unit || '°C',
       }
+      if (statusFresh) telemetryObservedAt.set(item.equipmentId, curRes.lastValidAt ?? 0)
     } catch {
       // 单台卡片摘要补全失败不阻断主列表渲染。
+    } finally {
+      if (telemetryPending.get(item.equipmentId) === seq) telemetryPending.delete(item.equipmentId)
     }
   }))
 }
 
 watch(() => devices.data.value, val => {
-  if (val?.items?.length) {
-    rememberBatchDevices(val.items)
-    void hydrateCardTelemetry(val.items)
-  }
+  if (val?.items?.length) rememberBatchDevices(val.items)
 })
 
-function load(cursor?: string, silent = false) {
+async function load(cursor?: string, silent = false, withTelemetry = true) {
   if (!building.value) return
   const backendSpaceId = selectedSpaceOption.value && selectedSpaceOption.value.spaceIds.length > 1 ? '' : space.value
   if (props.alarms) return exceptions.run(() => daikinApi.exceptions(building.value, props.history, cursor), silent)
-  return devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, backendSpaceId, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
+  const seq = ++listRequestSeq
+  listRequests++
+  try {
+    await devices.run(() => daikinApi.devices(building.value, page.value, kind.value, keyword.value, backendSpaceId, state.value, exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'), silent)
+    if (disposed || seq !== listRequestSeq || devices.error.value) return
+    const items = devices.data.value?.items ?? []
+    // 高频列表只读平台摘要；仅首次出现的卡片补全温度，既有温度仍按分钟刷新。
+    const telemetryItems = withTelemetry ? items : items.filter(item => !cardTelemetry.value[item.equipmentId]
+      && telemetryPending.get(item.equipmentId) !== telemetrySeq)
+    if (telemetryItems.length) void hydrateCardTelemetry(telemetryItems)
+  } finally {
+    listRequests--
+    if (!listRequests && statusRefreshQueued) {
+      statusRefreshQueued = false
+      refreshStatus()
+    }
+  }
 }
 
 function refresh() {
+  nextTelemetryAt = Date.now() + 60_000
   load(undefined, Boolean(devices.data.value || exceptions.data.value))
   refreshTick.value++
+}
+
+function refreshStatus(queue = false) {
+  if (disposed || document.hidden || props.alarms || props.history || !building.value) return
+  if (listRequests) {
+    statusRefreshQueued ||= queue
+    return
+  }
+  void load(undefined, true, false)
+}
+
+function detailStateRefreshed(snapshot: DeviceCurrent) {
+  if (snapshot.equipmentId !== selected.value || document.hidden) return
+  if ((snapshot.lastValidAt ?? 0) >= (telemetryObservedAt.get(snapshot.equipmentId) ?? 0)) {
+    cardTelemetry.value[snapshot.equipmentId] = {
+      ...(cardTelemetry.value[snapshot.equipmentId] ?? { roomTemp: null, setTemp: null, unit: '°C' }),
+      ...cardStatus(snapshot),
+    }
+    telemetryObservedAt.set(snapshot.equipmentId, snapshot.lastValidAt ?? 0)
+  }
+  // 详情与列表共用后端事实；慢列表结束后合并补读一次，不用请求目标推算实际状态。
+  refreshStatus(true)
+}
+
+function visibilityChanged() {
+  if (!document.hidden) refreshStatus(true)
 }
 
 function refreshAfterControl(operation: HvacControlOperation) {
@@ -437,16 +495,21 @@ watch(building, () => {
   page.value = 1
   quickStatus.value = 'ALL'
   devices.clear()
+  cardTelemetry.value = {}
+  telemetryObservedAt.clear()
+  telemetrySeq++
   exceptions.clear()
   load()
 })
 watch([kind, space, state, exceptionFilter], () => {
+  telemetrySeq++
   clearBatchSelection()
   page.value = 1
   selected.value = null
   load()
 })
 watch(page, () => {
+  telemetrySeq++
   selected.value = null
   load()
 })
@@ -462,14 +525,19 @@ onMounted(async () => {
     await Promise.resolve()
     if (!disposed) selected.value = route.query.equipmentId
   }
-  // 后台采集独立运行；浏览器只在可见且没有未完成请求时每分钟重读当前页。
+  nextTelemetryAt = Date.now() + 60_000
+  document.addEventListener('visibilitychange', visibilityChanged)
+  // 十秒刷新仅重读平台状态；温度、详情普通刷新和告警页面保留分钟节奏。
   timer = setInterval(() => {
-    if (!document.hidden && !devices.loading.value && !exceptions.loading.value && !props.history) refresh()
-  }, 60000)
+    if (document.hidden || listRequests || devices.loading.value || exceptions.loading.value || props.history) return
+    if (Date.now() >= nextTelemetryAt) refresh()
+    else refreshStatus()
+  }, 10_000)
 })
 onUnmounted(() => {
   disposed = true
   clearInterval(timer)
+  document.removeEventListener('visibilitychange', visibilityChanged)
 })
 </script>
 
@@ -969,6 +1037,7 @@ onUnmounted(() => {
         :visible="Boolean(selected)"
         @close="selected = null"
         @control-completed="refreshAfterControl"
+        @state-refreshed="detailStateRefreshed"
       />
     </template>
 
