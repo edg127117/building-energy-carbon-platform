@@ -73,8 +73,18 @@ public class DaikinControlService {
         return submit(user, equipment, request, traceId, relationshipHash, dispatchGuard, true);
     }
 
+    Operation submitBatch(long user, String equipment, Submit request, String traceId, String relationshipHash,
+                          Runnable dispatchGuard, String batchItemId) {
+        return submit(user, equipment, request, traceId, relationshipHash, dispatchGuard, true, batchItemId);
+    }
+
     private Operation submit(long user, String equipment, Submit request, String traceId, String relationshipHash,
                              Runnable dispatchGuard, boolean skipTarget) {
+        return submit(user, equipment, request, traceId, relationshipHash, dispatchGuard, skipTarget, null);
+    }
+
+    private Operation submit(long user, String equipment, Submit request, String traceId, String relationshipHash,
+                             Runnable dispatchGuard, boolean skipTarget, String batchItemId) {
         access.requireControl(user, equipment);
         validate(request);
         String hash = DaikinControlAccess.hash(equipment + "|" + request.action() + "|" + request.value() + "|" + request.revision());
@@ -85,7 +95,7 @@ public class DaikinControlService {
         var target = access.target(equipment);
         var gateway = gateway(target);
         boolean fast = access.testOpenControls();
-        var reservation = store.reserve(user, target, request, hash, traceId, clock.millis(), fast, dispatchGuard);
+        var reservation = store.reserve(user, target, request, hash, traceId, clock.millis(), fast, dispatchGuard, batchItemId);
         if (!reservation.created()) return visible(user, reservation.row()).view();
         String id = reservation.row().view().operationId();
         String before;

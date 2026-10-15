@@ -30,6 +30,13 @@ class DaikinControlMigrationTest {
         jdbc.update("INSERT INTO biz_daikin_control_slot VALUES (?, 'old')", "a".repeat(64));
         execute(ds, "V69__mysql_daikin_control_stability.sql");
         execute(ds, "V70__mysql_daikin_batch_control.sql");
+        jdbc.update("INSERT INTO biz_daikin_control_controller_slot VALUES (?, 'old')", "d".repeat(64));
+        jdbc.update("INSERT INTO biz_daikin_control_batch VALUES ('old-batch',1,'batch-key',?,'ON_OFF','on',0,'trace')", "e".repeat(64));
+        var oldSlots = jdbc.queryForList("SELECT * FROM biz_daikin_control_controller_slot");
+        execute(ds, "V71__mysql_daikin_batch_overlap.sql");
+        assertThat(jdbc.queryForList("SELECT * FROM biz_daikin_control_controller_slot")).isEqualTo(oldSlots);
+        assertThat(jdbc.queryForObject("SELECT overlap_allowed FROM biz_daikin_control_batch", Boolean.class)).isFalse();
+        jdbc.update("DELETE FROM biz_daikin_control_batch WHERE batch_id='old-batch'");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT status FROM biz_daikin_control_operation WHERE operation_id='old'", String.class)).isEqualTo("UNKNOWN");
@@ -43,6 +50,8 @@ class DaikinControlMigrationTest {
     private void execute(DriverManagerDataSource ds, String file) throws Exception {
         String sql = Files.readString(Path.of("src/env/init", file))
                 .replace(" COLLATE utf8mb4_bin", "").replace(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4", "");
+        for (String table : new String[]{"biz_daikin_control_controller_slot", "biz_daikin_control_batch_lane"})
+            sql = sql.replace("ALTER TABLE " + table + "\n DROP PRIMARY KEY,", "ALTER TABLE " + table + " DROP PRIMARY KEY;\nALTER TABLE " + table);
         // H2 不支持一个 ALTER 语句中多个 ADD COLUMN；仅拆分语句，保留增量列定义及默认值。
         for (String table : new String[]{"biz_daikin_control_grant", "biz_daikin_control_operation"}) {
             String prefix = "ALTER TABLE " + table;

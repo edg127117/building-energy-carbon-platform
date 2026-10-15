@@ -71,7 +71,7 @@ class DaikinBatchMysqlAcceptanceTest {
         db.update("UPDATE biz_device_product SET status='ENABLED' WHERE product_id='PRODUCT_DAIKIN_IN_STATE'");
     }
 
-    @Test @Order(1) void originalMigrationChainAddsV70WithoutChangingLegacyEvidence() throws Exception {
+    @Test @Order(1) void originalMigrationChainAddsV70AndV71WithoutChangingLegacyEvidence() throws Exception {
         try (var f = new Harness()) {
             var ids = seed("migration", 1, 1);
             behavior(ids.getFirst(), "UNKNOWN");
@@ -81,12 +81,21 @@ class DaikinBatchMysqlAcceptanceTest {
             var oldRows = new LinkedHashMap<String,List<Map<String,Object>>>();
             for (String table : CONTROL_TABLES) oldRows.put(table, db.queryForList("SELECT * FROM " + table));
             var history = db.queryForList("SELECT version,checksum,success FROM flyway_schema_history ORDER BY installed_rank");
+            var v70 = Flyway.configure().dataSource(db.getDataSource()).locations("filesystem:src/env/init").target("70").load();
+            assertThat(v70.migrate().migrationsExecuted).isEqualTo(1);
+            db.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id) VALUES ('legacy',7,'legacy-batch',?,'ON_OFF','on',0,'mysql-migration')", "a".repeat(64));
+            db.update("INSERT INTO biz_daikin_control_batch_lane(controller_key,item_id,lease_token,lease_until) VALUES (?,'legacy-item','legacy-lease',1)", "b".repeat(64));
+            var oldLanes = db.queryForList("SELECT * FROM biz_daikin_control_batch_lane");
             var flyway = Flyway.configure().dataSource(db.getDataSource()).locations("filesystem:src/env/init").load();
             assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             for (String table : CONTROL_TABLES) assertThat(db.queryForList("SELECT * FROM " + table)).containsExactlyInAnyOrderElementsOf(oldRows.get(table));
-            assertThat(db.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version<>'70' ORDER BY installed_rank")).isEqualTo(history);
+            assertThat(db.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version NOT IN ('70','71') ORDER BY installed_rank")).isEqualTo(history);
+            assertThat(db.queryForList("SELECT * FROM biz_daikin_control_batch_lane")).isEqualTo(oldLanes);
+            assertThat(db.queryForObject("SELECT overlap_allowed FROM biz_daikin_control_batch WHERE batch_id='legacy'", Boolean.class)).isFalse();
+            db.update("DELETE FROM biz_daikin_control_batch_lane WHERE item_id='legacy-item'");
+            db.update("DELETE FROM biz_daikin_control_batch WHERE batch_id='legacy'");
             assertThat(db.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('biz_daikin_control_preview','biz_daikin_control_batch','biz_daikin_control_batch_item','biz_daikin_control_batch_lane','biz_daikin_control_batch_gate')", Integer.class)).isEqualTo(5);
             assertThat(count("biz_daikin_control_batch")).isZero();
             assertThat(count("biz_daikin_control_batch_item")).isZero();
@@ -290,6 +299,99 @@ class DaikinBatchMysqlAcceptanceTest {
         }
     }
 
+    @Test @Order(9) void twoJvmsAllowOnlyTwoAcceptedSwitchesAndRecoverBothTimeouts() throws Exception {
+        try (var f = new Harness()) {
+            var ids = seed("overlap", 3, 3);
+            for (String id : ids) behavior(id, "NO_APPLY");
+            var batch = submit(f, ids, Action.ON_OFF, "on", "overlap-two-jvm");
+            var first = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4); f.batches.dispatch(first);
+            int before = count("acceptance_daikin_send");
+            compete("dispatch-only", batch.batchId(), "dispatch-only", batch.batchId(), 0, 0);
+            assertThat(count("acceptance_daikin_send") - before).isEqualTo(1);
+            var current = f.batches.get(USER, batch.batchId());
+            assertThat(current.activeCount()).isEqualTo(2); assertThat(current.queuedCount()).isEqualTo(1);
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_controller_slot s JOIN biz_daikin_control_operation o ON o.operation_id=s.operation_id WHERE o.source_id='overlap'", Integer.class)).isEqualTo(2);
+            assertThat(f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4)).isNull();
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_operation WHERE source_id='overlap' AND status='ACCEPTED'", Integer.class)).isEqualTo(2);
+            db.update("UPDATE biz_daikin_control_operation SET deadline_at=?,next_check_at=0,lease_until=0 WHERE source_id='overlap'", System.currentTimeMillis()-1);
+            f.controls.reconcile(); f.store.synchronize(Clock.systemUTC());
+            var recovery = new DaikinControlRecoveryService(f.access, f.controlStore, f.policy, List.of(f.gateway), Clock.systemUTC());
+            for (var item : f.batches.get(USER, batch.batchId()).items()) if (item.operationId()!=null) {
+                assertThat(item.status()).isEqualTo(ItemStatus.UNCONFIRMED);
+                recovery.continueCurrent(USER, item.operationId(), new Close("按当前隔离替身读值逐台恢复"), "mysql-overlap");
+            }
+            for (int i=0;i<3;i++) round(f);
+            assertThat(count("acceptance_daikin_send") - before).isEqualTo(1);
+            assertThat(f.batches.get(USER, batch.batchId()).items()).anyMatch(i -> i.status()==ItemStatus.NOT_SENT);
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_controller_slot s JOIN biz_daikin_control_operation o ON o.operation_id=s.operation_id WHERE o.source_id='overlap'", Integer.class)).isZero();
+            System.out.println("MYSQL_BATCH_OVERLAP_TWO_JVM_AND_RECOVERY_OK");
+        }
+    }
+
+    @Test @Order(10) void crashedSecondSendDoesNotReplayAndFirstStillCompletes() throws Exception {
+        try (var f = new Harness()) {
+            var ids = seed("overlap-crash", 3, 3);
+            for (String id : ids) behavior(id, "NO_APPLY");
+            var batch = submit(f, ids, Action.ON_OFF, "on", "overlap-crash-request");
+            var first = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4); f.batches.dispatch(first);
+            var second = candidate(batch.batchId()); behavior(second.item().equipmentId(), "CRASH");
+            int before = count("acceptance_daikin_send");
+            runOne("crash-after", batch.batchId(), 19);
+            expireClaims(batch.batchId()); f.store.synchronize(Clock.systemUTC());
+            db.update("UPDATE acceptance_daikin_unit SET unit_json=JSON_SET(unit_json,'$.onOff','on','$.unitStatus','operating') WHERE equipment_id=?", first.item().equipmentId());
+            forceReadbackDue(); f.controls.reconcile(); f.store.synchronize(Clock.systemUTC());
+            for (int i=0;i<3;i++) round(f);
+            assertThat(count("acceptance_daikin_send") - before).isEqualTo(1);
+            var result = f.batches.get(USER, batch.batchId());
+            assertThat(result.items()).anyMatch(i -> i.equipmentId().equals(first.item().equipmentId()) && i.status()==ItemStatus.MATCHED);
+            assertThat(result.items()).anyMatch(i -> i.status()==ItemStatus.UNCONFIRMED);
+            assertThat(result.items()).anyMatch(i -> i.status()==ItemStatus.NOT_SENT);
+            System.out.println("MYSQL_BATCH_OVERLAP_CRASH_NO_REPLAY_OK");
+        }
+    }
+
+    @Test @Order(11) void secondSlotAndOperationRollBackTogetherOnAuditFailure() throws Exception {
+        try (var f = new Harness()) {
+            var ids = seed("overlap-rollback", 2, 2);
+            for (String id : ids) behavior(id, "NO_APPLY");
+            var batch = submit(f, ids, Action.ON_OFF, "on", "overlap-audit-rollback");
+            var first = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4); f.batches.dispatch(first);
+            var second = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4);
+            int before = count("acceptance_daikin_send"); failAudit();
+            try { assertThatThrownBy(() -> f.batches.dispatch(second)).isInstanceOf(RuntimeException.class); }
+            finally { db.execute("DROP TRIGGER acceptance_fail_audit"); }
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_operation WHERE source_id='overlap-rollback'", Integer.class)).isEqualTo(1);
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_controller_slot s JOIN biz_daikin_control_operation o ON o.operation_id=s.operation_id WHERE o.source_id='overlap-rollback'", Integer.class)).isEqualTo(1);
+            assertThat(count("acceptance_daikin_send")).isEqualTo(before);
+            expireClaims(batch.batchId()); f.store.synchronize(Clock.systemUTC());
+            db.update("UPDATE acceptance_daikin_unit SET unit_json=JSON_SET(unit_json,'$.onOff','on','$.unitStatus','operating') WHERE equipment_id=?", first.item().equipmentId());
+            forceReadbackDue(); f.controls.reconcile(); f.store.synchronize(Clock.systemUTC());
+            assertThat(f.batches.get(USER, batch.batchId()).items()).anyMatch(i -> i.status()==ItemStatus.NOT_SENT);
+            assertThat(count("acceptance_daikin_send")).isEqualTo(before);
+            System.out.println("MYSQL_BATCH_OVERLAP_SECOND_SLOT_ROLLBACK_OK");
+        }
+    }
+
+    @Test @Order(12) void closingAnUnknownPeerCannotReviveAnUnsentClaim() throws Exception {
+        try (var f = new Harness()) {
+            var ids = seed("overlap-closed", 2, 2);
+            for (String id : ids) behavior(id, "NO_APPLY");
+            var batch = submit(f, ids, Action.ON_OFF, "on", "overlap-closed-request");
+            var first = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4); f.batches.dispatch(first);
+            var second = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4);
+            String operation = claimedOperation(first.item().equipmentId());
+            f.controlStore.transition(operation, Set.of(Status.ACCEPTED), Status.UNKNOWN, "SEND_RESULT_UNKNOWN",
+                    null, "off", null, null, 0, System.currentTimeMillis());
+            var recovery = new DaikinControlRecoveryService(f.access, f.controlStore, f.policy, List.of(f.gateway), Clock.systemUTC());
+            recovery.continueCurrent(USER, operation, new Close("按当前状态结束旧未知操作"), "mysql-closed");
+            int before = count("acceptance_daikin_send"); f.batches.dispatch(second);
+            assertThat(count("acceptance_daikin_send")).isEqualTo(before);
+            assertThat(f.store.work(second.item().itemId()).item().status()).isEqualTo(ItemStatus.NOT_SENT);
+            assertThat(f.store.work(second.item().itemId()).item().operationId()).isNull();
+            System.out.println("MYSQL_BATCH_OVERLAP_RECOVERY_STOPS_UNSENT_CLAIM_OK");
+        }
+    }
+
     private static List<String> seed(String prefix,int count,int perController) throws Exception {
         db.update("INSERT INTO biz_daikin_source(source_id,source_name,registered_by) VALUES (?,?,7)",prefix,"隔离模拟来源"+prefix);
         db.update("INSERT INTO biz_daikin_project_mapping(source_id,site_id,building_id,mapping_version,mapped_by,mapped_at) VALUES (?,'site','BLD001_ACCEPT',1,7,CURRENT_TIMESTAMP(3))",prefix);
@@ -451,6 +553,12 @@ class DaikinBatchMysqlAcceptanceTest {
                 case "cancel" -> f.batches.cancel(USER,payload);
                 case "claim" -> {
                     for(var w:f.store.candidates()) if(w.batchId().equals(payload)) f.store.claim(w,Clock.systemUTC(),4);
+                }
+                case "dispatch-only" -> {
+                    for(var w:f.store.candidates()) if(w.batchId().equals(payload)) {
+                        var claimed=f.store.claim(w,Clock.systemUTC(),4);
+                        if(claimed!=null) f.batches.dispatch(claimed);
+                    }
                 }
                 case "drain" -> drain(f,payload);
                 case "crash-before", "crash-after" -> {
