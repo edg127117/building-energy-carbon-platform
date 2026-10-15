@@ -63,6 +63,43 @@ class DaikinMonitoringStateServiceTest {
     }
 
     @Test
+    void fastChangesWithinMinuteAreAtomicDistinctAndDoNotEraseUnreadFieldsOrAdvanceMinuteRound() {
+        service.observe(target, NOW, observation(NOW+1000,Map.of("onOff",value("off"),"mode",value("cooling"))));
+        service.observeFast(target,observation(NOW+5000,Map.of("onOff",value("on"))));
+        service.observeFast(target,observation(NOW+10000,Map.of("onOff",value("off"))));
+        service.observeFast(target,observation(NOW+10000,Map.of("onOff",value("off"))));
+        assertThat(current("onOff").get("NORMALIZED_VALUE")).isEqualTo("off");
+        assertThat(current("mode").get("FIELD_STATUS")).isEqualTo("PRESENT");
+        assertThat(current("mode").get("LAST_VALID_AT_MS")).isEqualTo(NOW+1000);
+        assertThat(count("biz_daikin_state_event")).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT last_round_id FROM biz_daikin_monitoring_target",Long.class)).isEqualTo(NOW);
+        assertThat(jdbc.queryForObject("SELECT SUM(on_ms) FROM biz_daikin_observed_runtime_day",Long.class)).isEqualTo(5000);
+    }
+
+    @Test
+    void delayedMinuteAndFastResponsesCannotOverwriteNewerFastStateButNextMinuteCan() {
+        service.observe(target,NOW,observation(NOW+1000,Map.of("onOff",value("off"))));
+        service.observeFast(target,observation(NOW+10000,Map.of("onOff",value("on"))));
+        service.observe(target,NOW,observation(NOW+20000,Map.of("onOff",value("off"))));
+        service.observeFast(target,observation(NOW+5000,Map.of("onOff",value("off"))));
+        assertThat(current("onOff").get("NORMALIZED_VALUE")).isEqualTo("on");
+        service.observe(target,NOW+60000,observation(NOW+61000,Map.of("onOff",value("off"))));
+        assertThat(current("onOff").get("NORMALIZED_VALUE")).isEqualTo("off");
+        assertThat(count("biz_daikin_state_event")).isEqualTo(2);
+    }
+
+    @Test
+    void eventFailureRollsBackFastCurrentAndRuntimeTogether() {
+        service.observe(target,NOW,observation(NOW+1000,Map.of("onOff",value("off"))));
+        jdbc.execute("ALTER TABLE biz_daikin_state_event ADD CONSTRAINT reject_fast_events CHECK (round_id>=0)");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.observeFast(target,
+                observation(NOW+5000,Map.of("onOff",value("on"))))).isInstanceOf(RuntimeException.class);
+        assertThat(current("onOff").get("NORMALIZED_VALUE")).isEqualTo("off");
+        assertThat(current("onOff").get("LAST_VALID_AT_MS")).isEqualTo(NOW+1000);
+        assertThat(count("biz_daikin_observed_runtime_day")).isZero();
+    }
+
+    @Test
     void delayedPersistenceDoesNotRecoverAnAlreadyStaleDevice() {
         clock.set(NOW + 600000);
         service.scanStale(clock.millis(), 10);

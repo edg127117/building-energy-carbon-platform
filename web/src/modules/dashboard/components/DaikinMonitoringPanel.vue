@@ -360,11 +360,6 @@ function selectQuickStatus(status: DaikinQuickStatus) {
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
 let telemetrySeq = 0
-let controlRefreshTimer: ReturnType<typeof setTimeout> | undefined
-let controlRefreshOperation: HvacControlOperation | null = null
-let controlRefreshPass = 0
-const CONTROL_MONITOR_REFRESH_INTERVAL = 5_000
-const CONTROL_MONITOR_REFRESH_RETRIES = 12
 
 async function hydrateCardTelemetry(items: DaikinDevice[]) {
   const seq = ++telemetrySeq
@@ -422,10 +417,8 @@ function refresh() {
 
 function refreshAfterControl(operation: HvacControlOperation) {
   if (operation.equipmentId !== selected.value) return
-  stopControlRefresh()
-  controlRefreshOperation = operation
-  controlRefreshPass = 0
-  void refreshControlMonitoring(operation)
+  // 这里只重读一次平台数据；后续由详情关注和服务端三分钟跟踪持续获取真实状态。
+  void load(undefined, true)
 }
 
 function refreshAfterBatch(batch: HvacControlBatch) {
@@ -434,31 +427,6 @@ function refreshAfterBatch(batch: HvacControlBatch) {
   void load(undefined, true)
   refreshTick.value++
 }
-
-function stopControlRefresh() {
-  clearTimeout(controlRefreshTimer)
-  controlRefreshTimer = undefined
-  controlRefreshOperation = null
-}
-
-async function refreshControlMonitoring(operation: HvacControlOperation) {
-  controlRefreshPass++
-  await load(undefined, true)
-  if (disposed || controlRefreshOperation !== operation || selected.value !== operation.equipmentId) return
-  const monitoredAt = devices.data.value?.items.find(item => item.equipmentId === operation.equipmentId)?.lastValidAt
-  // 控制回读与分钟采集独立：最多追加 12 次只读重查，不用目标值填充旧监测，也不阻塞下一次人工操作。
-  if (!devices.error.value && (operation.lastReadAt == null || (monitoredAt != null && monitoredAt >= operation.lastReadAt))) {
-    monitorRefreshTick.value++
-    stopControlRefresh()
-  } else if (controlRefreshPass <= CONTROL_MONITOR_REFRESH_RETRIES) {
-    controlRefreshTimer = setTimeout(() => { void refreshControlMonitoring(operation) }, CONTROL_MONITOR_REFRESH_INTERVAL)
-  } else {
-    monitorRefreshTick.value++
-    stopControlRefresh()
-  }
-}
-
-watch([building, selected], stopControlRefresh)
 
 watch(building, () => {
   clearBatchSelection()
@@ -502,7 +470,6 @@ onMounted(async () => {
 onUnmounted(() => {
   disposed = true
   clearInterval(timer)
-  stopControlRefresh()
 })
 </script>
 

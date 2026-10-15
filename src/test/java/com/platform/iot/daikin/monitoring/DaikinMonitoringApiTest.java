@@ -22,6 +22,12 @@ class DaikinMonitoringApiTest {
 
     @Test
     void anonymousCannotReadMonitoringOrTemperature() throws Exception {
+        mvc.perform(post("/v1/hvac-monitoring/devices/missing/fast-watch")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"watchId\":\"watch-one\"}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.errorCode").value("DAIKIN_MONITORING_UNAUTHORIZED"));
+        mvc.perform(delete("/v1/hvac-monitoring/devices/missing/fast-watch?watchId=watch-one"))
+                .andExpect(status().isUnauthorized());
         for (String path : new String[] {"/v1/hvac-monitoring/buildings/BLD001/devices",
                 "/v1/hvac-monitoring/devices/missing/temperatures/current?field=roomTemp",
                 "/v1/hvac-monitoring/devices/missing/observed-runtime",
@@ -47,6 +53,8 @@ class DaikinMonitoringApiTest {
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/runtime").has("post")).isFalse();
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/observed-runtime").has("get")).isTrue();
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/observed-runtime").has("post")).isFalse();
+        assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/fast-watch").has("post")).isTrue();
+        assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/fast-watch").has("delete")).isTrue();
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/runtime/{valueId}/revisions").has("get")).isTrue();
     }
 }
