@@ -1,5 +1,5 @@
 export default {
-  title: '空调监测', inherited: '冷站监测', notice: '每分钟刷新平台状态；未接入或尚未采集时显示无数据。',
+  title: '空调监测', inherited: '冷站监测', notice: '页面可见时每10秒刷新平台状态，温度每分钟刷新；未接入或尚未采集时显示无数据。',
   space: '空间', FRESH: '有效', STALE: '数据过期', NO_OBSERVATION: '尚无观测', INACTIVE: '接入停用', exceptionFilter: '异常', withException: '有异常', withoutException: '无异常', sourceException: '来源级异常', searchDevice: '设备搜索', searchPlaceholder: '输入设备名称或编号', building: '建筑', equipment: '设备标识', kind: '设备种类', all: '全部', INDOOR: '内机', OUTDOOR: '外机',
   state: '当前状态', mode: '运行模式', onOff: '启停状态', fresh: '最近有效观测', stale: '数据过期', normal: '有效',
   exception: '存在异常', none: '暂无已接入的空调设备', detail: '查看监测', field: '字段', value: '最近有效值',

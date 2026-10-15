@@ -20,6 +20,7 @@ import { useDaikinResource } from '../composables/use-daikin-resource'
 import { useDaikinFastWatch } from '../composables/use-daikin-fast-watch'
 import HvacControlPanel from './HvacControlPanel.vue'
 import type { HvacControlOperation } from '../models/hvac-control'
+import type { DeviceCurrent } from '../models/daikin'
 
 const props = withDefaults(defineProps<{
   equipmentId: string
@@ -38,7 +39,7 @@ const props = withDefaults(defineProps<{
   visible: true,
   monitorRefreshTick: 0,
 })
-const emit = defineEmits<{ close: []; controlCompleted: [operation: HvacControlOperation] }>()
+const emit = defineEmits<{ close: []; controlCompleted: [operation: HvacControlOperation]; stateRefreshed: [current: DeviceCurrent] }>()
 
 const text = (key: string) => t(`dashboard.daikin.${key}`)
 const date = (value: number | null) => value == null ? t('common.missing') : formatDateTime(value)
@@ -81,7 +82,11 @@ function resetDetailResources() {
 }
 
 async function refreshFastWatch(equipmentId: string) {
-  const reads = [current.run(() => daikinApi.current(equipmentId), true)]
+  const reads = [current.run(() => daikinApi.current(equipmentId), true).then(() => {
+    const snapshot = current.data.value
+    if (equipmentId === props.equipmentId && props.visible && !document.hidden
+      && snapshot?.equipmentId === equipmentId && !current.error.value) emit('stateRefreshed', snapshot)
+  })]
   // 事件页只重读用户所在游标，静默刷新不重置翻页栈或显示加载占位。
   if (tab.value === 'events' && !events.loading.value) {
     reads.push(events.run(() => daikinApi.events(equipmentId, currentEventCursor.value), true))
