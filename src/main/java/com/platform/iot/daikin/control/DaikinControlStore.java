@@ -68,6 +68,108 @@ public class DaikinControlStore {
                 this::map, target.sourceId()).stream().anyMatch(row -> java.util.Objects.equals(row.target().controllerId(), target.controllerId()));
     }
 
+    private record BatchMember(String batchId, long user, Action action, String value, String equipment,
+                               String status, boolean overlap, String relationship, String impacts) { }
+
+    private BatchMember batchMember(String itemId) {
+        var rows = jdbc.query("""
+                SELECT i.*,b.operator_id,b.action,b.requested_value,b.overlap_allowed
+                FROM biz_daikin_control_batch_item i JOIN biz_daikin_control_batch b ON b.batch_id=i.batch_id
+                WHERE i.item_id=?
+                """, (rs, n) -> new BatchMember(rs.getString("batch_id"), rs.getLong("operator_id"),
+                Action.valueOf(rs.getString("action")), rs.getString("requested_value"), rs.getString("equipment_id"),
+                rs.getString("status"), rs.getBoolean("overlap_allowed"), rs.getString("relationship_hash"),
+                rs.getString("impacted_targets_json")), itemId);
+        return rows.size() == 1 ? rows.getFirst() : null;
+    }
+
+    private boolean independentSwitch(BatchMember member) {
+        if (member == null || !member.overlap() || member.action() != Action.ON_OFF
+                || !Set.of("on", "off").contains(member.value()) || member.relationship() == null) return false;
+        try { var impacts = member.impacts() == null ? null : json.readTree(member.impacts());
+            return impacts != null && impacts.isArray() && impacts.isEmpty(); }
+        catch (JsonProcessingException e) { return false; }
+    }
+
+    /** 来源锁下检查持久化槽；仅同批同值、无联动且已明确受理的一台可以与候选共同等待回读。 */
+    boolean canDispatchBatch(DaikinControlAccess.Target target, String itemId, long now) {
+        var member = batchMember(itemId);
+        if (member == null || !member.equipment().equals(target.equipmentId())) return false;
+        if (jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_daikin_control_controller_slot s
+                WHERE s.controller_key=? AND NOT EXISTS
+                  (SELECT 1 FROM biz_daikin_control_operation o WHERE o.operation_id=s.operation_id)
+                """, Integer.class, target.controllerKey()) > 0) return false;
+        var occupied = jdbc.query("""
+                SELECT o.* FROM biz_daikin_control_operation o WHERE o.source_id=?
+                AND NOT (o.operator_id=? AND o.idempotency_key=?)
+                AND (EXISTS (SELECT 1 FROM biz_daikin_control_slot s WHERE s.operation_id=o.operation_id)
+                  OR EXISTS (SELECT 1 FROM biz_daikin_control_controller_slot c WHERE c.operation_id=o.operation_id))
+                ORDER BY o.operation_id
+                """, this::map, target.sourceId(), member.user(), "batch-" + itemId).stream()
+                .filter(row -> row.target().controllerId().equals(target.controllerId()))
+                .toList();
+        var lanes = jdbc.queryForList("""
+                SELECT l.item_id FROM biz_daikin_control_batch_lane l
+                LEFT JOIN biz_daikin_control_batch_item i ON i.item_id=l.item_id
+                LEFT JOIN biz_daikin_control_operation o ON o.operation_id=i.operation_id
+                WHERE l.controller_key=? AND l.item_id<>?
+                  AND (o.status IS NULL OR o.status NOT IN ('CLOUD_VERIFIED','REJECTED','NOT_SENT'))
+                """, String.class, target.controllerKey(), itemId);
+        if (occupied.isEmpty()) return lanes.isEmpty();
+        if (occupied.size() != 1 || !independentSwitch(member)) return false;
+        var peer = occupied.getFirst();
+        if (!DaikinControlPolicy.isFastBaseline(peer.baseline())) return false;
+        // 仅锁定可共享的快速操作；旧策略的限流转换可能反向获取来源锁，不在这里锁旧操作。
+        peer = jdbc.query("SELECT * FROM biz_daikin_control_operation WHERE operation_id=? FOR UPDATE",
+                this::map, peer.view().operationId()).getFirst();
+        // 回读完成和批次租约清理分属事务；已原子释放的同伴不应让第二台的发送意图误失败。
+        if (Set.of(Status.CLOUD_VERIFIED, Status.REJECTED, Status.NOT_SENT).contains(peer.view().status())) {
+            var finishedItems = jdbc.queryForList("SELECT item_id FROM biz_daikin_control_batch_item WHERE operation_id=?",
+                    String.class, peer.view().operationId());
+            return lanes.stream().allMatch(finishedItems::contains);
+        }
+        if (peer.view().status() != Status.ACCEPTED || !"10000".equals(peer.view().vendorCode())
+                || !DaikinControlPolicy.isFastBaseline(peer.baseline()) || peer.view().action() != Action.ON_OFF
+                || !peer.view().value().equals(member.value()) || peer.userId() != member.user()
+                || peer.view().equipmentId().equals(target.equipmentId())
+                || peer.view().deadlineAt() == null || now >= peer.view().deadlineAt()) return false;
+        String key = jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",
+                String.class, peer.view().operationId());
+        if (!key.startsWith("batch-")) return false;
+        String peerItem = key.substring("batch-".length());
+        var other = batchMember(peerItem);
+        return independentSwitch(other) && other.batchId().equals(member.batchId()) && "ACTIVE".equals(other.status())
+                && other.equipment().equals(peer.view().equipmentId()) && other.value().equals(member.value())
+                && other.user() == member.user() && lanes.size() <= 1 && lanes.stream().allMatch(peerItem::equals);
+    }
+
+    private boolean recoverableBatchPeers(Row row) {
+        String key = jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",
+                String.class, row.view().operationId());
+        if (key == null || !key.startsWith("batch-")) return false;
+        var member = batchMember(key.substring("batch-".length()));
+        if (!independentSwitch(member) || member.user() != row.userId() || !member.equipment().equals(row.view().equipmentId())
+                || !member.value().equals(row.view().value()) || row.view().action() != Action.ON_OFF
+                || !DaikinControlPolicy.isFastBaseline(row.baseline())) return false;
+        var peers = jdbc.query("""
+                SELECT o.* FROM biz_daikin_control_operation o JOIN biz_daikin_control_controller_slot s ON s.operation_id=o.operation_id
+                WHERE s.controller_key=? AND o.operation_id<>? ORDER BY o.operation_id FOR UPDATE
+                """, this::map, row.target().controllerKey(), row.view().operationId());
+        if (peers.size() != 1) return false;
+        var peer = peers.getFirst();
+        if (!Set.of(Status.UNKNOWN, Status.UNCONFIRMED, Status.CLOSED, Status.OBSERVED_STABLE).contains(peer.view().status())) return false;
+        String peerKey = jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",
+                String.class, peer.view().operationId());
+        if (peerKey == null || !peerKey.startsWith("batch-")) return false;
+        var other = batchMember(peerKey.substring("batch-".length()));
+        // 两台均已结束自动核验时允许逐台只读恢复，避免互持槽导致无法处理；仍有执行中同伴则拒绝。
+        return independentSwitch(other) && other.batchId().equals(member.batchId()) && other.user() == member.user()
+                && other.value().equals(member.value()) && peer.view().action() == Action.ON_OFF
+                && other.equipment().equals(peer.view().equipmentId()) && DaikinControlPolicy.isFastBaseline(peer.baseline())
+                && peer.view().value().equals(member.value()) && peer.userId() == member.user();
+    }
+
     public Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now) {
         return reserve(user, target, request, hash, trace, now, false);
     }
@@ -77,6 +179,11 @@ public class DaikinControlStore {
     }
 
     Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now, boolean fast, Runnable dispatchGuard) {
+        return reserve(user, target, request, hash, trace, now, fast, dispatchGuard, null);
+    }
+
+    Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now,
+                        boolean fast, Runnable dispatchGuard, String batchItemId) {
         return tx.execute(status -> {
             // 来源行串行化占用创建；物理键唯一约束继续防止两条平台身份控制同一厂家 URL。
             jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE", target.sourceId());
@@ -86,7 +193,15 @@ public class DaikinControlStore {
             if (active(target.equipmentId()) != null || jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot WHERE physical_key=?",
                     Integer.class, target.physicalKey()) > 0) throw error(409, "BUSY");
             // 同一来源行锁跨实例有效；同时检查历史占用，避免升级前尚未建立控制器槽的记录漏过隔离。
-            if (controllerBusy(target)) throw error(409, "CONTROLLER_BUSY");
+            if (batchItemId == null || !fast) {
+                if (controllerBusy(target)) throw error(409, "CONTROLLER_BUSY");
+            } else {
+                var member = batchMember(batchItemId);
+                if (member == null || member.user() != user || member.action() != request.action()
+                        || !member.value().equals(request.value()) || !request.idempotencyKey().equals("batch-" + batchItemId)
+                        || !"DISPATCHING".equals(member.status()) || !canDispatchBatch(target, batchItemId, now))
+                    throw error(409, "CONTROLLER_BUSY");
+            }
             if (!fast) requireSourceReady(target.sourceId(), now);
             String id = id();
             jdbc.update("""
@@ -438,7 +553,8 @@ public class DaikinControlStore {
         if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot WHERE physical_key=? AND operation_id=?",
                 Integer.class,identity.physicalKey(),row.view().operationId())!=1) throw error(409,"REVISION_CHANGED");
         if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_controller_slot WHERE controller_key=? AND operation_id<>?",
-                Integer.class,identity.controllerKey(),row.view().operationId())>0) throw error(409,"CONTROLLER_BUSY");
+                Integer.class,identity.controllerKey(),row.view().operationId())>0
+                && !(simple && recoverableBatchPeers(row))) throw error(409,"CONTROLLER_BUSY");
         if (!simple) requireSourceReady(identity.sourceId(),now);
         return row;
     }

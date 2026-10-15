@@ -115,7 +115,8 @@ public class DaikinBatchService {
             boolean affectsOthers=preview.items().stream().filter(p->supports(p,request)).anyMatch(p->p.view().impactedEquipmentIds().stream().anyMatch(e->!selected.contains(e)));
             if(affectsOthers && !request.confirmLinkedImpact()) throw error(409,"LINKED_CONFIRMATION_REQUIRED");
         }
-        String id=store.create(user,request,hash,preview,trace,clock,access,policy);
+        String id=store.create(user,request,hash,preview,trace,clock,access,policy,
+                access.testOpenControls() && request.action()==Action.ON_OFF);
         return get(user,id);
     }
     public Batch get(long user,String id) { return store.get(user,id,access,clock.millis()); }
@@ -148,7 +149,7 @@ public class DaikinBatchService {
             access.requireControl(work.user(),work.item().equipmentId());
             if(!work.target().equals(access.target(work.item().equipmentId()))) throw error(409,"REVISION_CHANGED");
             var operation=controls.submitBatch(work.user(),work.item().equipmentId(),new Submit(work.action(),work.value(),work.operationKey(),work.revision()),
-                    work.trace(),work.relationshipHash(),()->{store.requireDispatch(work,clock); requireTargets(work);});
+                    work.trace(),work.relationshipHash(),()->{store.requireDispatch(work,clock); requireTargets(work);},work.item().itemId());
             store.dispatched(work,operation,clock);
         } catch(RuntimeException e) {
             store.failDispatch(work,e instanceof BusinessException business?DaikinBatchStore.reason(business):"DISPATCH_RESULT_UNAVAILABLE",clock);

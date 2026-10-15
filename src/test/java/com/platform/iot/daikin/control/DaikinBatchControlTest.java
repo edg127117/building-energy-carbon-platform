@@ -25,7 +25,7 @@ class DaikinBatchControlTest {
     static class Fixture implements AutoCloseable {
         final ControlFixture f;
         final Map<String,ObjectNode> units=new ConcurrentHashMap<>();
-        final Set<String> unknown=ConcurrentHashMap.newKeySet(),reject=ConcurrentHashMap.newKeySet(),noApply=ConcurrentHashMap.newKeySet(),delayedRun=ConcurrentHashMap.newKeySet();
+        final Set<String> unknown=ConcurrentHashMap.newKeySet(),reject=ConcurrentHashMap.newKeySet(),noApply=ConcurrentHashMap.newKeySet(),delayedRun=ConcurrentHashMap.newKeySet(),readFailure=ConcurrentHashMap.newKeySet();
         final AtomicInteger sends=new AtomicInteger(),reads=new AtomicInteger();
         final DaikinControlService controls;
         final DaikinBatchStore store;
@@ -37,8 +37,12 @@ class DaikinBatchControlTest {
             f.jdbc.execute("ALTER TABLE biz_equipment ADD equip_name VARCHAR(100)");
             f.jdbc.execute("ALTER TABLE biz_equipment ADD equip_code VARCHAR(100)");
             f.jdbc.update("DELETE FROM biz_daikin_control_grant");
-            String sql=Files.readString(Path.of("src/env/init/V70__mysql_daikin_batch_control.sql"))
+            String sql=(Files.readString(Path.of("src/env/init/V70__mysql_daikin_batch_control.sql"))
+                    + Files.readString(Path.of("src/env/init/V71__mysql_daikin_batch_overlap.sql")))
                     .replace(" COLLATE utf8mb4_bin","").replace(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4","");
+            // MySQL 原子替换主键；H2 只拆分 DDL，真实迁移另由隔离 MySQL 执行。
+            for (String table : List.of("biz_daikin_control_controller_slot", "biz_daikin_control_batch_lane"))
+                sql = sql.replace("ALTER TABLE " + table + "\n DROP PRIMARY KEY,", "ALTER TABLE " + table + " DROP PRIMARY KEY;\nALTER TABLE " + table);
             try(var c=f.jdbc.getDataSource().getConnection()) { ScriptUtils.executeSqlScript(c,new ByteArrayResource(sql.getBytes(StandardCharsets.UTF_8))); }
             for(int i=0;i<count;i++) {
                 String id=device(i),vendor="v"+i,unit="u"+i,controller="c"+(i/perController);
@@ -54,6 +58,7 @@ class DaikinBatchControlTest {
                 public Snapshot read(DaikinControlAccess.Target target) {
                     reads.incrementAndGet();
                     onRead.run();
+                    if(readFailure.contains(target.equipmentId())) throw new IllegalStateException("模拟状态读取失败");
                     return new Snapshot(f.gateway.controller.deepCopy().put("lcNo",target.controllerId()),units.get(target.equipmentId()).deepCopy());
                 }
                 public Reply send(DaikinControlAccess.Target target,Action action,String value) {

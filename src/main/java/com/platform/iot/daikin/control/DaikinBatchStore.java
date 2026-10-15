@@ -58,7 +58,7 @@ public class DaikinBatchStore {
     }
 
     String create(long user, SubmitBatch request, String hash, SavedPreview preview, String trace, Clock clock,
-                  DaikinControlAccess access, DaikinControlPolicy policy) {
+                  DaikinControlAccess access, DaikinControlPolicy policy, boolean overlap) {
         return tx.execute(status -> {
             // 用户行串行化重复提交，来源锁与单台占用一致；整个批次和所有取消/替换审计一起回滚。
             jdbc.queryForList("SELECT id FROM sys_user WHERE id=? FOR UPDATE",user);
@@ -77,8 +77,8 @@ public class DaikinBatchStore {
                 }
             }
             String batch=id();
-            jdbc.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id) VALUES(?,?,?,?,?,?,?,?)",
-                    batch,user,request.idempotencyKey(),hash,request.action().name(),request.value(),now,trace);
+            jdbc.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id,overlap_allowed) VALUES(?,?,?,?,?,?,?,?,?)",
+                    batch,user,request.idempotencyKey(),hash,request.action().name(),request.value(),now,trace,overlap);
             for(var p:preview.items()) {
                 ItemStatus next=ItemStatus.QUEUED; String reason=p.view().reasonCode();
                 if(p.target()==null || reason!=null) next=ItemStatus.UNSUPPORTED;
@@ -168,14 +168,11 @@ public class DaikinBatchStore {
             Work current=lock(candidate.item().itemId());
             if(current.item().status()!=ItemStatus.QUEUED) return null;
             // 恢复可能发生在两次扫描之间；槽已释放也不能让异常之前的旧排队项漏过停止边界。
-            var closed=jdbc.queryForList("SELECT target_json FROM biz_daikin_control_operation WHERE source_id=? AND status='CLOSED' AND updated_at>=?",
-                    String.class,current.target().sourceId(),current.item().createdAt());
-            if(closed.stream().map(s->decode(s,DaikinControlAccess.Target.class)).anyMatch(t->t.controllerKey().equals(current.target().controllerKey()))) {
+            if(closedAfterCreation(current)) {
                 finish(current,ItemStatus.NOT_SENT,"PREVIOUS_UNKNOWN_OPERATION",null,clock.millis());
                 return null;
             }
-            if(controls.controllerBusy(current.target())) return null;
-            if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane WHERE controller_key=?",Integer.class,current.target().controllerKey())>0) return null;
+            if(!controls.canDispatchBatch(current.target(),current.item().itemId(),clock.millis())) return null;
             String token=id(); long now=clock.millis();
             jdbc.update("INSERT INTO biz_daikin_control_batch_lane(controller_key,item_id,lease_token,lease_until) VALUES(?,?,?,?)",
                     current.target().controllerKey(),current.item().itemId(),token,now+120_000);
@@ -188,9 +185,20 @@ public class DaikinBatchStore {
 
     /** 在 reserve/markSending 的事务中锁定领取项；防止旧线程在租约恢复之后继续发送。 */
     void requireDispatch(Work expected,Clock clock) {
+        jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE",expected.target().sourceId());
         var current=lock(expected.item().itemId());
         if(current.item().status()!=ItemStatus.DISPATCHING || !Objects.equals(expected.token(),current.token()) || current.leaseUntil()<=clock.millis())
             throw error(409,"DISPATCH_EXPIRED");
+        if(closedAfterCreation(current)) throw error(409,"CONTROLLER_RESULT_UNCONFIRMED");
+        // 领取后能力读取期间，另一台可能已变为未知；发送意图落库前必须再次检查同批占用。
+        if(!controls.canDispatchBatch(current.target(),current.item().itemId(),clock.millis())) throw error(409,"CONTROLLER_BUSY");
+    }
+
+    private boolean closedAfterCreation(Work work) {
+        var closed=jdbc.queryForList("SELECT target_json FROM biz_daikin_control_operation WHERE source_id=? AND status='CLOSED' AND updated_at>=?",
+                String.class,work.target().sourceId(),work.item().createdAt());
+        return closed.stream().map(s->decode(s,DaikinControlAccess.Target.class))
+                .anyMatch(t->t.controllerKey().equals(work.target().controllerKey()));
     }
 
     void dispatched(Work expected,Operation operation,Clock clock) {
