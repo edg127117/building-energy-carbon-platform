@@ -8,6 +8,10 @@ describe('manufacturer platform query contracts', () => {
     await daikinApi.devices('b', 2, 'INDOOR', '301', 'space', 'STALE', false)
     expect(requestApi).toHaveBeenLastCalledWith({method:'GET',url:'/v1/hvac-monitoring/buildings/b/devices',params:{page:2,size:20,kind:'INDOOR',keyword:'301',spaceId:'space',state:'STALE',hasException:false}})
   })
+  it('requests the complete bounded filter scope when batch selection needs every page', async () => {
+    await daikinApi.devices('b', 1, 'INDOOR', '301', 'space', '', undefined, 100)
+    expect(requestApi).toHaveBeenLastCalledWith({method:'GET',url:'/v1/hvac-monitoring/buildings/b/devices',params:{page:1,size:100,kind:'INDOOR',keyword:'301',spaceId:'space',state:undefined,hasException:undefined}})
+  })
   it('encodes device IDs and preserves history bounds and zero cursor', async () => {
     await daikinApi.history('a/b', 'roomTemp', 0, 100, 0)
     expect(requestApi).toHaveBeenLastCalledWith({ method: 'GET', url: '/v1/hvac-monitoring/devices/a%2Fb/temperatures', params: { field: 'roomTemp', from: 0, to: 100, after: 0, limit: 1000 } })

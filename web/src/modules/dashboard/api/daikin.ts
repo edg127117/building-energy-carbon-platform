@@ -5,7 +5,7 @@ const root = '/v1/hvac-monitoring'
 const device = (id: string) => `${root}/devices/${encodeURIComponent(id)}`
 /** 只查询平台存储；刷新和翻页不触发厂家同步或控制。 */
 export const daikinApi = {
-  devices: (building: string, page: number, kind?: string, keyword?: string, spaceId?: string, state?: string, hasException?: boolean) => requestApi<{ items: DaikinDevice[]; total: number }>({ method: 'GET', url: `${root}/buildings/${encodeURIComponent(building)}/devices`, params: { page, size: 20, kind: kind || undefined, keyword: keyword || undefined, spaceId: spaceId || undefined, state: state || undefined, hasException } }),
+  devices: (building: string, page: number, kind?: string, keyword?: string, spaceId?: string, state?: string, hasException?: boolean, size = 20) => requestApi<{ items: DaikinDevice[]; total: number }>({ method: 'GET', url: `${root}/buildings/${encodeURIComponent(building)}/devices`, params: { page, size, kind: kind || undefined, keyword: keyword || undefined, spaceId: spaceId || undefined, state: state || undefined, hasException } }),
   spaces: (building: string) => requestApi<Array<{ spaceId: string; spaceName: string }>>({ method: 'GET', url: `${root}/buildings/${encodeURIComponent(building)}/spaces` }),
   current: (id: string) => requestApi<DeviceCurrent>({ method: 'GET', url: `${device(id)}/current` }),
   events: (id: string, cursor?: string) => requestApi<CursorPage<StateEvent>>({ method: 'GET', url: `${device(id)}/state-events`, params: { cursor, limit: 50 } }),

@@ -29,6 +29,9 @@ class DaikinControlMigrationTest {
                 """, "a".repeat(64), "b".repeat(64), "c".repeat(64));
         jdbc.update("INSERT INTO biz_daikin_control_slot VALUES (?, 'old')", "a".repeat(64));
         execute(ds, "V69__mysql_daikin_control_stability.sql");
+        execute(ds, "V70__mysql_daikin_batch_control.sql");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT status FROM biz_daikin_control_operation WHERE operation_id='old'", String.class)).isEqualTo("UNKNOWN");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot", Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT cloud_stable FROM biz_daikin_control_operation", Boolean.class)).isFalse();

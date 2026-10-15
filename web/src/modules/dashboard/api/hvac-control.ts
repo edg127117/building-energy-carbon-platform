@@ -1,6 +1,10 @@
 import { requestApi } from '@/infrastructure/http/public'
 import type {
   HvacControlBuilding,
+  HvacControlBatch,
+  HvacControlBatchCommand,
+  HvacControlBatchPage,
+  HvacControlBatchPreview,
   HvacControlDeviceGrantAccess,
   HvacControlDeviceGrantBatchRequest,
   HvacControlDeviceGrantBatchResult,
@@ -20,6 +24,8 @@ const devicePath = (equipmentId: string) => `${root}/devices/${encodeURIComponen
 const operationPath = (operationId: string) => `${root}/operations/${encodeURIComponent(operationId)}`
 const DEVICE_GRANT_BATCH_TIMEOUT_MILLIS = 180_000
 const RECOVERY_READ_TIMEOUT_MILLIS = 30_000
+// 预检需有界地读取每台设备能力，不能沿用普通短请求超时而误判为提交失败。
+const CONTROL_BATCH_PREVIEW_TIMEOUT_MILLIS = 180_000
 
 /** 控制端点使用平台统一 Result 包装；客户端只消费其 data，不直接访问厂家接口。 */
 export const hvacControlApi = {
@@ -55,6 +61,21 @@ export const hvacControlApi = {
   }),
   continueRecovery: (operationId: string, request: HvacControlRecoveryContinueRequest) => requestApi<HvacControlOperation>({
     method: 'POST', url: `${operationPath(operationId)}/recovery/continue`, data: request, timeout: RECOVERY_READ_TIMEOUT_MILLIS,
+  }),
+  previewBatch: (equipmentIds: string[]) => requestApi<HvacControlBatchPreview>({
+    method: 'POST', url: `${root}/batches/preview`, data: { equipmentIds }, timeout: CONTROL_BATCH_PREVIEW_TIMEOUT_MILLIS,
+  }),
+  createBatch: (command: HvacControlBatchCommand) => requestApi<HvacControlBatch>({
+    method: 'POST', url: `${root}/batches`, data: command,
+  }),
+  batch: (batchId: string) => requestApi<HvacControlBatch>({
+    method: 'GET', url: `${root}/batches/${encodeURIComponent(batchId)}`,
+  }),
+  batches: (page = 1, size = 10) => requestApi<HvacControlBatchPage>({
+    method: 'GET', url: `${root}/batches`, params: { page, size },
+  }),
+  cancelBatch: (batchId: string) => requestApi<HvacControlBatch>({
+    method: 'POST', url: `${root}/batches/${encodeURIComponent(batchId)}/cancel`,
   }),
 }
 

@@ -67,6 +67,26 @@ describe('大金离线控制 API 契约', () => {
       method: 'POST', url: '/v1/hvac-control/operations/op%2Fa/recovery/continue', timeout: 30_000,
       data: { reason: '测试模式按当前状态继续处理历史异常' },
     })
+
+    await hvacControlApi.previewBatch(['idu/01', 'idu/02'])
+    expect(requestApi).toHaveBeenLastCalledWith({
+      method: 'POST', url: '/v1/hvac-control/batches/preview', timeout: 180_000, data: { equipmentIds: ['idu/01', 'idu/02'] },
+    })
+
+    await hvacControlApi.createBatch({ previewId: 'preview-1', action: 'MODE', value: 'cooling', idempotencyKey: 'batch-key-1', confirmLinkedImpact: true })
+    expect(requestApi).toHaveBeenLastCalledWith({
+      method: 'POST', url: '/v1/hvac-control/batches',
+      data: { previewId: 'preview-1', action: 'MODE', value: 'cooling', idempotencyKey: 'batch-key-1', confirmLinkedImpact: true },
+    })
+
+    await hvacControlApi.batch('batch/a')
+    expect(requestApi).toHaveBeenLastCalledWith({ method: 'GET', url: '/v1/hvac-control/batches/batch%2Fa' })
+
+    await hvacControlApi.batches(2, 10)
+    expect(requestApi).toHaveBeenLastCalledWith({ method: 'GET', url: '/v1/hvac-control/batches', params: { page: 2, size: 10 } })
+
+    await hvacControlApi.cancelBatch('batch/a')
+    expect(requestApi).toHaveBeenLastCalledWith({ method: 'POST', url: '/v1/hvac-control/batches/batch%2Fa/cancel' })
   })
 
   it('浏览器不支持 randomUUID 时仍生成幂等键', () => {

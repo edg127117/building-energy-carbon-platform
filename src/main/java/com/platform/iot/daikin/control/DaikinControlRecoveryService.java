@@ -61,10 +61,12 @@ public class DaikinControlRecoveryService {
         catch (RuntimeException ex) { throw error(503, "RECOVERY_READ_UNAVAILABLE"); }
         String settings = policy.testSettings(target, snapshot);
         // 恢复本次动作只要求其当前字段有效；不支持温度的内机也能恢复风速等动作的异常。
-        if (policy.testObserved(settings, claimed.view().action()) == null)
+        String observed = policy.testObserved(settings, claimed.view().action());
+        if (observed == null)
             throw error(409, "READBACK_INVALID");
         boolean matchesOld = policy.testMatches(settings, claimed.view().action(), claimed.view().value());
-        return store.finishTestRecovery(claimed, target, actor, settings, matchesOld, body.reason().strip(), trace, started, clock, access).view();
+        return store.finishTestRecovery(claimed, target, actor, settings, observed, snapshot.unit().path("unitStatus").asText(),
+                matchesOld, body.reason().strip(), trace, started, clock, access).view();
     }
 
     public RecoveryProgress observe(long actor, String id, RecoveryBaseline body, String trace) {

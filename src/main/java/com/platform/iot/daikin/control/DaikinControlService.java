@@ -66,6 +66,15 @@ public class DaikinControlService {
     }
 
     public Operation submit(long user, String equipment, Submit request, String traceId) {
+        return submit(user, equipment, request, traceId, null, () -> { }, false);
+    }
+
+    Operation submitBatch(long user, String equipment, Submit request, String traceId, String relationshipHash, Runnable dispatchGuard) {
+        return submit(user, equipment, request, traceId, relationshipHash, dispatchGuard, true);
+    }
+
+    private Operation submit(long user, String equipment, Submit request, String traceId, String relationshipHash,
+                             Runnable dispatchGuard, boolean skipTarget) {
         access.requireControl(user, equipment);
         validate(request);
         String hash = DaikinControlAccess.hash(equipment + "|" + request.action() + "|" + request.value() + "|" + request.revision());
@@ -76,13 +85,16 @@ public class DaikinControlService {
         var target = access.target(equipment);
         var gateway = gateway(target);
         boolean fast = access.testOpenControls();
-        var reservation = store.reserve(user, target, request, hash, traceId, clock.millis(), fast);
+        var reservation = store.reserve(user, target, request, hash, traceId, clock.millis(), fast, dispatchGuard);
         if (!reservation.created()) return visible(user, reservation.row()).view();
         String id = reservation.row().view().operationId();
         String before;
         String baseline;
         try {
-            var snapshot = snapshot(target, fast);
+            // 排队项必须在派发前重新读取能力、关系与实际值，不能复用页面预检的短时缓存。
+            var snapshot = skipTarget ? gateway.read(target) : snapshot(target, fast);
+            if (skipTarget && Set.of(Action.MODE, Action.ON_OFF).contains(request.action()) && !java.util.Objects.equals(relationshipHash, policy.relationshipHash(snapshot)))
+                throw error(409, "LINKED_SCOPE_CHANGED");
             if (!request.revision().equals(fast ? policy.testRevision(target) : policy.revision(target, snapshot))) throw error(409, "REVISION_CHANGED");
             policy.validate(request.action(), request.value(), fast ? policy.testOptions(target, snapshot) : policy.options(target, snapshot));
             baseline = fast ? policy.testSettings(target, snapshot) : policy.settings(target, snapshot);
@@ -93,13 +105,16 @@ public class DaikinControlService {
             if (fast != access.testOpenControls()) throw error(409, "REVISION_CHANGED");
             if (!fast) store.requireSourceReady(target.sourceId(), clock.millis());
             if (clock.millis() - reservation.row().view().createdAt() >= 30_000) throw error(409, "PREFLIGHT_EXPIRED");
+            if (skipTarget && policy.testMatches(baseline, request.action(), request.value()))
+                return store.alreadyTarget(id, baseline, before, snapshot.unit().path("unitStatus").asText(),
+                        user, clock.millis(), dispatchGuard).view();
         } catch (RuntimeException failure) {
             return store.transition(id, Set.of(Status.PREPARING), Status.NOT_SENT,
                     failure instanceof BusinessException e ? reason(e) : "PREFLIGHT_UNAVAILABLE",
                     null, null, null, null, user, clock.millis()).view();
         }
         // 此事务成功是唯一发送许可。进程在提交后退出也只会被恢复为 UNKNOWN，不再调用 send。
-        var sending = store.markSending(id, before, baseline, user, clock.millis(), fast ? properties.getFastReadbackTimeoutMillis() : 300_000);
+        var sending = store.markSending(id, before, baseline, user, clock.millis(), fast ? properties.getFastReadbackTimeoutMillis() : 300_000, dispatchGuard);
         if (sending.view().status() != Status.SENDING) return sending.view();
         DaikinControlGateway.Reply reply;
         snapshots.remove(target.fingerprint());
@@ -124,6 +139,23 @@ public class DaikinControlService {
     }
 
     public Operation get(long user, String id) { return visible(user, store.get(id)).view(); }
+
+    record BatchInspection(DaikinControlAccess.Target target, Options options, DaikinControlGateway.Snapshot snapshot) { }
+
+    /** 批量预检不因同控制器的正常在途操作丢失厂家能力；真正占用在派发时复核。 */
+    BatchInspection inspectBatch(long user, String equipment) {
+        access.requireControl(user, equipment);
+        requireEnabled();
+        if (testWindowClosing()) throw error(409, "TEST_WINDOW_CLOSING");
+        var target = access.target(equipment);
+        boolean fast = access.testOpenControls();
+        var value = gateway(target).read(target);
+        access.requireControl(user, equipment);
+        if (!target.equals(access.target(equipment))) throw error(409, "REVISION_CHANGED");
+        var actions = fast ? policy.testOptions(target, value) : policy.options(target, value);
+        return new BatchInspection(target, new Options(equipment, actions.stream().anyMatch(ActionOption::allowed), null,
+                fast ? policy.testRevision(target) : policy.revision(target, value), actions, store.active(equipment), temperature(value), fast), value);
+    }
 
     public PageResponse<Operation> history(long user, String equipment, int page, int size) {
         access.requireControl(user, equipment);
