@@ -89,7 +89,8 @@ class FlywayMigrationConfigurationTest {
                 "V66__mysql_meter_coverage.sql",
                 "V67__mysql_weather_frontend_menus.sql",
                 "V68__mysql_daikin_control.sql",
-                "V69__mysql_daikin_control_stability.sql");
+                "V69__mysql_daikin_control_stability.sql",
+                "V70__mysql_daikin_batch_control.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

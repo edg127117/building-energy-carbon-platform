@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  ElAlert, ElButton, ElEmpty, ElInput, ElOption, ElPagination,
+  ElAlert, ElButton, ElCheckbox, ElEmpty, ElInput, ElOption, ElPagination,
   ElRadioButton, ElRadioGroup, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag,
 } from '@/shared/ui'
 import { t } from '@/locales'
@@ -16,10 +16,11 @@ import {
   type DaikinQuickStatus,
 } from '../models/daikin-display'
 import type { DaikinDevice } from '../models/daikin'
-import type { HvacControlOperation } from '../models/hvac-control'
+import type { HvacControlBatch, HvacControlOperation } from '../models/hvac-control'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 import { useHvacControlAccess } from '../composables/use-hvac-control-access'
 import DaikinDeviceDetail from './DaikinDeviceDetail.vue'
+import HvacBatchControlPanel from './HvacBatchControlPanel.vue'
 import HvacDeviceGrantPanel from './HvacDeviceGrantPanel.vue'
 
 interface CardTelemetry {
@@ -63,6 +64,11 @@ const page = ref(1)
 const selected = ref<string | null>(null)
 const refreshTick = ref(0)
 const monitorRefreshTick = ref(0)
+const batchSelectedEquipmentIds = ref<string[]>([])
+const batchDeviceById = ref<Record<string, DaikinDevice>>({})
+const batchSelectionLoading = ref(false)
+const batchSelectionError = ref<string | null>(null)
+let batchSelectionRequest = 0
 
 const spaceFilterOptions = computed(() => {
   const map = new Map<string, { value: string; label: string; spaceIds: string[] }>()
@@ -93,6 +99,9 @@ const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.v
 const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? []))
 const selectedDevice = computed(() => rawDevices.value.find(item => item.equipmentId === selected.value))
 const buildingName = computed(() => buildings.data.value?.find(item => item.buildingId === building.value)?.buildingName ?? building.value)
+const batchSelectedDevices = computed(() => batchSelectedEquipmentIds.value
+  .map(equipmentId => batchDeviceById.value[equipmentId])
+  .filter((item): item is DaikinDevice => item != null))
 
 const spaceSummaryItems = computed(() => {
   const groups = groupDaikinDevicesBySpace(rawDevices.value, spaces.data.value ?? [])
@@ -199,6 +208,126 @@ function toggleGroup(groupKey: string) {
   collapsedGroups.value[groupKey] = !collapsedGroups.value[groupKey]
 }
 
+function rememberBatchDevices(items: DaikinDevice[]) {
+  if (!items.length) return
+  batchDeviceById.value = {
+    ...batchDeviceById.value,
+    ...Object.fromEntries(items.map(item => [item.equipmentId, item])),
+  }
+}
+
+function clearBatchSelection() {
+  batchSelectionRequest++
+  batchSelectionLoading.value = false
+  batchSelectedEquipmentIds.value = []
+  batchDeviceById.value = {}
+  batchSelectionError.value = null
+}
+
+function isBatchSelected(equipmentId: string): boolean {
+  return batchSelectedEquipmentIds.value.includes(equipmentId)
+}
+
+function batchDeviceFromRow(row: unknown): DaikinDevice { return row as DaikinDevice }
+
+function setBatchSelected(item: DaikinDevice, selectedForBatch: boolean) {
+  batchSelectionRequest++
+  batchSelectionLoading.value = false
+  batchSelectionError.value = null
+  rememberBatchDevices([item])
+  batchSelectedEquipmentIds.value = selectedForBatch
+    ? Array.from(new Set([...batchSelectedEquipmentIds.value, item.equipmentId])).sort()
+    : batchSelectedEquipmentIds.value.filter(equipmentId => equipmentId !== item.equipmentId)
+}
+
+function batchSelectionScopeKey(): string {
+  return [building.value, kind.value, space.value, keyword.value, state.value, exceptionFilter.value, quickStatus.value].join('\u0001')
+}
+
+function batchSelectionLabel(item: DaikinDevice): string {
+  return text('batchControl.selectDevice').replace('{name}', item.equipmentName || item.equipmentCode || item.equipmentId)
+}
+
+async function selectAllFilteredDevices() {
+  if (!building.value || batchSelectionLoading.value) return
+  const request = ++batchSelectionRequest
+  const scopeKey = batchSelectionScopeKey()
+  const selectedSpace = selectedSpaceOption.value
+  const selectedSpaceIds = new Set(selectedSpace?.spaceIds ?? [])
+  const backendSpaceId = selectedSpace && selectedSpace.spaceIds.length > 1 ? '' : space.value
+  const buildingId = building.value
+  const selectedKind = kind.value
+  const selectedKeyword = keyword.value
+  const selectedState = state.value
+  const selectedException = exceptionFilter.value === '' ? undefined : exceptionFilter.value === 'yes'
+  const selectedQuickStatus = quickStatus.value
+  const pageSize = 100
+  batchSelectionLoading.value = true
+  batchSelectionError.value = null
+  const isCurrentRequest = () => !disposed && request === batchSelectionRequest && scopeKey === batchSelectionScopeKey()
+  const rejectSelection = (messageKey: 'filteredTooMany' | 'filteredListChanged') => {
+    batchSelectedEquipmentIds.value = []
+    batchDeviceById.value = {}
+    batchSelectionError.value = text(`batchControl.${messageKey}`)
+  }
+  try {
+    // 完整读取服务端分页后才应用快捷和合并空间筛选，避免把当前页伪装成“全选”。
+    const seenEquipmentIds = new Set<string>()
+    const matchingItems: DaikinDevice[] = []
+    let total: number | null = null
+    for (let currentPage = 1; total == null || seenEquipmentIds.size < total; currentPage++) {
+      const result = await daikinApi.devices(
+        buildingId,
+        currentPage,
+        selectedKind,
+        selectedKeyword,
+        backendSpaceId,
+        selectedState,
+        selectedException,
+        pageSize,
+      )
+      if (!isCurrentRequest()) return
+      if (!Number.isSafeInteger(result.total) || result.total < 0 || (total != null && result.total !== total)) {
+        rejectSelection('filteredListChanged')
+        return
+      }
+      total = result.total
+      const expectedItemCount = Math.min(pageSize, total - seenEquipmentIds.size)
+      if (result.items.length !== expectedItemCount) {
+        rejectSelection('filteredListChanged')
+        return
+      }
+      for (const item of result.items) {
+        if (!item.equipmentId || seenEquipmentIds.has(item.equipmentId)) {
+          rejectSelection('filteredListChanged')
+          return
+        }
+        seenEquipmentIds.add(item.equipmentId)
+        const inSelectedSpace = selectedSpace == null || selectedSpace.spaceIds.length <= 1
+          || (item.spaceId != null && selectedSpaceIds.has(item.spaceId))
+        if (inSelectedSpace && filterDaikinDevicesByQuickStatus([item], selectedQuickStatus).length) {
+          matchingItems.push(item)
+          if (matchingItems.length > pageSize) {
+            rejectSelection('filteredTooMany')
+            return
+          }
+        }
+      }
+    }
+    if (!isCurrentRequest()) return
+    batchDeviceById.value = Object.fromEntries(matchingItems.map(item => [item.equipmentId, item]))
+    batchSelectedEquipmentIds.value = matchingItems.map(item => item.equipmentId).sort()
+  } catch {
+    if (isCurrentRequest()) {
+      batchSelectedEquipmentIds.value = []
+      batchDeviceById.value = {}
+      batchSelectionError.value = text('batchControl.selectFilteredFailed')
+    }
+  } finally {
+    if (isCurrentRequest()) batchSelectionLoading.value = false
+  }
+}
+
 function deviceHealthLabel(row: DaikinDevice): string {
   if (!row.active) return text('inactive')
   if (row.lastValidAt == null) return text('noObservation')
@@ -215,10 +344,17 @@ function pillToneClass(status: DaikinQuickStatus): string {
 }
 
 function search() {
-  keyword.value = searchInput.value.trim()
+  const nextKeyword = searchInput.value.trim()
+  if (keyword.value !== nextKeyword) clearBatchSelection()
+  keyword.value = nextKeyword
   selected.value = null
   if (page.value === 1) load()
   else page.value = 1
+}
+
+function selectQuickStatus(status: DaikinQuickStatus) {
+  if (quickStatus.value !== status) clearBatchSelection()
+  quickStatus.value = status
 }
 
 let timer: ReturnType<typeof setInterval> | undefined
@@ -266,7 +402,10 @@ async function hydrateCardTelemetry(items: DaikinDevice[]) {
 }
 
 watch(() => devices.data.value, val => {
-  if (val?.items?.length) void hydrateCardTelemetry(val.items)
+  if (val?.items?.length) {
+    rememberBatchDevices(val.items)
+    void hydrateCardTelemetry(val.items)
+  }
 })
 
 function load(cursor?: string, silent = false) {
@@ -287,6 +426,13 @@ function refreshAfterControl(operation: HvacControlOperation) {
   controlRefreshOperation = operation
   controlRefreshPass = 0
   void refreshControlMonitoring(operation)
+}
+
+function refreshAfterBatch(batch: HvacControlBatch) {
+  if (!batch.completed) return
+  // 批次完成后只重读平台监测数据；绝不将共同目标值填回设备的实际读值。
+  void load(undefined, true)
+  refreshTick.value++
 }
 
 function stopControlRefresh() {
@@ -315,6 +461,7 @@ async function refreshControlMonitoring(operation: HvacControlOperation) {
 watch([building, selected], stopControlRefresh)
 
 watch(building, () => {
+  clearBatchSelection()
   space.value = ''
   spaces.clear()
   if (!props.alarms && building.value) void spaces.run(() => daikinApi.spaces(building.value))
@@ -326,6 +473,7 @@ watch(building, () => {
   load()
 })
 watch([kind, space, state, exceptionFilter], () => {
+  clearBatchSelection()
   page.value = 1
   selected.value = null
   load()
@@ -359,7 +507,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="daikin-panel">
+  <section class="daikin-panel" :class="{ 'daikin-panel-batch-control': building && !alarms }">
     <header class="panel-header">
       <div class="title-block">
         <h1>{{ text(alarms ? (history ? 'historyAlarms' : 'currentAlarms') : 'title') }}</h1>
@@ -410,7 +558,7 @@ onUnmounted(() => {
             :class="[
               quickStatus === pill[0] ? 'status-pill-active' : pillToneClass(pill[0]),
             ]"
-            @click="quickStatus = pill[0]"
+            @click="selectQuickStatus(pill[0])"
           >
             <span v-if="pill[0] !== 'ALL'" class="status-dot" :class="`dot-${pill[0].toLowerCase()}`" />
             <span>{{ text(pill[1]) }}</span>
@@ -419,6 +567,9 @@ onUnmounted(() => {
         </div>
 
         <div class="view-switchers">
+          <ElButton data-testid="batch-select-filtered" :loading="batchSelectionLoading" @click="selectAllFilteredDevices">
+            {{ text(batchSelectionLoading ? 'batchControl.selectingFiltered' : 'batchControl.selectFiltered') }}
+          </ElButton>
           <ElRadioGroup v-if="viewMode === 'CARD'" v-model="groupMode">
             <ElRadioButton value="SYSTEM">{{ text('groupBySystem') }}</ElRadioButton>
             <ElRadioButton value="SPACE">{{ text('groupBySpace') }}</ElRadioButton>
@@ -443,6 +594,13 @@ onUnmounted(() => {
         :building-name="buildingName"
         :devices="filteredDevices"
         :space-options="spaceFilterOptions"
+      />
+      <ElAlert v-if="batchSelectionError" :title="batchSelectionError" type="error" :closable="false" />
+      <HvacBatchControlPanel
+        :equipment-ids="batchSelectedEquipmentIds"
+        :devices="batchSelectedDevices"
+        @clear-selection="clearBatchSelection"
+        @completed="refreshAfterBatch"
       />
 
       <section v-if="spaceSummaryItems.length" class="space-summary-bar">
@@ -576,6 +734,13 @@ onUnmounted(() => {
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ spaceNameOf(item.spaceId) }}</p>
                     </div>
                     <div class="device-card-tags">
+                      <ElCheckbox
+                        :model-value="isBatchSelected(item.equipmentId)"
+                        :aria-label="batchSelectionLabel(item)"
+                        :data-testid="`batch-select-${item.equipmentId}`"
+                        @click.stop
+                        @update:model-value="setBatchSelected(item, Boolean($event))"
+                      />
                       <ElTag v-if="showHardExceptionTag(item)" type="danger">{{ text('exception') }}</ElTag>
                       <ElTag v-if="cardTelemetry[item.equipmentId]?.isFilterDirty" type="warning">{{ text('filterReminderTag') }}</ElTag>
                       <ElTag :type="item.stale || !item.active ? 'warning' : 'success'">{{ deviceHealthLabel(item) }}</ElTag>
@@ -674,6 +839,13 @@ onUnmounted(() => {
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ text(item.deviceKind === 'OUTDOOR' ? 'outdoorBadge' : 'indoorBadge') }}</p>
                     </div>
                     <div class="device-card-tags">
+                      <ElCheckbox
+                        :model-value="isBatchSelected(item.equipmentId)"
+                        :aria-label="batchSelectionLabel(item)"
+                        :data-testid="`batch-select-${item.equipmentId}`"
+                        @click.stop
+                        @update:model-value="setBatchSelected(item, Boolean($event))"
+                      />
                       <ElTag v-if="showHardExceptionTag(item)" type="danger">{{ text('exception') }}</ElTag>
                       <ElTag v-if="cardTelemetry[item.equipmentId]?.isFilterDirty" type="warning">{{ text('filterReminderTag') }}</ElTag>
                       <ElTag :type="item.stale || !item.active ? 'warning' : 'success'">{{ deviceHealthLabel(item) }}</ElTag>
@@ -743,6 +915,17 @@ onUnmounted(() => {
           :data="filteredDevices"
           :empty-text="text('none')"
         >
+          <ElTableColumn :label="text('batchControl.select')" width="78">
+            <template #default="{ row }">
+              <ElCheckbox
+                :model-value="isBatchSelected(batchDeviceFromRow(row).equipmentId)"
+                :aria-label="batchSelectionLabel(batchDeviceFromRow(row))"
+                :data-testid="`batch-select-${batchDeviceFromRow(row).equipmentId}`"
+                @click.stop
+                @update:model-value="setBatchSelected(batchDeviceFromRow(row), Boolean($event))"
+              />
+            </template>
+          </ElTableColumn>
           <ElTableColumn :label="text('equipment')" min-width="180">
             <template #default="{ row }">
               <div class="device-title-row">
@@ -843,7 +1026,8 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.daikin-panel { display: grid; gap: var(--bec-space-section); min-width: 0; }
+  .daikin-panel { display: grid; gap: var(--bec-space-section); min-width: 0; }
+  .daikin-panel-batch-control { padding-bottom: calc(var(--bec-control-height) * 3); }
 .panel-header { display: grid; gap: var(--bec-space-group); }
 .title-block h1 { margin: 0; font-size: var(--bec-font-size-system); }
 .title-block p { margin: var(--bec-space-tight) 0 0; color: var(--bec-color-text-secondary); line-height: var(--bec-line-height); }
@@ -917,4 +1101,5 @@ onUnmounted(() => {
 .space-chip-name { font-size: var(--bec-font-size-body); font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
 .space-chip-metrics { display: flex; flex-wrap: wrap; align-items: center; gap: var(--bec-ref-space-1); font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
 .space-summary-empty { margin: 0; font-size: var(--bec-font-size-small); color: var(--bec-color-text-secondary); }
+  @media (max-width: 640px) { .daikin-panel-batch-control { padding-bottom: calc(var(--bec-control-height) * 4); } }
 </style>

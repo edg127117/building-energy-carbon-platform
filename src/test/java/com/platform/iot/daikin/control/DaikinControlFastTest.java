@@ -146,6 +146,23 @@ class DaikinControlFastTest {
         assertThat(f.gateway.reads).hasValue(reads+1); assertThat(f.gateway.writes).hasValue(1);
     }
 
+    @Test void manualRecoveryPersistsLatestReadingWithoutEarlierReconcileAndDoesNotConfirmOldTarget() throws Exception {
+        var f=fixture(); f.gateway.loseResponse=true;
+        var op=submit(f,10,Action.TEMPERATURE,"26","recover-without-polling");
+        assertThat(op.observedValue()).isNull();
+        f.gateway.unit.put("temperature",28).put("unitStatus","operating");
+        f.clock.advance(2000);
+        var done=recovery(f).continueCurrent(8,op.operationId(),new Close("按最新现场替身状态继续测试"),"latest-reading");
+        assertThat(done.status()).isEqualTo(Status.CLOSED);
+        assertThat(done.value()).isEqualTo("26");
+        assertThat(done.observedValue()).isEqualTo("28");
+        assertThat(done.unitStatus()).isEqualTo("operating");
+        assertThat(done.lastReadAt()).isEqualTo(f.clock.millis());
+        assertThat(done.cloudStable()).isFalse();
+        assertThat(done.isolated()).isFalse();
+        assertThat(f.gateway.writes).hasValue(1);
+    }
+
     @Test void fastFinishAuditFailureRollsBackSampleStateAndBothSlots() throws Exception {
         var f=fixture(); var op=submit(f,10,Action.TEMPERATURE,"26","audit-fast-failure");
         int samples=f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_sample",Integer.class);

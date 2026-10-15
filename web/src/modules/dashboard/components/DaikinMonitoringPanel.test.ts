@@ -290,6 +290,61 @@ describe('DaikinMonitoringPanel', () => {
     wrapper.unmount()
   })
 
+  it('全选当前筛选会读取跨页完整范围后再应用快捷状态，不把当前页伪装成全选', async () => {
+    const runningIndexes = new Set([1, 101, 150])
+    const allDevices = Array.from({ length: 150 }, (_, index) => {
+      const item = index + 1
+      const running = runningIndexes.has(item)
+      return {
+        identityId: `id-${item}`,
+        equipmentId: `eq-${String(item).padStart(3, '0')}`,
+        pendingId: `pd-${item}`,
+        buildingId: 'BLD001',
+        spaceId: 'SP-308',
+        systemGroupId: 'SYS-3F',
+        deviceKind: 'INDOOR',
+        mappingVersion: 1,
+        active: true,
+        stale: false,
+        lastValidAt: 1_700_000_000_000,
+        onOff: { value: running ? 'on' : 'off', status: 'PRESENT', lastValidAt: 1_700_000_000_000, stale: false },
+        mode: { value: 'cooling', status: 'PRESENT', lastValidAt: 1_700_000_000_000, stale: false },
+        unitStatus: { value: running ? 'operating' : 'stopped', status: 'PRESENT', lastValidAt: 1_700_000_000_000, stale: false },
+        hasActiveException: false,
+        equipmentCode: `IDU${item}`,
+        equipmentName: `测试内机 ${item}`,
+      }
+    })
+    vi.mocked(daikinApi.devices).mockImplementation(async (_building, currentPage, _kind, _keyword, _spaceId, _state, _hasException, size = 20) => ({
+      total: allDevices.length,
+      items: allDevices.slice((currentPage - 1) * size, currentPage * size),
+    }))
+    const wrapper = mount(DaikinMonitoringPanel, {
+      global: { stubs: {
+        ChartView: true,
+        HvacBatchControlPanel: {
+          name: 'HvacBatchControlPanel',
+          props: ['equipmentIds', 'devices'],
+          template: '<section data-testid="batch-panel-stub">{{ equipmentIds.join(",") }}</section>',
+        },
+      } },
+    })
+    await flushPromises()
+
+    const runningPill = wrapper.findAll('.status-pill').find(button => button.text().includes('运行中'))!
+    await runningPill.trigger('click')
+    await wrapper.find('[data-testid="batch-select-filtered"]').trigger('click')
+    await flushPromises()
+    await flushPromises()
+
+    expect(daikinApi.devices).toHaveBeenCalledWith('BLD001', 1, '', '', '', '', undefined, 100)
+    expect(daikinApi.devices).toHaveBeenCalledWith('BLD001', 2, '', '', '', '', undefined, 100)
+    const batchPanel = wrapper.findComponent({ name: 'HvacBatchControlPanel' })
+    expect(batchPanel.props('equipmentIds')).toEqual(['eq-001', 'eq-101', 'eq-150'])
+    expect(batchPanel.props('devices')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
   it('refreshes silently without unmounting cards and applies clock-skew-safe upper bound when switching 24h/7d temperature presets', async () => {
     vi.mocked(daikinApi.history).mockResolvedValue({
       unit: '°C',

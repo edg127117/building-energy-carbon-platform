@@ -73,9 +73,14 @@ public class DaikinControlStore {
     }
 
     public Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now, boolean fast) {
+        return reserve(user, target, request, hash, trace, now, fast, () -> { });
+    }
+
+    Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now, boolean fast, Runnable dispatchGuard) {
         return tx.execute(status -> {
             // 来源行串行化占用创建；物理键唯一约束继续防止两条平台身份控制同一厂家 URL。
             jdbc.queryForList("SELECT source_id FROM biz_daikin_source WHERE source_id=? FOR UPDATE", target.sourceId());
+            dispatchGuard.run();
             Row existing = existing(user, request.idempotencyKey(), hash);
             if (existing != null) return new Reservation(existing, false);
             if (active(target.equipmentId()) != null || jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot WHERE physical_key=?",
@@ -222,10 +227,26 @@ public class DaikinControlStore {
     }
 
     public Row markSending(String id, String before, String baseline, long actor, long now, long timeout) {
+        return markSending(id, before, baseline, actor, now, timeout, () -> { });
+    }
+
+    Row markSending(String id, String before, String baseline, long actor, long now, long timeout, Runnable dispatchGuard) {
         return tx.execute(status -> {
+            // 批量租约必须和发送意图在同一事务中复核；过期后台线程不能跨越恢复边界下发。
+            dispatchGuard.run();
             jdbc.update("UPDATE biz_daikin_control_operation SET baseline_json=?,deadline_at=? WHERE operation_id=? AND status='PREPARING'",
                     baseline, now + timeout, id);
             return transition(id, Set.of(Status.PREPARING), Status.SENDING, null, null, before, now + 30_000, null, actor, now);
+        });
+    }
+
+    /** 无写副作用的目标已满足结果也保留真实读值和读取时刻，不伪造厂家受理。 */
+    Row alreadyTarget(String id, String baseline, String observed, String unitStatus, long actor, long now, Runnable dispatchGuard) {
+        return tx.execute(status -> {
+            dispatchGuard.run();
+            jdbc.update("UPDATE biz_daikin_control_operation SET baseline_json=?,last_read_at=?,unit_status=? WHERE operation_id=? AND status='PREPARING'",
+                    baseline, now, unitStatus, id);
+            return transition(id, Set.of(Status.PREPARING), Status.NOT_SENT, "ALREADY_TARGET", null, observed, null, null, actor, now);
         });
     }
 
@@ -381,17 +402,19 @@ public class DaikinControlStore {
         return lockRecovery(claimed, identity, actor, requestedAt, clock, access, false);
     }
 
-    public Row finishTestRecovery(Row claimed, DaikinControlAccess.Target identity, long actor, String settings,
+    public Row finishTestRecovery(Row claimed, DaikinControlAccess.Target identity, long actor, String settings, String observed, String unitStatus,
                                   boolean matchesOld, String reason, String trace, long requestedAt,
                                   java.time.Clock clock, DaikinControlAccess access) {
         return tx.execute(status -> {
             Row row = lockRecovery(claimed, identity, actor, requestedAt, clock, access, true);
             long now = clock.millis();
             recoverySample(row, settings, matchesOld, "TEST_CURRENT_STATE_READ", requestedAt, now);
+            // 最新读值与解除占用同事务保存；只更新事实，不把原未知操作改判为成功。
             transition(row.view().operationId(), Set.of(row.view().status()), Status.CLOSED, "TEST_CURRENT_STATE_RELEASED",
-                    null, row.view().observedValue(), null, row.view().closedReason() == null ? reason : null, actor, now);
+                    null, observed, null, row.view().closedReason() == null ? reason : null, actor, now);
             releaseSlots(row.view().operationId());
-            jdbc.update("UPDATE biz_daikin_control_operation SET lease_until=0 WHERE operation_id=?", row.view().operationId());
+            jdbc.update("UPDATE biz_daikin_control_operation SET lease_until=0,last_read_at=?,unit_status=? WHERE operation_id=?",
+                    now, unitStatus, row.view().operationId());
             recoveryAudit(row, actor, now, "HVAC_CONTROL_TEST_CONTINUE", settings, null, trace, reason);
             return get(row.view().operationId());
         });

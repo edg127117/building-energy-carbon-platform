@@ -4,6 +4,12 @@
 export const HVAC_CONTROL_ACTIONS = ['ON_OFF', 'TEMPERATURE', 'MODE', 'AIR_FLOW', 'FAN_SPEED'] as const
 export type HvacControlAction = typeof HVAC_CONTROL_ACTIONS[number]
 
+export const HVAC_CONTROL_BATCH_ITEM_STATUSES = [
+  'QUEUED', 'DISPATCHING', 'ACTIVE', 'MATCHED', 'ALREADY_TARGET', 'UNSUPPORTED',
+  'FAILED', 'UNCONFIRMED', 'CANCELLED', 'NOT_SENT', 'SUPERSEDED',
+] as const
+export type HvacControlBatchItemStatus = typeof HVAC_CONTROL_BATCH_ITEM_STATUSES[number]
+
 export const HVAC_CONTROL_OPERATION_STATUSES = [
   'PREPARING', 'SENDING', 'ACCEPTED', 'OBSERVED_MATCH', 'OBSERVED_STABLE', 'CLOUD_VERIFIED', 'CONFIRMED', 'REJECTED', 'NOT_SENT', 'UNKNOWN', 'UNCONFIRMED', 'CLOSED',
 ] as const
@@ -16,6 +22,71 @@ export interface HvacControlActionOption {
   values: string[]
   minimum: number | null
   maximum: number | null
+}
+
+/** 批量预检由服务端保存快照；浏览器只用它展示可选共同动作，不能据此绕过提交时复核。 */
+export interface HvacControlBatchPreviewItem {
+  equipmentId: string
+  revision: string | null
+  reasonCode: string | null
+  actions: HvacControlActionOption[]
+  impactedEquipmentIds: string[]
+  impactedEquipmentLabels?: Record<string, string>
+  impactKnown: boolean
+}
+
+export interface HvacControlBatchPreview {
+  previewId: string
+  expiresAt: number
+  items: HvacControlBatchPreviewItem[]
+}
+
+export interface HvacControlBatchCommand {
+  previewId: string
+  action: HvacControlAction
+  value: string
+  idempotencyKey: string
+  confirmLinkedImpact: boolean
+}
+
+export interface HvacControlBatchItem {
+  itemId: string
+  equipmentId: string
+  status: HvacControlBatchItemStatus
+  reasonCode: string | null
+  operationId: string | null
+  observedValue: string | null
+  unitStatus: string | null
+  createdAt: number
+  dispatchedAt: number | null
+  acceptedAt: number | null
+  readbackAt: number | null
+  queuedMillis: number | null
+  acceptanceMillis: number | null
+  readbackMillis: number | null
+}
+
+/** 所有时间点和耗时均为毫秒；请求目标不能作为当前监测读值展示。 */
+export interface HvacControlBatch {
+  batchId: string
+  action: HvacControlAction
+  value: string
+  createdAt: number
+  updatedAt: number
+  completed: boolean
+  total: number
+  completedCount: number
+  queuedCount: number
+  activeCount: number
+  attentionCount: number
+  items: HvacControlBatchItem[]
+}
+
+export interface HvacControlBatchPage {
+  page: number
+  size: number
+  total: number
+  items: HvacControlBatch[]
 }
 
 /**
