@@ -21,6 +21,7 @@ vi.mock('../composables/use-hvac-control-access', () => ({
 }))
 
 vi.mock('../api/daikin', () => ({
+  newDaikinFastWatchId: () => 'watch-test-1234',
   daikinApi: {
     spaces: vi.fn(),
     devices: vi.fn(),
@@ -30,6 +31,8 @@ vi.mock('../api/daikin', () => ({
     history: vi.fn(),
     observedRuntime: vi.fn(),
     exceptions: vi.fn(),
+    startFastWatch: vi.fn().mockResolvedValue({ enabled: false, intervalMillis: 5000, expiresAt: 0 }),
+    stopFastWatch: vi.fn().mockResolvedValue(true),
   },
 }))
 
@@ -41,6 +44,7 @@ describe('DaikinMonitoringPanel', () => {
   afterEach(() => vi.useRealTimers())
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(daikinApi.startFastWatch).mockResolvedValue({ enabled: false, intervalMillis: 5000, expiresAt: 0 })
     controlAccess.testOpenControls.value = false
     controlAccess.loaded.value = true
     vi.mocked(hvacControlApi.buildings).mockResolvedValue([
@@ -136,7 +140,44 @@ describe('DaikinMonitoringPanel', () => {
     return wrapper
   }
 
-  it('分钟采集滞后时后台重查，收到较新监测就停止，不等待下一轮页面刷新', async () => {
+  it('详情关注静默同步最新状态和事件当前页，关闭后停止读取', async () => {
+    vi.mocked(daikinApi.startFastWatch).mockResolvedValue({ enabled: true, intervalMillis: 5000, expiresAt: Date.now() + 15000 })
+    vi.mocked(daikinApi.events).mockResolvedValue({ items: [], nextCursor: 'older-page' })
+    const wrapper = await openMonitorForRetry()
+    await wrapper.find('#tab-events').trigger('click')
+    await flushPromises()
+    wrapper.find('.events-toolbar').findComponent({ name: 'ElRadioGroup' }).vm.$emit('change', '24H')
+    await flushPromises()
+    vi.mocked(daikinApi.events).mockImplementation(async () => ({ items: [{
+      eventId: 1, fieldName: 'onOff', beforeNormalizedValue: 'on', afterNormalizedValue: 'off',
+      previousObservedAt: Date.now() - 5000, observedAt: Date.now() + 1000, afterGap: false,
+    }], nextCursor: 'older-page' }))
+    const currentCalls = vi.mocked(daikinApi.current).mock.calls.length
+    const eventCalls = vi.mocked(daikinApi.events).mock.calls.length
+    await vi.advanceTimersByTimeAsync(5000)
+    await flushPromises()
+    expect(daikinApi.current).toHaveBeenCalledTimes(currentCalls + 1)
+    expect(daikinApi.events).toHaveBeenCalledTimes(eventCalls + 1)
+    expect(daikinApi.events).toHaveBeenLastCalledWith('eq-idu-2', undefined)
+    expect(wrapper.find('.event-card').exists()).toBe(true)
+    expect(wrapper.find('.drawer-stub').exists()).toBe(true)
+    const earlier = wrapper.findAll('button').find(button => button.text() === '更早记录')
+    expect(earlier).toBeDefined()
+    await earlier!.trigger('click')
+    await flushPromises()
+    await vi.advanceTimersByTimeAsync(5000)
+    await flushPromises()
+    expect(daikinApi.events).toHaveBeenLastCalledWith('eq-idu-2', 'older-page')
+    wrapper.findComponent(DaikinDeviceDetail).vm.$emit('close')
+    await flushPromises()
+    const countAfterClose = vi.mocked(daikinApi.current).mock.calls.length
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(daikinApi.current).toHaveBeenCalledTimes(countAfterClose)
+    expect(daikinApi.stopFastWatch).toHaveBeenCalledWith('eq-idu-2', 'watch-test-1234')
+    wrapper.unmount()
+  })
+
+  it('控制完成只重读一次列表，持续跟踪交给服务端和详情关注', async () => {
     const wrapper = await openMonitorForRetry()
     const original = await vi.mocked(daikinApi.devices).mock.results[0]!.value
     const fresh = { ...original, items: original.items.map((device: typeof original.items[number]) => device.deviceKind === 'INDOOR'
@@ -149,10 +190,10 @@ describe('DaikinMonitoringPanel', () => {
     expect(daikinApi.devices).toHaveBeenCalledTimes(2)
     await vi.advanceTimersByTimeAsync(5_000)
     await flushPromises()
-    expect(wrapper.find('.device-card-running').exists()).toBe(false)
-    expect(daikinApi.devices).toHaveBeenCalledTimes(3)
+    expect(wrapper.find('.device-card-running').exists()).toBe(true)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(2)
     await vi.advanceTimersByTimeAsync(20_000)
-    expect(daikinApi.devices).toHaveBeenCalledTimes(3)
+    expect(daikinApi.devices).toHaveBeenCalledTimes(2)
     wrapper.unmount()
   })
 
@@ -168,7 +209,7 @@ describe('DaikinMonitoringPanel', () => {
     wrapper.unmount()
   })
 
-  it('刷新失败保留旧卡片，后台重查有上限且不无限轮询', async () => {
+  it('控制后列表刷新失败保留旧卡片，仍只保留正常分钟刷新', async () => {
     const wrapper = await openMonitorForRetry()
     vi.mocked(daikinApi.devices).mockRejectedValueOnce(new Error('offline read failed'))
     wrapper.findComponent(DaikinDeviceDetail).vm.$emit('controlCompleted', completedForMonitor())
@@ -176,7 +217,7 @@ describe('DaikinMonitoringPanel', () => {
     expect(wrapper.find('.device-card-running').exists()).toBe(true)
     await vi.advanceTimersByTimeAsync(70_000)
     const calls = vi.mocked(daikinApi.devices).mock.calls.length
-    expect(calls).toBeLessThanOrEqual(15) // 初始加载、最多 13 轮控制后读取及正常分钟刷新。
+    expect(calls).toBe(3) // 初始、控制完成一次读取及正常分钟刷新。
     await vi.advanceTimersByTimeAsync(10_000)
     expect(daikinApi.devices).toHaveBeenCalledTimes(calls)
     wrapper.unmount()

@@ -17,6 +17,7 @@ import {
   temperatureSeries, runtimePeriodTime, temperatureWindow,
 } from '../models/daikin-display'
 import { useDaikinResource } from '../composables/use-daikin-resource'
+import { useDaikinFastWatch } from '../composables/use-daikin-fast-watch'
 import HvacControlPanel from './HvacControlPanel.vue'
 import type { HvacControlOperation } from '../models/hvac-control'
 
@@ -54,6 +55,7 @@ const seriesMode = ref<'BOTH' | 'ROOM' | 'SET'>('BOTH')
 const eventQuickRange = ref<'ALL' | '24H' | '7D' | '30D'>('ALL')
 const eventFieldFilter = ref('')
 const eventTimeRange = ref<[number, number] | null>(null)
+const customEventRange = ref(false)
 const eventCursorStack = ref<Array<string | undefined>>([])
 const currentEventCursor = ref<string | undefined>(undefined)
 const granularity = ref('DAY')
@@ -63,6 +65,40 @@ const queriedRange = ref<[number, number] | null>(null)
 const rangeError = ref(false)
 const showCapabilities = ref(false)
 const showExtended = ref(false)
+
+function resetDetailResources() {
+  current.clear()
+  events.clear()
+  roomTempCurrent.clear()
+  setpointCurrent.clear()
+  roomHistory.clear()
+  setHistory.clear()
+  runtime.clear()
+  eventCursorStack.value = []
+  currentEventCursor.value = undefined
+  queriedRange.value = null
+  rangeError.value = false
+}
+
+async function refreshFastWatch(equipmentId: string) {
+  const reads = [current.run(() => daikinApi.current(equipmentId), true)]
+  // 事件页只重读用户所在游标，静默刷新不重置翻页栈或显示加载占位。
+  if (tab.value === 'events' && !events.loading.value) {
+    reads.push(events.run(() => daikinApi.events(equipmentId, currentEventCursor.value), true))
+  }
+  await Promise.all(reads)
+  if (equipmentId === props.equipmentId && !customEventRange.value && eventQuickRange.value !== 'ALL') {
+    applyEventQuickRange(eventQuickRange.value)
+  }
+}
+
+const fastWatch = useDaikinFastWatch({
+  equipmentId: () => props.equipmentId,
+  visible: () => props.visible,
+  refresh: refreshFastWatch,
+  reset: resetDetailResources,
+})
+const detailError = computed(() => current.error.value || fastWatch.error.value)
 
 const isOutdoor = computed(() => props.deviceKind === 'OUTDOOR')
 const structured = computed(() => daikinStructuredDetail(current.data.value?.fields ?? [], props.deviceKind))
@@ -174,17 +210,19 @@ function applyQuickRange(preset: '6H' | '24H' | '7D') {
 }
 
 function applyEventQuickRange(preset: 'ALL' | '24H' | '7D' | '30D') {
+  customEventRange.value = false
   eventQuickRange.value = preset
   if (preset === 'ALL') {
     eventTimeRange.value = null
     return
   }
-  const now = Date.now()
+  const now = Math.max(Date.now(), ...(events.data.value?.items.map(item => item.observedAt) ?? []))
   const hoursMap = { '24H': 24, '7D': 168, '30D': 720 }
   eventTimeRange.value = [now - hoursMap[preset] * 3_600_000, now]
 }
 
 function onEventCustomRangeChange(val: [number, number] | null) {
+  customEventRange.value = Boolean(val && val.length === 2)
   if (!val || val.length !== 2) {
     eventQuickRange.value = 'ALL'
     eventTimeRange.value = null
@@ -298,7 +336,7 @@ onMounted(() => {
         <ElButton @click="$emit('close')">{{ text('close') }}</ElButton>
       </header>
 
-      <ElAlert v-if="current.error.value" :title="current.error.value" type="error" :closable="false" />
+      <ElAlert v-if="detailError" :title="detailError" type="error" :closable="false" />
       <ElSkeleton v-if="current.loading.value" :rows="5" animated />
 
       <section v-else-if="current.data.value?.fields.length" class="core-telemetry" :aria-label="text('coreTelemetryTitle')">

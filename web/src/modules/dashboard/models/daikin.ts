@@ -14,6 +14,8 @@ export interface CurrentField {
   valueVisible: boolean; stale: boolean; mappingVersion: number; lastAttemptMappingVersion: number
 }
 export interface DeviceCurrent { equipmentId: string; active: boolean; lastValidAt: number | null; fields: CurrentField[] }
+/** 浏览器详情页的短期只读核验租约；enabled 仅表示平台已登记订阅，不代表厂家取数已完成。 */
+export interface DaikinFastWatch { enabled: boolean; intervalMillis: number; expiresAt: number }
 export interface StateEvent {
   eventId: number; fieldName: string; beforeNormalizedValue: string | null; afterNormalizedValue: string | null
   previousObservedAt: number; observedAt: number; afterGap: boolean

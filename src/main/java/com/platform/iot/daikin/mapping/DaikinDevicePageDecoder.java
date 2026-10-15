@@ -134,6 +134,17 @@ public final class DaikinDevicePageDecoder {
         return fields;
     }
 
+    /** 单机只读核验是部分状态观测；不采温度、不把接口未返回的字段写成缺失。 */
+    public DaikinDeviceObservation decodeStateSnapshot(DaikinDeviceKey key, String vendorId,
+            JsonNode unit, JsonNode controller, Instant requestedAt) {
+        requireObject(unit);
+        requireObject(controller);
+        Map<String, DaikinFieldValue> fields = new LinkedHashMap<>(decodeFields(key.kind(), unit, controller));
+        fields.entrySet().removeIf(entry -> Set.of("roomTemp", "temperature").contains(entry.getKey())
+                || entry.getValue().status() == MISSING);
+        return new DaikinDeviceObservation(key, vendorId, null, null, requestedAt, null, fields);
+    }
+
     private DaikinFieldValue temperature(JsonNode value) {
         if (missing(value)) return absent();
         if (!value.isNumber() || !Double.isFinite(value.doubleValue()) || raw(value) == null) {

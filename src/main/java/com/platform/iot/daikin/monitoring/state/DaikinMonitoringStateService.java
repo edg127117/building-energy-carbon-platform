@@ -89,7 +89,18 @@ public class DaikinMonitoringStateService {
         }
         long observedAt = observation.observedAt().toEpochMilli();
         requireTime(observedAt);
-        transaction.executeWithoutResult(status -> observeLocked(target, roundId, observation, observedAt));
+        transaction.executeWithoutResult(status -> observeLocked(target, roundId, observation, observedAt, false));
+    }
+
+    /** 快速核验只合并实读字段；负轮次区分请求起点，既不占用分钟轮次也不抹掉未读取字段。 */
+    public void observeFast(Target target, DaikinDeviceObservation observation) {
+        requireTarget(target);
+        if (!target.sourceId().equals(observation.key().sourceId())) throw new IllegalArgumentException("观测来源不一致");
+        long requestedAt = observation.observedAt().toEpochMilli();
+        requireTime(requestedAt);
+        if (requestedAt == 0 || observation.fields().keySet().stream().anyMatch(TEMPERATURE_FIELDS::contains))
+            throw new IllegalArgumentException("快速观测必须是有时间的非温度状态");
+        transaction.executeWithoutResult(status -> observeLocked(target, -requestedAt, observation, requestedAt, true));
     }
 
     public void recordFailure(String sourceId, long roundId) {
@@ -114,7 +125,7 @@ public class DaikinMonitoringStateService {
     }
 
     private void observeLocked(Target target, long roundId, DaikinDeviceObservation observation,
-                               long observedAt) {
+                               long observedAt, boolean partial) {
         TargetRow registered = targetForUpdate(target.identityId());
         if (registered == null || !registered.active()) {
             throw new IllegalStateException("大金监测目标未注册或已停用");
@@ -122,7 +133,9 @@ public class DaikinMonitoringStateService {
         if (!registered.sourceId().equals(target.sourceId())) {
             throw new IllegalArgumentException("目标来源不可变");
         }
-        if (registered.lastRoundId() != null && roundId < registered.lastRoundId()) return;
+        if (!partial && registered.lastRoundId() != null && roundId < registered.lastRoundId()) return;
+        if (!Objects.equals(registered.buildingId(), target.buildingId())
+                || registered.mappingVersion() != target.mappingVersion()) return;
 
         updateTargetSnapshot(target);
         boolean hasFreshRuntimeObservation = false;
@@ -133,7 +146,12 @@ public class DaikinMonitoringStateService {
             String fieldName = requireField(entry.getKey());
             DaikinFieldValue incoming = Objects.requireNonNull(entry.getValue(), "fieldValue");
             CurrentField current = currentFieldForUpdate(target.identityId(), fieldName);
-            if (current != null && roundId <= current.roundId()) continue;
+            if (current != null) {
+                if (observedAt < current.lastAttemptAt() || partial && observedAt == current.lastAttemptAt()) continue;
+                if (!partial && (current.roundId() >= 0 ? roundId <= current.roundId()
+                        // 分钟轮次早于快速请求时，无法证明其响应更新；宁可等下一轮，也不覆盖新状态。
+                        : roundId <= current.lastAttemptAt())) continue;
+            }
             if (incoming.status() == DaikinFieldValue.Status.PRESENT) {
                 // 轮次更新不代表页解析时间更新；迟到的成功值不能回退正式值、新鲜度或恢复异常。
                 if (current != null && current.lastValidAt() != null
@@ -154,10 +172,11 @@ public class DaikinMonitoringStateService {
                         observedAt, current == null);
             }
         }
-        for (String fieldName : priorFieldNames) {
+        for (String fieldName : partial ? List.<String>of() : priorFieldNames) {
             if (observation.fields().containsKey(fieldName)) continue;
             CurrentField current = currentFieldForUpdate(target.identityId(), fieldName);
-            if (current != null && roundId > current.roundId()) {
+            if (current != null && roundId > current.roundId() && observedAt >= current.lastAttemptAt()
+                    && (current.roundId() >= 0 || roundId > current.lastAttemptAt())) {
                 upsertUnavailable(target, fieldName, roundId, DaikinFieldValue.Status.MISSING,
                         null, observedAt, false);
             }
@@ -169,7 +188,7 @@ public class DaikinMonitoringStateService {
             nextValidAt = observedAt;
         }
         jdbc.update("UPDATE biz_daikin_monitoring_target SET last_round_id=?,last_valid_at_ms=? WHERE identity_id=?",
-                roundId, nextValidAt, target.identityId());
+                partial ? registered.lastRoundId() : roundId, nextValidAt, target.identityId());
         // 延迟持久化可补历史，但已过期的原观测不能把当前过期实例短暂恢复成正常。
         if (hasFreshRuntimeObservation && nextValidAt != null && nextValidAt >= clock.millis() - STALE_AFTER_MS) {
             recover(activeKey("DEVICE_STALE", target), observedAt, roundId);
@@ -437,10 +456,10 @@ public class DaikinMonitoringStateService {
     private CurrentField currentFieldForUpdate(String identityId, String fieldName) {
         List<CurrentField> rows = jdbc.query("""
                 SELECT raw_json,normalized_value,last_valid_at_ms,last_round_id,building_id,
-                       mapping_version,field_status
+                       mapping_version,field_status,last_attempt_at_ms
                 FROM biz_daikin_current_state WHERE identity_id=? AND field_name=? FOR UPDATE
                 """, (rs, row) -> new CurrentField(rs.getString(1), rs.getString(2),
-                nullableLong(rs, 3), rs.getLong(4), rs.getString(5), rs.getInt(6), rs.getString(7)),
+                nullableLong(rs, 3), rs.getLong(4), rs.getString(5), rs.getInt(6), rs.getString(7), rs.getLong(8)),
                 identityId, fieldName);
         return rows.isEmpty() ? null : rows.get(0);
     }
@@ -500,7 +519,7 @@ public class DaikinMonitoringStateService {
                              Long lastValidAt, Long lastRoundId, String buildingId, String spaceId,
                              String systemGroupId, int mappingVersion) { }
     private record CurrentField(String rawJson, String normalizedValue, Long lastValidAt, long roundId,
-                                String buildingId, int mappingVersion, String fieldStatus) { }
+                                String buildingId, int mappingVersion, String fieldStatus, long lastAttemptAt) { }
     private record SourceResult(Long roundId, int failures) { }
     private record BooleanException(String type, boolean opensWhenTrue) { }
 }
