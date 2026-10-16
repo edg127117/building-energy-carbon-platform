@@ -66,7 +66,11 @@ public final class DaikinControlClient implements DaikinControlGateway {
         return found;
     }
 
-    @Override public Reply send(Target target, Action action, String value) {
+    @Override public List<SendPermit> prepareSendWave(int size) { return session.prepareSendWave(size); }
+
+    @Override public Reply send(Target target, Action action, String value) { return send(target,action,value,null); }
+
+    @Override public Reply send(Target target, Action action, String value,SendPermit permit) {
         requireSource(target);
         if (action == Action.TEMPERATURE && !temperatureCelsiusConfirmed) throw invalid();
         DaikinEndpoint endpoint = switch (action) {
@@ -76,7 +80,8 @@ public final class DaikinControlClient implements DaikinControlGateway {
             case AIR_FLOW -> DaikinEndpoint.CONTROL_AIR_FLOW;
             case FAN_SPEED -> DaikinEndpoint.CONTROL_FAN_SPEED;
         };
-        JsonNode envelope = session.controlOnce(endpoint, target.vendorId(), Map.of(action.parameter, value));
+        JsonNode envelope = permit==null ? session.controlOnce(endpoint,target.vendorId(),Map.of(action.parameter,value))
+                : session.controlOnce(endpoint,target.vendorId(),Map.of(action.parameter,value),permit);
         JsonNode code = envelope == null ? null : envelope.get("code");
         if (code == null || !code.isTextual() || !code.textValue().matches("[0-9]{5,6}")) throw invalid();
         return new Reply(code.textValue());

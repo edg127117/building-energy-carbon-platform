@@ -13,7 +13,9 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.Semaphore;
+import com.platform.iot.daikin.control.DaikinControlGateway;
+import java.util.List;
+import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -26,11 +28,8 @@ public final class DaikinSession {
     private final DaikinHttpTransport transport;
     private final ObjectMapper objectMapper;
     private final Clock clock;
-    private final Semaphore concurrency;
-    private final ReentrantLock rateLock = new ReentrantLock(true);
+    private final DaikinHttpBudget budget;
     private final ReentrantLock tokenLock = new ReentrantLock();
-    private long nextRequestNanos;
-    private boolean rateInitialized;
     private volatile DaikinWireCodec.Token token;
 
     public DaikinSession(DaikinClientConfiguration configuration, DaikinWireCodec wireCodec,
@@ -43,7 +42,7 @@ public final class DaikinSession {
                 .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
                 .enable(DeserializationFeature.FAIL_ON_READING_DUP_TREE_KEY);
         this.clock = Objects.requireNonNull(clock, "clock");
-        this.concurrency = new Semaphore(configuration.maxConcurrentRequests());
+        this.budget = new DaikinHttpBudget(configuration);
     }
 
     public JsonNode read(DaikinEndpoint endpoint, String resourceId, Map<String, String> parameters) {
@@ -76,7 +75,24 @@ public final class DaikinSession {
         if (endpoint == null || !endpoint.method().equals("PUT")) {
             throw new DaikinClientException(DaikinClientException.Code.INVALID_REQUEST);
         }
-        return invoke(endpoint, endpoint.path(resourceId), validateParameters(parameters), validToken().accessToken());
+        return invoke(endpoint, endpoint.path(resourceId), validateParameters(parameters), controlToken());
+    }
+
+    List<DaikinControlGateway.SendPermit> prepareSendWave(int size) {
+        // 波次等待覆盖同伴的预读超时，但小于操作发送意图的 30 秒只读恢复边界。
+        Duration wait=configuration.requestTimeout().plus(configuration.concurrencyWait().multipliedBy(2));
+        return DaikinSendWave.prepare(budget,size,wait.compareTo(Duration.ofSeconds(25))>0?Duration.ofSeconds(25):wait);
+    }
+
+    JsonNode controlOnce(DaikinEndpoint endpoint,String resourceId,Map<String,String> parameters,DaikinControlGateway.SendPermit permit) {
+        ensureReady();
+        if(endpoint==null || !endpoint.method().equals("PUT")) throw new DaikinClientException(DaikinClientException.Code.INVALID_REQUEST);
+        return invoke(endpoint,endpoint.path(resourceId),validateParameters(parameters),controlToken(),permit);
+    }
+
+    private String controlToken() {
+        try { return validToken().accessToken(); }
+        catch(RuntimeException failure) { throw new DaikinControlGateway.NotSentException("CONTROL_AUTH_UNAVAILABLE"); }
     }
 
     private DaikinWireCodec.Token validToken() {
@@ -130,14 +146,14 @@ public final class DaikinSession {
 
     private JsonNode invoke(DaikinEndpoint endpoint, String path, Map<String, String> parameters,
                             String accessToken) {
-        boolean acquired = false;
+        return invoke(endpoint,path,parameters,accessToken,null);
+    }
+
+    private JsonNode invoke(DaikinEndpoint endpoint, String path, Map<String,String> parameters,
+                            String accessToken, DaikinControlGateway.SendPermit sendPermit) {
+        DaikinHttpBudget.Ticket ticket=null;
+        boolean transportStarted=false;
         try {
-            acquired = concurrency.tryAcquire(configuration.concurrencyWait().toMillis(),
-                    java.util.concurrent.TimeUnit.MILLISECONDS);
-            if (!acquired) {
-                throw new DaikinClientException(DaikinClientException.Code.CONCURRENCY_LIMIT);
-            }
-            awaitRateBudget();
             DaikinWireCodec.EncodedRequest encoded;
             try {
                 encoded = Objects.requireNonNull(wireCodec.encode(endpoint, parameters,
@@ -148,6 +164,13 @@ public final class DaikinSession {
                 throw new DaikinClientException(DaikinClientException.Code.INVALID_REQUEST, ex);
             }
             URI uri = buildUri(path, validateParameters(encoded.queryParameters()), encoded.encryptedQuery());
+            if(sendPermit instanceof DaikinSendWave.Member member) ticket=member.ticket(budget);
+            else {
+                if(sendPermit!=null) sendPermit.awaitReady();
+                ticket=budget.acquire(1).getFirst();
+            }
+            ticket.start();
+            transportStarted=true;
             DaikinHttpTransport.Response response = transport.execute(
                     new DaikinHttpTransport.Request(endpoint.method(), uri, encoded.headers(), encoded.body(),
                             configuration.requestTimeout()), configuration.maxResponseBytes());
@@ -167,18 +190,20 @@ public final class DaikinSession {
                 throw new DaikinClientException(DaikinClientException.Code.INVALID_RESPONSE, ex);
             }
         } catch (DaikinClientException ex) {
+            if(!transportStarted && "PUT".equals(endpoint.method())
+                    && (ex.code()==DaikinClientException.Code.CONCURRENCY_LIMIT || ex.code()==DaikinClientException.Code.INTERRUPTED))
+                throw new DaikinControlGateway.NotSentException("HTTP_BUDGET_UNAVAILABLE");
             throw ex;
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
+            if(!transportStarted && "PUT".equals(endpoint.method())) throw new DaikinControlGateway.NotSentException("HTTP_BUDGET_UNAVAILABLE");
             throw new DaikinClientException(DaikinClientException.Code.INTERRUPTED, ex);
         } catch (IOException ex) {
             throw new DaikinClientException(DaikinClientException.Code.TRANSPORT_FAILURE, ex);
         } catch (RuntimeException ex) {
             throw new DaikinClientException(DaikinClientException.Code.TRANSPORT_FAILURE, ex);
         } finally {
-            if (acquired) {
-                concurrency.release();
-            }
+            if (ticket!=null) ticket.close();
         }
     }
 
@@ -222,29 +247,6 @@ public final class DaikinSession {
             }
         }
         return URI.create(value.toString());
-    }
-
-    private void awaitRateBudget() throws InterruptedException {
-        long intervalNanos = 1_000_000_000L / configuration.requestsPerSecond();
-        long deadline = System.nanoTime() + configuration.concurrencyWait().toNanos();
-        if (!rateLock.tryLock(configuration.concurrencyWait().toNanos(), TimeUnit.NANOSECONDS))
-            throw new DaikinClientException(DaikinClientException.Code.CONCURRENCY_LIMIT);
-        try {
-            long now = System.nanoTime();
-            if (!rateInitialized) {
-                rateInitialized = true;
-                nextRequestNanos = now + intervalNanos;
-                return;
-            }
-            long remaining = nextRequestNanos - now;
-            if (remaining > 0) {
-                // 配置低速率时也不能无限等待，随后越过控制租约再迟到发送；本地等待超时不重试 PUT。
-                if (remaining > deadline - now) throw new DaikinClientException(DaikinClientException.Code.CONCURRENCY_LIMIT);
-                java.util.concurrent.TimeUnit.NANOSECONDS.sleep(remaining);
-                now = System.nanoTime();
-            }
-            nextRequestNanos = now + intervalNanos;
-        } finally { rateLock.unlock(); }
     }
 
     private void lockToken() {

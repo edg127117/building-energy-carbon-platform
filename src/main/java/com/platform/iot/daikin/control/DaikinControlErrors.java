@@ -13,6 +13,8 @@ public final class DaikinControlErrors {
             case "REVISION_CHANGED" -> "设备状态或配置已变化，请刷新后确认";
             case "INVALID_REQUEST" -> "控制参数无效";
             case "BATCH_SOURCE_BACKPRESSURE" -> "厂家限流或忙碌，本批次该来源的未发送项已停止";
+            case "HTTP_BUDGET_UNAVAILABLE" -> "本地请求预算暂不可用，本次未发送";
+            case "CONTROL_AUTH_UNAVAILABLE" -> "厂家认证暂不可用，本次未发送";
             case "SOURCE_PAUSED" -> "厂家来源暂不可用，请稍后重新核验";
             case "PREVIEW_EXPIRED" -> "批量预检已过期，请重新核验设备能力";
             case "PREVIEW_BUSY" -> "批量能力读取中，请稍后重试";

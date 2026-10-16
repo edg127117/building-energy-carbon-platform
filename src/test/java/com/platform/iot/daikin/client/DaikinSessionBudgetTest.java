@@ -9,8 +9,30 @@ import java.util.*;
 import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
-/** 速率是请求起始间隔，不依赖上一请求返回；普通测试仅使用内存 transport。 */
+/** 滚动预算允许小批突发且总量受限；普通测试仅使用内存 transport。 */
 class DaikinSessionBudgetTest {
+    @Test void authenticationFailureIsKnownNotSentButTransportFailureRemainsUnknown() {
+        var puts=new java.util.concurrent.atomic.AtomicInteger();
+        var authFails=new java.util.concurrent.atomic.AtomicBoolean(true);
+        var config=new DaikinClientConfiguration(true,true,URI.create("https://vendor.example.test"),
+                new DaikinClientConfiguration.Credentials("test","test","salt","0123456789abcdef"),
+                Duration.ofSeconds(1),Duration.ofSeconds(10),Duration.ofSeconds(1),Duration.ZERO,10000,4,4);
+        DaikinHttpTransport transport=(request,max)->{
+            if(request.method().equals("PUT")) { puts.incrementAndGet();throw new java.io.IOException("response lost"); }
+            if(authFails.get()) throw new java.io.IOException("authentication unavailable");
+            return new DaikinHttpTransport.Response(200,"{\"code\":\"10000\",\"data\":{\"token\":\"t\",\"refreshKey\":\"r\",\"expireAt\":\"2099-01-01T00:00:00Z\"}}".getBytes(StandardCharsets.UTF_8));
+        };
+        var json=new ObjectMapper();var session=new DaikinSession(config,new DaikinControlWireCodec(json),transport,json,Clock.systemUTC());
+        assertThatThrownBy(()->session.controlOnce(DaikinEndpoint.CONTROL_ON_OFF,"v0",Map.of("onOff","on")))
+                .isInstanceOfSatisfying(com.platform.iot.daikin.control.DaikinControlGateway.NotSentException.class,
+                        e->assertThat(e.reason()).isEqualTo("CONTROL_AUTH_UNAVAILABLE"));
+        assertThat(puts).hasValue(0);
+        authFails.set(false);
+        assertThatThrownBy(()->session.controlOnce(DaikinEndpoint.CONTROL_ON_OFF,"v0",Map.of("onOff","on")))
+                .isInstanceOfSatisfying(DaikinClientException.class,e->assertThat(e.code()).isEqualTo(DaikinClientException.Code.TRANSPORT_FAILURE));
+        assertThat(puts).hasValue(1);
+    }
+
     @Test void lowRateCannotWaitPastLocalBudgetAndLaterTransmitAStalePut() {
         var calls=new java.util.concurrent.atomic.AtomicInteger();
         var config=new DaikinClientConfiguration(true,true,URI.create("https://vendor.example.test"),
@@ -22,11 +44,12 @@ class DaikinSessionBudgetTest {
         };
         var json=new ObjectMapper();var session=new DaikinSession(config,new DaikinControlWireCodec(json),transport,json,Clock.systemUTC());
         assertThatThrownBy(()->session.controlOnce(DaikinEndpoint.CONTROL_ON_OFF,"v0",Map.of("onOff","on")))
-                .isInstanceOfSatisfying(DaikinClientException.class,e->assertThat(e.code()).isEqualTo(DaikinClientException.Code.CONCURRENCY_LIMIT));
+                .isInstanceOfSatisfying(com.platform.iot.daikin.control.DaikinControlGateway.NotSentException.class,
+                        e->assertThat(e.reason()).isEqualTo("HTTP_BUDGET_UNAVAILABLE"));
         assertThat(calls).hasValue(1); // Only authentication reached transport; the PUT never did.
     }
 
-    @Test void configuredRatePacesStartsWhileResponsesStillOverlap() throws Exception {
+    @Test void configuredWindowAllowsThreeRequestsBeforeAnyResponse() throws Exception {
         var starts=new CopyOnWriteArrayList<Long>();var release=new CountDownLatch(1);var arrived=new CountDownLatch(3);
         var config=new DaikinClientConfiguration(true,true,URI.create("https://vendor.example.test"),
                 new DaikinClientConfiguration.Credentials("test","test","salt","0123456789abcdef"),
@@ -49,7 +72,7 @@ class DaikinSessionBudgetTest {
                 assertThat(arrived.await(4,TimeUnit.SECONDS)).isTrue();
                 var sorted=starts.stream().sorted().toList();
                 assertThat(sorted).hasSize(3);
-                for(int i=1;i<3;i++) assertThat(sorted.get(i)-sorted.get(i-1)).isGreaterThanOrEqualTo(TimeUnit.MILLISECONDS.toNanos(230));
+                assertThat(sorted.getLast()-sorted.getFirst()).isLessThan(TimeUnit.MILLISECONDS.toNanos(230));
             } finally { release.countDown(); }
             for(var future:futures) future.get(5,TimeUnit.SECONDS);
         }
