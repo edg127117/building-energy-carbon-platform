@@ -127,9 +127,62 @@ class DaikinBatchParallelTest {
 
     @ParameterizedTest @ValueSource(ints={3,15,100})
     void actualHttpsRequestsReachManufacturerWhileFirstResponseIsBlocked(int count) throws Exception {
+        httpsProof(count,1000);
+    }
+
+    @Test void twoRequestsActuallyOverlapWithProductionFourPerSecondBudget() throws Exception { httpsProof(2,4); }
+
+    @ParameterizedTest @ValueSource(booleans={true,false})
+    void skippedPreflightOrAlreadyTargetDoesNotBlockReadySameBatchPeers(boolean preflightFailure) throws Exception {
+        httpsProof(3,4,preflightFailure?"preflight-failure":"already-target");
+    }
+
+    @Test void groupingDatabaseFailureDoesNotLeakLocalWorkerCapacity() throws Exception {
+        try(var t=new DaikinBatchControlTest.Fixture(2,2)) {
+            t.submit(2,Action.ON_OFF,"on");
+            var failingStore=org.mockito.Mockito.spy(t.store);
+            org.mockito.Mockito.doThrow(new IllegalStateException("database unavailable"))
+                    .when(failingStore).parallelPolicy(org.mockito.ArgumentMatchers.any());
+            var service=new DaikinBatchService(failingStore,t.controls,t.f.access,t.f.policy,t.f.props,t.f.jdbc,t.f.clock);
+            try {
+                service.tick();
+                var active=(java.util.concurrent.atomic.AtomicInteger)org.springframework.test.util.ReflectionTestUtils.getField(service,"active");
+                assertThat(active).hasValue(0);
+                assertThat(t.sends).hasValue(0);
+            } finally { service.stop(); }
+        }
+    }
+
+    @Test void localBudgetRefusalDoesNotCreateUnknownIsolationOrReplayAWrite() throws Exception {
+        try(var t=new DaikinBatchControlTest.Fixture(2,2,f->new DaikinControlGateway() {
+            public boolean supports(String source) { return true; }
+            public Snapshot read(DaikinControlAccess.Target target) {
+                return new Snapshot(f.f.gateway.controller.deepCopy().put("lcNo","c0"),f.units.get(target.equipmentId()).deepCopy());
+            }
+            public Reply send(DaikinControlAccess.Target target,Action action,String value) {
+                throw new NotSentException("HTTP_BUDGET_UNAVAILABLE");
+            }
+        })) {
+            var batch=t.submit(2,Action.ON_OFF,"on");
+            assertThat(t.drain(batch.batchId()).items()).allSatisfy(i->{
+                assertThat(i.status()).isEqualTo(ItemStatus.NOT_SENT);
+                assertThat(i.reasonCode()).isEqualTo("HTTP_BUDGET_UNAVAILABLE");
+            });
+            assertThat(t.sends).hasValue(0);
+            for(String suffix:List.of("slot","controller_slot","batch_lane"))
+                assertThat(t.f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_"+suffix,Integer.class)).isZero();
+            assertThat(t.f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_operation WHERE status='UNKNOWN'",Integer.class)).isZero();
+        }
+    }
+
+    private void httpsProof(int count,int rate) throws Exception { httpsProof(count,rate,null); }
+
+    private void httpsProof(int count,int rate,String skipped) throws Exception {
+        int expected=count-(skipped==null?0:1);
+        var submitted=new AtomicBoolean();
         var fixture=new AtomicReference<DaikinBatchControlTest.Fixture>();
         var release=new CountDownLatch(1);var arrivals=new CopyOnWriteArrayList<String>();
-        var initialWindow=new CountDownLatch(Math.min(count,4));
+        var initialWindow=new CountDownLatch(Math.min(expected,4));
         var responseSent=new AtomicBoolean();var beforeFirstResponse=new AtomicInteger();
         var inFlight=new AtomicInteger();var maxInFlight=new AtomicInteger();var tokens=new AtomicInteger();
         try(var server=new DaikinLoopbackHttps(exchange->{
@@ -138,6 +191,9 @@ class DaikinBatchParallelTest {
                 if(path.equals("/token")) { tokens.incrementAndGet(); body="{\"code\":\"10000\",\"data\":{\"token\":\"test-token\",\"refreshKey\":\"refresh\",\"expireAt\":\"2099-01-01T00:00:00Z\"}}"; }
                 else if(exchange.getRequestMethod().equals("GET")) {
                     String vendor=path.substring(path.lastIndexOf('/')+1);var t=fixture.get();
+                    if(submitted.get() && "preflight-failure".equals(skipped) && vendor.equals("v0")) {
+                        respond(exchange,"{\"code\":\"10008\"}");return;
+                    }
                     var unit=t.units.get(t.device(Integer.parseInt(vendor.substring(1))));
                     var envelope=t.f.json.createObjectNode().put("code","10000");
                     var controller=envelope.putObject("data").putArray("sites").addObject().put("siteId","site")
@@ -165,26 +221,30 @@ class DaikinBatchParallelTest {
                 fixture.set(f);
                 var config=new DaikinClientConfiguration(true,true,server.uri,
                         new DaikinClientConfiguration.Credentials("test-app","test-password","test-salt","0123456789abcdef"),
-                        Duration.ofSeconds(2),Duration.ofSeconds(60),Duration.ofSeconds(10),Duration.ofSeconds(1),1_000_000,4,1000);
+                        Duration.ofSeconds(2),Duration.ofSeconds(rate==4?10:60),Duration.ofSeconds(rate==4?1:10),Duration.ofSeconds(1),1_000_000,4,rate);
                 return new DaikinControlClient("source",new DaikinSession(config,new DaikinControlWireCodec(f.f.json),server.transport,f.f.json,f.f.clock));
             })) {
-                var batch=t.submit(count,Action.ON_OFF,"on");
+                var batch=t.submit(count,Action.ON_OFF,"on");submitted.set(true);
+                if("already-target".equals(skipped)) t.units.get(t.device(0)).put("onOff","on").put("unitStatus","operating");
                 try {
-                    try { await(()->arrivals.size()==count,t.service::tick); }
+                    try { await(()->arrivals.size()==expected,t.service::tick); }
                     catch(AssertionError failed) { throw new AssertionError("arrivals="+arrivals+";items="+t.service.get(7,batch.batchId()).items()+";ops="+t.f.jdbc.queryForList("SELECT equipment_id,status,reason_code FROM biz_daikin_control_operation"),failed); }
                     assertThat(responseSent).isFalse();
-                    assertThat(beforeFirstResponse).hasValue(count);
-                    assertThat(arrivals).doesNotHaveDuplicates().hasSize(count);
-                    assertThat(maxInFlight.get()).isEqualTo(Math.min(count,4));
+                    assertThat(beforeFirstResponse).hasValue(expected);
+                    assertThat(arrivals).doesNotHaveDuplicates().hasSize(expected);
+                    assertThat(maxInFlight.get()).isEqualTo(Math.min(expected,4));
                     assertThat(t.f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_event WHERE status='ACCEPTED'",Integer.class)).isLessThan(count);
                     assertThat(tokens).hasValue(1);
                     System.out.printf("HTTPS_PARALLEL_PROOF devices=%d arrivalsBeforeFirstResponse=%d maxPutInFlight=%d%n",count,beforeFirstResponse.get(),maxInFlight.get());
                 } finally { release.countDown(); }
-                await(()->t.service.get(7,batch.batchId()).items().stream().allMatch(i->i.status()==ItemStatus.ACTIVE),t.service::tick);
+                await(()->t.service.get(7,batch.batchId()).items().stream().noneMatch(i->i.status()==ItemStatus.QUEUED || i.status()==ItemStatus.DISPATCHING),t.service::tick);
                 // Finish real readback through the same HTTPS/codec/identity path without sending another PUT.
                 t.units.values().forEach(u->u.put("onOff","on").put("unitStatus","operating"));
-                assertThat(t.drain(batch.batchId()).completedCount()).isEqualTo(count);
-                assertThat(arrivals).hasSize(count);
+                var complete=t.drain(batch.batchId());
+                assertThat(complete.completedCount()).isEqualTo("preflight-failure".equals(skipped)?count-1:count);
+                assertThat(arrivals).hasSize(expected);
+                if(skipped!=null) assertThat(arrivals).doesNotContain("v0");
+                assertThat(t.f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_slot",Integer.class)).isZero();
             }
         } finally { release.countDown(); }
     }

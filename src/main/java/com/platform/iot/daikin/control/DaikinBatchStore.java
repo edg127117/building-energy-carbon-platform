@@ -160,6 +160,11 @@ public class DaikinBatchStore {
                 """,this::map);
     }
 
+    boolean parallelPolicy(Work work) {
+        return "PARALLEL_ON_OFF_V1".equals(jdbc.queryForObject("SELECT dispatch_policy FROM biz_daikin_control_batch WHERE batch_id=?",String.class,work.batchId()))
+                && work.action()==Action.ON_OFF && work.impactedTargets().isEmpty();
+    }
+
     Work claim(Work candidate,Clock clock,int concurrency) {
         return tx.execute(status->{
             jdbc.queryForList("SELECT gate_id FROM biz_daikin_control_batch_gate WHERE gate_id=1 FOR UPDATE");

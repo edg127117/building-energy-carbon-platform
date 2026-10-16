@@ -142,26 +142,51 @@ public class DaikinBatchService {
         if(!properties.isEnabled()) return;
         try {
             store.synchronize(clock);
+            var claimed=new ArrayList<DaikinBatchStore.Work>();
             for(var candidate:store.candidates()) {
-                if(active.get()>=sendConcurrency) break;
+                if(active.get()+claimed.size()>=sendConcurrency) break;
                 var work=store.claim(candidate,clock,sendConcurrency);
                 if(work==null) continue;
-                active.incrementAndGet();
-                workers.execute(()->{try { dispatch(work); } finally { active.decrementAndGet(); }});
+                claimed.add(work);
             }
+            // 仅同批、同 LC 的新独立启停共享一次发送波次；旧策略和其他动作不等待同伴准备。
+            var waves=new LinkedHashMap<String,List<DaikinBatchStore.Work>>();
+            for(var work:claimed) {
+                String key=store.parallelPolicy(work)?work.batchId()+":"+work.target().controllerKey():work.item().itemId();
+                waves.computeIfAbsent(key,k->new ArrayList<>()).add(work);
+            }
+            for(var wave:waves.values()) launch(wave);
         } catch(RuntimeException e) { org.slf4j.LoggerFactory.getLogger(getClass()).warn("批量控制扫描未完成，持久化队列保留",e); }
     }
-    void dispatch(DaikinBatchStore.Work work) {
+    private void launch(List<DaikinBatchStore.Work> wave) {
+        List<DaikinControlGateway.SendPermit> permits;
+        try { permits=controls.prepareBatchSendWave(wave.getFirst().target(),wave.size()); }
+        catch(RuntimeException failure) {
+            for(var work:wave) store.failDispatch(work,"PROVIDER_UNAVAILABLE",clock);
+            return;
+        }
+        for(int i=0;i<wave.size();i++) {
+            var work=wave.get(i);var permit=permits.get(i);
+            // 仅已交给本进程执行器的任务占本地名额；领取/分组的数据库失败由持久化租约恢复。
+            active.incrementAndGet();
+            try { workers.execute(()->{try { dispatch(work,permit); } finally { active.decrementAndGet(); }}); }
+            catch(RejectedExecutionException failure) { permit.close();active.decrementAndGet();store.failDispatch(work,"DISPATCH_INTERRUPTED",clock); }
+        }
+    }
+
+    void dispatch(DaikinBatchStore.Work work) { dispatch(work,DaikinControlGateway.uncoordinated()); }
+
+    private void dispatch(DaikinBatchStore.Work work,DaikinControlGateway.SendPermit permit) {
         try {
             // 排队期间撤权、归属、许可或关系变化均禁止发送；派发只使用预检保存的原设备和值。
             access.requireControl(work.user(),work.item().equipmentId());
             if(!work.target().equals(access.target(work.item().equipmentId()))) throw error(409,"REVISION_CHANGED");
             var operation=controls.submitBatch(work.user(),work.item().equipmentId(),new Submit(work.action(),work.value(),work.operationKey(),work.revision()),
-                    work.trace(),work.relationshipHash(),()->{store.requireDispatch(work,clock); requireTargets(work);},work.item().itemId());
+                    work.trace(),work.relationshipHash(),()->{store.requireDispatch(work,clock); requireTargets(work);},work.item().itemId(),permit);
             store.dispatched(work,operation,clock);
         } catch(RuntimeException e) {
             store.failDispatch(work,e instanceof BusinessException business?DaikinBatchStore.reason(business):"DISPATCH_RESULT_UNAVAILABLE",clock);
-        }
+        } finally { permit.close(); }
     }
     private void requireTargets(DaikinBatchStore.Work work) {
         access.requireControl(work.user(),work.item().equipmentId());

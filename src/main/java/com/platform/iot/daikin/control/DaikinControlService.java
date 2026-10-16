@@ -92,6 +92,20 @@ public class DaikinControlService {
 
     private Operation submit(long user, String equipment, Submit request, String traceId, String relationshipHash,
                              Runnable dispatchGuard, boolean skipTarget, String batchItemId) {
+        return submit(user,equipment,request,traceId,relationshipHash,dispatchGuard,skipTarget,batchItemId,DaikinControlGateway.uncoordinated());
+    }
+
+    List<DaikinControlGateway.SendPermit> prepareBatchSendWave(DaikinControlAccess.Target target,int size) {
+        return gateway(target).prepareSendWave(size);
+    }
+
+    Operation submitBatch(long user,String equipment,Submit request,String traceId,String relationshipHash,
+                          Runnable guard,String itemId,DaikinControlGateway.SendPermit permit) {
+        return submit(user,equipment,request,traceId,relationshipHash,guard,true,itemId,permit);
+    }
+
+    private Operation submit(long user, String equipment, Submit request, String traceId, String relationshipHash,
+                             Runnable dispatchGuard, boolean skipTarget, String batchItemId,DaikinControlGateway.SendPermit permit) {
         access.requireControl(user, equipment);
         validate(request);
         String hash = DaikinControlAccess.hash(equipment + "|" + request.action() + "|" + request.value() + "|" + request.revision());
@@ -147,7 +161,11 @@ public class DaikinControlService {
         if (sending.view().status() != Status.SENDING) return sending.view();
         DaikinControlGateway.Reply reply;
         snapshots.remove(target.fingerprint());
-        try { reply = gateway.send(target, request.action(), request.value()); }
+        try { reply = gateway.send(target, request.action(), request.value(),permit); }
+        catch(DaikinControlGateway.NotSentException failure) {
+            return store.transition(id,Set.of(Status.SENDING),Status.NOT_SENT,failure.reason(),
+                    null,null,null,null,user,clock.millis()).view();
+        }
         catch (RuntimeException failure) {
             return store.transition(id, Set.of(Status.SENDING), Status.UNKNOWN, "SEND_RESULT_UNKNOWN",
                     null, null, clock.millis() + (fast ? 0 : 15_000), null, user, clock.millis()).view();
