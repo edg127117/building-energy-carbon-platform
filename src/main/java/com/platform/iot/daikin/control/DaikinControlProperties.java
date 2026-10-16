@@ -17,6 +17,9 @@ public class DaikinControlProperties {
     private boolean testAccessEnabled = false;
     /** 仅显式 TEST 环境启用；开放空调模块账号/设备许可，并为新操作使用快速目标回显。 */
     private boolean testOpenControls = false;
+    /** 发送者和回读者使用独立线程预算；厂家 HTTP 并发/速率另由 device-client 限制。 */
+    private int batchSendConcurrency = 4;
+    private int readbackConcurrency = 4;
     private long fastReadbackTimeoutMillis = 60_000;
     /** 原限时测试模式的设备清单；TEST 全开放忽略此值，空清单不赋予设备许可。 */
     private java.util.List<String> testEquipmentIds = java.util.List.of();

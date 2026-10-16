@@ -11,6 +11,9 @@ import java.net.URI;
 @Setter
 @ConfigurationProperties(prefix = "daikin.device-client")
 public class DaikinDeviceClientProperties {
+    /** 同一来源进程内的共享 HTTP 预算，覆盖鉴权、读取和控制；不是厂家公布的配额。 */
+    private int maxConcurrentRequests = 4;
+    private int requestsPerSecond = 4;
     private boolean enabled;
     private String sourceId;
     private URI baseUri;

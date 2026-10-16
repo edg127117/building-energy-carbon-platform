@@ -27,7 +27,7 @@ public final class DaikinSession {
     private final ObjectMapper objectMapper;
     private final Clock clock;
     private final Semaphore concurrency;
-    private final Object rateLock = new Object();
+    private final ReentrantLock rateLock = new ReentrantLock(true);
     private final ReentrantLock tokenLock = new ReentrantLock();
     private long nextRequestNanos;
     private boolean rateInitialized;
@@ -226,7 +226,10 @@ public final class DaikinSession {
 
     private void awaitRateBudget() throws InterruptedException {
         long intervalNanos = 1_000_000_000L / configuration.requestsPerSecond();
-        synchronized (rateLock) {
+        long deadline = System.nanoTime() + configuration.concurrencyWait().toNanos();
+        if (!rateLock.tryLock(configuration.concurrencyWait().toNanos(), TimeUnit.NANOSECONDS))
+            throw new DaikinClientException(DaikinClientException.Code.CONCURRENCY_LIMIT);
+        try {
             long now = System.nanoTime();
             if (!rateInitialized) {
                 rateInitialized = true;
@@ -235,11 +238,13 @@ public final class DaikinSession {
             }
             long remaining = nextRequestNanos - now;
             if (remaining > 0) {
+                // 配置低速率时也不能无限等待，随后越过控制租约再迟到发送；本地等待超时不重试 PUT。
+                if (remaining > deadline - now) throw new DaikinClientException(DaikinClientException.Code.CONCURRENCY_LIMIT);
                 java.util.concurrent.TimeUnit.NANOSECONDS.sleep(remaining);
                 now = System.nanoTime();
             }
             nextRequestNanos = now + intervalNanos;
-        }
+        } finally { rateLock.unlock(); }
     }
 
     private void lockToken() {

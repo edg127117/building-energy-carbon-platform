@@ -36,6 +36,8 @@ class DaikinControlMigrationTest {
         execute(ds, "V71__mysql_daikin_batch_overlap.sql");
         assertThat(jdbc.queryForList("SELECT * FROM biz_daikin_control_controller_slot")).isEqualTo(oldSlots);
         assertThat(jdbc.queryForObject("SELECT overlap_allowed FROM biz_daikin_control_batch", Boolean.class)).isFalse();
+        execute(ds,"V72__mysql_daikin_batch_parallel.sql");
+        assertThat(jdbc.queryForObject("SELECT dispatch_policy FROM biz_daikin_control_batch",String.class)).isEqualTo("SERIAL_V1");
         jdbc.update("DELETE FROM biz_daikin_control_batch WHERE batch_id='old-batch'");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane", Integer.class)).isZero();

@@ -22,7 +22,8 @@ class DaikinBatchApiTest {
             var auth=new UsernamePasswordAuthenticationToken(new JwtUserPrincipal(7L,"offline"),null,List.of());
             var p=mvc.perform(post("/v1/hvac-control/batches/preview").principal(auth).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"equipmentIds\":[\"e000\",\"e001\",\"e002\"]}"))
-                    .andExpect(status().isOk()).andExpect(jsonPath("$.data.items.length()").value(3)).andReturn();
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.data.items.length()").value(3))
+                    .andExpect(jsonPath("$.data.items[0].independentOnOff").value(true)).andReturn();
             String preview=t.f.json.readTree(p.getResponse().getContentAsString()).path("data").path("previewId").asText();
             String body=t.f.json.writeValueAsString(new DaikinBatchContracts.SubmitBatch(preview,DaikinControlContracts.Action.TEMPERATURE,"26","api-batch-request",false));
             var result=mvc.perform(post("/v1/hvac-control/batches").principal(auth).contentType(MediaType.APPLICATION_JSON).content(body))
@@ -46,6 +47,9 @@ class DaikinBatchApiTest {
                     .content("{\"equipmentIds\":[]}")).andExpect(status().isBadRequest());
             mvc.perform(post("/v1/hvac-control/batches").principal(auth).contentType(MediaType.APPLICATION_JSON)
                     .content("{\"vendorId\":\"arbitrary\"}")).andExpect(status().isBadRequest()).andExpect(jsonPath("$.errorCode").value("HVAC_CONTROL_INVALID_REQUEST"));
+            mvc.perform(post("/v1/hvac-control/batches").principal(auth).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"previewId\":\"arbitrary\",\"action\":\"ON_OFF\",\"value\":\"on\",\"idempotencyKey\":\"forged-scope\",\"confirmLinkedImpact\":false,\"independentOnOff\":true}"))
+                    .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errorCode").value("HVAC_CONTROL_INVALID_REQUEST"));
             var batch=t.submit(1,DaikinControlContracts.Action.ON_OFF,"on");
             var other=new UsernamePasswordAuthenticationToken(new JwtUserPrincipal(8L,"other"),null,List.of());
             mvc.perform(get("/v1/hvac-control/batches/"+batch.batchId()).principal(other)).andExpect(status().isNotFound());

@@ -34,7 +34,7 @@ public class DaikinDeviceClientBeans {
                 properties.getPassword(), properties.getSignatureSalt(), properties.getCommunicationKey());
         var configuration = new DaikinClientConfiguration(true, true, properties.getBaseUri(), credentials,
                 Duration.ofSeconds(5), Duration.ofSeconds(10), Duration.ofSeconds(1),
-                Duration.ofMinutes(1), 1024 * 1024, 4, 4);
+                Duration.ofMinutes(1), 1024 * 1024, properties.getMaxConcurrentRequests(), properties.getRequestsPerSecond());
         Clock clock = Clock.systemUTC();
         DaikinWireCodec codec = controls.isEnabled() && controls.isWireConfirmed()
                 ? new DaikinControlWireCodec(mapper) : new DaikinV2DeviceWireCodec(mapper);

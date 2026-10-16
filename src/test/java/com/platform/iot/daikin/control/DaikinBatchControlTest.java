@@ -32,13 +32,15 @@ class DaikinBatchControlTest {
         final DaikinBatchService service;
         Runnable onSend=()->{};
         Runnable onRead=()->{};
-        Fixture(int count,int perController) throws Exception {
+        Fixture(int count,int perController) throws Exception { this(count,perController,null); }
+        Fixture(int count,int perController,java.util.function.Function<Fixture,DaikinControlGateway> factory) throws Exception {
             f=new ControlFixture(); f.props.setTestOpenControls(true);
             f.jdbc.execute("ALTER TABLE biz_equipment ADD equip_name VARCHAR(100)");
             f.jdbc.execute("ALTER TABLE biz_equipment ADD equip_code VARCHAR(100)");
             f.jdbc.update("DELETE FROM biz_daikin_control_grant");
             String sql=(Files.readString(Path.of("src/env/init/V70__mysql_daikin_batch_control.sql"))
-                    + Files.readString(Path.of("src/env/init/V71__mysql_daikin_batch_overlap.sql")))
+                    + Files.readString(Path.of("src/env/init/V71__mysql_daikin_batch_overlap.sql"))
+                    + Files.readString(Path.of("src/env/init/V72__mysql_daikin_batch_parallel.sql")))
                     .replace(" COLLATE utf8mb4_bin","").replace(" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4","");
             // MySQL 原子替换主键；H2 只拆分 DDL，真实迁移另由隔离 MySQL 执行。
             for (String table : List.of("biz_daikin_control_controller_slot", "biz_daikin_control_batch_lane"))
@@ -74,7 +76,7 @@ class DaikinBatchControlTest {
                     return new Reply("10000");
                 }
             };
-            controls=new DaikinControlService(f.props,f.access,f.policy,f.store,List.of(gateway),f.clock);
+            controls=new DaikinControlService(f.props,f.access,f.policy,f.store,List.of(factory==null?gateway:factory.apply(this)),f.clock);
             AuditEvidenceWriter writer=new JdbcSecurityAuditEvidenceWriter(f.jdbc,new AuditSummarySanitizer());
             store=new DaikinBatchStore(f.jdbc,new TransactionTemplate(new DataSourceTransactionManager(f.jdbc.getDataSource())),f.json,f.store,
                     e->{if(f.auditFails) throw new IllegalStateException("模拟审计事务失败");writer.append(e);},new AuditGovernanceProperties());
@@ -102,7 +104,7 @@ class DaikinBatchControlTest {
             return new DaikinBatchStore(jdbc,new TransactionTemplate(new DataSourceTransactionManager(f.jdbc.getDataSource())),f.json,f.store,
                     new JdbcSecurityAuditEvidenceWriter(jdbc,new AuditSummarySanitizer()),new AuditGovernanceProperties());
         }
-        public void close() { service.stop(); }
+        public void close() { service.stop(); controls.stop(); f.service.stop(); }
     }
 
     @ParameterizedTest @ValueSource(ints={1,3,15,100})
@@ -335,7 +337,7 @@ class DaikinBatchControlTest {
             var p=t.preview(1);assertThat(p.items().getFirst().impactedEquipmentIds()).containsExactly(t.device(1));
             assertThat(p.items().getFirst().impactedEquipmentLabels()).containsEntry(t.device(1),"模拟空调1");
             assertThatThrownBy(()->t.service.submit(7,t.request(p,Action.MODE,"heating","linked-request-1"),"offline")).isInstanceOf(BusinessException.class);
-            assertThatThrownBy(()->t.service.submit(7,t.request(p,Action.ON_OFF,"on","linked-on-off-1"),"offline")).isInstanceOf(BusinessException.class);
+            assertThat(p.items().getFirst().independentOnOff()).isTrue();
             var batch=t.service.submit(7,new SubmitBatch(p.previewId(),Action.MODE,"heating","linked-request-2",true),"offline");
             t.units.get(t.device(0)).putArray("masterSlaveIds").add("unknown-unit");
             assertThat(t.drain(batch.batchId()).items().getFirst().status()).isEqualTo(ItemStatus.NOT_SENT);assertThat(t.sends).hasValue(0);

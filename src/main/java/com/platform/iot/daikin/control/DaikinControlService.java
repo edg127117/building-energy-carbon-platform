@@ -26,6 +26,8 @@ public class DaikinControlService {
     private final DaikinControlStore store;
     private final List<DaikinControlGateway> gateways;
     private final Clock clock;
+    private final java.util.concurrent.ExecutorService readbackWorkers;
+    private final java.util.concurrent.Semaphore readbackPermits;
     private final java.util.concurrent.ConcurrentHashMap<String, CachedSnapshot> snapshots = new java.util.concurrent.ConcurrentHashMap<>();
     private record CachedSnapshot(DaikinControlGateway.Snapshot value, long at) { }
 
@@ -38,6 +40,11 @@ public class DaikinControlService {
                          DaikinControlStore store, List<DaikinControlGateway> gateways, Clock clock) {
         this.properties = properties; this.access = access; this.policy = policy; this.store = store;
         this.gateways = List.copyOf(gateways); this.clock = clock;
+        int concurrency=properties.getReadbackConcurrency();
+        if(concurrency<1 || concurrency>64) throw new IllegalArgumentException("readback-concurrency must be 1..64");
+        readbackPermits=new java.util.concurrent.Semaphore(concurrency);
+        readbackWorkers=java.util.concurrent.Executors.newFixedThreadPool(concurrency,
+                Thread.ofPlatform().daemon().name("hvac-readback-",0).factory());
     }
 
     public Options options(long user, String equipment) {
@@ -103,6 +110,10 @@ public class DaikinControlService {
         try {
             // 排队项必须在派发前重新读取能力、关系与实际值，不能复用页面预检的短时缓存。
             var snapshot = skipTarget ? gateway.read(target) : snapshot(target, fast);
+            // 旧预检也必须服从当前启停边界，不能借旧确认绕过共用遥控器保护。
+            if (skipTarget && request.action() == Action.ON_OFF
+                    && (!snapshot.unit().path("isGroupSlave").isBoolean() || snapshot.unit().path("isGroupSlave").asBoolean()))
+                throw error(409, "LINKED_SCOPE_UNKNOWN");
             if (skipTarget && Set.of(Action.MODE, Action.ON_OFF).contains(request.action()) && !java.util.Objects.equals(relationshipHash, policy.relationshipHash(snapshot)))
                 throw error(409, "LINKED_SCOPE_CHANGED");
             if (!request.revision().equals(fast ? policy.testRevision(target) : policy.revision(target, snapshot))) throw error(409, "REVISION_CHANGED");
@@ -124,7 +135,15 @@ public class DaikinControlService {
                     null, null, null, null, user, clock.millis()).view();
         }
         // 此事务成功是唯一发送许可。进程在提交后退出也只会被恢复为 UNKNOWN，不再调用 send。
-        var sending = store.markSending(id, before, baseline, user, clock.millis(), fast ? properties.getFastReadbackTimeoutMillis() : 300_000, dispatchGuard);
+        DaikinControlStore.Row sending;
+        try {
+            sending = store.markSending(id, before, baseline, user, clock.millis(), fast ? properties.getFastReadbackTimeoutMillis() : 300_000, dispatchGuard);
+        } catch (RuntimeException failure) {
+            // 守卫拒绝时还没有发送许可，及时结束 PREPARING；若发送意图已经提交则保留原状态供只读恢复。
+            return store.transition(id, Set.of(Status.PREPARING), Status.NOT_SENT,
+                    failure instanceof BusinessException e ? reason(e) : "PREFLIGHT_UNAVAILABLE",
+                    null, null, null, null, user, clock.millis()).view();
+        }
         if (sending.view().status() != Status.SENDING) return sending.view();
         DaikinControlGateway.Reply reply;
         snapshots.remove(target.fingerprint());
@@ -211,24 +230,46 @@ public class DaikinControlService {
         return store.finish(id, Set.of(Status.UNKNOWN, Status.UNCONFIRMED, Status.CLOSED), true, reason.strip(), user, clock.millis()).view();
     }
 
+    /** 调度线程不等待 HTTP 回读；只读租约和独立预算防止慢读取阻塞批量发送扫描。 */
     @Scheduled(fixedDelayString = "${daikin.control.reconcile-delay-ms:1000}")
+    public void scheduledReconcile() {
+        if(!properties.isEnabled()) return;
+        for(var row:store.due(clock.millis())) {
+            if(!readbackPermits.tryAcquire()) break;
+            try {
+                if(!store.claimCheck(row,clock.millis())) { readbackPermits.release(); continue; }
+                readbackWorkers.execute(()->{try { reconcileClaimed(row); } finally { readbackPermits.release(); }});
+            } catch(RuntimeException failure) { readbackPermits.release(); throw failure; }
+        }
+    }
+
     public void reconcile() {
         if (!properties.isEnabled()) return;
         for (var row : store.due(clock.millis())) {
             try {
                 if (!store.claimCheck(row, clock.millis())) continue;
-                if (row.view().status() == Status.PREPARING) {
-                    store.transition(row.view().operationId(), Set.of(Status.PREPARING), Status.NOT_SENT,
-                            "PREFLIGHT_EXPIRED", null, null, null, null, 0, clock.millis());
-                } else if (row.view().status() == Status.SENDING) {
-                    store.transition(row.view().operationId(), Set.of(Status.SENDING), Status.UNKNOWN,
-                            "SEND_RESULT_UNKNOWN", null, null, clock.millis() + (DaikinControlPolicy.isFastBaseline(row.baseline()) ? 0 : 15_000), null, 0, clock.millis());
-                } else if (CHECKABLE.contains(row.view().status())) check(store.get(row.view().operationId()), 0);
+                reconcileClaimed(row);
             } catch (RuntimeException e) {
                 org.slf4j.LoggerFactory.getLogger(getClass()).warn("空调控制只读恢复失败，记录保留: operationId={}", row.view().operationId());
             }
         }
     }
+
+    private void reconcileClaimed(DaikinControlStore.Row row) {
+        try {
+            if (row.view().status() == Status.PREPARING) {
+                store.transition(row.view().operationId(), Set.of(Status.PREPARING), Status.NOT_SENT,
+                        "PREFLIGHT_EXPIRED", null, null, null, null, 0, clock.millis());
+            } else if (row.view().status() == Status.SENDING) {
+                store.transition(row.view().operationId(), Set.of(Status.SENDING), Status.UNKNOWN,
+                        "SEND_RESULT_UNKNOWN", null, null, clock.millis() + (DaikinControlPolicy.isFastBaseline(row.baseline()) ? 0 : 15_000), null, 0, clock.millis());
+            } else if (CHECKABLE.contains(row.view().status())) check(store.get(row.view().operationId()), 0);
+        } catch(RuntimeException failure) {
+            org.slf4j.LoggerFactory.getLogger(getClass()).warn("空调控制只读恢复失败，记录保留: operationId={}",row.view().operationId());
+        }
+    }
+
+    @jakarta.annotation.PreDestroy public void stop() { readbackWorkers.shutdown(); }
 
     private DaikinControlStore.Row check(DaikinControlStore.Row row, long actor) {
         long requestedAt = clock.millis();

@@ -69,29 +69,29 @@ public class DaikinControlStore {
     }
 
     private record BatchMember(String batchId, long user, Action action, String value, String equipment,
-                               String status, boolean overlap, String relationship, String impacts) { }
+                               String status, boolean overlap, String relationship, String impacts, String policy) { }
 
     private BatchMember batchMember(String itemId) {
         var rows = jdbc.query("""
-                SELECT i.*,b.operator_id,b.action,b.requested_value,b.overlap_allowed
+                SELECT i.*,b.operator_id,b.action,b.requested_value,b.overlap_allowed,b.dispatch_policy
                 FROM biz_daikin_control_batch_item i JOIN biz_daikin_control_batch b ON b.batch_id=i.batch_id
                 WHERE i.item_id=?
                 """, (rs, n) -> new BatchMember(rs.getString("batch_id"), rs.getLong("operator_id"),
                 Action.valueOf(rs.getString("action")), rs.getString("requested_value"), rs.getString("equipment_id"),
                 rs.getString("status"), rs.getBoolean("overlap_allowed"), rs.getString("relationship_hash"),
-                rs.getString("impacted_targets_json")), itemId);
+                rs.getString("impacted_targets_json"), rs.getString("dispatch_policy")), itemId);
         return rows.size() == 1 ? rows.getFirst() : null;
     }
 
     private boolean independentSwitch(BatchMember member) {
-        if (member == null || !member.overlap() || member.action() != Action.ON_OFF
+        if (member == null || !Set.of("ACCEPTED_PAIR_V1","PARALLEL_ON_OFF_V1").contains(member.policy()) || !member.overlap() || member.action() != Action.ON_OFF
                 || !Set.of("on", "off").contains(member.value()) || member.relationship() == null) return false;
         try { var impacts = member.impacts() == null ? null : json.readTree(member.impacts());
             return impacts != null && impacts.isArray() && impacts.isEmpty(); }
         catch (JsonProcessingException e) { return false; }
     }
 
-    /** 来源锁下检查持久化槽；仅同批同值、无联动且已明确受理的一台可以与候选共同等待回读。 */
+    /** 来源锁下检查持久化槽；启停影响按动作落库，冷热选择权关联不占用启停影响范围。 */
     boolean canDispatchBatch(DaikinControlAccess.Target target, String itemId, long now) {
         var member = batchMember(itemId);
         if (member == null || !member.equipment().equals(target.equipmentId())) return false;
@@ -116,6 +116,7 @@ public class DaikinControlStore {
                 WHERE l.controller_key=? AND l.item_id<>?
                   AND (o.status IS NULL OR o.status NOT IN ('CLOUD_VERIFIED','REJECTED','NOT_SENT'))
                 """, String.class, target.controllerKey(), itemId);
+        if ("PARALLEL_ON_OFF_V1".equals(member.policy()) && independentSwitch(member)) return parallelPeers(member,target,occupied,lanes,now);
         if (occupied.isEmpty()) return lanes.isEmpty();
         if (occupied.size() != 1 || !independentSwitch(member)) return false;
         var peer = occupied.getFirst();
@@ -144,6 +145,38 @@ public class DaikinControlStore {
                 && other.user() == member.user() && lanes.size() <= 1 && lanes.stream().allMatch(peerItem::equals);
     }
 
+    /** 短事务只验证同批独立启停和占用；PREPARING/SENDING 也可共享，绝不等待同伴的受理响应。 */
+    private boolean parallelPeers(BatchMember member, DaikinControlAccess.Target target, List<Row> occupied, List<String> lanes, long now) {
+        if(!independentSwitch(member)) return false;
+        for(String item:lanes) {
+            var other=batchMember(item);
+            // 受理落库与 lane 释放同事务；此处前一条查询的快照可能仍包含刚释放的 lane。
+            if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane WHERE item_id=?",Integer.class,item)==0) continue;
+            if(!sameParallelBatch(member,other) || !Set.of("DISPATCHING","ACTIVE").contains(other.status()) || other.equipment().equals(target.equipmentId())) return false;
+        }
+        for(var peer:occupied) {
+            // 快速策略完成/失败只锁操作本身；来源锁下不反向锁旧策略操作，避免锁序倒置。
+            if(!DaikinControlPolicy.isFastBaseline(peer.baseline())) return false;
+            peer=jdbc.query("SELECT * FROM biz_daikin_control_operation WHERE operation_id=? FOR UPDATE",this::map,peer.view().operationId()).getFirst();
+            if(Set.of(Status.CLOUD_VERIFIED,Status.REJECTED,Status.NOT_SENT).contains(peer.view().status())) continue;
+            if(!Set.of(Status.PREPARING,Status.SENDING,Status.ACCEPTED).contains(peer.view().status())
+                    || peer.view().action()!=Action.ON_OFF || !peer.view().value().equals(member.value())
+                    || peer.userId()!=member.user() || peer.view().equipmentId().equals(target.equipmentId())
+                    || peer.view().status()==Status.PREPARING && now-peer.view().createdAt()>=30_000
+                    || peer.view().status()!=Status.PREPARING && (peer.view().deadlineAt()==null || now>=peer.view().deadlineAt())) return false;
+            String key=jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",String.class,peer.view().operationId());
+            var other=key!=null && key.startsWith("batch-")?batchMember(key.substring(6)):null;
+            if(!sameParallelBatch(member,other) || !Set.of("DISPATCHING","ACTIVE").contains(other.status())
+                    || !other.equipment().equals(peer.view().equipmentId())) return false;
+        }
+        return true;
+    }
+
+    private boolean sameParallelBatch(BatchMember member,BatchMember other) {
+        return independentSwitch(other) && "PARALLEL_ON_OFF_V1".equals(other.policy())
+                && member.batchId().equals(other.batchId()) && member.user()==other.user() && member.value().equals(other.value());
+    }
+
     private boolean recoverableBatchPeers(Row row) {
         String key = jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",
                 String.class, row.view().operationId());
@@ -156,18 +189,21 @@ public class DaikinControlStore {
                 SELECT o.* FROM biz_daikin_control_operation o JOIN biz_daikin_control_controller_slot s ON s.operation_id=o.operation_id
                 WHERE s.controller_key=? AND o.operation_id<>? ORDER BY o.operation_id FOR UPDATE
                 """, this::map, row.target().controllerKey(), row.view().operationId());
-        if (peers.size() != 1) return false;
-        var peer = peers.getFirst();
-        if (!Set.of(Status.UNKNOWN, Status.UNCONFIRMED, Status.CLOSED, Status.OBSERVED_STABLE).contains(peer.view().status())) return false;
-        String peerKey = jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",
-                String.class, peer.view().operationId());
-        if (peerKey == null || !peerKey.startsWith("batch-")) return false;
-        var other = batchMember(peerKey.substring("batch-".length()));
-        // 两台均已结束自动核验时允许逐台只读恢复，避免互持槽导致无法处理；仍有执行中同伴则拒绝。
-        return independentSwitch(other) && other.batchId().equals(member.batchId()) && other.user() == member.user()
-                && other.value().equals(member.value()) && peer.view().action() == Action.ON_OFF
-                && other.equipment().equals(peer.view().equipmentId()) && DaikinControlPolicy.isFastBaseline(peer.baseline())
-                && peer.view().value().equals(member.value()) && peer.userId() == member.user();
+        if (peers.isEmpty() || !"PARALLEL_ON_OFF_V1".equals(member.policy()) && peers.size()!=1) return false;
+        for (var peer : peers) {
+            if (!Set.of(Status.UNKNOWN, Status.UNCONFIRMED, Status.CLOSED, Status.OBSERVED_STABLE).contains(peer.view().status())) return false;
+            String peerKey = jdbc.queryForObject("SELECT idempotency_key FROM biz_daikin_control_operation WHERE operation_id=?",
+                    String.class, peer.view().operationId());
+            if (peerKey == null || !peerKey.startsWith("batch-")) return false;
+            var other = batchMember(peerKey.substring("batch-".length()));
+            // 所有同伴均结束自动核验后才允许逐台只读恢复；执行中的同伴仍阻止释放。
+            if (!(independentSwitch(other) && other.batchId().equals(member.batchId()) && other.user() == member.user()
+                    && other.value().equals(member.value()) && peer.view().action() == Action.ON_OFF
+                    && other.equipment().equals(peer.view().equipmentId()) && DaikinControlPolicy.isFastBaseline(peer.baseline())
+                    && peer.view().value().equals(member.value()) && peer.userId() == member.user()
+                    && java.util.Objects.equals(other.policy(),member.policy()))) return false;
+        }
+        return true;
     }
 
     public Reservation reserve(long user, DaikinControlAccess.Target target, Submit request, String hash, String trace, long now) {

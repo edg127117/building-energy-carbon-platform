@@ -310,7 +310,12 @@ weather:
 
 # 控制默认关闭；测试全开放须显式声明 TEST 环境，测试部署可持续启用，不依赖限时窗口。
 daikin:
+  device-client:
+    max-concurrent-requests: ${DAIKIN_HTTP_MAX_CONCURRENT_REQUESTS:4}
+    requests-per-second: ${DAIKIN_HTTP_REQUESTS_PER_SECOND:4}
   control:
+    batch-send-concurrency: ${DAIKIN_BATCH_SEND_CONCURRENCY:4}
+    readback-concurrency: ${DAIKIN_READBACK_CONCURRENCY:4}
     enabled: ${DAIKIN_CONTROL_ENABLED:false}
     wire-confirmed: ${DAIKIN_CONTROL_WIRE_CONFIRMED:false}
     test-access-enabled: ${DAIKIN_CONTROL_TEST_ACCESS_ENABLED:false}
