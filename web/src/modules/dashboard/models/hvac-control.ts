@@ -33,6 +33,8 @@ export interface HvacControlBatchPreviewItem {
   impactedEquipmentIds: string[]
   impactedEquipmentLabels?: Record<string, string>
   impactKnown: boolean
+  /** 服务端明确确认独立启停；旧响应缺少此字段时保留原关联提示。 */
+  independentOnOff?: boolean
 }
 
 export interface HvacControlBatchPreview {

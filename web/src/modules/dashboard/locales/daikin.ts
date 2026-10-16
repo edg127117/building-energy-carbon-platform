@@ -167,6 +167,7 @@ export default {
       PREFLIGHT_UNAVAILABLE: '预检当前不可用', PREFLIGHT_EXPIRED: '预检已过期，请重新预检', REVISION_CHANGED: '设备状态或配置已变化，请重新预检',
       PROVIDER_UNAVAILABLE: '厂家服务当前不可用', SOURCE_PAUSED: '设备数据源已暂停', READBACK_UNAVAILABLE: '回读当前不可用',
       READBACK_NOT_CONFIRMED: '回读尚未确认', READBACK_INVALID: '回读字段缺失或无效', CANCELLED_BY_USER: '由用户取消未发送项',
+      BATCH_SOURCE_BACKPRESSURE: '厂家限流或忙碌，已停止该来源的未发送项', CONTROLLER_RESULT_UNCONFIRMED: '控制器存在未确认结果，未发送项已停止',
       REPLACED_BY_NEW_BATCH: '已被同动作的后续批次替换', DISPATCH_RESULT_UNAVAILABLE: '发送结果未确认', PREVIOUS_UNKNOWN_OPERATION: '控制器上一操作曾未确认，旧排队项不会补发',
     },
   },

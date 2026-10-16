@@ -53,10 +53,13 @@ function hasSafeCandidate(option: HvacControlActionOption | null): boolean {
 }
 
 const linkedImpactAction = computed(() => selectedAction.value === 'MODE' || selectedAction.value === 'ON_OFF')
-const linkedScopeUnknown = computed(() => linkedImpactAction.value && previewItems.value.some(item => !item.impactKnown))
+function impactKnown(item: HvacControlBatchPreviewItem, action: HvacControlAction): boolean {
+  return action === 'ON_OFF' && item.independentOnOff === true || item.impactKnown
+}
+const linkedScopeUnknown = computed(() => linkedImpactAction.value && previewItems.value.some(item => !impactKnown(item, selectedAction.value!)))
 function actionCanBeSent(item: HvacControlBatchPreviewItem, action: HvacControlAction): boolean {
   return hasSafeCandidate(actionOption(item, action))
-    && !((action === 'MODE' || action === 'ON_OFF') && !item.impactKnown)
+    && !((action === 'MODE' || action === 'ON_OFF') && !impactKnown(item, action))
 }
 function actionSupportCount(action: HvacControlAction): number {
   return previewItems.value.filter(item => actionCanBeSent(item, action)).length
@@ -110,7 +113,8 @@ const externalLinkedEquipment = computed(() => {
   for (const item of previewItems.value) {
     if (!actionCanBeSent(item, selectedAction.value!)) continue
     if (!isHvacControlActionValueAllowed(actionOption(item, selectedAction.value!)!, actionValue.value.trim())) continue
-    for (const equipmentId of item.impactedEquipmentIds) {
+    const impactedIds = selectedAction.value === 'ON_OFF' && item.independentOnOff === true ? [] : item.impactedEquipmentIds
+    for (const equipmentId of impactedIds) {
       if (!selectedSet.value.has(equipmentId)) labels.set(equipmentId, item.impactedEquipmentLabels?.[equipmentId] ?? deviceLabel(equipmentId))
     }
   }
@@ -126,7 +130,7 @@ const previewRows = computed(() => previewItems.value.map(item => {
     item,
     option,
     supported,
-    reasonCode: option?.reasonCode ?? item.reasonCode ?? (selectedAction.value && (selectedAction.value === 'MODE' || selectedAction.value === 'ON_OFF') && !item.impactKnown ? 'LINKED_SCOPE_UNKNOWN' : null),
+    reasonCode: option?.reasonCode ?? item.reasonCode ?? (selectedAction.value && (selectedAction.value === 'MODE' || selectedAction.value === 'ON_OFF') && !impactKnown(item, selectedAction.value) ? 'LINKED_SCOPE_UNKNOWN' : null),
   }
 }))
 const unsupportedPreviewRows = computed(() => previewRows.value.filter(row => !row.supported))

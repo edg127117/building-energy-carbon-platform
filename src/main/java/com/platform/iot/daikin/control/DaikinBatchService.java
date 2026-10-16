@@ -26,7 +26,8 @@ public class DaikinBatchService {
     private final DaikinControlProperties properties;
     private final JdbcTemplate jdbc;
     private final Clock clock;
-    private final ExecutorService workers = Executors.newFixedThreadPool(4, Thread.ofPlatform().daemon().name("hvac-batch-",0).factory());
+    private final ExecutorService workers;
+    private final int sendConcurrency;
     private final ExecutorService readers = Executors.newFixedThreadPool(4, Thread.ofPlatform().daemon().name("hvac-batch-preview-",0).factory());
     private final java.util.concurrent.atomic.AtomicInteger active = new java.util.concurrent.atomic.AtomicInteger();
     private final Semaphore previewPermit = new Semaphore(1);
@@ -40,6 +41,9 @@ public class DaikinBatchService {
                        DaikinControlPolicy policy, DaikinControlProperties properties, JdbcTemplate jdbc, Clock clock) {
         this.store=store; this.controls=controls; this.access=access; this.policy=policy;
         this.properties=properties; this.jdbc=jdbc; this.clock=clock;
+        sendConcurrency=properties.getBatchSendConcurrency();
+        if(sendConcurrency<1 || sendConcurrency>64) throw new IllegalArgumentException("batch-send-concurrency must be 1..64");
+        workers=Executors.newFixedThreadPool(sendConcurrency,Thread.ofPlatform().daemon().name("hvac-batch-",0).factory());
     }
 
     public Preview preview(long user,PreviewRequest request) {
@@ -66,6 +70,9 @@ public class DaikinBatchService {
             String relationship=policy.relationshipHash(snapshot);
             boolean known=relationship!=null && snapshot.unit().path("isGroupSlave").isBoolean()
                     && Set.of("Master","Slave").contains(snapshot.unit().path("masterSlaveFlag").asText());
+            // 冷热选择权主从不等于启停群组；只有明确不共用遥控器的完整关系快照可独立启停。
+            // 共用遥控器的成员不能由 masterSlaveIds 推断，范围未确认时保持禁止启停。
+            boolean independentOnOff=known && !snapshot.unit().path("isGroupSlave").asBoolean();
             var impacted=new ArrayList<String>();
             var impactedTargets=new ArrayList<DaikinControlAccess.Target>();
             var impactedLabels=new LinkedHashMap<String,String>();
@@ -92,14 +99,15 @@ public class DaikinBatchService {
             if(snapshot.unit().path("isGroupSlave").asBoolean() && impacted.isEmpty()) known=false;
             boolean finalKnown=known;
             boolean groupSlave=snapshot.unit().path("isGroupSlave").asBoolean();
-            var actions=inspection.options().actions().stream().map(a->(Set.of(Action.MODE,Action.ON_OFF).contains(a.action()) && !finalKnown
+            var actions=inspection.options().actions().stream().map(a->(a.action()==Action.MODE && !finalKnown
+                    || a.action()==Action.ON_OFF && !independentOnOff
                     || groupSlave && !Set.of(Action.MODE,Action.ON_OFF).contains(a.action()))
                     ?new ActionOption(a.action(),false,"LINKED_SCOPE_UNKNOWN",List.of(),null,null):a).toList();
             return new PreparedItem(new PreviewItem(equipment,inspection.options().revision(),null,actions,
-                    known?impacted.stream().distinct().sorted().toList():List.of(),known,known?Map.copyOf(impactedLabels):Map.of()),target,relationship,known?List.copyOf(impactedTargets):List.of());
+                    known?impacted.stream().distinct().sorted().toList():List.of(),known,known?Map.copyOf(impactedLabels):Map.of(),independentOnOff),target,relationship,known?List.copyOf(impactedTargets):List.of());
         } catch(RuntimeException e) {
             String reason=e instanceof BusinessException business?DaikinBatchStore.reason(business):"PREFLIGHT_UNAVAILABLE";
-            return new PreparedItem(new PreviewItem(equipment,null,reason,Arrays.stream(Action.values()).map(a->new ActionOption(a,false,reason,List.of(),null,null)).toList(),List.of(),false,Map.of()),null,null,List.of());
+            return new PreparedItem(new PreviewItem(equipment,null,reason,Arrays.stream(Action.values()).map(a->new ActionOption(a,false,reason,List.of(),null,null)).toList(),List.of(),false,Map.of(),false),null,null,List.of());
         }
     }
 
@@ -112,7 +120,7 @@ public class DaikinBatchService {
         var preview=store.preview(user,request.previewId(),clock.millis());
         if(Set.of(Action.MODE,Action.ON_OFF).contains(request.action())) {
             var selected=preview.items().stream().map(p->p.view().equipmentId()).collect(java.util.stream.Collectors.toSet());
-            boolean affectsOthers=preview.items().stream().filter(p->supports(p,request)).anyMatch(p->p.view().impactedEquipmentIds().stream().anyMatch(e->!selected.contains(e)));
+            boolean affectsOthers=preview.items().stream().filter(p->supports(p,request)).anyMatch(p->p.impactedTargets(request.action()).stream().anyMatch(t->!selected.contains(t.equipmentId())));
             if(affectsOthers && !request.confirmLinkedImpact()) throw error(409,"LINKED_CONFIRMATION_REQUIRED");
         }
         String id=store.create(user,request,hash,preview,trace,clock,access,policy,
@@ -135,8 +143,8 @@ public class DaikinBatchService {
         try {
             store.synchronize(clock);
             for(var candidate:store.candidates()) {
-                if(active.get()>=4) break;
-                var work=store.claim(candidate,clock,4);
+                if(active.get()>=sendConcurrency) break;
+                var work=store.claim(candidate,clock,sendConcurrency);
                 if(work==null) continue;
                 active.incrementAndGet();
                 workers.execute(()->{try { dispatch(work); } finally { active.decrementAndGet(); }});

@@ -20,6 +20,10 @@ class DaikinBatchOverlapTest {
         return t.store.work(item.itemId());
     }
 
+    private void legacy(DaikinBatchControlTest.Fixture t,Batch batch) {
+        t.f.jdbc.update("UPDATE biz_daikin_control_batch SET dispatch_policy='ACCEPTED_PAIR_V1' WHERE batch_id=?",batch.batchId());
+    }
+
     private void send(DaikinBatchControlTest.Fixture t, Batch batch, int index) {
         var claimed = t.store.claim(work(t, batch, index), t.f.clock, 4);
         assertThat(claimed).isNotNull();
@@ -50,7 +54,7 @@ class DaikinBatchOverlapTest {
     @Test void thirdWaitsAndOnlyOneOfTwoInstancesCanClaimTheSecondSlot() throws Exception {
         try (var t = new DaikinBatchControlTest.Fixture(3, 3); var pool = Executors.newFixedThreadPool(2)) {
             t.delayedRun.addAll(t.devices(3));
-            var batch = t.submit(3, Action.ON_OFF, "on"); send(t, batch, 0);
+            var batch = t.submit(3, Action.ON_OFF, "on"); legacy(t,batch); send(t, batch, 0);
             var other = t.anotherStore(); var start = new CountDownLatch(1);
             var a = pool.submit(() -> { start.await(); return t.store.claim(work(t, batch, 1), t.f.clock, 4); });
             var b = pool.submit(() -> { start.await(); return other.claim(work(t, batch, 2), t.f.clock, 4); });
@@ -70,7 +74,7 @@ class DaikinBatchOverlapTest {
 
     @Test void claimIsNotPermissionToSendBeforeTheFirstAcceptance() throws Exception {
         try (var t = new DaikinBatchControlTest.Fixture(2, 2)) {
-            var batch = t.submit(2, Action.ON_OFF, "on");
+            var batch = t.submit(2, Action.ON_OFF, "on"); legacy(t,batch);
             var first = t.store.claim(work(t, batch, 0), t.f.clock, 4);
             assertThat(t.store.claim(work(t, batch, 1), t.f.clock, 4)).isNull();
             t.service.dispatch(first); send(t, batch, 1);
@@ -78,11 +82,10 @@ class DaikinBatchOverlapTest {
         }
     }
 
-    @Test void legacyBatchOtherActionsLinkedScopeAndDifferentBatchesRemainSerial() throws Exception {
-        for (boolean linked : List.of(false, true)) try (var t = new DaikinBatchControlTest.Fixture(2, 2)) {
-            if (linked) t.units.get(t.device(0)).putArray("masterSlaveIds").add("v1");
+    @Test void legacyBatchOtherActionsAndDifferentBatchesRemainSerial() throws Exception {
+        try (var t = new DaikinBatchControlTest.Fixture(2, 2)) {
             var batch = t.submit(2, Action.ON_OFF, "on");
-            if (!linked) t.f.jdbc.update("UPDATE biz_daikin_control_batch SET overlap_allowed=FALSE WHERE batch_id=?", batch.batchId());
+            t.f.jdbc.update("UPDATE biz_daikin_control_batch SET overlap_allowed=FALSE WHERE batch_id=?", batch.batchId());
             send(t, batch, 0);
             assertThat(t.store.claim(work(t, batch, 1), t.f.clock, 4)).isNull();
         }
@@ -138,6 +141,9 @@ class DaikinBatchOverlapTest {
             String firstOperation = work(t, batch, 0).item().operationId();
             t.onRead = () -> t.f.jdbc.update("UPDATE biz_daikin_control_operation SET status='UNKNOWN' WHERE operation_id=?", firstOperation);
             t.service.dispatch(second); t.onRead = () -> {};
+            t.store.synchronize(t.f.clock);
+            assertThat(work(t,batch,1).item().status()).isEqualTo(ItemStatus.NOT_SENT);
+            assertThat(t.f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_operation WHERE status='PREPARING'",Integer.class)).isZero();
             assertThat(t.sends).hasValue(1);
             assertThat(t.f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_event WHERE status='SENDING'", Integer.class)).isEqualTo(1);
             t.f.clock.advance(120_001); t.controls.reconcile(); t.store.synchronize(t.f.clock);
@@ -210,7 +216,7 @@ class DaikinBatchOverlapTest {
 
     @Test void overlappingPairsStillShareTheGlobalFourOperationLimit() throws Exception {
         try (var t = new DaikinBatchControlTest.Fixture(6, 2)) {
-            var batch = t.submit(6, Action.ON_OFF, "on");
+            var batch = t.submit(6, Action.ON_OFF, "on"); legacy(t,batch);
             for (int i = 0; i < 4; i++) send(t, batch, i);
             assertThat(t.store.claim(work(t, batch, 4), t.f.clock, 4)).isNull();
             assertThat(t.sends).hasValue(4);

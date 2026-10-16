@@ -71,7 +71,7 @@ class DaikinBatchMysqlAcceptanceTest {
         db.update("UPDATE biz_device_product SET status='ENABLED' WHERE product_id='PRODUCT_DAIKIN_IN_STATE'");
     }
 
-    @Test @Order(1) void originalMigrationChainAddsV70AndV71WithoutChangingLegacyEvidence() throws Exception {
+    @Test @Order(1) void originalMigrationChainAddsVersionedDispatchWithoutChangingLegacyEvidence() throws Exception {
         try (var f = new Harness()) {
             var ids = seed("migration", 1, 1);
             behavior(ids.getFirst(), "UNKNOWN");
@@ -86,16 +86,20 @@ class DaikinBatchMysqlAcceptanceTest {
             db.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id) VALUES ('legacy',7,'legacy-batch',?,'ON_OFF','on',0,'mysql-migration')", "a".repeat(64));
             db.update("INSERT INTO biz_daikin_control_batch_lane(controller_key,item_id,lease_token,lease_until) VALUES (?,'legacy-item','legacy-lease',1)", "b".repeat(64));
             var oldLanes = db.queryForList("SELECT * FROM biz_daikin_control_batch_lane");
+            Flyway.configure().dataSource(db.getDataSource()).locations("filesystem:src/env/init").target("71").load().migrate();
+            db.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id,overlap_allowed) VALUES ('legacy-pair',7,'legacy-pair-key',?,'ON_OFF','on',0,'mysql-migration',TRUE)","f".repeat(64));
             var flyway = Flyway.configure().dataSource(db.getDataSource()).locations("filesystem:src/env/init").load();
             assertThat(flyway.migrate().migrationsExecuted).isEqualTo(1);
             flyway.validate();
             assertThat(flyway.migrate().migrationsExecuted).isZero();
             for (String table : CONTROL_TABLES) assertThat(db.queryForList("SELECT * FROM " + table)).containsExactlyInAnyOrderElementsOf(oldRows.get(table));
-            assertThat(db.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version NOT IN ('70','71') ORDER BY installed_rank")).isEqualTo(history);
+            assertThat(db.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version NOT IN ('70','71','72') ORDER BY installed_rank")).isEqualTo(history);
             assertThat(db.queryForList("SELECT * FROM biz_daikin_control_batch_lane")).isEqualTo(oldLanes);
             assertThat(db.queryForObject("SELECT overlap_allowed FROM biz_daikin_control_batch WHERE batch_id='legacy'", Boolean.class)).isFalse();
             db.update("DELETE FROM biz_daikin_control_batch_lane WHERE item_id='legacy-item'");
-            db.update("DELETE FROM biz_daikin_control_batch WHERE batch_id='legacy'");
+            assertThat(db.queryForObject("SELECT dispatch_policy FROM biz_daikin_control_batch WHERE batch_id='legacy'",String.class)).isEqualTo("SERIAL_V1");
+            assertThat(db.queryForObject("SELECT dispatch_policy FROM biz_daikin_control_batch WHERE batch_id='legacy-pair'",String.class)).isEqualTo("ACCEPTED_PAIR_V1");
+            db.update("DELETE FROM biz_daikin_control_batch WHERE batch_id IN ('legacy','legacy-pair')");
             assertThat(db.queryForObject("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('biz_daikin_control_preview','biz_daikin_control_batch','biz_daikin_control_batch_item','biz_daikin_control_batch_lane','biz_daikin_control_batch_gate')", Integer.class)).isEqualTo(5);
             assertThat(count("biz_daikin_control_batch")).isZero();
             assertThat(count("biz_daikin_control_batch_item")).isZero();
@@ -304,6 +308,7 @@ class DaikinBatchMysqlAcceptanceTest {
             var ids = seed("overlap", 3, 3);
             for (String id : ids) behavior(id, "NO_APPLY");
             var batch = submit(f, ids, Action.ON_OFF, "on", "overlap-two-jvm");
+            db.update("UPDATE biz_daikin_control_batch SET dispatch_policy='ACCEPTED_PAIR_V1' WHERE batch_id=?",batch.batchId());
             var first = f.store.claim(candidate(batch.batchId()), Clock.systemUTC(), 4); f.batches.dispatch(first);
             int before = count("acceptance_daikin_send");
             compete("dispatch-only", batch.batchId(), "dispatch-only", batch.batchId(), 0, 0);
@@ -392,6 +397,46 @@ class DaikinBatchMysqlAcceptanceTest {
         }
     }
 
+    @Test @Order(13) void commonModeMasterAllowsIndependentOnOffAndKeepsMasterUnchanged() throws Exception {
+        try(var f=new Harness()) {
+            var ids=seed("mode-relation",3,3);
+            for(int i=0;i<3;i++) {
+                var unit=(ObjectNode)f.gateway.read(f.access.target(ids.get(i))).unit();
+                unit.put("masterSlaveFlag",i==2?"Master":"Slave");
+                var related=unit.putArray("masterSlaveIds");
+                if(i==2)related.add("vendor-0").add("vendor-1");
+                else {
+                    related.add("vendor-2");unit.putArray("modeSetList").add("fan").add("dependent").add("dry");
+                    behavior(ids.get(i),"NO_APPLY");
+                }
+                db.update("UPDATE acceptance_daikin_unit SET unit_json=? WHERE equipment_id=?",unit.toString(),ids.get(i));
+            }
+            String masterBefore=db.queryForObject("SELECT unit_json FROM acceptance_daikin_unit WHERE equipment_id=?",String.class,ids.get(2));
+            for(String target:List.of("on","off")) {
+                var batch=submit(f,ids.subList(0,2),Action.ON_OFF,target,"mode-relation-"+target);
+                var first=f.store.claim(candidate(batch.batchId()),Clock.systemUTC(),4);f.batches.dispatch(first);
+                var second=f.store.claim(candidate(batch.batchId()),Clock.systemUTC(),4);assertThat(second).isNotNull();f.batches.dispatch(second);
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_operation WHERE source_id='mode-relation' AND status='ACCEPTED'",Integer.class)).isEqualTo(2);
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_item WHERE batch_id=? AND impacted_targets_json='[]'",Integer.class,batch.batchId())).isEqualTo(2);
+                f.controls.reconcile();f.store.synchronize(Clock.systemUTC());
+                assertThat(f.batches.get(USER,batch.batchId()).completedCount()).isZero();
+                for(String id:ids.subList(0,2)) {
+                    var unit=(ObjectNode)f.gateway.read(f.access.target(id)).unit();
+                    unit.put("onOff",target).put("unitStatus",target.equals("on")?"operating":"stopped");
+                    db.update("UPDATE acceptance_daikin_unit SET unit_json=? WHERE equipment_id=?",unit.toString(),id);
+                }
+                db.update("UPDATE biz_daikin_control_operation SET next_check_at=0,lease_until=0 WHERE source_id='mode-relation' AND status='ACCEPTED'");
+                f.controls.reconcile();f.store.synchronize(Clock.systemUTC());
+                assertThat(f.batches.get(USER,batch.batchId()).completedCount()).isEqualTo(2);
+                assertThat(db.queryForObject("SELECT unit_json FROM acceptance_daikin_unit WHERE equipment_id=?",String.class,ids.get(2))).isEqualTo(masterBefore);
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM acceptance_daikin_send WHERE equipment_id=?",Integer.class,ids.get(2))).isZero();
+            }
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM acceptance_daikin_send WHERE equipment_id IN (?,?)",Integer.class,ids.get(0),ids.get(1))).isEqualTo(4);
+            assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_controller_slot s JOIN biz_daikin_control_operation o ON o.operation_id=s.operation_id WHERE o.source_id='mode-relation'",Integer.class)).isZero();
+            System.out.println("MYSQL_BATCH_MODE_MASTER_INDEPENDENT_SWITCHES_OK");
+        }
+    }
+
     private static List<String> seed(String prefix,int count,int perController) throws Exception {
         db.update("INSERT INTO biz_daikin_source(source_id,source_name,registered_by) VALUES (?,?,7)",prefix,"隔离模拟来源"+prefix);
         db.update("INSERT INTO biz_daikin_project_mapping(source_id,site_id,building_id,mapping_version,mapped_by,mapped_at) VALUES (?,'site','BLD001_ACCEPT',1,7,CURRENT_TIMESTAMP(3))",prefix);
@@ -439,6 +484,30 @@ class DaikinBatchMysqlAcceptanceTest {
         }
     }
 
+    @Test @Order(14) void parallelSameLcScalesAcrossTwoJvmsWithoutHoldingSendLanesDuringReadback() throws Exception {
+        try(var f=new Harness()) {
+            for(int count:List.of(3,15,100)) {
+                String source="parallel"+count;var ids=seed(source,count,count);
+                for(String id:ids) behavior(id,"NO_APPLY");
+                var batch=submit(f,ids,Action.ON_OFF,"on","parallel-mysql-"+count);
+                // Four sending claims are globally bounded even before any operation/acceptance exists.
+                compete("claim",batch.batchId(),"claim",batch.batchId(),0,0);
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane l JOIN biz_daikin_control_batch_item i ON i.item_id=l.item_id WHERE i.batch_id=?",Integer.class,batch.batchId())).isEqualTo(Math.min(count,4));
+                // Resume the original claims (not requeue) and race independent dispatchers for the rest.
+                for(var item:f.batches.get(USER,batch.batchId()).items()) if(item.status()==ItemStatus.DISPATCHING) f.batches.dispatch(f.store.work(item.itemId()));
+                compete("dispatch-only",batch.batchId(),"dispatch-only",batch.batchId(),0,0);
+                var result=f.batches.get(USER,batch.batchId());
+                assertThat(result.activeCount()).isEqualTo(count);assertThat(result.queuedCount()).isZero();
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_operation WHERE source_id=? AND status='ACCEPTED'",Integer.class,source)).isEqualTo(count);
+                assertThat(db.queryForObject("SELECT COUNT(*) FROM biz_daikin_control_batch_lane l JOIN biz_daikin_control_batch_item i ON i.item_id=l.item_id WHERE i.batch_id=?",Integer.class,batch.batchId())).isZero();
+                for(String id:ids) assertThat(db.queryForObject("SELECT COUNT(*) FROM acceptance_daikin_send WHERE equipment_id=?",Integer.class,id)).isEqualTo(1);
+                db.update("UPDATE acceptance_daikin_unit SET unit_json=JSON_SET(unit_json,'$.onOff','on','$.unitStatus','operating') WHERE equipment_id LIKE ?",source+"-%");
+                assertThat(drain(f,batch.batchId()).completedCount()).isEqualTo(count);
+                System.out.printf("MYSQL_PARALLEL_SCALE_OK devices=%d acceptedBeforeReadback=%d%n",count,count);
+            }
+        }
+    }
+
     private static class Harness implements AutoCloseable {
         final DaikinControlPolicy policy = new DaikinControlPolicy();
         final SqlGateway gateway = new SqlGateway();
@@ -458,7 +527,7 @@ class DaikinBatchMysqlAcceptanceTest {
             store=new DaikinBatchStore(db,tx,JSON,controlStore,writer,audit);
             batches=new DaikinBatchService(store,controls,access,policy,props,db,Clock.systemUTC());
         }
-        public void close() { batches.stop(); }
+        public void close() { batches.stop(); controls.stop(); }
     }
 
     private static Batch submit(Harness f,List<String> ids,Action action,String value,String key) {

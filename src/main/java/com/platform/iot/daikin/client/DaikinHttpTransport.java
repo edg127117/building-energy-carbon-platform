@@ -85,10 +85,17 @@ public interface DaikinHttpTransport {
                     ? HttpRequest.BodyPublishers.noBody()
                     : HttpRequest.BodyPublishers.ofByteArray(request.body());
             builder.method(request.method(), publisher);
+            // 发送意图早于 HTTP 预算等待；现场核对应使用这里的实际传输起点，日志不包含 URL、签名或报文。
+            boolean control = "PUT".equals(request.method()) && request.uri().getPath().startsWith("/v2/operations/");
+            String callId = control ? java.util.UUID.randomUUID().toString() : null;
+            var log = org.slf4j.LoggerFactory.getLogger(Jdk.class);
+            if (control) log.info("DAIKIN_CONTROL_HTTP_BEGIN callId={} vendorId={} at={}",callId,
+                    request.uri().getPath().substring(request.uri().getPath().lastIndexOf('/')+1),System.currentTimeMillis());
             CompletableFuture<HttpResponse<byte[]>> future = client.sendAsync(builder.build(),
                     ignored -> new LimitedBodySubscriber(maxResponseBytes));
             try {
                 HttpResponse<byte[]> response = future.get(request.timeout().toMillis(), TimeUnit.MILLISECONDS);
+                if (control) log.info("DAIKIN_CONTROL_HTTP_REPLY callId={} httpStatus={} at={}",callId,response.statusCode(),System.currentTimeMillis());
                 return new Response(response.statusCode(), response.body());
             } catch (TimeoutException ex) {
                 future.cancel(true);

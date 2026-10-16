@@ -71,14 +71,14 @@ public class DaikinBatchStore {
             for(var p:preview.items()) {
                 access.requireControl(user,p.view().equipmentId());
                 if(p.target()!=null && !p.target().equals(access.target(p.view().equipmentId()))) throw error(409,"REVISION_CHANGED");
-                if(Set.of(Action.MODE,Action.ON_OFF).contains(request.action())) for(var related:p.impactedTargets()) {
+                if(Set.of(Action.MODE,Action.ON_OFF).contains(request.action())) for(var related:p.impactedTargets(request.action())) {
                     access.requireControl(user,related.equipmentId());
                     if(!related.equals(access.target(related.equipmentId()))) throw error(409,"LINKED_SCOPE_CHANGED");
                 }
             }
             String batch=id();
-            jdbc.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id,overlap_allowed) VALUES(?,?,?,?,?,?,?,?,?)",
-                    batch,user,request.idempotencyKey(),hash,request.action().name(),request.value(),now,trace,overlap);
+            jdbc.update("INSERT INTO biz_daikin_control_batch(batch_id,operator_id,idempotency_key,request_hash,action,requested_value,created_at,trace_id,overlap_allowed,dispatch_policy) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    batch,user,request.idempotencyKey(),hash,request.action().name(),request.value(),now,trace,overlap,overlap?"PARALLEL_ON_OFF_V1":"SERIAL_V1");
             for(var p:preview.items()) {
                 ItemStatus next=ItemStatus.QUEUED; String reason=p.view().reasonCode();
                 if(p.target()==null || reason!=null) next=ItemStatus.UNSUPPORTED;
@@ -100,7 +100,7 @@ public class DaikinBatchStore {
                         INSERT INTO biz_daikin_control_batch_item(item_id,batch_id,equipment_id,controller_key,target_json,revision,
                          relationship_hash,impacted_targets_json,status,reason_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
                         """,item,batch,p.view().equipmentId(),p.target()==null?null:p.target().controllerKey(),p.target()==null?null:encode(p.target()),
-                        p.view().revision(),p.relationshipHash(),encode(p.impactedTargets()),next.name(),reason,now,now);
+                        p.view().revision(),p.relationshipHash(),encode(p.impactedTargets(request.action())),next.name(),reason,now,now);
                 evidence(work(item),next.name(),user,now);
             }
             return batch;
@@ -149,14 +149,14 @@ public class DaikinBatchStore {
     }
 
     List<Work> candidates() {
-        // 每条控制器只扫描最早排队项，避免一个忙控制器的百台队列遮住其他控制器。
+        // 每个 LC 的首项优先，再扫描后续项；并发批次可在同轮填满发送预算，忙 LC 不遮住其他 LC。
         return jdbc.query("""
-                SELECT i.*,b.operator_id,b.action,b.requested_value,b.trace_id
-                FROM biz_daikin_control_batch_item i JOIN biz_daikin_control_batch b ON b.batch_id=i.batch_id
-                WHERE i.status='QUEUED' AND NOT EXISTS (SELECT 1 FROM biz_daikin_control_batch_item older
-                  WHERE older.controller_key=i.controller_key AND older.status='QUEUED'
-                  AND (older.created_at<i.created_at OR (older.created_at=i.created_at AND older.item_id<i.item_id)))
-                ORDER BY i.created_at,i.item_id LIMIT 100
+                SELECT ranked.* FROM (
+                  SELECT i.*,b.operator_id,b.action,b.requested_value,b.trace_id,
+                    ROW_NUMBER() OVER (PARTITION BY i.controller_key ORDER BY i.created_at,i.item_id) AS queue_rank
+                  FROM biz_daikin_control_batch_item i JOIN biz_daikin_control_batch b ON b.batch_id=i.batch_id
+                  WHERE i.status='QUEUED'
+                ) ranked ORDER BY queue_rank,created_at,item_id LIMIT 100
                 """,this::map);
     }
 
@@ -168,8 +168,9 @@ public class DaikinBatchStore {
             Work current=lock(candidate.item().itemId());
             if(current.item().status()!=ItemStatus.QUEUED) return null;
             // 恢复可能发生在两次扫描之间；槽已释放也不能让异常之前的旧排队项漏过停止边界。
-            if(closedAfterCreation(current)) {
-                finish(current,ItemStatus.NOT_SENT,"PREVIOUS_UNKNOWN_OPERATION",null,clock.millis());
+            String stopped=parallelStopReason(current);
+            if(closedAfterCreation(current) || stopped!=null) {
+                finish(current,ItemStatus.NOT_SENT,stopped==null?"PREVIOUS_UNKNOWN_OPERATION":stopped,null,clock.millis());
                 return null;
             }
             if(!controls.canDispatchBatch(current.target(),current.item().itemId(),clock.millis())) return null;
@@ -190,8 +191,31 @@ public class DaikinBatchStore {
         if(current.item().status()!=ItemStatus.DISPATCHING || !Objects.equals(expected.token(),current.token()) || current.leaseUntil()<=clock.millis())
             throw error(409,"DISPATCH_EXPIRED");
         if(closedAfterCreation(current)) throw error(409,"CONTROLLER_RESULT_UNCONFIRMED");
+        String stopped=parallelStopReason(current);
+        if(stopped!=null) throw error(409,stopped);
         // 领取后能力读取期间，另一台可能已变为未知；发送意图落库前必须再次检查同批占用。
         if(!controls.canDispatchBatch(current.target(),current.item().itemId(),clock.millis())) throw error(409,"CONTROLLER_BUSY");
+    }
+
+    /** 失败记录而非内存标志形成停止边界；重启或占用释放后也不会补发旧队列。 */
+    private String parallelStopReason(Work work) {
+        if(!"PARALLEL_ON_OFF_V1".equals(jdbc.queryForObject("SELECT dispatch_policy FROM biz_daikin_control_batch WHERE batch_id=?",String.class,work.batchId()))) return null;
+        var reasons=jdbc.queryForList("""
+                SELECT CASE WHEN o.vendor_code IN ('10003','10008') THEN 'BATCH_SOURCE_BACKPRESSURE'
+                  ELSE 'CONTROLLER_RESULT_UNCONFIRMED' END AS reason FROM biz_daikin_control_batch_item i
+                JOIN biz_daikin_control_operation o ON o.operator_id=? AND o.idempotency_key=CONCAT('batch-',i.item_id)
+                WHERE i.batch_id=? AND o.source_id=? AND
+                 ((i.controller_key=? AND o.status IN ('UNKNOWN','UNCONFIRMED','CLOSED','OBSERVED_STABLE'))
+                  OR o.vendor_code IN ('10003','10008'))
+                ORDER BY CASE WHEN o.vendor_code IN ('10003','10008') THEN 0 ELSE 1 END LIMIT 1
+                """,String.class,work.user(),work.batchId(),work.target().sourceId(),work.target().controllerKey());
+        return reasons.isEmpty()?null:reasons.getFirst();
+    }
+
+    private void releaseSendLane(Work work) {
+        // 旧策略的 lane 仍代表等待回读占用；新策略仅覆盖派发到请求结果落库，不占用回读预算。
+        if("PARALLEL_ON_OFF_V1".equals(jdbc.queryForObject("SELECT dispatch_policy FROM biz_daikin_control_batch WHERE batch_id=?",String.class,work.batchId())))
+            jdbc.update("DELETE FROM biz_daikin_control_batch_lane WHERE item_id=? AND lease_token=?",work.item().itemId(),work.token());
     }
 
     private boolean closedAfterCreation(Work work) {
@@ -207,6 +231,7 @@ public class DaikinBatchStore {
             if(current.item().status()!=ItemStatus.DISPATCHING || !Objects.equals(current.token(),expected.token())) return;
             jdbc.update("UPDATE biz_daikin_control_batch_item SET operation_id=?,status='ACTIVE',updated_at=? WHERE item_id=?",
                     operation.operationId(),clock.millis(),current.item().itemId());
+            releaseSendLane(current);
         });
     }
     void failDispatch(Work expected,String reason,Clock clock) {
@@ -217,6 +242,7 @@ public class DaikinBatchStore {
             if(operation!=null) {
                 jdbc.update("UPDATE biz_daikin_control_batch_item SET operation_id=?,status='ACTIVE',updated_at=? WHERE item_id=?",
                         operation.view().operationId(),clock.millis(),current.item().itemId());
+                releaseSendLane(current);
             } else finish(current,ItemStatus.NOT_SENT,reason,null,clock.millis());
         });
     }
@@ -257,6 +283,14 @@ public class DaikinBatchStore {
                     op.status()==Status.CLOSED && !op.isolated()?op.updatedAt():now);
             if(next!=ItemStatus.ACTIVE) finish(current,next,op.reasonCode(),op.observedValue(),now);
         });
+        for(var queued:candidates()) {
+            if(parallelStopReason(queued)!=null) tx.executeWithoutResult(status->{
+                var current=lock(queued.item().itemId());
+                String stopped=parallelStopReason(current);
+                if(current.item().status()==ItemStatus.QUEUED && stopped!=null)
+                    finish(current,ItemStatus.NOT_SENT,stopped,null,clock.millis());
+            });
+        }
         // 同时识别单台控制留下的未知占用，而不只检查本批次发出的操作。
         var uncertain=new LinkedHashSet<>(jdbc.queryForList("SELECT s.controller_key FROM biz_daikin_control_controller_slot s JOIN biz_daikin_control_operation o ON o.operation_id=s.operation_id WHERE o.status IN ('UNKNOWN','UNCONFIRMED','CLOSED','OBSERVED_STABLE')",String.class));
         // 升级前的未知操作可能只有设备槽，不能因为缺少 V69 控制器槽而将旧队列留待补发。

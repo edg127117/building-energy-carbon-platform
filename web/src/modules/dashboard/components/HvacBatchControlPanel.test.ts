@@ -139,6 +139,61 @@ const devices = ['A', 'B', 'C'].map(equipmentId => ({
 describe('HvacBatchControlPanel', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('独立启停不要求确认冷热主机，切换到模式后仍保留关联确认', async () => {
+    const control = createControl()
+    useBatchControl.mockReturnValue(control)
+    const wrapper = mount(HvacBatchControlPanel, { props: { equipmentIds: ['A', 'B', 'C'], devices } })
+    control.preview.value = {
+      ...preview,
+      items: [{ ...previewItem('A', allActions()), independentOnOff: true }],
+    }
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect)[0]!.vm.$emit('update:modelValue', 'ON_OFF')
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect)[1]!.vm.$emit('update:modelValue', 'off')
+    await flushPromises()
+    expect(wrapper.findComponent(ElCheckbox).exists()).toBe(false)
+    expect((wrapper.find('[data-testid="batch-submit"]').element as HTMLButtonElement).disabled).toBe(false)
+
+    wrapper.findAllComponents(ElSelect)[0]!.vm.$emit('update:modelValue', 'MODE')
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect)[1]!.vm.$emit('update:modelValue', 'cooling')
+    await flushPromises()
+    expect(wrapper.findComponent(ElCheckbox).exists()).toBe(true)
+    expect((wrapper.find('[data-testid="batch-submit"]').element as HTMLButtonElement).disabled).toBe(true)
+
+    wrapper.findAllComponents(ElSelect)[0]!.vm.$emit('update:modelValue', 'ON_OFF')
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect)[1]!.vm.$emit('update:modelValue', 'off')
+    await flushPromises()
+    await wrapper.find('[data-testid="batch-submit"]').trigger('click')
+    expect(control.submit).toHaveBeenCalledWith('ON_OFF', 'off', false)
+    wrapper.unmount()
+  })
+
+  it('旧预检缺少独立启停标记时保留关联确认，共用遥控器不能提交', async () => {
+    const control = createControl()
+    useBatchControl.mockReturnValue(control)
+    const wrapper = mount(HvacBatchControlPanel, { props: { equipmentIds: ['A'], devices } })
+    control.preview.value = { ...preview, items: [previewItem('A', allActions())] }
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect)[0]!.vm.$emit('update:modelValue', 'ON_OFF')
+    await flushPromises()
+    wrapper.findAllComponents(ElSelect)[1]!.vm.$emit('update:modelValue', 'off')
+    await flushPromises()
+    expect(wrapper.findComponent(ElCheckbox).exists()).toBe(true)
+    expect((wrapper.find('[data-testid="batch-submit"]').element as HTMLButtonElement).disabled).toBe(true)
+    control.preview.value = { ...preview, items: [{
+      ...previewItem('A', allActions().map(a => a.action === 'ON_OFF'
+        ? { ...a, allowed: false, reasonCode: 'LINKED_SCOPE_UNKNOWN' } : a)),
+      independentOnOff: false,
+    }] }
+    await flushPromises()
+    expect(wrapper.findAllComponents(ElOption).find(o => o.props('value') === 'ON_OFF')?.props('disabled')).toBe(true)
+    expect(control.submit).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('当前批次未完成时仍可重新预检', async () => {
     const control = createControl(batchFor())
     useBatchControl.mockReturnValue(control)
