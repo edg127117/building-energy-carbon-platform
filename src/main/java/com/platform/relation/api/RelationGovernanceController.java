@@ -383,6 +383,19 @@ public class RelationGovernanceController {
         return Result.success(service.effectiveBoundaries(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, page, size));
     }
+    @GetMapping("/v1/relation-models/{buildingId}/versions/{versionId}/metering/boundaries")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<BoundaryCatalogueView> boundaryCatalogue(Authentication a,@PathVariable String buildingId,
+            @PathVariable String versionId,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="100") int size) {
+        return Result.success(service.boundaryCatalogue(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,versionId,page,size));
+    }
+    @GetMapping("/v1/relation-models/{buildingId}/versions/{versionId}/nodes")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<NodeCatalogueView> nodeCatalogue(Authentication a,@PathVariable String buildingId,
+            @PathVariable String versionId,@RequestParam(required=false) String nodeType,
+            @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="100") int size) {
+        return Result.success(service.nodeCatalogue(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,versionId,nodeType,page,size));
+    }
 
     @GetMapping("/v1/relation-models/{buildingId}/effective/metering-assignments")
     public Result<MeteringAssignmentsView> effectiveMeteringAssignments(

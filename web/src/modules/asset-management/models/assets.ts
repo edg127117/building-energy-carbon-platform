@@ -231,6 +231,7 @@ export type AssetEquipmentQuery = {
   productId?: string
   status?: string
   keyword?: string
+  category?: string
 }
 
 export type AssetStatusKey = 'active' | 'disabled' | 'unbound' | 'unknown'

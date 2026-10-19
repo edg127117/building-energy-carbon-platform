@@ -266,6 +266,15 @@ public class AssetManagementService {
             int page, int size, String buildingId, String spaceId, String systemGroupId,
             String typeCode, String productId, String status, String keyword,
             Collection<String> roles) {
+        return listEquipment(page, size, buildingId, spaceId, systemGroupId,
+                typeCode, productId, status, keyword, null, roles);
+    }
+
+    /** 分类在数据库分页前过滤，避免电表被其他设备挤出前一页而遗漏。 */
+    public PageResponse<EquipmentListItemView> listEquipment(
+            int page, int size, String buildingId, String spaceId, String systemGroupId,
+            String typeCode, String productId, String status, String keyword,
+            String category, Collection<String> roles) {
         requireAdmin(roles);
         validatePage(page, size);
         LambdaQueryWrapper<BizEquipment> wrapper = new LambdaQueryWrapper<>();
@@ -273,6 +282,7 @@ public class AssetManagementService {
                 .eq(StringUtils.hasText(spaceId), BizEquipment::getSpaceId, spaceId)
                 .eq(StringUtils.hasText(systemGroupId), BizEquipment::getSystemGroupId, systemGroupId)
                 .eq(StringUtils.hasText(typeCode), BizEquipment::getTypeCode, typeCode)
+                .eq(StringUtils.hasText(category), BizEquipment::getEquipCategory, category)
                 .eq(StringUtils.hasText(productId), BizEquipment::getProductId, productId);
         if (StringUtils.hasText(keyword)) {
             wrapper.and(item -> item.like(BizEquipment::getEquipName, keyword)

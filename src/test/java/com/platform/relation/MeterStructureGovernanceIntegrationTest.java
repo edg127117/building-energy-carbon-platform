@@ -79,6 +79,24 @@ class MeterStructureGovernanceIntegrationTest {
     }
 
     @Test
+    void configurationCataloguesExposeUnreferencedDraftBoundariesAndScopedCurrentNodeLabels() {
+        var draft=service.initialize(101L,ENERGY,"BLD001","catalogue-init","配置目录测试");
+        service.initialize(101L,ENERGY,"BLD002","catalogue-other","跨建筑配置目录测试");
+        var boundary=service.createBoundary(101L,ENERGY,draft.versionId(),"catalogue-boundary",
+                new MeteringBoundaryRequest("CATALOGUE","未引用边界","ELECTRICITY","CONFIRMED","SYNTHETIC_EVIDENCE",draft.revision()));
+        var catalogue=service.boundaryCatalogue(101L,ENERGY,"BLD001",draft.versionId(),1,100);
+        assertThat(catalogue.editableCatalogue()).isTrue();
+        assertThat(catalogue.items()).singleElement().satisfies(b->{assertThat(b.boundaryId()).isEqualTo(boundary.boundaryId());assertThat(b.evidenceReference()).isEqualTo("SYNTHETIC_EVIDENCE");});
+        var nodes=service.nodeCatalogue(101L,ENERGY,"BLD001",draft.versionId(),"POINT",1,1);
+        assertThat(nodes.labelNature()).isEqualTo("CURRENT_ASSET_LABELS");assertThat(nodes.total()).isGreaterThan(1);
+        assertThat(nodes.items()).singleElement().satisfies(n->{assertThat(n.nodeType()).isEqualTo("POINT");assertThat(n.name()).isNotBlank();assertThat(n.businessObjectId()).isNotEqualTo("POINT020");});
+        assertThat(service.nodeCatalogue(101L,ENERGY,"BLD001",draft.versionId(),"POINT",2,1).items().getFirst().nodeId()).isNotEqualTo(nodes.items().getFirst().nodeId());
+        assertCode(()->service.boundaryCatalogue(101L,ENERGY,"BLD002",draft.versionId(),1,100),RelationErrors.CROSS_BUILDING);
+        assertCode(()->service.nodeCatalogue(101L,ENERGY,"BLD001",draft.versionId(),"BAD",1,100),RelationErrors.VALIDATION_FAILED);
+        assertCode(()->service.nodeCatalogue(101L,Set.of("BUILDING_OWNER"),"BLD001",draft.versionId(),null,1,100),RelationErrors.FORBIDDEN);
+    }
+
+    @Test
     void rejectsInvalidParentsDuplicatesCrossBuildingAndDirectOrIndirectCycles() {
         var draft = service.initialize(101L, ENERGY, "BLD001", "meter-init-2", "层级拒绝测试");
         service.initialize(101L, ENERGY, "BLD002", "meter-init-2-b2", "跨建筑层级拒绝测试");

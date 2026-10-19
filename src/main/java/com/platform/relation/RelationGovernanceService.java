@@ -825,6 +825,28 @@ public class RelationGovernanceService {
                 page * (long) boundedSize < total), page, boundedSize, total, items);
     }
 
+    public BoundaryCatalogueView boundaryCatalogue(Long userId,Collection<String> roles,String buildingId,
+                                                   String versionId,int page,int size) {
+        requireHistoryReader(roles);checkBuilding(userId,roles,buildingId);requirePage(page,size);
+        ModelRow model=requireModel(buildingId,false);VersionRow version=requireVersion(versionId,false);
+        requireSameBuilding(buildingId,version.buildingId());boolean draft="DRAFT".equals(version.status());
+        int bounded=Math.min(size,properties.getMaxPageSize());
+        long total=repository.countBoundaryCatalogue(versionId,buildingId,draft);
+        var items=repository.boundaryCatalogue(versionId,buildingId,draft,bounded,pageOffset(page,bounded)).stream()
+                .map(b->new BoundaryCatalogueItem(b.boundaryId(),b.boundaryCode(),b.boundaryName(),b.energyType(),b.confirmationStatus(),b.status(),b.evidenceReference())).toList();
+        return new BoundaryCatalogueView(metadata(model,version,0,page*(long)bounded<total),page,bounded,total,draft,items);
+    }
+    public NodeCatalogueView nodeCatalogue(Long userId,Collection<String> roles,String buildingId,
+                                           String versionId,String nodeType,int page,int size) {
+        requireHistoryReader(roles);checkBuilding(userId,roles,buildingId);requirePage(page,size);
+        ModelRow model=requireModel(buildingId,false);VersionRow version=requireVersion(versionId,false);
+        requireSameBuilding(buildingId,version.buildingId());
+        if(nodeType!=null&&!NODE_TYPES.contains(nodeType))throw error(400,VALIDATION_FAILED,"节点类型不支持");
+        int bounded=Math.min(size,properties.getMaxPageSize());long total=repository.countNodeCatalogue(buildingId,nodeType);
+        return new NodeCatalogueView(metadata(model,version,0,page*(long)bounded<total),page,bounded,total,
+                "CURRENT_ASSET_LABELS",repository.nodeCatalogue(buildingId,nodeType,bounded,pageOffset(page,bounded)));
+    }
+
     public MeteringAssignmentsView historicalMeteringAssignments(
             Long userId, Collection<String> roles, String buildingId,
             String versionId, int page, int size) {
