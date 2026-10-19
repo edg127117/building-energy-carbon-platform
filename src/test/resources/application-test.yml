@@ -1,3 +1,9 @@
+# 仅供隔离自动化测试，不作为部署环境密钥。
+security:
+  auth-cleanup-enabled: false
+  jwt:
+    secret: test-only-jwt-secret-with-more-than-thirty-two-bytes
+
 spring:
   datasource:
     driver-class-name: org.h2.Driver

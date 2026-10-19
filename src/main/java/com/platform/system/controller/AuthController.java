@@ -3,6 +3,7 @@ package com.platform.system.controller;
 import com.platform.audit.SecurityAuditService;
 import com.platform.cache.MenuCacheService;
 import com.platform.cache.TokenCacheService;
+import com.platform.security.AccountSessionService;
 import com.platform.framework.common.Result;
 import com.platform.framework.exception.BusinessException;
 import com.platform.security.JwtService;
@@ -38,6 +39,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/auth")
 public class AuthController {
 
+    private final AccountSessionService sessions;
     private final SysUserService sysUserService;
     private final JwtService jwtService;
     private final TokenCacheService tokenCacheService;
@@ -48,7 +50,9 @@ public class AuthController {
     public AuthController(SysUserService sysUserService, JwtService jwtService,
                           TokenCacheService tokenCacheService, MenuCacheService menuCacheService,
                           SecurityAuditService securityAuditService,
-                          PasswordSetupTokenService passwordSetupTokenService) {
+                          PasswordSetupTokenService passwordSetupTokenService,
+                          AccountSessionService sessions) {
+        this.sessions = sessions;
         this.sysUserService = sysUserService;
         this.jwtService = jwtService;
         this.tokenCacheService = tokenCacheService;
@@ -127,8 +131,7 @@ public class AuthController {
     /**
      * 安全退出当前账号。
      *
-     * <p>当前 Token 会按剩余有效期加入黑名单，同时移除用户白名单和菜单缓存，
-     * 防止客户端继续使用已退出的 JWT。</p>
+     * <p>安全版本提交后当前 Token 立即失效；白名单与菜单缓存提交后清理，失败持久化重试。</p>
      */
     @PostMapping("/logout")
     @PreAuthorize("isAuthenticated()")
@@ -136,13 +139,7 @@ public class AuthController {
         JwtUserPrincipal principal = (JwtUserPrincipal) authentication.getPrincipal();
         String header = request.getHeader("Authorization");
         String token = header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
-        if (token != null) {
-            long remaining = Math.max(1, (jwtService.parseToken(token).getPayload().getExpiration().getTime()
-                    - System.currentTimeMillis()) / 1000);
-            tokenCacheService.addToBlacklist(token, remaining);
-        }
-        tokenCacheService.removeFromWhitelist(principal.getId());
-        menuCacheService.evict(principal.getId());
+        sessions.logout(principal.getId(), token);
         securityAuditService.recordAuthentication(request, principal.getId(),
                 "TOKEN_REVOKED", "SUCCESS", null);
         return Result.success("已安全退出");

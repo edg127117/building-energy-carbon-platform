@@ -1,6 +1,7 @@
 package com.platform.security;
 
 import io.jsonwebtoken.Claims;
+import jakarta.annotation.PostConstruct;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -18,7 +19,7 @@ import java.util.UUID;
  * 登录 Token 的签发与密码学校验边界。
  *
  * <p>Token 的 {@code subject} 保存用户名，{@code uid} 保存用户 ID，{@code roles}
- * 保存登录时的正式角色快照。JWT 只承载身份和角色，不承载建筑授权；建筑授权变更因此可在
+ * 保存登录时的正式角色快照，{@code sv} 绑定 MySQL 安全版本。JWT 不承载建筑授权；建筑授权变更因此可在
  * 清理范围缓存后立即生效，而角色变更必须撤销旧 Token 并要求用户重新登录。</p>
  */
 @Service
@@ -34,7 +35,8 @@ public class JwtService {
      * 为已完成账号、密码和正式角色校验的用户签发 JWT。
      * 返回值由登录服务写入 Redis 单账号白名单并交给前端作为 Bearer Token。
      */
-    public String generateToken(Long userId, String username, List<String> roles) {
+    public String generateToken(Long userId, String username, List<String> roles, long securityVersion) {
+        if (securityVersion < 1) throw new IllegalArgumentException("无效安全版本");
         Date now = new Date();
         Date exp = new Date(now.getTime() + expireSeconds * 1000);
 
@@ -45,6 +47,7 @@ public class JwtService {
                 .issuedAt(now)
                 .expiration(exp)
                 .claim("uid", userId)
+                .claim("sv", securityVersion)
                 .claim("roles", roles == null ? Collections.emptyList() : roles)
                 .signWith(getKey())
                 .compact();
@@ -63,6 +66,16 @@ public class JwtService {
 
     public long getExpireSeconds() {
         return expireSeconds;
+    }
+
+    /** 不兼容缺失版本的旧 JWT，也不把浮点数或字符串宽松转换为安全版本。 */
+    public Long getSecurityVersion(Claims claims) {
+        Object value = claims.get("sv");
+        if (value instanceof Integer || value instanceof Long) {
+            long version = ((Number) value).longValue();
+            if (version > 0) return version;
+        }
+        return null;
     }
 
     /** 从已验证 claims 中提取登录时的角色快照；字段缺失或类型错误时返回空集合。 */
@@ -91,8 +104,19 @@ public class JwtService {
         return null;
     }
 
+    /** 启动时拒绝缺失配置和公开示例，避免服务就绪后才发现密钥不可用。 */
+    @PostConstruct
+    void validateConfiguration() {
+        getKey();
+    }
+
     private SecretKey getKey() {
-        // HMAC 密钥不足 32 字节时拒绝启动签发/校验，避免使用可被轻易猜测的弱密钥。
+        if (secret == null || secret.isBlank()
+                || secret.equals("iot-platform-demo-jwt-secret-please-change-32-bytes-min")
+                || secret.equals("replace-with-a-random-secret-of-at-least-32-bytes")) {
+            throw new IllegalStateException("security.jwt.secret 必须配置独立随机密钥，不能使用示例值");
+        }
+        // 长度检查不能证明随机性，部署方仍须安全生成和保存密钥。
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         if (keyBytes.length < 32) {
             throw new IllegalStateException("security.jwt.secret 长度不足，至少需要 32 字节");

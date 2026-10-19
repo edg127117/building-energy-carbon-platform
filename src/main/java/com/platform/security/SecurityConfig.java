@@ -30,9 +30,9 @@ public class SecurityConfig {
     /**
      * 装配无状态 HTTP 安全链。
      *
-     * <p>{@code /auth/**} 允许匿名注册和登录；WebSocket 路径只为浏览器 HTTP 升级匿名放行，
+     * <p>认证路由中的会话查询和退出要求登录，其余允许匿名注册和登录；WebSocket 路径只为浏览器 HTTP 升级匿名放行，
      * 业务权限由端点首帧 JWT 校验和建筑订阅校验执行；其余 HTTP 请求必须先由 JWT 过滤器建立
-     * 身份。认证失败交给 401 入口，已认证但角色不足交给 403 处理器，业务层抛出的建筑越权则
+     * 身份。认证失败交给统一入口区分 401 与登录态依赖故障 503，角色不足交给 403 处理器，业务层抛出的建筑越权则
      * 由全局异常处理器映射为 403。</p>
      */
     @Bean
@@ -55,6 +55,8 @@ public class SecurityConfig {
 
         // 路由级别的粗粒度权限：方法级细粒度用 @PreAuthorize
         http.authorizeHttpRequests(auth -> auth
+                // 在公开认证路由前检查会话接口，保证依赖故障由认证入口返回 503。
+                .requestMatchers("/auth/me", "/api/auth/me", "/auth/logout", "/api/auth/logout").authenticated()
                 // 1. 放行登录与注册相关接口
                 .requestMatchers("/auth/**", "/api/auth/**").permitAll()
                 // 仅放行 WebSocket 传输升级；首帧 SUBSCRIBE 在端点内完成 JWT 与建筑权限校验。

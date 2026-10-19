@@ -1,3 +1,4 @@
+DROP TABLE IF EXISTS sys_auth_cleanup;
 DROP TABLE IF EXISTS biz_daikin_monitor_inbox;
 DROP TABLE IF EXISTS biz_daikin_monitor_round;
 DROP TABLE IF EXISTS biz_daikin_directory_sync_job;
@@ -73,6 +74,7 @@ CREATE TABLE sys_user (
   status TINYINT DEFAULT 1,
   del_flag TINYINT DEFAULT 0,
   activation_pending TINYINT DEFAULT 0 NOT NULL,
+  security_version BIGINT DEFAULT 1 NOT NULL,
   create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -1926,4 +1928,14 @@ CREATE TABLE biz_energy_boundary_summary_policy_version (
   created_by BIGINT NOT NULL, created_at TIMESTAMP(3) NOT NULL,
   approved_by BIGINT, approved_at TIMESTAMP(3), review_comment VARCHAR(500),
   UNIQUE (policy_id,version_no)
+);
+
+-- 安全状态提交即生效；缓存补偿与版本同事务保存，不保存 Token 或密码。
+CREATE TABLE sys_auth_cleanup (
+    user_id BIGINT PRIMARY KEY,
+    revoked_through_version BIGINT NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    next_attempt_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_error VARCHAR(64),
+    INDEX idx_auth_cleanup_due (next_attempt_at)
 );

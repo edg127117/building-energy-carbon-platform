@@ -273,7 +273,7 @@ redisson:
 
 security:
   jwt:
-    secret: ${JWT_SECRET:iot-platform-demo-jwt-secret-please-change-32-bytes-min}
+    secret: ${JWT_SECRET:}
     expire-seconds: ${JWT_EXPIRE_SECONDS:86400}
 
 # 后台治理环境模式必须由部署显式复核。研发自审默认关闭；当前单人研发如需使用，

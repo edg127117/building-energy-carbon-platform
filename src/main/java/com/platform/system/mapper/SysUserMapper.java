@@ -16,6 +16,25 @@ import java.util.List;
  */
 @Mapper
 public interface SysUserMapper extends BaseMapper<SysUser> {
+    /** 同账号登录和安全变更共用行锁；必须在事务内调用，读取包括已删除账号。 */
+    @Select("SELECT * FROM sys_user WHERE id=#{id} FOR UPDATE")
+    @org.apache.ibatis.annotations.Options(timeout = 5)
+    SysUser lockById(Long id);
+
+    /** 只读取鉴权所需字段，不把密码等资料带入每次请求的权威校验。 */
+    @Select("SELECT id,status,del_flag,activation_pending,security_version FROM sys_user WHERE id=#{id}")
+    @org.apache.ibatis.annotations.Options(timeout = 5)
+    SysUser selectSecurityState(Long id);
+
+    @Update("UPDATE sys_user SET security_version=security_version+1, update_time=CURRENT_TIMESTAMP WHERE id=#{id} AND security_version < 9223372036854775807")
+    int incrementSecurityVersion(Long id);
+
+    @Update("UPDATE sys_user SET nickname=#{nickname}, phone=#{phone}, update_time=CURRENT_TIMESTAMP WHERE id=#{id} AND del_flag=0")
+    int updateProfile(@Param("id") Long id, @Param("nickname") String nickname, @Param("phone") String phone);
+
+    @Update("UPDATE sys_user SET password=#{password}, update_time=CURRENT_TIMESTAMP WHERE id=#{id}")
+    int updatePassword(@Param("id") Long id, @Param("password") String password);
+
     /** 按用户名查询账号，包含逻辑删除数据。 */
     @Select("SELECT * FROM sys_user WHERE username = #{username} LIMIT 1")
     SysUser selectAnyByUsername(String username);

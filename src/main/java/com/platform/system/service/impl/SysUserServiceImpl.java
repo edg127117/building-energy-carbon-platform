@@ -6,6 +6,8 @@ import com.platform.cache.TokenCacheService;
 import com.platform.cache.MenuCacheService;
 import com.platform.framework.exception.BusinessException;
 import com.platform.security.JwtService;
+import com.platform.security.AccountSessionService;
+import com.platform.security.AuthenticationStateService;
 import com.platform.security.FormalRole;
 import com.platform.system.mapper.SysRoleMapper;
 import com.platform.system.mapper.SysUserRoleMapper;
@@ -34,6 +36,7 @@ import java.util.List;
 @Service
 public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> implements SysUserService {
 
+    private final AccountSessionService sessions;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
     private final TokenCacheService tokenCacheService;
@@ -51,8 +54,10 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
             SysRoleMapper sysRoleMapper,
             SysUserRoleMapper sysUserRoleMapper,
             MenuCacheService menuCacheService,
-            BuildingScopeService buildingScopeService
+            BuildingScopeService buildingScopeService,
+            AccountSessionService sessions
     ) {
+        this.sessions = sessions;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.tokenCacheService = tokenCacheService;
@@ -99,72 +104,21 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         buildingScopeService.evict(user.getId());
     }
 
-    /**
-     * 校验 MySQL 账号状态、密码和正式角色并签发登录结果。
-     *
-     * <p>初始化数据中的历史明文密码仅在本次校验成功后升级为 BCrypt。角色列表写入 JWT，
-     * Token 随后覆盖 Redis 白名单，从而使同账号上一枚 Token 失效。Redis 写入失败不阻断
-     * 登录，但会进入仅校验 JWT 的降级状态。</p>
-     */
+    /** 密码计算在锁外执行，账号状态、哈希与角色在会话事务的行锁内重新核对。 */
     @Override
     public LoginResponse login(String username, String password) {
-        // 默认查询会排除逻辑删除账号，避免向外区分“用户不存在”和“密码错误”。
-        SysUser user = this.getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, username));
-        if (user == null) {
-            throw new BusinessException(401, "用户名或密码错误");
+        SysUser user;
+        try {
+            user = this.getOne(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, username));
+        } catch (org.springframework.dao.DataAccessException failure) {
+            throw AuthenticationStateService.unavailable();
         }
-        if (user.getStatus() != null && user.getStatus() == 0) {
-            throw new BusinessException(403, "账号已被禁用");
-        }
-
-        // 兼容初始化脚本中的历史明文；只有匹配成功才原地升级，失败时不改数据库。
-        boolean ok;
+        if (user == null) throw new BusinessException(401, "用户名或密码错误");
         String stored = user.getPassword();
-        if (stored != null && (stored.startsWith("$2a$") || stored.startsWith("$2b$") || stored.startsWith("$2y$"))) {
-            ok = passwordEncoder.matches(password, stored);
-        } else {
-            ok = stored != null && stored.equals(password);
-            if (ok) {
-                user.setPassword(passwordEncoder.encode(password));
-                this.updateById(user);
-            }
-        }
-
-        if (!ok) {
-            throw new BusinessException(401, "用户名或密码错误");
-        }
-
-        if (user.getDelFlag() != null && user.getDelFlag() == 1) {
-            throw new BusinessException(403, "账号已被删除");
-        }
-
-        // 初始化脚本直接给内置管理员绑定正式角色；登录不再修复旧角色数据。
-        List<String> roleKeys = sysRoleMapper.selectRoleKeysByUserId(user.getId()).stream()
-                .map(String::toUpperCase)
-                .filter(FormalRole::isFormal)
-                .distinct()
-                .toList();
-        if (roleKeys.isEmpty()) {
-            throw new BusinessException(403, "账号尚未分配正式角色，请联系平台管理员");
-        }
-
-        // 正式角色写入 JWT claims，供 @PreAuthorize 使用；建筑权限不写入 JWT，可动态生效。
-        String token = jwtService.generateToken(user.getId(), user.getUsername(), roleKeys);
-
-        // 写入单账号白名单；Redis 故障由缓存服务记录并按可用性优先策略降级。
-        tokenCacheService.addToWhitelist(user.getId(), token);
-
-        return LoginResponse.builder()
-                .token(token)
-                .tokenType("Bearer")
-                .expiresIn(jwtService.getExpireSeconds())
-                .user(LoginResponse.UserInfo.builder()
-                        .id(user.getId())
-                        .username(user.getUsername())
-                        .nickname(user.getNickname())
-                        .roles(roleKeys)
-                        .build())
-                .build();
+        boolean bcrypt = stored != null && (stored.startsWith("$2a$") || stored.startsWith("$2b$") || stored.startsWith("$2y$"));
+        boolean ok = bcrypt ? passwordEncoder.matches(password, stored) : stored != null && stored.equals(password);
+        if (!ok) throw new BusinessException(401, "用户名或密码错误");
+        // 历史明文升级仅在锁内确认哈希未改变后写入，不再写回锁前读取的完整用户实体。
+        return sessions.login(user.getId(), stored, bcrypt ? null : passwordEncoder.encode(password));
     }
-
 }

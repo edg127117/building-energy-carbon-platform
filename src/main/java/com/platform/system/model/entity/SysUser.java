@@ -40,6 +40,10 @@ public class SysUser {
     /** 1 表示账号仍需用一次性令牌设置初始密码；普通禁用账号保持 0。 */
     private Integer activationPending;
 
+    /** MySQL 权威会话版本；安全变更只能通过专用 SQL 递增，普通实体更新不得写回旧值。 */
+    @com.baomidou.mybatisplus.annotation.TableField(updateStrategy = com.baomidou.mybatisplus.annotation.FieldStrategy.NEVER)
+    private Long securityVersion;
+
     private Date createTime;
 
     private Date updateTime;

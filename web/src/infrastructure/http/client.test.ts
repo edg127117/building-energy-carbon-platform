@@ -2,6 +2,17 @@ import { describe, expect, it, vi } from 'vitest'
 import { AxiosError, AxiosHeaders } from 'axios'
 import { configureHttpAuthentication, createHttpClient, requestApi, TransportError } from './client'
 describe('transport boundary', () => {
+  it('登录态服务故障时保留会话并返回可识别的服务错误', async () => {
+    const onUnauthorized = vi.fn()
+    configureHttpAuthentication({ getToken: () => 'current', onUnauthorized })
+    await expect(requestApi({ url: '/only-a-test', adapter: async config => {
+      throw new AxiosError('unavailable', 'ERR_BAD_RESPONSE', config, undefined, {
+        status: 503, data: { errorCode: 'AUTH_STATE_UNAVAILABLE' },
+        statusText: '', headers: new AxiosHeaders(), config,
+      })
+    } })).rejects.toMatchObject({ kind: 'request', status: 503, errorCode: 'AUTH_STATE_UNAVAILABLE' })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
   it('保留稳定错误码但不透传服务端异常原文', async () => {
     const client = createHttpClient('/test', () => null)
     await expect(client.request({ url: '/only-a-test', adapter: async config => {
