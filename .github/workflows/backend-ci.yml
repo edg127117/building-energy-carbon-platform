@@ -66,6 +66,15 @@ jobs:
           S01_MYSQL_PASSWORD: s01-isolated-ci-only
           S01_REDIS_PORT: "6379"
         run: ./mvnw --batch-mode --no-transfer-progress -Dtest=AccountSecurityMysqlRedisIntegrationTest test
+      - name: Preserve isolated process test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: account-security-process-evidence
+          path: |
+            target/s01-process-tests/
+            target/surefire-reports/*AccountSecurityMysqlRedisIntegrationTest*
+          retention-days: 7
 
   verify:
     name: Java 21 verify
