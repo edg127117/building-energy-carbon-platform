@@ -118,8 +118,10 @@ abstract class AccountSecurityContract {
         login = new SysUserServiceImpl(encoder, jwt, tokens, mock(SysRoleService.class), roles,
                 sql.getMapper(SysUserRoleMapper.class), menus, buildings, sessions);
         ReflectionTestUtils.setField(login, "baseMapper", users);
-        workers = Executors.newFixedThreadPool(2);
+        workers = newWorkers();
     }
+
+    protected ExecutorService newWorkers() { return Executors.newFixedThreadPool(2); }
 
     @SuppressWarnings("unchecked")
     private <T> T transactional(T target) {
