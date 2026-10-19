@@ -112,13 +112,19 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
             directory = java.nio.file.Files.createTempDirectory(root, "child-").toAbsolutePath();
             java.nio.file.Files.writeString(directory.resolve("owner"), nonce);
             String javaExecutable = java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java").toString();
-            process = new ProcessBuilder(javaExecutable, "-Duser.timezone=Asia/Shanghai", "-cp",
-                    System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")),
+            // 完整 Maven classpath 可能超过操作系统进程信息读取上限；主类和 nonce 留在短命令行中。
+            String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+            var arguments = directory.resolve("java.args");
+            java.nio.file.Files.writeString(arguments, "-cp\n\"" + classpath.replace("\\", "\\\\").replace("\"", "\\\"") + "\"\n");
+            process = new ProcessBuilder(javaExecutable, "-Duser.timezone=Asia/Shanghai", "@" + arguments,
                     AccountCleanupProcess.class.getName(), directory.toString(), nonce, mode)
                     .redirectErrorStream(true).redirectOutput(directory.resolve("process.log").toFile()).start();
             started = process.info().startInstant().orElseThrow();
             try { awaitFile("ready"); verifyIdentity(); }
-            catch (Exception | AssertionError failure) { stopOwnedProcess(); throw failure; }
+            catch (Exception | AssertionError failure) {
+                try { stopOwnedProcess(); } catch (Exception | AssertionError cleanupFailure) { failure.addSuppressed(cleanupFailure); }
+                throw failure;
+            }
         }
 
         void awaitFile(String name) throws Exception {
@@ -153,7 +159,7 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
             if (!process.isAlive()) return;
             // 即使握手前启动失败，也只处理保存的直接子进程，且复核启动时间和随机参数。
             assertThat(process.info().startInstant()).contains(started);
-            assertThat(process.info().arguments().orElseThrow()).contains(AccountCleanupProcess.class.getName(), nonce);
+            process.info().arguments().ifPresent(args -> assertThat(args).contains(AccountCleanupProcess.class.getName(), nonce));
             process.destroy();
             if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly();
