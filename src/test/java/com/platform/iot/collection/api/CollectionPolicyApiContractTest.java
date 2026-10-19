@@ -8,6 +8,8 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlConfig;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
@@ -52,17 +54,19 @@ class CollectionPolicyApiContractTest {
     }
 
     @Test
+    // 登录独立事务只读取已提交账号；业务写入仍由测试事务回滚。
+    @Sql(statements = {"INSERT INTO sys_user (id,username,password,nickname,status,del_flag) VALUES (900001,'collection_owner','123456','测试业主',1,0)",
+            "INSERT INTO sys_user_role (user_id,role_id) VALUES (900001,10)"},
+            config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
+    @Sql(statements = {"DELETE FROM sys_user_role WHERE user_id=900001", "DELETE FROM sys_user WHERE id=900001"},
+            executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD,
+            config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
     void returnsCollectionCodesForAnonymousRoleAndValidationFailures() throws Exception {
         mockMvc.perform(get("/v1/data-sources"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.errorCode").value("COLLECTION_CONFIG_UNAUTHORIZED"));
 
-        mockMvc.perform(post("/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"collection_owner","password":"123456","nickname":"采集只读用户"}
-                                """))
-                .andExpect(status().isOk());
+
         String ownerToken = login("collection_owner", "123456");
         mockMvc.perform(post("/v1/data-sources")
                         .header("Authorization", "Bearer " + ownerToken)

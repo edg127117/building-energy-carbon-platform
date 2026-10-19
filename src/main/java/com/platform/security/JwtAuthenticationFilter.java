@@ -1,8 +1,6 @@
 package com.platform.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.platform.cache.TokenCacheService;
-import com.platform.cache.TokenValidationResult;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import jakarta.servlet.FilterChain;
@@ -25,23 +23,23 @@ import java.util.stream.Collectors;
  * 把 Bearer JWT 转换成 Spring Security 当前用户的请求过滤器。
  *
  * <p>请求先在这里校验 JWT 签名、有效期和四类正式角色，再由
- * {@link TokenCacheService} 检查 Redis 中的单账号登录态。通过后写入的
+ * {@link AuthenticationStateService} 检查 Redis 登录态与 MySQL 当前账号状态和安全版本。通过后写入的
  * {@link JwtUserPrincipal} 和 {@code ROLE_*} 权限会被控制器的 {@code @PreAuthorize}
  * 使用；建筑范围不在 JWT 中，由业务服务按 MySQL 授权单独校验。</p>
  *
- * <p>Redis 明确拒绝时 Token 视为失效；Redis 不可用时保持匿名并由安全入口返回
+ * <p>Redis 明确拒绝时 Token 视为失效；Redis 或 MySQL 不可用时保持匿名并由安全入口返回
  * 服务不可用，不能仅凭 JWT 签名绕过撤销状态校验。</p>
  */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtService jwtService;
-    private final TokenCacheService tokenCacheService;
+    private final AuthenticationStateService authenticationState;
     private final ObjectMapper objectMapper;
 
-    public JwtAuthenticationFilter(JwtService jwtService, TokenCacheService tokenCacheService, ObjectMapper objectMapper) {
+    public JwtAuthenticationFilter(JwtService jwtService, AuthenticationStateService authenticationState, ObjectMapper objectMapper) {
         this.jwtService = jwtService;
-        this.tokenCacheService = tokenCacheService;
+        this.authenticationState = authenticationState;
         this.objectMapper = objectMapper;
     }
 
@@ -79,13 +77,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 throw new IllegalArgumentException("Token 不包含有效的正式角色");
             }
 
-            TokenValidationResult tokenState = tokenCacheService.validateActiveToken(userId, token);
-            if (tokenState == TokenValidationResult.CACHE_UNAVAILABLE) {
-                request.setAttribute("auth_state_unavailable", true);
-            }
-            if (tokenState != TokenValidationResult.ACTIVE) {
-                throw new IllegalArgumentException("Token 已失效或已被其他登录替换");
-            }
+            authenticationState.requireActive(userId, token, jwtService.getSecurityVersion(claims));
 
             // Spring Security 的 hasRole 会查找 ROLE_ 前缀，因此把正式角色转换为 ROLE_PLATFORM_ADMIN 等权限值。
             List<GrantedAuthority> authorities = roles.stream()
@@ -102,6 +94,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } catch (Exception e) {
             // 未建立身份时保持匿名，受保护路由由认证入口区分失效与依赖故障。
             SecurityContextHolder.clearContext();
+            if (e instanceof com.platform.framework.exception.BusinessException failure
+                    && Integer.valueOf(503).equals(failure.getCode())) {
+                request.setAttribute("auth_state_unavailable", true);
+            }
             // 保留内部失败原因便于安全入口诊断，但响应仍使用统一脱敏文案。
             request.setAttribute("jwt_error", e.getMessage());
             // 不在过滤器直接写响应，否则携带过期 Token 的 /auth/login 也会被错误拦截。

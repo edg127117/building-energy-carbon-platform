@@ -8,6 +8,8 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlConfig;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.transaction.annotation.Transactional;
@@ -69,17 +71,19 @@ class EnergyPointProfileApiContractTest {
     }
 
     @Test
+    // 登录独立事务只读取已提交账号；业务写入仍由测试事务回滚。
+    @Sql(statements = {"INSERT INTO sys_user (id,username,password,nickname,status,del_flag) VALUES (900002,'energy_profile_owner','123456','测试业主',1,0)",
+            "INSERT INTO sys_user_role (user_id,role_id) VALUES (900002,10)"},
+            config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
+    @Sql(statements = {"DELETE FROM sys_user_role WHERE user_id=900002", "DELETE FROM sys_user WHERE id=900002"},
+            executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD,
+            config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
     void returnsStableAnonymousRoleAndValidationCodes() throws Exception {
         mockMvc.perform(get("/v1/energy-point-profiles/options"))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.errorCode").value("ENERGY_METADATA_UNAUTHORIZED"));
 
-        mockMvc.perform(post("/auth/register")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("""
-                                {"username":"energy_profile_owner","password":"123456","nickname":"只读用户"}
-                                """))
-                .andExpect(status().isOk());
+
         String ownerToken = login("energy_profile_owner", "123456");
         mockMvc.perform(post("/v1/energy-point-profiles")
                         .header("Authorization", "Bearer " + ownerToken)

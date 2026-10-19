@@ -28,8 +28,8 @@ class JwtServiceTest {
 
     @Test
     void consecutiveTokensHaveDifferentIdsAndSerializedValues() {
-        String first = service.generateToken(7L, "operator", List.of("BUILDING_OWNER"));
-        String second = service.generateToken(7L, "operator", List.of("BUILDING_OWNER"));
+        String first = service.generateToken(7L, "operator", List.of("BUILDING_OWNER"), 1L);
+        String second = service.generateToken(7L, "operator", List.of("BUILDING_OWNER"), 1L);
 
         Claims firstClaims = service.parseToken(first).getPayload();
         Claims secondClaims = service.parseToken(second).getPayload();
@@ -60,5 +60,14 @@ class JwtServiceTest {
         new ApplicationContextRunner().withUserConfiguration(JwtService.class)
                 .withPropertyValues("security.jwt.secret=test-only-jwt-secret-with-more-than-thirty-two-bytes")
                 .run(context -> assertThat(context).hasNotFailed());
+    }
+
+    @Test
+    void rejectsAbsentMalformedAndNonPositiveSecurityVersions() {
+        assertThat(service.getSecurityVersion(io.jsonwebtoken.Jwts.claims().build())).isNull();
+        for (Object value : List.of("1", 1.5, 0, -1L)) {
+            assertThat(service.getSecurityVersion(io.jsonwebtoken.Jwts.claims().add("sv", value).build())).isNull();
+        }
+        assertThat(service.getSecurityVersion(io.jsonwebtoken.Jwts.claims().add("sv", 1L).build())).isEqualTo(1L);
     }
 }

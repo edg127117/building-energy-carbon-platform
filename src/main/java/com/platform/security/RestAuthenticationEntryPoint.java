@@ -23,7 +23,7 @@ import java.util.Map;
  * 最终进入这里。响应保持 {@code code/msg/success} JSON，前端据此清理登录态并跳转登录页；
  * 公开 {@code /auth/**} 请求不会因附带失效 Token 而在过滤器中被提前拦截。</p>
  *
- * <p>Redis 登录态无法核实时返回 503，不建立身份，也不误报为密码错误或要求前端清除会话。</p>
+ * <p>Redis 登录态或 MySQL 权威状态无法核实时返回 503，不建立身份，也不误报为密码错误或要求前端清除会话。</p>
  */
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
 

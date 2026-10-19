@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.platform.cache.MenuCacheService;
 import com.platform.cache.TokenCacheService;
+import com.platform.security.AccountSessionService;
 import com.platform.audit.AuditEvidence;
 import com.platform.audit.AuditEvidenceWriter;
 import com.platform.audit.AuditGovernanceProperties;
@@ -144,10 +145,8 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
     @Override
     public UserAdminDtos.UserView update(Long id, UserAdminDtos.UpdateRequest request) {
         SysUser user = requireActiveUser(id);
-        user.setNickname(request.nickname());
-        user.setPhone(request.phone());
-        userMapper.updateById(user);
-        return toView(user);
+        userMapper.updateProfile(id, request.nickname(), request.phone());
+        return toView(requireActiveUser(id));
     }
 
     /**
@@ -156,26 +155,31 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
      * 恢复时必须由管理员重新确认权限。
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, timeout = 10)
     public void delete(Long currentUserId, Long id) {
         // 自删除和删除最后一个平台管理员都会导致后台失去管理入口，因此必须阻止。
         if (id.equals(currentUserId)) throw new BusinessException(409, "不能删除当前登录管理员");
-        SysUser user = requireActiveUser(id);
+        SysUser user = lockActiveUser(id);
         protectLastAdmin(user);
         // 用户主体逻辑删除，角色和建筑关联直接清除；恢复时由管理员重新确认权限。
         userMapper.logicalDelete(id);
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, id));
         userBuildingMapper.delete(new LambdaQueryWrapper<SysUserBuilding>().eq(SysUserBuilding::getUserId, id));
         buildingScopeService.evict(id);
+        AccountSessionService.incrementVersion(userMapper, user);
         tokenCacheService.revokeActiveToken(id);
         menuCacheService.evict(id);
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class, timeout = 10)
     public UserAdminDtos.UserView restore(Long id) {
-        SysUser user = requireAnyUser(id);
+        SysUser user = userMapper.lockById(id);
+        if (user == null) throw new BusinessException(404, "用户不存在");
         if (user.getDelFlag() == null || user.getDelFlag() == 0) throw new BusinessException(409, "用户未被删除");
         userMapper.restore(id);
+        AccountSessionService.incrementVersion(userMapper, user);
+        tokenCacheService.revokeActiveToken(id);
         return toView(requireAnyUser(id));
     }
 
@@ -185,18 +189,19 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
      * 避免账号已禁用但旧登录态在缓存恢复后仍被接受。
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, timeout = 10)
     public void updateStatus(Long currentUserId, Long id, Integer status) {
         if (status == null || (status != 0 && status != 1)) throw new BusinessException(400, "状态只能是0或1");
         if (id.equals(currentUserId) && status == 0) throw new BusinessException(409, "不能禁用当前登录管理员");
-        SysUser user = requireActiveUser(id);
+        SysUser user = lockActiveUser(id);
         if (status == 1 && user.getActivationPending() != null && user.getActivationPending() == 1) {
             throw new BusinessException(409, "账号尚未使用一次性令牌设置初始密码");
         }
         if (status == 0) protectLastAdmin(user);
         user.setStatus(status);
         userMapper.updateById(user);
-        if (status == 0) tokenCacheService.revokeActiveToken(id);
+        AccountSessionService.incrementVersion(userMapper, user);
+        tokenCacheService.revokeActiveToken(id);
     }
 
     /**
@@ -206,9 +211,9 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
      * 因此提交事务前撤销旧 Token 并清理菜单缓存；撤销失败回滚角色变更，重新登录后才取得新权限。</p>
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, timeout = 10)
     public void replaceRoles(Long currentUserId, Long id, List<String> roleKeys) {
-        requireActiveUser(id);
+        SysUser user = lockActiveUser(id);
         Set<String> normalized = normalizeRoles(roleKeys);
         if (id.equals(currentUserId) && !normalized.contains(FormalRole.PLATFORM_ADMIN.name())) {
             throw new BusinessException(409, "不能取消当前管理员自己的平台管理员角色");
@@ -220,6 +225,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         }
         replaceRolesInternal(id, List.copyOf(normalized));
         // 角色写在 JWT claims 中，变更后必须撤销旧 Token，用户重新登录才能获得新角色。
+        AccountSessionService.incrementVersion(userMapper, user);
         tokenCacheService.revokeActiveToken(id);
         menuCacheService.evict(id);
     }
@@ -324,6 +330,14 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         List<String> buildings = userBuildingMapper.selectBuildingIdsByUserId(user.getId());
         return new UserAdminDtos.UserView(user.getId(), user.getUsername(), user.getNickname(), user.getPhone(),
                 user.getStatus(), user.getDelFlag(), roles, buildings, user.getCreateTime(), user.getUpdateTime());
+    }
+
+    private SysUser lockActiveUser(Long id) {
+        SysUser user = userMapper.lockById(id);
+        if (user == null || !Integer.valueOf(0).equals(user.getDelFlag())) {
+            throw new BusinessException(404, "用户不存在或已删除");
+        }
+        return user;
     }
 
     private SysUser requireActiveUser(Long id) {

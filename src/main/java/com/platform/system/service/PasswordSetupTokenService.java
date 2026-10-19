@@ -5,6 +5,7 @@ import com.platform.audit.AuditEvidenceWriter;
 import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.TraceContext;
 import com.platform.cache.TokenCacheService;
+import com.platform.security.AccountSessionService;
 import com.platform.framework.exception.BusinessException;
 import com.platform.system.mapper.SysUserMapper;
 import com.platform.system.model.entity.SysUser;
@@ -45,10 +46,10 @@ public class PasswordSetupTokenService {
     private final AuditGovernanceProperties properties;
 
     /** 签发令牌前撤销该账号尚未消费的旧令牌，避免多个有效入口并存。 */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, timeout = 10)
     public IssuedToken issue(long userId, String sourceRequestId, long operatorId) {
-        SysUser user = userMapper.selectById(userId);
-        if (user == null) throw new BusinessException(404, "账号不存在或已删除");
+        SysUser user = userMapper.lockById(userId);
+        if (user == null || !Integer.valueOf(0).equals(user.getDelFlag())) throw new BusinessException(404, "账号不存在或已删除");
         Purpose purpose = user.getActivationPending() != null && user.getActivationPending() == 1
                 ? Purpose.ACTIVATION : Purpose.RESET;
         LocalDateTime now = LocalDateTime.now();
@@ -68,15 +69,21 @@ public class PasswordSetupTokenService {
     }
 
     /** 原始令牌只能成功消费一次；任何无效、过期或已用令牌统一返回同一脱敏错误。 */
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, timeout = 10)
     public void setupPassword(String rawToken, String password) {
-        TokenRecord token = findForUpdate(hash(rawToken));
+        String tokenHash = hash(rawToken);
+        // 非锁定定位只取得账号 ID；统一先账号后令牌，锁内必须重新验证令牌全部状态。
+        List<Long> ids = jdbcTemplate.query("SELECT user_id FROM sys_password_setup_token WHERE token_hash=?",
+                (rs, rowNum) -> rs.getLong(1), tokenHash);
+        if (ids.size() != 1) throw invalidToken();
+        SysUser user = userMapper.lockById(ids.get(0));
+        if (user == null || !Integer.valueOf(0).equals(user.getDelFlag())) throw invalidToken();
+        TokenRecord token = findForUpdate(tokenHash);
         LocalDateTime now = LocalDateTime.now();
         if (token == null || !"ACTIVE".equals(token.status()) || !token.expiresAt().isAfter(now)) {
             throw invalidToken();
         }
-        SysUser user = userMapper.selectById(token.userId());
-        if (user == null) throw invalidToken();
+        if (token.userId() != user.getId()) throw invalidToken();
         Purpose purpose = Purpose.valueOf(token.purpose());
         if (purpose == Purpose.ACTIVATION
                 && (user.getActivationPending() == null || user.getActivationPending() != 1)) {
@@ -88,6 +95,7 @@ public class PasswordSetupTokenService {
             user.setStatus(1);
         }
         userMapper.updateById(user);
+        AccountSessionService.incrementVersion(userMapper, user);
         int consumed = jdbcTemplate.update("""
                 UPDATE sys_password_setup_token SET status='USED',used_at=?
                 WHERE token_id=? AND status='ACTIVE'

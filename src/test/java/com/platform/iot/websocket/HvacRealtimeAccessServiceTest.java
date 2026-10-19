@@ -40,11 +40,14 @@ class HvacRealtimeAccessServiceTest {
     private Claims claims;
 
     private HvacRealtimeAccessService service;
+    @Mock private com.platform.system.mapper.SysUserMapper users;
+
 
     @BeforeEach
     void setUp() {
         service = new HvacRealtimeAccessService(
-                jwtService, tokenCacheService, buildingScopeService);
+                jwtService, new com.platform.security.AuthenticationStateService(tokenCacheService, users,
+                        org.mockito.Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class)), buildingScopeService);
     }
 
     @Test
@@ -167,7 +170,22 @@ class HvacRealtimeAccessServiceTest {
         assertFailure("jwt", "BLD001", 4401, "UNAUTHORIZED");
     }
 
+    @Test
+    void rejectsStaleMysqlVersionAndClosesOnMysqlFailure() {
+        stubClaims(7L, List.of("BUILDING_OWNER"), futureExpiry());
+        when(tokenCacheService.validateActiveToken(7L, "jwt")).thenReturn(TokenValidationResult.ACTIVE);
+        var current = users.selectSecurityState(7L);
+        current.setSecurityVersion(2L);
+        assertFailure("jwt", "BLD001", 4401, "UNAUTHORIZED");
+        when(users.selectSecurityState(7L)).thenThrow(new DataAccessResourceFailureException("private-db-detail"));
+        assertFailure("jwt", "BLD001", 1011, "REALTIME_AUTH_UNAVAILABLE");
+    }
+
     private void stubClaims(Long userId, List<String> roles, Date expiry) {
+        var user = new com.platform.system.model.entity.SysUser();
+        user.setStatus(1); user.setDelFlag(0); user.setActivationPending(0); user.setSecurityVersion(1L);
+        org.mockito.Mockito.lenient().when(users.selectSecurityState(org.mockito.ArgumentMatchers.anyLong())).thenReturn(user);
+        org.mockito.Mockito.lenient().when(jwtService.getSecurityVersion(claims)).thenReturn(1L);
         when(jwtService.parseToken("jwt")).thenReturn(jws);
         when(jws.getPayload()).thenReturn(claims);
         when(jwtService.getUserId(claims)).thenReturn(userId);

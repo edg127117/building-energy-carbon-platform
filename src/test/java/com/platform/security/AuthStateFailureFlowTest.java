@@ -35,6 +35,7 @@ class AuthStateFailureFlowTest {
     @Autowired private SysUserAdminService admin;
     @Autowired private JdbcTemplate jdbc;
     @MockBean private TokenCacheService tokens;
+    @org.springframework.boot.test.mock.mockito.SpyBean private com.platform.system.mapper.SysUserMapper states;
 
     @BeforeEach
     void setUp() {
@@ -111,5 +112,18 @@ class AuthStateFailureFlowTest {
 
     private BusinessException unavailable() {
         return new BusinessException(503, "AUTH_STATE_UNAVAILABLE", "登录状态服务暂不可用，请稍后重试");
+    }
+
+    @Test
+    void mysqlAuthorityFailureReturns503ForHttpAndSessionQuery() throws Exception {
+        String token = login();
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("private-db-detail"))
+                .when(states).selectSecurityState(anyLong());
+        for (String path : java.util.List.of("/s01-protected-probe", "/auth/me")) {
+            mvc.perform(get(path).header("Authorization", "Bearer " + token))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.errorCode").value("AUTH_STATE_UNAVAILABLE"))
+                    .andExpect(content().string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("private-db-detail"))));
+        }
     }
 }

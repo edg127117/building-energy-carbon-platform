@@ -3,6 +3,7 @@ package com.platform.system.controller;
 import com.platform.audit.SecurityAuditService;
 import com.platform.cache.MenuCacheService;
 import com.platform.cache.TokenCacheService;
+import com.platform.security.AccountSessionService;
 import com.platform.framework.common.Result;
 import com.platform.framework.exception.BusinessException;
 import com.platform.security.JwtService;
@@ -38,6 +39,7 @@ import java.util.stream.Collectors;
 @RequestMapping("/auth")
 public class AuthController {
 
+    private final AccountSessionService sessions;
     private final SysUserService sysUserService;
     private final JwtService jwtService;
     private final TokenCacheService tokenCacheService;
@@ -48,7 +50,9 @@ public class AuthController {
     public AuthController(SysUserService sysUserService, JwtService jwtService,
                           TokenCacheService tokenCacheService, MenuCacheService menuCacheService,
                           SecurityAuditService securityAuditService,
-                          PasswordSetupTokenService passwordSetupTokenService) {
+                          PasswordSetupTokenService passwordSetupTokenService,
+                          AccountSessionService sessions) {
+        this.sessions = sessions;
         this.sysUserService = sysUserService;
         this.jwtService = jwtService;
         this.tokenCacheService = tokenCacheService;
@@ -136,13 +140,7 @@ public class AuthController {
         JwtUserPrincipal principal = (JwtUserPrincipal) authentication.getPrincipal();
         String header = request.getHeader("Authorization");
         String token = header != null && header.startsWith("Bearer ") ? header.substring(7) : null;
-        if (token != null) {
-            long remaining = Math.max(1, (jwtService.parseToken(token).getPayload().getExpiration().getTime()
-                    - System.currentTimeMillis()) / 1000);
-            tokenCacheService.addToBlacklist(token, remaining);
-        }
-        tokenCacheService.removeFromWhitelist(principal.getId());
-        menuCacheService.evict(principal.getId());
+        sessions.logout(principal.getId(), token);
         securityAuditService.recordAuthentication(request, principal.getId(),
                 "TOKEN_REVOKED", "SUCCESS", null);
         return Result.success("已安全退出");

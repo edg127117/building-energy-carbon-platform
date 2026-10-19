@@ -92,7 +92,8 @@ class FlywayMigrationConfigurationTest {
                 "V69__mysql_daikin_control_stability.sql",
                 "V70__mysql_daikin_batch_control.sql",
                 "V71__mysql_daikin_batch_overlap.sql",
-                "V72__mysql_daikin_batch_parallel.sql");
+                "V72__mysql_daikin_batch_parallel.sql",
+                "V73__mysql_account_security_version.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

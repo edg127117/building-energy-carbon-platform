@@ -1,10 +1,9 @@
 package com.platform.iot.websocket;
 
-import com.platform.cache.TokenCacheService;
-import com.platform.cache.TokenValidationResult;
 import com.platform.framework.exception.BusinessException;
 import com.platform.security.FormalRole;
 import com.platform.security.JwtService;
+import com.platform.security.AuthenticationStateService;
 import com.platform.system.service.BuildingScopeService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -22,7 +21,7 @@ import java.util.stream.Collectors;
 /**
  * 将 WebSocket 首帧和心跳复用为与 HTTP 一致的登录态及建筑范围校验。
  *
- * <p>JWT 只提供已签名的用户与正式角色快照；Redis 明确拒绝或不可用时都不允许订阅。
+ * <p>JWT 只提供已签名的用户与正式角色快照；Redis 或 MySQL 权威账号状态拒绝、不可用时都不允许订阅。
  * 建筑范围仍通过 {@link BuildingScopeService} 实时判断，权限
  * 事实来源不可用时保持失败关闭，不能把暂时故障伪装成用户越权或直接放行。</p>
  */
@@ -33,20 +32,20 @@ public class HvacRealtimeAccessService {
     private static final String AUTH_UNAVAILABLE_MESSAGE = "实时权限校验暂不可用";
 
     private final JwtService jwtService;
-    private final TokenCacheService tokenCacheService;
+    private final AuthenticationStateService authenticationState;
     private final BuildingScopeService buildingScopeService;
 
     public HvacRealtimeAccessService(
             JwtService jwtService,
-            TokenCacheService tokenCacheService,
+            AuthenticationStateService authenticationState,
             BuildingScopeService buildingScopeService) {
         this.jwtService = jwtService;
-        this.tokenCacheService = tokenCacheService;
+        this.authenticationState = authenticationState;
         this.buildingScopeService = buildingScopeService;
     }
 
     /**
-     * 在会话加入建筑路由前完成 JWT、Redis 单账号登录态与 MySQL 建筑范围三层复核。
+     * 在会话加入建筑路由前完成 JWT、Redis 登录态、MySQL 账号版本及建筑范围复核。
      *
      * <p>登录态或建筑权限依赖故障返回 1011，停止推送；不能用签名有效替代当前授权。</p>
      */
@@ -64,14 +63,7 @@ public class HvacRealtimeAccessService {
                 throw unauthorized();
             }
 
-            TokenValidationResult tokenState =
-                    tokenCacheService.validateActiveToken(userId, token);
-            if (tokenState == TokenValidationResult.CACHE_UNAVAILABLE) {
-                throw unavailable();
-            }
-            if (tokenState != TokenValidationResult.ACTIVE) {
-                throw unauthorized();
-            }
+            authenticationState.requireActive(userId, token, jwtService.getSecurityVersion(claims));
 
             buildingScopeService.checkAccess(userId, roles, buildingId);
             return new HvacRealtimeSubscription(
@@ -79,6 +71,7 @@ public class HvacRealtimeAccessService {
         } catch (HvacRealtimeAccessException exception) {
             throw exception;
         } catch (BusinessException exception) {
+            if (Integer.valueOf(401).equals(exception.getCode())) throw unauthorized();
             if (Integer.valueOf(403).equals(exception.getCode())) {
                 throw forbidden();
             }

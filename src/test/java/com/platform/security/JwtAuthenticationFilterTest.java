@@ -22,10 +22,9 @@ class JwtAuthenticationFilterTest {
         JwtService jwt = new JwtService();
         ReflectionTestUtils.setField(jwt, "secret", "test-only-jwt-secret-with-more-than-thirty-two-bytes");
         ReflectionTestUtils.setField(jwt, "expireSeconds", 3600L);
-        String token = jwt.generateToken(7L, "operator", List.of("BUILDING_OWNER"));
-        TokenCacheService tokens = mock(TokenCacheService.class);
-        when(tokens.validateActiveToken(7L, token)).thenReturn(TokenValidationResult.ACTIVE);
-        JwtAuthenticationFilter filter = new JwtAuthenticationFilter(jwt, tokens, new ObjectMapper());
+        String token = jwt.generateToken(7L, "operator", List.of("BUILDING_OWNER"), 1L);
+        AuthenticationStateService state = mock(AuthenticationStateService.class);
+        JwtAuthenticationFilter filter = new JwtAuthenticationFilter(jwt, state, new ObjectMapper());
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("Authorization", "Bearer " + token);
         MockHttpServletResponse response = new MockHttpServletResponse();

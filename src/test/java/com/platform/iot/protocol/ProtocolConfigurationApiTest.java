@@ -11,6 +11,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.jdbc.Sql;
+import org.springframework.test.context.jdbc.SqlConfig;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.UUID;
@@ -128,11 +130,16 @@ class ProtocolConfigurationApiTest {
                     .content(mapper.createObjectNode().put("samplePayload",payload).toString())).andExpect(status().isBadRequest());
     }
     @Test
+    // 登录独立事务只读取已提交账号；业务写入仍由测试事务回滚。
+    @Sql(statements = {"INSERT INTO sys_user (id,username,password,nickname,status,del_flag) VALUES (900003,'protocol_owner','123456','测试业主',1,0)",
+            "INSERT INTO sys_user_role (user_id,role_id) VALUES (900003,10)"},
+            config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
+    @Sql(statements = {"DELETE FROM sys_user_role WHERE user_id=900003", "DELETE FROM sys_user WHERE id=900003"},
+            executionPhase = Sql.ExecutionPhase.AFTER_TEST_METHOD,
+            config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
     void anonymousCannotAccessAndInvalidMappingNeverPersists() throws Exception {
         mvc.perform(get(BASE)).andExpect(status().isUnauthorized());
-        mvc.perform(post("/auth/register").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"username\":\"protocol_owner\",\"password\":\"123456\",\"nickname\":\"测试业主\"}"))
-                .andExpect(status().isOk());
+
         String owner=mapper.readTree(mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"username\":\"protocol_owner\",\"password\":\"123456\"}"))
                 .andExpect(status().isOk()).andReturn().getResponse().getContentAsString()).path("data").path("token").asText();
