@@ -1,5 +1,6 @@
 package com.platform.cache;
 
+import com.platform.framework.exception.BusinessException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
@@ -16,8 +17,8 @@ import java.util.concurrent.TimeUnit;
  * 保存已登出或被管理员撤销的 Token。两类键的 TTL 都不超过 JWT 有效期，避免 Token 过期后
  * 留下永久状态。认证过滤器通过三态结果区分“确实失效”和“Redis 故障”。</p>
  *
- * <p>Redis 访问失败只记录告警：登录仍可签发 JWT，请求鉴权退化为签名和有效期校验。
- * 这意味着缓存故障期间无法保证立即踢下线，是可用性优先降级的明确代价。</p>
+ * <p>Redis 不可用时不能证明登录态有效，HTTP 与实时订阅均拒绝授权。
+ * 写入失败向上抛出，避免把未生效的登录、退出或撤销操作报告为成功。</p>
  */
 @Service
 public class TokenCacheService {
@@ -42,17 +43,18 @@ public class TokenCacheService {
             redis.opsForValue().set(key, token, Duration.ofSeconds(jwtExpireSeconds));
             log.debug("Token 白名单写入: userId={}", userId);
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，Token 白名单写入失败: userId={}", userId, e);
+            log.warn("Redis 不可用，Token 白名单写入失败: userId={}", userId);
+            throw unavailable();
         }
     }
 
-    /** 读取用户白名单原值；返回 {@code null} 可能是未命中，也可能是 Redis 读取失败。 */
+    /** 读取用户白名单原值；未命中返回 {@code null}，依赖故障向上抛出。 */
     public String getFromWhitelist(Long userId) {
         try {
             return redis.opsForValue().get(CacheConstants.TOKEN_WHITELIST + userId);
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，Token 白名单读取失败: userId={}", userId, e);
-            return null;
+            log.warn("Redis 不可用，Token 白名单读取失败: userId={}", userId);
+            throw unavailable();
         }
     }
 
@@ -72,7 +74,7 @@ public class TokenCacheService {
                     ? TokenValidationResult.ACTIVE
                     : TokenValidationResult.REJECTED;
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，Token 降级为仅校验 JWT: userId={}", userId, e);
+            log.warn("Redis 不可用，无法确认 Token 登录态: userId={}", userId);
             return TokenValidationResult.CACHE_UNAVAILABLE;
         }
     }
@@ -92,7 +94,8 @@ public class TokenCacheService {
             }
             redis.delete(CacheConstants.TOKEN_WHITELIST + userId);
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，无法注销用户当前 Token: userId={}", userId, e);
+            log.warn("Redis 不可用，无法注销用户当前 Token: userId={}", userId);
+            throw unavailable();
         }
     }
 
@@ -102,7 +105,8 @@ public class TokenCacheService {
             redis.delete(CacheConstants.TOKEN_WHITELIST + userId);
             log.debug("Token 白名单移除: userId={}", userId);
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，Token 白名单移除失败: userId={}", userId, e);
+            log.warn("Redis 不可用，Token 白名单移除失败: userId={}", userId);
+            throw unavailable();
         }
     }
 
@@ -119,17 +123,22 @@ public class TokenCacheService {
             );
             log.debug("Token 已加入黑名单，剩余有效期: {}秒", remainingSeconds);
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，Token 黑名单写入失败", e);
+            log.warn("Redis 不可用，Token 黑名单写入失败");
+            throw unavailable();
         }
     }
 
-    /** 查询黑名单；Redis 故障时返回 {@code false}，与系统的 JWT 降级策略一致。 */
+    /** 查询黑名单；依赖故障向上抛出，不能把未完成的查询当作未撤销。 */
     public boolean isBlacklisted(String token) {
         try {
             return Boolean.TRUE.equals(redis.hasKey(CacheConstants.TOKEN_BLACKLIST + token));
         } catch (DataAccessException e) {
-            log.warn("Redis 不可用，Token 黑名单校验失败，默认放行", e);
-            return false; // Redis 不可用时默认放行，避免大面积误拦截
+            log.warn("Redis 不可用，Token 黑名单校验失败");
+            throw unavailable();
         }
+    }
+
+    private static BusinessException unavailable() {
+        return new BusinessException(503, "AUTH_STATE_UNAVAILABLE", "登录状态服务暂不可用，请稍后重试");
     }
 }

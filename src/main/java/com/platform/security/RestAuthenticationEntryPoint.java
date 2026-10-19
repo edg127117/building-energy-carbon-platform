@@ -17,11 +17,13 @@ import java.util.Map;
 
 @Component
 /**
- * Spring Security 对未建立有效身份的受保护请求返回 401 的入口。
+ * Spring Security 对未建立有效身份的受保护请求返回认证错误的入口。
  *
  * <p>无 Token、JWT 签名/有效期失败、Redis 明确判定 Token 已撤销，都会由过滤器留下匿名上下文，
  * 最终进入这里。响应保持 {@code code/msg/success} JSON，前端据此清理登录态并跳转登录页；
  * 公开 {@code /auth/**} 请求不会因附带失效 Token 而在过滤器中被提前拦截。</p>
+ *
+ * <p>Redis 登录态无法核实时返回 503，不建立身份，也不误报为密码错误或要求前端清除会话。</p>
  */
 public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
@@ -33,20 +35,26 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
         this.securityAuditService = securityAuditService;
     }
 
-    /** 写入脱敏的 401 JSON，不把 JWT 解析失败原因和安全异常细节暴露给客户端。 */
+    /** 登录态依赖不可用返回 503，其余认证失败返回 401；响应不包含底层异常或 Token。 */
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException {
         Map<String, Object> body = new HashMap<>();
-        body.put("code", 401);
-        body.put("msg", "未登录或登录已过期");
+        boolean unavailable = Boolean.TRUE.equals(request.getAttribute("auth_state_unavailable"));
+        body.put("code", unavailable ? 503 : 401);
+        body.put("msg", unavailable ? "登录状态服务暂不可用，请稍后重试" : "未登录或登录已过期");
         body.put("success", false);
         body.put("traceId", TraceContext.from(request));
-        addVersionedErrorCode(request, body);
-        String reason = request.getAttribute("jwt_error") == null
+        if (unavailable) {
+            body.put("errorCode", "AUTH_STATE_UNAVAILABLE");
+        } else {
+            addVersionedErrorCode(request, body);
+        }
+        String reason = unavailable ? "AUTH_STATE_UNAVAILABLE" : request.getAttribute("jwt_error") == null
                 ? "AUTHENTICATION_REQUIRED" : "TOKEN_INVALID";
         securityAuditService.recordDenied(request, null, reason);
 
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        response.setStatus(unavailable ? HttpServletResponse.SC_SERVICE_UNAVAILABLE
+                : HttpServletResponse.SC_UNAUTHORIZED);
         response.setCharacterEncoding("UTF-8");
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.getWriter().write(objectMapper.writeValueAsString(body));

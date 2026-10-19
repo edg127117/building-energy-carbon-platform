@@ -22,8 +22,8 @@ import java.util.stream.Collectors;
 /**
  * 将 WebSocket 首帧和心跳复用为与 HTTP 一致的登录态及建筑范围校验。
  *
- * <p>JWT 只提供已签名的用户与正式角色快照；Redis 明确拒绝时必须关闭连接，Redis 不可用时
- * 才沿用 HTTP 的可用性优先降级。建筑范围仍通过 {@link BuildingScopeService} 实时判断，权限
+ * <p>JWT 只提供已签名的用户与正式角色快照；Redis 明确拒绝或不可用时都不允许订阅。
+ * 建筑范围仍通过 {@link BuildingScopeService} 实时判断，权限
  * 事实来源不可用时保持失败关闭，不能把暂时故障伪装成用户越权或直接放行。</p>
  */
 public class HvacRealtimeAccessService {
@@ -48,8 +48,7 @@ public class HvacRealtimeAccessService {
     /**
      * 在会话加入建筑路由前完成 JWT、Redis 单账号登录态与 MySQL 建筑范围三层复核。
      *
-     * <p>任何未能证明目标建筑范围的外部资源故障都返回 1011；只有已验证 JWT 且 Redis 明确
-     * 报告不可用时，才允许继续，以保持现有 HTTP 登录态降级语义一致。</p>
+     * <p>登录态或建筑权限依赖故障返回 1011，停止推送；不能用签名有效替代当前授权。</p>
      */
     public HvacRealtimeSubscription authenticate(String token, String buildingId) {
         if (isBlank(token) || isBlank(buildingId)) {
@@ -67,8 +66,10 @@ public class HvacRealtimeAccessService {
 
             TokenValidationResult tokenState =
                     tokenCacheService.validateActiveToken(userId, token);
-            if (tokenState != TokenValidationResult.ACTIVE
-                    && tokenState != TokenValidationResult.CACHE_UNAVAILABLE) {
+            if (tokenState == TokenValidationResult.CACHE_UNAVAILABLE) {
+                throw unavailable();
+            }
+            if (tokenState != TokenValidationResult.ACTIVE) {
                 throw unauthorized();
             }
 

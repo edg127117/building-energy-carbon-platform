@@ -181,9 +181,11 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
 
     /**
      * 启用或禁用账号。禁用当前管理员和最后一个有效平台管理员会被拒绝；禁用其他账号后撤销
-     * 当前 Token，使已经签发的 JWT 不能继续访问受保护接口。
+     * 当前 Token，使已经签发的 JWT 不能继续访问受保护接口。撤销失败时回滚数据库状态，
+     * 避免账号已禁用但旧登录态在缓存恢复后仍被接受。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void updateStatus(Long currentUserId, Long id, Integer status) {
         if (status == null || (status != 0 && status != 1)) throw new BusinessException(400, "状态只能是0或1");
         if (id.equals(currentUserId) && status == 0) throw new BusinessException(409, "不能禁用当前登录管理员");
@@ -201,7 +203,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
      * 全量替换用户正式角色。
      *
      * <p>先规范化并验证四类角色，再保护当前管理员和最后管理员约束。角色写入 JWT claims，
-     * 因此事务完成后撤销旧 Token 并清理菜单缓存，用户重新登录后才能取得新权限。</p>
+     * 因此提交事务前撤销旧 Token 并清理菜单缓存；撤销失败回滚角色变更，重新登录后才取得新权限。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class)

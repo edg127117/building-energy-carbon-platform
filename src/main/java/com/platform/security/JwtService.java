@@ -1,6 +1,7 @@
 package com.platform.security;
 
 import io.jsonwebtoken.Claims;
+import jakarta.annotation.PostConstruct;
 import io.jsonwebtoken.Jws;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -91,8 +92,19 @@ public class JwtService {
         return null;
     }
 
+    /** 启动时拒绝缺失配置和公开示例，避免服务就绪后才发现密钥不可用。 */
+    @PostConstruct
+    void validateConfiguration() {
+        getKey();
+    }
+
     private SecretKey getKey() {
-        // HMAC 密钥不足 32 字节时拒绝启动签发/校验，避免使用可被轻易猜测的弱密钥。
+        if (secret == null || secret.isBlank()
+                || secret.equals("iot-platform-demo-jwt-secret-please-change-32-bytes-min")
+                || secret.equals("replace-with-a-random-secret-of-at-least-32-bytes")) {
+            throw new IllegalStateException("security.jwt.secret 必须配置独立随机密钥，不能使用示例值");
+        }
+        // 长度检查不能证明随机性，部署方仍须安全生成和保存密钥。
         byte[] keyBytes = secret.getBytes(StandardCharsets.UTF_8);
         if (keyBytes.length < 32) {
             throw new IllegalStateException("security.jwt.secret 长度不足，至少需要 32 字节");

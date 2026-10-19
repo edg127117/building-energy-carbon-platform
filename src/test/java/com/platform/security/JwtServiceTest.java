@@ -3,11 +3,16 @@ package com.platform.security;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 锁定同一账号在同一秒内重新登录时也必须获得唯一 Token。 */
 class JwtServiceTest {
@@ -30,5 +35,30 @@ class JwtServiceTest {
         Claims secondClaims = service.parseToken(second).getPayload();
         assertThat(first).isNotEqualTo(second);
         assertThat(firstClaims.getId()).isNotBlank().isNotEqualTo(secondClaims.getId());
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {" ", "short", "iot-platform-demo-jwt-secret-please-change-32-bytes-min",
+            "replace-with-a-random-secret-of-at-least-32-bytes"})
+    void rejectsMissingShortAndPublishedExampleKeys(String key) {
+        ReflectionTestUtils.setField(service, "secret", key);
+        assertThatThrownBy(service::validateConfiguration).isInstanceOf(IllegalStateException.class);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "short", "iot-platform-demo-jwt-secret-please-change-32-bytes-min",
+            "replace-with-a-random-secret-of-at-least-32-bytes"})
+    void rejectsInvalidKeyAtStartupBeforeServingRequests(String key) {
+        new ApplicationContextRunner().withUserConfiguration(JwtService.class)
+                .withPropertyValues("security.jwt.secret=" + key)
+                .run(context -> assertThat(context).hasFailed());
+    }
+
+    @Test
+    void startsWithAnExplicitNonExampleKey() {
+        new ApplicationContextRunner().withUserConfiguration(JwtService.class)
+                .withPropertyValues("security.jwt.secret=test-only-jwt-secret-with-more-than-thirty-two-bytes")
+                .run(context -> assertThat(context).hasNotFailed());
     }
 }

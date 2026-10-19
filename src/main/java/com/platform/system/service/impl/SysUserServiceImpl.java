@@ -151,7 +151,7 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
         // 正式角色写入 JWT claims，供 @PreAuthorize 使用；建筑权限不写入 JWT，可动态生效。
         String token = jwtService.generateToken(user.getId(), user.getUsername(), roleKeys);
 
-        // 写入单账号白名单；Redis 故障由缓存服务记录并按可用性优先策略降级。
+        // 白名单写入失败时不返回 JWT，避免把未建立的登录态报告为登录成功。
         tokenCacheService.addToWhitelist(user.getId(), token);
 
         return LoginResponse.builder()

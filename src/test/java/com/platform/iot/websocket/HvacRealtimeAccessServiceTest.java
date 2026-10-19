@@ -77,12 +77,12 @@ class HvacRealtimeAccessServiceTest {
     }
 
     @Test
-    void keepsHttpJwtFallbackWhenRedisIsUnavailable() {
+    void rejectsSubscriptionWhenRedisIsUnavailable() {
         stubClaims(7L, List.of("BUILDING_OWNER"), futureExpiry());
         when(tokenCacheService.validateActiveToken(7L, "jwt"))
                 .thenReturn(TokenValidationResult.CACHE_UNAVAILABLE);
 
-        assertThat(service.authenticate("jwt", "BLD001").userId()).isEqualTo(7L);
+        assertFailure("jwt", "BLD001", 1011, "REALTIME_AUTH_UNAVAILABLE");
     }
 
     @Test
@@ -149,6 +149,22 @@ class HvacRealtimeAccessServiceTest {
                 .isInstanceOf(HvacRealtimeAccessException.class)
                 .satisfies(error -> assertThat(
                         ((HvacRealtimeAccessException) error).closeCode()).isEqualTo(4403));
+    }
+
+    @Test
+    void closesExistingSubscriptionOnCacheFailureAndRejectsRevokedTokenAfterRecovery() {
+        stubClaims(7L, List.of("BUILDING_OWNER"), futureExpiry());
+        when(tokenCacheService.validateActiveToken(7L, "jwt"))
+                .thenReturn(TokenValidationResult.ACTIVE);
+        HvacRealtimeSubscription initial = service.authenticate("jwt", "BLD001");
+        when(tokenCacheService.validateActiveToken(7L, "jwt"))
+                .thenReturn(TokenValidationResult.CACHE_UNAVAILABLE);
+        assertThatThrownBy(() -> service.revalidate(initial))
+                .isInstanceOf(HvacRealtimeAccessException.class)
+                .satisfies(error -> assertThat(((HvacRealtimeAccessException) error).closeCode()).isEqualTo(1011));
+        when(tokenCacheService.validateActiveToken(7L, "jwt"))
+                .thenReturn(TokenValidationResult.REJECTED);
+        assertFailure("jwt", "BLD001", 4401, "UNAUTHORIZED");
     }
 
     private void stubClaims(Long userId, List<String> roles, Date expiry) {
