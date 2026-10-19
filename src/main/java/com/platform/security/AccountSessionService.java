@@ -1,8 +1,6 @@
 package com.platform.security;
 
-import com.platform.cache.MenuCacheService;
 import com.platform.cache.TokenCacheService;
-import com.platform.cache.TokenValidationResult;
 import com.platform.framework.exception.BusinessException;
 import com.platform.system.mapper.SysRoleMapper;
 import com.platform.system.mapper.SysUserMapper;
@@ -19,24 +17,24 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Supplier;
 
-/** 在账号行锁内完成登录/退出与版本递增；Redis 失败回滚 MySQL，提交成功才向客户端返回 JWT。 */
+/** 在账号行锁内完成登录/退出与版本递增；登录双写成功才返回 JWT，退出提交后通过持久化待办清理 Redis。 */
 @Service
 public class AccountSessionService {
     private final SysUserMapper users;
     private final SysRoleMapper roles;
     private final JwtService jwt;
     private final TokenCacheService tokens;
-    private final MenuCacheService menus;
+    private final AccountCleanupService cleanup;
     private final TransactionTemplate transaction;
 
     public AccountSessionService(SysUserMapper users, SysRoleMapper roles, JwtService jwt,
-                                 TokenCacheService tokens, MenuCacheService menus,
-                                 PlatformTransactionManager transactionManager) {
+                                 TokenCacheService tokens,
+                                 PlatformTransactionManager transactionManager, AccountCleanupService cleanup) {
         this.users = users;
         this.roles = roles;
         this.jwt = jwt;
         this.tokens = tokens;
-        this.menus = menus;
+        this.cleanup = cleanup;
         transaction = new TransactionTemplate(transactionManager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
@@ -78,14 +76,8 @@ public class AccountSessionService {
             if (!AuthenticationStateService.isEnabled(user) || !version.equals(user.getSecurityVersion())) {
                 throw AuthenticationStateService.unauthorized();
             }
-            TokenValidationResult state = tokens.validateActiveToken(userId, token);
-            if (state == TokenValidationResult.CACHE_UNAVAILABLE) throw AuthenticationStateService.unavailable();
-            if (state != TokenValidationResult.ACTIVE) throw AuthenticationStateService.unauthorized();
-            incrementVersion(users, user);
-            long remaining = Math.max(1, (claims.getExpiration().getTime() - System.currentTimeMillis()) / 1000);
-            tokens.addToBlacklist(token, remaining);
-            tokens.removeFromWhitelist(userId);
-            menus.evict(userId);
+            long nextVersion = incrementVersion(users, user);
+            cleanup.enqueue(userId, nextVersion);
             return null;
         });
     }

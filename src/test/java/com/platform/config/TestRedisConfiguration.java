@@ -61,6 +61,18 @@ public class TestRedisConfiguration {
                 get(entries, invocation.getArgument(0)) != null);
         when(template.delete(anyString())).thenAnswer(invocation ->
                 entries.remove(invocation.getArgument(0)) != null);
+        // 精确模拟账号补偿的原子 compare-and-delete；并发新值不能被旧命令删除。
+        when(template.execute(org.mockito.ArgumentMatchers.any(org.springframework.data.redis.core.script.RedisScript.class),
+                org.mockito.ArgumentMatchers.anyList(), anyString())).thenAnswer(invocation -> {
+            java.util.List<String> keys = invocation.getArgument(1);
+            String expected = invocation.getArgument(2);
+            java.util.concurrent.atomic.AtomicLong removed = new java.util.concurrent.atomic.AtomicLong();
+            entries.computeIfPresent(keys.getFirst(), (key, entry) -> {
+                if (entry.value().equals(expected)) { removed.set(1); return null; }
+                return entry;
+            });
+            return removed.get();
+        });
         return template;
     }
 

@@ -49,13 +49,14 @@ abstract class AccountSecurityContract {
     protected SysUserMapper users;
     protected TokenCacheService tokens;
     protected AccountSessionService sessions;
+    protected AccountCleanupService cleanup;
     protected SysUserAdminService admin;
     protected PasswordSetupTokenService passwords;
     protected AuthenticationStateService authority;
     protected JwtService jwt;
     protected SysUserServiceImpl login;
     private ExecutorService workers;
-    private final List<String> tables = List.of("sys_password_setup_token", "sys_user_building", "sys_user_role", "sys_role", "sys_user");
+    private final List<String> tables = List.of("sys_auth_cleanup", "sys_password_setup_token", "sys_user_building", "sys_user_role", "sys_role", "sys_user");
 
     protected DataSource dataSource() {
         return new DriverManagerDataSource("jdbc:h2:mem:s01_" + UUID.randomUUID()
@@ -105,13 +106,14 @@ abstract class AccountSecurityContract {
         jwt = new JwtService();
         ReflectionTestUtils.setField(jwt, "secret", "test-only-jwt-secret-with-more-than-thirty-two-bytes");
         ReflectionTestUtils.setField(jwt, "expireSeconds", 3600L);
-        sessions = spy(new AccountSessionService(users, roles, jwt, tokens, menus, tm));
+        cleanup = spy(new AccountCleanupService(jdbc, users, tokens, jwt, redis, tm));
+        sessions = spy(new AccountSessionService(users, roles, jwt, tokens, tm, cleanup));
         authority = new AuthenticationStateService(tokens, users, tm);
         var audit = mock(AuditEvidenceWriter.class);
         var properties = new AuditGovernanceProperties();
-        passwords = transactional(new PasswordSetupTokenService(jdbc, users, encoder, tokens, audit, properties));
+        passwords = transactional(new PasswordSetupTokenService(jdbc, users, encoder, cleanup, audit, properties));
         admin = transactional(new SysUserAdminServiceImpl(users, roles, sql.getMapper(SysUserRoleMapper.class),
-                sql.getMapper(SysUserBuildingMapper.class), mock(BuildingMapper.class), encoder, tokens, menus,
+                sql.getMapper(SysUserBuildingMapper.class), mock(BuildingMapper.class), encoder, cleanup, menus,
                 buildings, passwords, audit, properties));
         login = new SysUserServiceImpl(encoder, jwt, tokens, mock(SysRoleService.class), roles,
                 sql.getMapper(SysUserRoleMapper.class), menus, buildings, sessions);
@@ -201,8 +203,7 @@ abstract class AccountSecurityContract {
         String token = loginToken();
         sessions.logout(7L, token);
         redis.delete(CacheConstants.TOKEN_BLACKLIST + token);
-        tokens.addToWhitelist(7L, token);
-        rejected(token);
+        restoreRedisAndReject(token);
     }
 
     @Test
@@ -210,13 +211,11 @@ abstract class AccountSecurityContract {
         String token = loginToken();
         admin.updateStatus(-1L, 7L, 0);
         admin.updateStatus(-1L, 7L, 1);
-        tokens.addToWhitelist(7L, token);
-        rejected(token);
+        restoreRedisAndReject(token);
         String next = loginToken();
         admin.delete(-1L, 7L);
         admin.restore(7L);
-        tokens.addToWhitelist(7L, next);
-        rejected(next);
+        restoreRedisAndReject(next);
         assertThat(users.selectSecurityState(7L).getStatus()).isEqualTo(1);
     }
 
@@ -271,34 +270,166 @@ abstract class AccountSecurityContract {
     }
 
     @Test
-    void revocationFailureRollsBackStatusRolesAndVersion() {
+    void cleanupFailureDoesNotRollbackDisableRolesDeleteOrLogout() {
         String token = loginToken();
         long before = version(token);
-        doThrow(AuthenticationStateService.unavailable()).when(tokens).revokeActiveToken(7L);
-        assertThatThrownBy(() -> admin.updateStatus(-1L, 7L, 0)).isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> admin.replaceRoles(-1L, 7L, List.of("ENERGY_MANAGER"))).isInstanceOf(BusinessException.class);
-        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(before);
-        assertThat(admin.detail(7L).roles()).containsExactly("BUILDING_OWNER");
+        doThrow(AuthenticationStateService.unavailable()).when(tokens).getFromWhitelist(7L);
+        admin.updateStatus(-1L, 7L, 0);
+        assertThat(users.selectSecurityState(7L).getStatus()).isZero();
+        admin.replaceRoles(-1L, 7L, List.of("ENERGY_MANAGER"));
+        assertThat(admin.detail(7L).roles()).containsExactly("ENERGY_MANAGER");
+        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(before + 2);
+        assertPending();
+        restoreRedisAndReject(token);
+        admin.updateStatus(-1L, 7L, 1);
+        String current = loginToken();
+        sessions.logout(7L, current);
+        restoreRedisAndReject(current);
+        admin.delete(-1L, 7L);
+        assertThat(users.selectSecurityState(7L).getDelFlag()).isEqualTo(1);
+        assertPending();
+        doCallRealMethod().when(tokens).getFromWhitelist(7L);
+        cleanup.attempt(7L);
+        assertThat(pendingCount()).isZero();
+        assertThat(tokens.getFromWhitelist(7L)).isNull();
+    }
+
+    @Test
+    void activationAndPasswordResetCommitDespiteCleanupFailure() {
+        jdbc.update("UPDATE sys_user SET status=0,activation_pending=1 WHERE id=7");
+        doThrow(AuthenticationStateService.unavailable()).when(tokens).getFromWhitelist(7L);
+        String activation = passwords.issue(7L, "activate", -1L).token();
+        passwords.setupPassword(activation, "pass");
+        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(2L);
+        assertThat(users.selectSecurityState(7L).getActivationPending()).isZero();
+        String token = loginToken();
+        String resetToken = passwords.issue(7L, "reset", -1L).token();
+        passwords.setupPassword(resetToken, "new-pass");
+        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(version(token) + 1);
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_password_setup_token WHERE source_request_id='reset'", String.class)).isEqualTo("USED");
+        assertThatThrownBy(() -> passwords.setupPassword(resetToken, "other")).isInstanceOf(BusinessException.class);
+        restoreRedisAndReject(token);
+        assertPending();
+        active(login.login("s01", "new-pass").getToken());
+    }
+
+    @Test
+    void durableRetryAfterServiceRestartPreservesNewerLogin() {
+        String old = loginToken();
+        doThrow(AuthenticationStateService.unavailable()).when(tokens).getFromWhitelist(7L);
+        admin.replaceRoles(-1L, 7L, List.of("ENERGY_MANAGER"));
+        assertPending();
+        String current = loginToken();
+        doCallRealMethod().when(tokens).getFromWhitelist(7L);
+        jdbc.update("UPDATE sys_auth_cleanup SET next_attempt_at=CURRENT_TIMESTAMP");
+        new AccountCleanupService(jdbc, users, tokens, jwt, redis, tm).retryPending();
+        assertThat(pendingCount()).isZero();
+        assertThat(tokens.getFromWhitelist(7L)).isEqualTo(current);
+        active(current);
+        // 模拟旧补偿命令在新登录之后才到达 Redis，CAS 必须保留新值。
+        tokens.removeFromWhitelistIfMatches(7L, old);
+        assertThat(tokens.getFromWhitelist(7L)).isEqualTo(current);
+        active(current);
+    }
+
+    @Test
+    void mysqlRollbackDoesNotCleanRedisOrLeavePendingWork() {
+        String token = loginToken();
+        clearInvocations(tokens);
+        var outer = new TransactionTemplate(tm);
+        assertThatThrownBy(() -> outer.executeWithoutResult(status -> {
+            admin.updateStatus(-1L, 7L, 0);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void beforeCommit(boolean readOnly) {
+                    throw new DataAccessResourceFailureException("isolated commit failure");
+                }
+            });
+        })).isInstanceOf(DataAccessResourceFailureException.class);
+        assertThat(pendingCount()).isZero();
+        assertThat(users.selectSecurityState(7L).getStatus()).isEqualTo(1);
+        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(version(token));
+        verify(tokens, never()).getFromWhitelist(anyLong());
         active(token);
     }
 
     @Test
-    void activationIncrementsVersionAndPasswordFailureRollsBackTokenConsumption() {
-        jdbc.update("UPDATE sys_user SET status=0,activation_pending=1 WHERE id=7");
-        String activation = passwords.issue(7L, "activate", -1L).token();
-        passwords.setupPassword(activation, "pass");
-        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(2L);
+    void compensationRecordFailureRollsBackSecurityChange() {
         String token = loginToken();
-        String resetToken = passwords.issue(7L, "reset", -1L).token();
-        doThrow(AuthenticationStateService.unavailable()).when(tokens).revokeActiveToken(7L);
-        assertThatThrownBy(() -> passwords.setupPassword(resetToken, "new-pass")).isInstanceOf(BusinessException.class);
+        doThrow(new DataAccessResourceFailureException("isolated outbox failure"))
+                .when(cleanup).enqueue(eq(7L), anyLong());
+        assertThatThrownBy(() -> admin.updateStatus(-1L, 7L, 0)).isInstanceOf(DataAccessResourceFailureException.class);
+        assertThat(users.selectSecurityState(7L).getStatus()).isEqualTo(1);
         assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(version(token));
-        assertThat(jdbc.queryForObject("SELECT status FROM sys_password_setup_token WHERE source_request_id='reset'", String.class)).isEqualTo("ACTIVE");
         active(token);
-        doCallRealMethod().when(tokens).revokeActiveToken(7L);
-        passwords.setupPassword(resetToken, "new-pass");
+    }
+
+    @Test
+    void cleanupAlsoRemovesUnpublishedFailedLoginAtRevocationVersion() {
+        doAnswer(call -> { call.callRealMethod(); throw AuthenticationStateService.unavailable(); })
+                .when(tokens).addToWhitelist(eq(7L), anyString());
+        assertThatThrownBy(this::loginToken).isInstanceOf(BusinessException.class);
+        String unpublished = tokens.getFromWhitelist(7L);
+        rejected(unpublished);
+        admin.replaceRoles(-1L, 7L, List.of("ENERGY_MANAGER"));
+        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(version(unpublished));
+        assertThat(tokens.getFromWhitelist(7L)).isNull();
+        assertThat(pendingCount()).isZero();
+    }
+
+    @Test
+    void partialCleanupCanRetryWithoutRevivingOrDeletingNewSession() {
+        String token = loginToken();
+        doAnswer(call -> {
+            call.callRealMethod();
+            throw AuthenticationStateService.unavailable();
+        }).when(tokens).removeFromWhitelistIfMatches(eq(7L), anyString());
+        admin.replaceRoles(-1L, 7L, List.of("ENERGY_MANAGER"));
+        assertPending();
+        assertThat(tokens.getFromWhitelist(7L)).isNull();
+        restoreRedisAndReject(token);
+        String current = loginToken();
+        doCallRealMethod().when(tokens).removeFromWhitelistIfMatches(eq(7L), anyString());
+        cleanup.attempt(7L);
+        assertThat(pendingCount()).isZero();
+        active(current);
+    }
+
+    @Test
+    void mysqlPasswordFailureRollsBackCredentialVersionAndTokenConsumption() {
+        String token = loginToken();
+        String reset = passwords.issue(7L, "rollback-reset", -1L).token();
+        var outer = new TransactionTemplate(tm);
+        assertThatThrownBy(() -> outer.executeWithoutResult(status -> {
+            passwords.setupPassword(reset, "new-pass");
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override public void beforeCommit(boolean readOnly) {
+                    throw new DataAccessResourceFailureException("isolated commit failure");
+                }
+            });
+        })).isInstanceOf(DataAccessResourceFailureException.class);
+        assertThat(pendingCount()).isZero();
+        assertThat(users.selectSecurityState(7L).getSecurityVersion()).isEqualTo(version(token));
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_password_setup_token WHERE source_request_id='rollback-reset'",
+                String.class)).isEqualTo("ACTIVE");
+        active(token);
+        active(loginToken());
+    }
+
+    private void restoreRedisAndReject(String token) {
+        redis.delete(CacheConstants.TOKEN_BLACKLIST + token);
         tokens.addToWhitelist(7L, token);
+        assertThat(tokens.validateActiveToken(7L, token)).isEqualTo(TokenValidationResult.ACTIVE);
         rejected(token);
+    }
+
+    private int pendingCount() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM sys_auth_cleanup WHERE user_id=7", Integer.class);
+    }
+
+    private void assertPending() {
+        assertThat(pendingCount()).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT last_error FROM sys_auth_cleanup WHERE user_id=7", String.class))
+                .isEqualTo("REDIS_CLEANUP_FAILED");
     }
 
     @Test

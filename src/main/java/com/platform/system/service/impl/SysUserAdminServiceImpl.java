@@ -3,7 +3,7 @@ package com.platform.system.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.platform.cache.MenuCacheService;
-import com.platform.cache.TokenCacheService;
+import com.platform.security.AccountCleanupService;
 import com.platform.security.AccountSessionService;
 import com.platform.audit.AuditEvidence;
 import com.platform.audit.AuditEvidenceWriter;
@@ -55,7 +55,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
     private final SysUserBuildingMapper userBuildingMapper;
     private final BuildingMapper buildingMapper;
     private final PasswordEncoder passwordEncoder;
-    private final TokenCacheService tokenCacheService;
+    private final AccountCleanupService cleanup;
     private final MenuCacheService menuCacheService;
     private final BuildingScopeService buildingScopeService;
     private final PasswordSetupTokenService passwordSetupTokenService;
@@ -166,9 +166,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         userRoleMapper.delete(new LambdaQueryWrapper<SysUserRole>().eq(SysUserRole::getUserId, id));
         userBuildingMapper.delete(new LambdaQueryWrapper<SysUserBuilding>().eq(SysUserBuilding::getUserId, id));
         buildingScopeService.evict(id);
-        AccountSessionService.incrementVersion(userMapper, user);
-        tokenCacheService.revokeActiveToken(id);
-        menuCacheService.evict(id);
+        cleanup.enqueue(id, AccountSessionService.incrementVersion(userMapper, user));
     }
 
     @Override
@@ -178,15 +176,13 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         if (user == null) throw new BusinessException(404, "用户不存在");
         if (user.getDelFlag() == null || user.getDelFlag() == 0) throw new BusinessException(409, "用户未被删除");
         userMapper.restore(id);
-        AccountSessionService.incrementVersion(userMapper, user);
-        tokenCacheService.revokeActiveToken(id);
+        cleanup.enqueue(id, AccountSessionService.incrementVersion(userMapper, user));
         return toView(requireAnyUser(id));
     }
 
     /**
      * 启用或禁用账号。禁用当前管理员和最后一个有效平台管理员会被拒绝；禁用其他账号后撤销
-     * 当前 Token，使已经签发的 JWT 不能继续访问受保护接口。撤销失败时回滚数据库状态，
-     * 避免账号已禁用但旧登录态在缓存恢复后仍被接受。
+     * 当前 Token。状态与版本提交即生效；Redis 清理失败持久化重试，不回滚已提交的禁用。
      */
     @Override
     @Transactional(rollbackFor = Exception.class, timeout = 10)
@@ -200,15 +196,14 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         if (status == 0) protectLastAdmin(user);
         user.setStatus(status);
         userMapper.updateById(user);
-        AccountSessionService.incrementVersion(userMapper, user);
-        tokenCacheService.revokeActiveToken(id);
+        cleanup.enqueue(id, AccountSessionService.incrementVersion(userMapper, user));
     }
 
     /**
      * 全量替换用户正式角色。
      *
      * <p>先规范化并验证四类角色，再保护当前管理员和最后管理员约束。角色写入 JWT claims，
-     * 因此提交事务前撤销旧 Token 并清理菜单缓存；撤销失败回滚角色变更，重新登录后才取得新权限。</p>
+     * 因此角色与版本同事务提交后旧 Token 立即失效；缓存清理失败重试，重新登录后才取得新权限。</p>
      */
     @Override
     @Transactional(rollbackFor = Exception.class, timeout = 10)
@@ -225,9 +220,7 @@ public class SysUserAdminServiceImpl implements SysUserAdminService {
         }
         replaceRolesInternal(id, List.copyOf(normalized));
         // 角色写在 JWT claims 中，变更后必须撤销旧 Token，用户重新登录才能获得新角色。
-        AccountSessionService.incrementVersion(userMapper, user);
-        tokenCacheService.revokeActiveToken(id);
-        menuCacheService.evict(id);
+        cleanup.enqueue(id, AccountSessionService.incrementVersion(userMapper, user));
     }
 
     /** 全量替换 MySQL 用户建筑关系，并清理范围缓存使新范围在下一次请求立即生效。 */

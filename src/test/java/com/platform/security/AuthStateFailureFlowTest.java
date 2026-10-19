@@ -64,25 +64,28 @@ class AuthStateFailureFlowTest {
     }
 
     @Test
-    void loginAndLogoutDoNotReturnSuccessWhenWritesFail() throws Exception {
+    void loginWriteFailureRejectsButLogoutCleanupFailureStillSucceeds() throws Exception {
         doThrow(unavailable()).when(tokens).addToWhitelist(anyLong(), anyString());
         mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
                         .content("{\"username\":\"admin\",\"password\":\"123456\"}"))
                 .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.data.token").doesNotExist());
         doNothing().when(tokens).addToWhitelist(anyLong(), anyString());
         String token = login();
-        doThrow(unavailable()).when(tokens).addToBlacklist(eq(token), anyLong());
+        doThrow(unavailable()).when(tokens).getFromWhitelist(1L);
         mvc.perform(post("/auth/logout").header("Authorization", "Bearer " + token))
-                .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.success").value(false));
+                .andExpect(status().isOk()).andExpect(jsonPath("$.success").value(true));
+        mvc.perform(get("/auth/me").header("Authorization", "Bearer " + token))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    void disableRollsBackIfTokenRevocationFails() {
+    void disableCommitsIfRedisCleanupFails() {
         long userId = users.createActiveUser("s01-disable", "test-pass", "BUILDING_OWNER", null);
-        doThrow(unavailable()).when(tokens).revokeActiveToken(userId);
-        assertThatThrownBy(() -> admin.updateStatus(-1L, userId, 0)).isInstanceOf(BusinessException.class);
-        assertThat(jdbc.queryForObject("SELECT status FROM sys_user WHERE id=?", Integer.class, userId)).isEqualTo(1);
-        doNothing().when(tokens).revokeActiveToken(userId);
+        doThrow(unavailable()).when(tokens).getFromWhitelist(userId);
+        admin.updateStatus(-1L, userId, 0);
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_user WHERE id=?", Integer.class, userId)).isEqualTo(0);
+        doReturn(null).when(tokens).getFromWhitelist(userId);
+        jdbc.update("DELETE FROM sys_auth_cleanup WHERE user_id=?", userId);
         users.remove("s01-disable");
     }
 
@@ -94,18 +97,18 @@ class AuthStateFailureFlowTest {
     }
 
     @Test
-    void roleChangeRollsBackOnRevocationFailureAndSucceedsAfterRecovery() {
+    void roleChangeCommitsOnCleanupFailureAndRetriesAfterRecovery() {
         long userId = users.createActiveUser("s01-role", "test-pass", "BUILDING_OWNER", null);
         try {
-            doThrow(unavailable()).when(tokens).revokeActiveToken(userId);
-            assertThatThrownBy(() -> admin.replaceRoles(-1L, userId, java.util.List.of("ENERGY_MANAGER")))
-                    .isInstanceOf(BusinessException.class);
-            assertThat(admin.detail(userId).roles()).containsExactly("BUILDING_OWNER");
-            doNothing().when(tokens).revokeActiveToken(userId);
+            doThrow(unavailable()).when(tokens).getFromWhitelist(userId);
+            admin.replaceRoles(-1L, userId, java.util.List.of("ENERGY_MANAGER"));
+            assertThat(admin.detail(userId).roles()).containsExactly("ENERGY_MANAGER");
+            doReturn(null).when(tokens).getFromWhitelist(userId);
             admin.replaceRoles(-1L, userId, java.util.List.of("ENERGY_MANAGER"));
             assertThat(admin.detail(userId).roles()).containsExactly("ENERGY_MANAGER");
         } finally {
-            doNothing().when(tokens).revokeActiveToken(userId);
+            doReturn(null).when(tokens).getFromWhitelist(userId);
+            jdbc.update("DELETE FROM sys_auth_cleanup WHERE user_id=?", userId);
             users.remove("s01-role");
         }
     }

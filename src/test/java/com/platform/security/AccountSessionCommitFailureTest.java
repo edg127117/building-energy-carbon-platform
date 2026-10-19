@@ -39,7 +39,7 @@ class AccountSessionCommitFailureTest {
         ReflectionTestUtils.setField(jwt, "secret", "test-only-jwt-secret-with-more-than-thirty-two-bytes");
         ReflectionTestUtils.setField(jwt, "expireSeconds", 3600L);
         AccountSessionService sessions = new AccountSessionService(users, roles, jwt, tokens,
-                mock(MenuCacheService.class), tm);
+                tm, mock(AccountCleanupService.class));
         assertThatThrownBy(() -> sessions.login(7L, "hash", null))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.getCode()).isEqualTo(503);

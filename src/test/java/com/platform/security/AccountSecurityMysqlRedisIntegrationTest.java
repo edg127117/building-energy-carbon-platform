@@ -27,6 +27,25 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
     private boolean redisVerified;
 
     @Test
+    void realRedisCleanupTimeoutCannotRollbackDisableAndCanBeRetried() {
+        String token = loginToken();
+        redis.execute((RedisCallback<Object>) connection -> connection.execute("CLIENT",
+                "PAUSE".getBytes(StandardCharsets.US_ASCII), "3000".getBytes(StandardCharsets.US_ASCII)));
+        admin.updateStatus(-1L, 7L, 0);
+        assertThat(jdbc.queryForObject("SELECT status FROM sys_user WHERE id=7", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT last_error FROM sys_auth_cleanup WHERE user_id=7", String.class))
+                .isEqualTo("REDIS_CLEANUP_FAILED");
+        assertThat(redis.execute((RedisCallback<String>) connection -> connection.ping())).isEqualTo("PONG");
+        redis.delete(CacheConstants.TOKEN_BLACKLIST + token);
+        tokens.addToWhitelist(7L, token);
+        assertThat(tokens.validateActiveToken(7L, token)).isEqualTo(com.platform.cache.TokenValidationResult.ACTIVE);
+        rejected(token);
+        cleanup.attempt(7L);
+        assertThat(tokens.getFromWhitelist(7L)).isNull();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_auth_cleanup", Integer.class)).isZero();
+    }
+
+    @Test
     void realRedisTimeoutFailsClosedAndRecoveryCannotRestoreDisabledAccount() {
         String token = loginToken();
         admin.updateStatus(-1L, 7L, 0);

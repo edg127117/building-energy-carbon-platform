@@ -131,8 +131,7 @@ public class AuthController {
     /**
      * 安全退出当前账号。
      *
-     * <p>当前 Token 会按剩余有效期加入黑名单，同时移除用户白名单和菜单缓存，
-     * 防止客户端继续使用已退出的 JWT。</p>
+     * <p>安全版本提交后当前 Token 立即失效；白名单与菜单缓存提交后清理，失败持久化重试。</p>
      */
     @PostMapping("/logout")
     @PreAuthorize("isAuthenticated()")

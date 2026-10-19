@@ -18,10 +18,13 @@ import java.util.concurrent.TimeUnit;
  * 留下永久状态。认证过滤器通过三态结果区分“确实失效”和“Redis 故障”。</p>
  *
  * <p>Redis 不可用时不能证明登录态有效，HTTP 与实时订阅均拒绝授权。
- * 写入失败向上抛出，避免把未生效的登录、退出或撤销操作报告为成功。</p>
+ * 登录写入失败向上抛出；安全变更由 MySQL 版本决定生效，缓存清理由持久化补偿重试。</p>
  */
 @Service
 public class TokenCacheService {
+    private static final org.springframework.data.redis.core.script.DefaultRedisScript<Long> DELETE_MATCHING =
+            new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+                    "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end", Long.class);
 
     private static final Logger log = LoggerFactory.getLogger(TokenCacheService.class);
 
@@ -58,6 +61,11 @@ public class TokenCacheService {
         }
     }
 
+    /** 原子比较并删除，迟到的补偿命令不能移除同账号后来登录的新白名单。 */
+    public void removeFromWhitelistIfMatches(Long userId, String expectedToken) {
+        redis.execute(DELETE_MATCHING, java.util.List.of(CacheConstants.TOKEN_WHITELIST + userId), expectedToken);
+    }
+
     /**
      * 校验单账号当前有效 Token。
      *
@@ -82,7 +90,7 @@ public class TokenCacheService {
     /**
      * 注销某用户当前登录态。
      *
-     * <p>角色变更、账号禁用、逻辑删除和管理员重置安全信息时调用。当前白名单 Token
+     * <p>低层缓存撤销工具，不负责数据库安全状态；领域安全变更使用持久化补偿。当前白名单 Token
      * 会进入黑名单，然后删除白名单项，使已经签发的 JWT 立即失效。</p>
      */
     public void revokeActiveToken(Long userId) {

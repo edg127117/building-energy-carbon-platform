@@ -4,7 +4,7 @@ import com.platform.audit.AuditEvidence;
 import com.platform.audit.AuditEvidenceWriter;
 import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.TraceContext;
-import com.platform.cache.TokenCacheService;
+import com.platform.security.AccountCleanupService;
 import com.platform.security.AccountSessionService;
 import com.platform.framework.exception.BusinessException;
 import com.platform.system.mapper.SysUserMapper;
@@ -41,7 +41,7 @@ public class PasswordSetupTokenService {
     private final JdbcTemplate jdbcTemplate;
     private final SysUserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
-    private final TokenCacheService tokenCacheService;
+    private final AccountCleanupService cleanup;
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties properties;
 
@@ -95,7 +95,7 @@ public class PasswordSetupTokenService {
             user.setStatus(1);
         }
         userMapper.updateById(user);
-        AccountSessionService.incrementVersion(userMapper, user);
+        cleanup.enqueue(user.getId(), AccountSessionService.incrementVersion(userMapper, user));
         int consumed = jdbcTemplate.update("""
                 UPDATE sys_password_setup_token SET status='USED',used_at=?
                 WHERE token_id=? AND status='ACTIVE'
@@ -105,7 +105,6 @@ public class PasswordSetupTokenService {
                 UPDATE sys_password_setup_token SET status='REVOKED'
                 WHERE user_id=? AND token_id<>? AND status='ACTIVE'
                 """, token.userId(), token.tokenId());
-        tokenCacheService.revokeActiveToken(token.userId());
         auditWriter.append(new AuditEvidence("SYSTEM_SECURITY", null, "USER", token.userId(),
                 purpose == Purpose.ACTIVATION ? "ACTIVATE_USER_CREDENTIAL" : "RESET_USER_CREDENTIAL",
                 "USER_ACCOUNT", Long.toString(token.userId()), null, token.sourceRequestId(),
