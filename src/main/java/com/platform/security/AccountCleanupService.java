@@ -16,9 +16,6 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.sql.Timestamp;
-import java.time.LocalDateTime;
-
 /** 安全变更的持久化缓存补偿；MySQL 提交决定撤权，Redis 清理不再撤销已提交的安全状态。 */
 @Service
 public class AccountCleanupService {
@@ -92,10 +89,11 @@ public class AccountCleanupService {
                     redis.delete(CacheConstants.MENU_USER + userId);
                     redis.delete(CacheConstants.MENU_ALL);
                 } catch (RuntimeException failure) {
+                    // 到期时间和扫描使用同一数据库时钟，避免 JVM 与数据库时区不同导致补偿延迟。
                     jdbc.update("""
                             UPDATE sys_auth_cleanup SET attempts=attempts+1,last_error='REDIS_CLEANUP_FAILED',
-                                next_attempt_at=? WHERE user_id=?
-                            """, Timestamp.valueOf(LocalDateTime.now().plusSeconds(30)), userId);
+                                next_attempt_at=TIMESTAMPADD(SECOND,30,CURRENT_TIMESTAMP) WHERE user_id=?
+                            """, userId);
                     log.warn("账号安全变更已生效，缓存清理待重试: userId={}", userId);
                     return;
                 }

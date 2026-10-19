@@ -66,7 +66,15 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
         String url = System.getenv("S01_MYSQL_URL");
         assertThat(url).startsWith("jdbc:mysql://127.0.0.1:").contains("/s01_auth_it?");
         var ds = new DriverManagerDataSource(url, "root", System.getenv("S01_MYSQL_PASSWORD"));
+        // 每个连接固定数据库 UTC，显式与 JVM/驱动的上海时区不同，覆盖 DATETIME 的时钟边界。
+        var properties = new java.util.Properties();
+        properties.setProperty("sessionVariables", "time_zone='+00:00'");
+        properties.setProperty("connectionTimeZone", "Asia/Shanghai");
+        properties.setProperty("forceConnectionTimeZoneToSession", "false");
+        ds.setConnectionProperties(properties);
         var check = new JdbcTemplate(ds);
+        assertThat(java.time.ZoneId.systemDefault()).isEqualTo(java.time.ZoneId.of("Asia/Shanghai"));
+        assertThat(check.queryForObject("SELECT @@session.time_zone", String.class)).isEqualTo("+00:00");
         assertThat(check.queryForObject("SELECT VERSION()", String.class)).startsWith("8.");
         assertThat(check.queryForObject("SELECT @@hostname", String.class)).isEqualTo("s01-auth-mysql");
         assertThat(check.queryForObject("SELECT DATABASE()", String.class)).isEqualTo("s01_auth_it");

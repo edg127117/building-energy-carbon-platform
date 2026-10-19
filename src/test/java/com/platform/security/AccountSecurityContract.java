@@ -314,15 +314,31 @@ abstract class AccountSecurityContract {
     }
 
     @Test
-    void durableRetryAfterServiceRestartPreservesNewerLogin() {
+    void durableRetryAfterServiceRecreationUsesOriginalDatabaseDeadline() throws InterruptedException {
         String old = loginToken();
         doThrow(AuthenticationStateService.unavailable()).when(tokens).getFromWhitelist(7L);
         admin.replaceRoles(-1L, 7L, List.of("ENERGY_MANAGER"));
         assertPending();
+        assertThat(jdbc.queryForObject("""
+                SELECT TIMESTAMPDIFF(SECOND,CURRENT_TIMESTAMP,next_attempt_at)
+                FROM sys_auth_cleanup WHERE user_id=7
+                """, Long.class)).isBetween(25L, 30L);
+        String originalDeadline = jdbc.queryForObject(
+                "SELECT CAST(next_attempt_at AS CHAR) FROM sys_auth_cleanup WHERE user_id=7", String.class);
         String current = loginToken();
         doCallRealMethod().when(tokens).getFromWhitelist(7L);
-        jdbc.update("UPDATE sys_auth_cleanup SET next_attempt_at=CURRENT_TIMESTAMP");
-        new AccountCleanupService(jdbc, users, tokens, jwt, redis, tm).retryPending();
+        var recreated = new AccountCleanupService(jdbc, users, tokens, jwt, redis, tm);
+        recreated.retryPending();
+        assertPending();
+        assertThat(jdbc.queryForObject(
+                "SELECT CAST(next_attempt_at AS CHAR) FROM sys_auth_cleanup WHERE user_id=7", String.class))
+                .isEqualTo(originalDeadline);
+        // 保留生产代码写入的到期时间；重建服务后只能靠数据库自然到期恢复补偿。
+        long timeout = System.nanoTime() + TimeUnit.SECONDS.toNanos(45);
+        while (pendingCount() != 0 && System.nanoTime() < timeout) {
+            Thread.sleep(250);
+            recreated.retryPending();
+        }
         assertThat(pendingCount()).isZero();
         assertThat(tokens.getFromWhitelist(7L)).isEqualTo(current);
         active(current);
