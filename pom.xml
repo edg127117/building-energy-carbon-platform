@@ -20,6 +20,8 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <java.version>21</java.version>
+    <!-- Java 21 虚拟线程需要已修复 JDBC I/O 固定载体线程的驱动；9.7 仍支持部署中的 MySQL 8.0。 -->
+    <mysql.version>9.7.0</mysql.version>
     <mybatis-plus.version>3.5.5</mybatis-plus.version>
     <paho-mqtt.version>1.2.5</paho-mqtt.version>
     <taos-jdbc.version>3.2.7</taos-jdbc.version>

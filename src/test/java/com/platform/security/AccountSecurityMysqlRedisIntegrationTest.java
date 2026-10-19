@@ -27,6 +27,29 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
     private LettuceConnectionFactory redisFactory;
     private boolean redisVerified;
 
+    @Override
+    protected java.util.concurrent.ExecutorService newWorkers() {
+        return java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    @Test
+    void virtualThreadLockWaitersCannotStarveTheTransactionHoldingTheLock() throws Exception {
+        try (var child = new Child("virtual")) {
+            child.awaitFile("owner-holds-lock");
+            long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(4);
+            int waiting;
+            do {
+                waiting = jdbc.queryForObject("SELECT COUNT(*) FROM performance_schema.data_lock_waits", Integer.class);
+                if (waiting >= 4) break;
+                Thread.sleep(20);
+            } while (System.nanoTime() < deadline);
+            assertThat(waiting).as("real MySQL lock waiters must occupy all four carriers with the old driver").isGreaterThanOrEqualTo(4);
+            child.release();
+            child.awaitFile("verified");
+            assertThat(child.read("verified")).isEqualTo("logins=17;versions=17;latest=active;stale=rejected;tls=true");
+        }
+    }
+
     @Test
     @org.junit.jupiter.api.Order(1)
     void killedJvmRecoversCommittedOutboxThroughRealScheduler() throws Exception {
@@ -105,6 +128,7 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
         private final String nonce = java.util.UUID.randomUUID().toString();
         private final Process process;
         private final java.time.Instant started;
+        private final String mainClass;
 
         Child(String mode) throws Exception {
             var root = java.nio.file.Path.of("target", "s01-process-tests");
@@ -116,8 +140,10 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
             String classpath = System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
             var arguments = directory.resolve("java.args");
             java.nio.file.Files.writeString(arguments, "-cp\n\"" + classpath.replace("\\", "\\\\").replace("\"", "\\\"") + "\"\n");
-            process = new ProcessBuilder(javaExecutable, "-Duser.timezone=Asia/Shanghai", "@" + arguments,
-                    AccountCleanupProcess.class.getName(), directory.toString(), nonce, mode)
+            mainClass = mode.equals("virtual") ? AccountVirtualThreadProcess.class.getName() : AccountCleanupProcess.class.getName();
+            process = new ProcessBuilder(javaExecutable, "-Duser.timezone=Asia/Shanghai",
+                    "-Djdk.virtualThreadScheduler.parallelism=4", "@" + arguments,
+                    mainClass, directory.toString(), nonce, mode)
                     .redirectErrorStream(true).redirectOutput(directory.resolve("process.log").toFile()).start();
             started = process.info().startInstant().orElseThrow();
             try { awaitFile("ready"); verifyIdentity(); }
@@ -145,7 +171,7 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
         void verifyIdentity() throws Exception {
             assertThat(read("ready")).isEqualTo(process.pid() + ":" + nonce);
             assertThat(process.info().startInstant()).contains(started);
-            assertThat(process.info().arguments().orElseThrow()).contains(AccountCleanupProcess.class.getName(), nonce);
+            assertThat(process.info().arguments().orElseThrow()).contains(mainClass, nonce);
         }
 
         void killVerified() throws Exception {
@@ -159,7 +185,7 @@ class AccountSecurityMysqlRedisIntegrationTest extends AccountSecurityContract {
             if (!process.isAlive()) return;
             // 即使握手前启动失败，也只处理保存的直接子进程，且复核启动时间和随机参数。
             assertThat(process.info().startInstant()).contains(started);
-            process.info().arguments().ifPresent(args -> assertThat(args).contains(AccountCleanupProcess.class.getName(), nonce));
+            process.info().arguments().ifPresent(args -> assertThat(args).contains(mainClass, nonce));
             process.destroy();
             if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly();
