@@ -206,6 +206,10 @@ def tdengine_exclusive_instance():
     def sql(statement, username="root", password="taosdata"):
         header = {"Authorization": "Basic " + base64.b64encode((username + ":" + password).encode()).decode()}
         status, result = request(api, statement.encode(), header)
+        if statement.startswith("CREATE DATABASE") and not (status == 200 and result.get("code") == 0):
+            # 仅记录本测试固定建库语句的错误；账号创建/改密语句及认证头绝不输出。
+            print("tdengine_database_probe_failure=" + json.dumps({"http": status, "code": result.get("code"),
+                                                                   "reason": result.get("desc")}), flush=True)
         return status == 200 and result.get("code") == 0
     await_ready(lambda: sql("SELECT SERVER_VERSION()"))
     details = json.loads(docker("inspect", identifier))[0]
