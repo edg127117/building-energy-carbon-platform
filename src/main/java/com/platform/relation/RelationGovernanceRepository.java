@@ -1279,6 +1279,38 @@ public class RelationGovernanceRepository {
                 rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), versionId, versionId);
     }
 
+    /** 草稿可选择尚未引用的建筑边界；冻结版本仍只返回版本实际引用的身份。 */
+    public List<BoundaryRow> boundaryCatalogue(String versionId,String buildingId,boolean draft,int size,int offset) {
+        if(!draft)return listBoundaries(versionId,buildingId,size,offset);
+        return jdbc.query("SELECT boundary_id,boundary_code,boundary_name,energy_type,confirmation_status,status,evidence_reference FROM biz_metering_boundary WHERE building_id=? AND status='ACTIVE' ORDER BY boundary_code LIMIT ? OFFSET ?",(r,n)->new BoundaryRow(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6),r.getString(7)),buildingId,size,offset);
+    }
+    public long countBoundaryCatalogue(String versionId,String buildingId,boolean draft) {
+        if(!draft)return countBoundaries(versionId,buildingId);
+        Long value=jdbc.queryForObject("SELECT COUNT(*) FROM biz_metering_boundary WHERE building_id=? AND status='ACTIVE'",Long.class,buildingId);
+        return value==null?0:value;
+    }
+    public long countNodeCatalogue(String buildingId,String type) {
+        Long value=jdbc.queryForObject("SELECT COUNT(*) FROM biz_relation_node WHERE building_id=? AND (? IS NULL OR node_type=?)",Long.class,buildingId,type,type);
+        return value==null?0:value;
+    }
+    /** 名称取当前档案，仅作配置选择；不能把这些标签当作历史版本中的名称快照。 */
+    public List<com.platform.relation.api.RelationContracts.NodeCatalogueItem> nodeCatalogue(String buildingId,String type,int size,int offset) {
+        return jdbc.query("""
+                SELECT n.node_id,n.node_type,n.business_object_id,
+                       COALESCE(p.point_code,e.equip_code,s.space_code,g.system_group_code,b.boundary_code,n.business_object_id) AS object_code,
+                       COALESCE(p.point_name,e.equip_name,s.space_name,g.system_group_name,b.boundary_name,n.business_object_id) AS object_name,
+                       CASE WHEN COALESCE(p.point_id,e.equip_id,s.space_id,g.system_group_id,b.boundary_id) IS NULL THEN 'UNAVAILABLE' ELSE n.status END AS object_status
+                FROM biz_relation_node n
+                LEFT JOIN biz_data_point p ON n.node_type='POINT' AND p.point_id=n.business_object_id AND p.building_id=n.building_id AND p.del_flag=0
+                LEFT JOIN biz_equipment e ON n.node_type='EQUIPMENT' AND e.equip_id=n.business_object_id AND e.building_id=n.building_id AND e.del_flag=0
+                LEFT JOIN biz_space s ON n.node_type='SPACE' AND s.space_id=n.business_object_id AND s.building_id=n.building_id AND s.del_flag=0
+                LEFT JOIN biz_system_group g ON n.node_type='SYSTEM' AND g.system_group_id=n.business_object_id AND g.building_id=n.building_id AND g.del_flag=0
+                LEFT JOIN biz_metering_boundary b ON n.node_type='METERING_BOUNDARY' AND b.boundary_id=n.business_object_id AND b.building_id=n.building_id
+                WHERE n.building_id=? AND (? IS NULL OR n.node_type=?)
+                ORDER BY n.node_type,object_code,n.node_id LIMIT ? OFFSET ?
+                """,(r,n)->new com.platform.relation.api.RelationContracts.NodeCatalogueItem(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6)),buildingId,type,type,size,offset);
+    }
+
     private static String id() {
         return java.util.UUID.randomUUID().toString().replace("-", "");
     }

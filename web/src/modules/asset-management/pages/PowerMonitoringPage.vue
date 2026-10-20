@@ -80,6 +80,7 @@ async function query() {
       systemGroupId: filters.systemGroupId || undefined,
       keyword: filters.keyword,
       size: 100,
+      category: 'ELECTRIC_METER',
     })
   } catch {
     // 错误状态保留在 management.equipmentError 中展示。
@@ -138,7 +139,7 @@ onMounted(() => {
     filters.buildingId = requestedBuilding
   }
   void Promise.all([
-    management.setEquipmentQuery({ buildingId: requestedBuilding, size: 100 }),
+    management.setEquipmentQuery({ buildingId: requestedBuilding, size: 100, category: 'ELECTRIC_METER' }),
     management.ensureBuildingOptions(),
     requestedBuilding ? filterScope.loadScope(requestedBuilding) : Promise.resolve(),
   ]).then(() => {
@@ -173,7 +174,7 @@ onMounted(() => {
       <article class="summary-card">
         <span class="summary-label">{{ t('assetManagement.powerMonitoring.totalMeters') }}</span>
         <div class="summary-value-row">
-          <strong class="summary-value">{{ allMeters.length }}</strong>
+          <strong class="summary-value">{{ management.equipment.value.total }}</strong>
           <span class="summary-unit">{{ t('assetManagement.powerMonitoring.unitCount') }}</span>
         </div>
       </article>
@@ -313,7 +314,7 @@ onMounted(() => {
           layout="total, prev, pager, next"
           :current-page="management.equipment.value.page"
           :page-size="management.equipment.value.size"
-          :total="filteredMeters.length"
+          :total="management.equipment.value.total"
           @current-change="changePage"
         />
       </div>

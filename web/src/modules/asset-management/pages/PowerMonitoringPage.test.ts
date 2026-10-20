@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
-import { ElButton } from '@/shared/ui'
+import { ElButton, ElPagination } from '@/shared/ui'
 import { getEquipment, listBuildings, listEquipment, listEquipmentPoints, listSpaces, listSystemGroups } from '../api/assets'
 import { listMeterCoverages } from '../api/meter-coverage'
 import PowerMonitoringPage from './PowerMonitoringPage.vue'
@@ -45,7 +45,7 @@ describe('电力监控页面（PowerMonitoringPage）', () => {
       { equipmentId: 'M-3P', equipmentName: '外机三相总表', equipmentCode: 'MTR-3P', typeCode: 'ELECTRIC_METER_3P', category: 'ELECTRIC_METER', spaceName: '楼顶机房', status: 'ACTIVE', identities: [], pointSummary: { total: 12, required: 0, configuredRequired: 0 } },
       { equipmentId: 'M-1P', equipmentName: '101室单相电表', equipmentCode: 'MTR-1P', typeCode: 'ELECTRIC_METER_1P', category: 'ELECTRIC_METER', spaceName: '101室', status: 'ACTIVE', identities: [], pointSummary: { total: 6, required: 0, configuredRequired: 0 } },
     ]
-    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 100, total: 3, items: items as never })
+    vi.mocked(listEquipment).mockResolvedValue({ page: 1, size: 100, total: 203, items: items as never })
     vi.mocked(listBuildings).mockResolvedValue({ page: 1, size: 100, total: 0, items: [] })
     vi.mocked(listSpaces).mockResolvedValue([])
     vi.mocked(listSystemGroups).mockResolvedValue({ page: 1, size: 100, total: 0, items: [] })
@@ -65,6 +65,8 @@ describe('电力监控页面（PowerMonitoringPage）', () => {
     await flushPromises()
 
     expect(wrapper.find('h1').text()).toBe('电力监控')
+    expect(listEquipment).toHaveBeenCalledWith(expect.objectContaining({ category: 'ELECTRIC_METER' }))
+    expect(wrapper.findComponent(ElPagination).props('total')).toBe(203)
     expect(wrapper.text()).toContain('外机三相总表')
     expect(wrapper.text()).toContain('101室单相电表')
     expect(wrapper.text()).not.toContain('101室内机')

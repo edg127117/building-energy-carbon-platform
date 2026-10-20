@@ -97,6 +97,7 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 | `com.platform.energy.activity` | 多能源原始活动数据的有界读取和质量门禁 |
 | `com.platform.energy.catalog`、`conversion` | 能源品种、单位量纲、折标公式和参数版本；研发模拟结果不得冒充正式结算 |
 | `com.platform.energy.aggregation`、`period`、`summary` | 活动量聚合、计量事件与修正、周期投影与封账、历史关系和计量边界汇总 |
+| `com.platform.energy.classification` | 版本化分类树、设备及测点归属、计量树分解与原生分类统计、独立审核的人工来源；不写入碳核算 |
 | `com.platform.energy.efficiency` | 电驱动水冷冷站原生周期、年度 EERp 和研发评价 |
 | `com.platform.carbon` | 因子与分母版本、范围一/二计算、追溯、重算和批次审批 |
 | `com.platform.relation` | 建筑关系版本、表计层级和方向、计量边界、分层查询及 Excel 草稿导入 |

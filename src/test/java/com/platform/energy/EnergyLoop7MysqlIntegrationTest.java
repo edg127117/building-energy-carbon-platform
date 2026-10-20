@@ -1,19 +1,30 @@
 package com.platform.energy;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.energy.classification.ClassificationContracts.Reading;
+import com.platform.energy.classification.ClassificationRepository;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** 专用一次性 MySQL 8 验证第七闭环完整迁移链、硬约束和关键查询索引。 */
+/** 专用一次性 MySQL 8 验证完整迁移链、能源闭环约束及通用分类的持久化与并发。 */
 @EnabledIfEnvironmentVariable(named = "ENERGY_LOOP7_MYSQL_IT_URL", matches = ".+")
 class EnergyLoop7MysqlIntegrationTest {
     private static final List<String> LOOP_TABLES = List.of(
@@ -24,7 +35,7 @@ class EnergyLoop7MysqlIntegrationTest {
             "biz_energy_boundary_summary_policy_version");
 
     @Test
-    void migratesEmptyDatabaseAndEnforcesLoopGovernance() {
+    void migratesEmptyDatabaseAndEnforcesLoopGovernance() throws Exception {
         String url = System.getenv("ENERGY_LOOP7_MYSQL_IT_URL");
         assertThat(System.getenv("ENERGY_LOOP7_MYSQL_IT_ISOLATED"))
                 .as("集成测试必须由调用方显式确认使用一次性隔离 MySQL")
@@ -39,12 +50,20 @@ class EnergyLoop7MysqlIntegrationTest {
                 Integer.class)).as("隔离库必须为空").isZero();
 
         Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init")
-                .load().migrate();
+                .target("74").load().migrate();
+        Integer equipmentBefore = jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class);
+        Integer pointsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class);
+        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
+        assertThat(flyway.migrate().migrationsExecuted).as("从既有V74升级只执行新增V75").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
 
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
-                """, String.class)).isEqualTo("74");
+                """, String.class)).isEqualTo("75");
+        flyway.validate();
+        assertThat(flyway.migrate().migrationsExecuted).as("重跑迁移不得重复建表或改写历史").isZero();
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM biz_equipment_type WHERE type_code='ODU'
                 """, Integer.class)).isEqualTo(1);
@@ -107,5 +126,108 @@ class EnergyLoop7MysqlIntegrationTest {
                   AND period_start >= '2026-01-01' AND status <> 'SUPERSEDED'
                 """)).singleElement().satisfies(row ->
                 assertThat(row.get("key")).isEqualTo("idx_energy_period_snapshot_visible"));
+        verifyClassificationStorage(dataSource, jdbc);
+    }
+
+    private void verifyClassificationStorage(DataSource dataSource, JdbcTemplate jdbc) throws Exception {
+        assertThat(jdbc.queryForList("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema=DATABASE() AND engine='InnoDB'
+                """, String.class)).contains("biz_energy_classification_scope", "biz_energy_classification_version",
+                "biz_energy_manual_batch", "biz_energy_manual_reading");
+        assertThat(jdbc.queryForList("""
+                SELECT index_name FROM information_schema.statistics
+                WHERE table_schema=DATABASE() AND table_name IN
+                ('biz_energy_classification_version','biz_energy_manual_batch','biz_energy_manual_reading')
+                """, String.class)).contains("uk_classification_version", "uk_energy_manual_batch",
+                "idx_classification_effective", "idx_energy_manual_period");
+
+        var repository = new ClassificationRepository(jdbc);
+        var transactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        Instant from = Instant.parse("2026-08-01T00:00:00Z"), to = Instant.parse("2026-09-01T00:00:00Z");
+        String configuration = "{\"source\":\"隔离数据库验证\"}";
+        transactions.executeWithoutResult(status -> {
+            repository.lock("BLD001");
+            repository.insertVersion("MYSQL_CLASS_V1", "BLD001", configuration, "隔离测试", 1);
+            var version = repository.version("BLD001", "MYSQL_CLASS_V1");
+            assertThat(version.json()).isEqualTo(configuration);
+            assertThat(repository.save(version, 0, configuration, "保存")).isEqualTo(1);
+            assertThat(repository.save(version, 0, configuration, "过期修订")).isZero();
+            assertThat(repository.submit(version, 1, "提交")).isEqualTo(1);
+            assertThat(repository.approve(version, 2, from, 2, "独立审核")).isEqualTo(1);
+        });
+        assertThat(repository.effective("BLD001", from, to)).singleElement()
+                .satisfies(version -> assertThat(version.reviewer()).isEqualTo(2L));
+        assertThat(repository.version("OTHER_BUILDING", "MYSQL_CLASS_V1")).isNull();
+
+        assertThatThrownBy(() -> transactions.executeWithoutResult(status -> {
+            repository.lock("BLD001");
+            repository.insertVersion("MYSQL_CLASS_ROLLBACK", "BLD001", configuration, "回滚验证", 1);
+            var version = repository.version("BLD001", "MYSQL_CLASS_ROLLBACK");
+            repository.submit(version, 0, "提交");
+            repository.approve(version, 1, to, 2, "审核");
+            throw new IllegalStateException("模拟审计写入失败");
+        })).isInstanceOf(IllegalStateException.class);
+        assertThat(repository.version("BLD001", "MYSQL_CLASS_ROLLBACK")).isNull();
+        assertThat(repository.version("BLD001", "MYSQL_CLASS_V1").to()).isNull();
+
+        BigDecimal exact = new BigDecimal("99999999999999999999999999.123456789012");
+        var json = new ObjectMapper().findAndRegisterModules();
+        Reading reading = new Reading("POINT004", from, to, "ELECTRICITY", "kWh", "PERIOD_TOTAL",
+                null, null, exact, BigDecimal.ONE, true, "CONFIRMED", "隔离样例", "EXACT", null);
+        repository.insertBatch("MYSQL_BATCH", "BLD001", "mysql-key", "a".repeat(64), "隔离来源", 1);
+        repository.insertReading("MYSQL_FACT", "MYSQL_BATCH", "BLD001", reading, json.writeValueAsString(reading), exact, 1);
+        assertThat(repository.readings("BLD001", from, to, true)).isEmpty();
+        assertThat(repository.approveBatch("BLD001", "MYSQL_BATCH", 0, 2)).isEqualTo(1);
+        assertThat(repository.approveBatch("BLD001", "MYSQL_BATCH", 0, 2)).isZero();
+        assertThat(repository.readings("BLD001", from, to, true)).singleElement().satisfies(value -> {
+            assertThat(value.quantity()).isEqualByComparingTo(exact);
+            assertThat(value.batchStatus()).isEqualTo("APPROVED");
+        });
+        assertThat(repository.batch("OTHER_BUILDING", "MYSQL_BATCH", false)).isNull();
+        assertThat(repository.readings("OTHER_BUILDING", from, to, true)).isEmpty();
+        assertThatThrownBy(() -> repository.insertBatch("MYSQL_DUPLICATE", "BLD001", "mysql-key",
+                "b".repeat(64), "重复幂等键", 1)).isInstanceOf(DataAccessException.class);
+
+        Reading pending = new Reading("POINT004", from, to, "ELECTRICITY", "kWh", "PERIOD_TOTAL",
+                null, null, BigDecimal.TEN, null, false, "PENDING_EXPERT", "倍率未知", "DATE_ONLY", null);
+        repository.insertBatch("MYSQL_PENDING", "BLD001", "mysql-pending", "c".repeat(64), "保留未知倍率", 1);
+        repository.insertReading("MYSQL_UNKNOWN", "MYSQL_PENDING", "BLD001", pending, json.writeValueAsString(pending), null, 1);
+        assertThat(repository.batchReadings("BLD001", "MYSQL_PENDING")).singleElement()
+                .satisfies(value -> assertThat(value.quantity()).isNull());
+
+        BigDecimal corrected = new BigDecimal("0.010000000001");
+        Reading revision = new Reading("POINT004", from, to, "ELECTRICITY", "kWh", "PERIOD_TOTAL",
+                null, null, corrected, BigDecimal.ONE, true, "CONFIRMED", "明确修订", "EXACT", "MYSQL_FACT");
+        repository.insertBatch("MYSQL_REVISION", "BLD001", "mysql-revision", "d".repeat(64), "修订", 1);
+        repository.insertReading("MYSQL_FACT_V2", "MYSQL_REVISION", "BLD001", revision, json.writeValueAsString(revision), corrected, 1);
+        assertThat(repository.readings("BLD001", from, to, true)).singleElement()
+                .satisfies(value -> assertThat(value.id()).isEqualTo("MYSQL_FACT"));
+        repository.approveBatch("BLD001", "MYSQL_REVISION", 0, 2);
+        assertThat(repository.readings("BLD001", from, to, true)).singleElement().satisfies(value -> {
+            assertThat(value.id()).isEqualTo("MYSQL_FACT_V2");
+            assertThat(value.quantity()).isEqualByComparingTo(corrected);
+        });
+        assertThat(repository.batchReadings("BLD001", "MYSQL_BATCH")).hasSize(1);
+
+        try (var executor = Executors.newFixedThreadPool(2)) {
+            var start = new CountDownLatch(1);
+            var tasks = new java.util.ArrayList<Future<?>>();
+            for (int i = 0; i < 12; i++) {
+                final int index = i;
+                tasks.add(executor.submit(() -> {
+                    if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("并发起跑超时");
+                    transactions.executeWithoutResult(status -> {
+                        repository.lock("BLD001");
+                        repository.insertVersion("MYSQL_CONCURRENT_" + index, "BLD001", configuration, "并发序号", 1);
+                    });
+                    return null;
+                }));
+            }
+            start.countDown();
+            for (Future<?> task : tasks) task.get(30, TimeUnit.SECONDS);
+        }
+        assertThat(repository.versions("BLD001")).hasSize(13)
+                .extracting(ClassificationRepository.Version::no).doesNotHaveDuplicates();
     }
 }

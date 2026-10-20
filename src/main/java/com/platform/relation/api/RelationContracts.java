@@ -177,6 +177,16 @@ public final class RelationContracts {
             QueryMetadata metadata, int page, int size, long total,
             List<MeteringBoundaryView> items) {}
 
+    public record BoundaryCatalogueItem(String boundaryId, String boundaryCode, String boundaryName,
+                                        String energyType, String confirmationStatus, String status,
+                                        String evidenceReference) {}
+    public record BoundaryCatalogueView(QueryMetadata metadata, int page, int size, long total,
+                                        boolean editableCatalogue, List<BoundaryCatalogueItem> items) {}
+    public record NodeCatalogueItem(String nodeId, String nodeType, String businessObjectId,
+                                    String code, String name, String status) {}
+    public record NodeCatalogueView(QueryMetadata metadata, int page, int size, long total,
+                                    String labelNature, List<NodeCatalogueItem> items) {}
+
     public record MeteringAssignmentView(
             String assignmentItemId, String allocationStatus,
             String reasonCode, String reasonText, String evidenceReference,

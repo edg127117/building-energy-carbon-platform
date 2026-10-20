@@ -177,9 +177,10 @@ public class AssetManagementController {
             @RequestParam(required = false) String productId,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String category,
             Authentication authentication) {
         return Result.success(service.listEquipment(page, size, buildingId, spaceId,
-                systemGroupId, typeCode, productId, status, keyword,
+                systemGroupId, typeCode, productId, status, keyword, category,
                 SecurityUser.roles(authentication)));
     }
 
