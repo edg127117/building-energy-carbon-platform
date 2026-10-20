@@ -11,12 +11,14 @@ import urllib.error
 import urllib.request
 import uuid
 
+from verify_tdengine_exclusive import BoundaryError, PROJECT, PROJECT_LABEL, verify_instance
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 NONCE = uuid.uuid4().hex
 LABEL = "bec.s02.test=" + NONCE
 OWNED = []
 NETWORKS = []
+VOLUMES = []
 ENV = os.environ.copy()
 
 
@@ -188,11 +190,17 @@ def emqx_template():
             assert kind == 0x30 and body.endswith(b"s02-isolated-probe"), "authorized telemetry did not arrive"
 
 
-def tdengine_accounts():
+def tdengine_exclusive_instance():
     network = docker("network", "create", "--label", LABEL, "--opt", "com.docker.network.bridge.host_binding_ipv4=127.0.0.1",
-                     "--opt", "com.docker.network.bridge.enable_icc=false", "s02-data-" + NONCE[:12])
+                     "--opt", "com.docker.network.bridge.enable_icc=false", "--label", PROJECT_LABEL + "=" + PROJECT,
+                     "s02-data-" + NONCE[:12])
     NETWORKS.append(network)
-    identifier = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network])
+    network_name = "s02-data-" + NONCE[:12]
+    volume = docker("volume", "create", "--label", LABEL, "s02-taos-" + NONCE[:12])
+    VOLUMES.append(volume)
+    identifier = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network,
+                           "--label", PROJECT_LABEL + "=" + PROJECT, "--label", "bec.security.tdengine-exclusive=true",
+                           "--mount", "type=volume,src=" + volume + ",dst=/var/lib/taos"])
     api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
     def sql(statement, username="root", password="taosdata"):
         header = {"Authorization": "Basic " + base64.b64encode((username + ":" + password).encode()).decode()}
@@ -208,37 +216,68 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     except OSError: continue
     raise SystemExit('unauthorized network reached data service')
 """
-    probe = container("python:3.12-alpine", [], ["--network=bridge"], ["python", "-c", probe_code,
-                      connection["Gateway"], str(port(identifier, 6041)), connection["IPAddress"], "6041",
-                      connection["IPAddress"], "6030"])
-    await_ready(lambda: json.loads(docker("inspect", probe))[0]["State"]["Status"] == "exited")
-    assert json.loads(docker("inspect", probe))[0]["State"]["ExitCode"] == 0, "data service reachable from Broker-side network"
+    for source in ["bridge", network]:
+        probe = container("python:3.12-alpine", [], ["--network", source, "--label", PROJECT_LABEL + "=" + PROJECT],
+                          ["python", "-c", probe_code, connection["Gateway"], str(port(identifier, 6041)),
+                           connection["IPAddress"], "6041", connection["IPAddress"], "6030"])
+        await_ready(lambda: json.loads(docker("inspect", probe))[0]["State"]["Status"] == "exited")
+        assert json.loads(docker("inspect", probe))[0]["State"]["ExitCode"] == 0, "data service reachable from an unauthorized container"
     print("cross_network_boundary=PASS", flush=True)
     assert request(api, b"SELECT SERVER_VERSION()")[0] == 401
-    assert sql("CREATE DATABASE s02_project") and sql("CREATE DATABASE s02_other")
-    password = uuid.uuid4().hex[:24]
-    assert sql("CREATE USER s02_app PASS '" + password + "' SYSINFO 0"), "create dedicated TDengine account"
-    for permission in ["READ", "WRITE"]:
-        assert sql("GRANT " + permission + " ON s02_project.* TO s02_app"), "grant project TDengine access"
-    assert sql("CREATE STABLE s02_project.st(ts TIMESTAMP,v INT) TAGS(d INT)", "s02_app", password)
-    assert sql("INSERT INTO s02_project.t USING s02_project.st TAGS(1) VALUES(NOW,1)", "s02_app", password)
-    assert sql("SELECT COUNT(*) FROM s02_project.st", "s02_app", password)
-    assert sql("CREATE STABLE s02_other.st(ts TIMESTAMP,v INT) TAGS(d INT)")
-    assert sql("INSERT INTO s02_other.t USING s02_other.st TAGS(1) VALUES(NOW,777)")
-    other_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
-    status, other = request(api, b"SELECT COUNT(*) FROM s02_other.st", other_header)
-    print("tdengine_cross_db_probe=" + json.dumps({"http": status, "code": other.get("code"), "counts": other.get("data")}), flush=True)
-    assert status != 200 or other.get("code") != 0, "TDengine cross-database access to populated stable"
     new_root = uuid.uuid4().hex[:24]
     assert sql("ALTER USER root PASS '" + new_root + "'"), "rotate isolated default administrator password"
     assert not sql("SELECT SERVER_VERSION()"), "old TDengine default password still works"
     assert sql("SELECT SERVER_VERSION()", "root", new_root)
+    assert sql("CREATE DATABASE s02_project", "root", new_root)
+    password = uuid.uuid4().hex[:24]
+    assert sql("CREATE USER s02_app PASS '" + password + "' SYSINFO 0", "root", new_root), "create dedicated TDengine account"
+    for permission in ["READ", "WRITE"]:
+        assert sql("GRANT " + permission + " ON s02_project.* TO s02_app", "root", new_root)
+    assert not sql("SELECT SERVER_VERSION()", "s02_app", "incorrect-password"), "wrong application password accepted"
+    assert sql("CREATE STABLE s02_project.st(ts TIMESTAMP,v INT) TAGS(d INT)", "s02_app", password)
+    assert sql("INSERT INTO s02_project.t USING s02_project.st TAGS(1) VALUES(NOW,1)", "s02_app", password)
+    assert sql("SELECT COUNT(*) FROM s02_project.st", "s02_app", password)
+    verify_instance(identifier, volume, network_name, "s02_project", new_root)
+    print("tdengine_exclusive_project=PASS", flush=True)
+
+    # 保留社区版授权无效的真实反例；安全断言改由实际部署核验器拒绝混放实例承担。
+    assert sql("CREATE DATABASE s02_other", "root", new_root)
+    assert sql("CREATE STABLE s02_other.st(ts TIMESTAMP,v INT) TAGS(d INT)", "root", new_root)
+    assert sql("INSERT INTO s02_other.t USING s02_other.st TAGS(1) VALUES(NOW,777)", "root", new_root)
+    other_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, other = request(api, b"SELECT COUNT(*) FROM s02_other.st", other_header)
+    print("tdengine_cross_db_probe=" + json.dumps({"http": status, "code": other.get("code"), "counts": other.get("data")}), flush=True)
+    assert status == 200 and other.get("code") == 0 and other.get("data") == [[1]], "revalidate Community GRANT limitation"
+    try:
+        verify_instance(identifier, volume, network_name, "s02_project", new_root)
+    except BoundaryError as error:
+        assert "another business database" in str(error)
+    else:
+        raise AssertionError("deployment guard accepted a shared TDengine catalog")
+    print("tdengine_shared_catalog_rejected=PASS", flush=True)
+    # 仅清理由本测试在新建容器中创建的反例库，不接触既有数据库。
+    assert sql("DROP DATABASE s02_other", "root", new_root)
+    shared = container("python:3.12-alpine", [], ["--network=none",
+                       "--mount", "type=volume,src=" + volume + ",dst=/shared:ro"], ["python", "-c", "import time; time.sleep(120)"])
+    try:
+        verify_instance(identifier, volume, network_name, "s02_project", new_root)
+    except BoundaryError as error:
+        assert "volume is attached" in str(error)
+    else:
+        raise AssertionError("deployment guard accepted a shared TDengine volume")
+    assert json.loads(docker("inspect", shared))[0]["Config"]["Labels"]["bec.s02.test"] == NONCE
+    docker("rm", "-f", "-v", shared)
+    OWNED.remove(shared)
+    print("tdengine_shared_volume_rejected=PASS", flush=True)
+    ENV["TDENGINE_AUDIT_PASSWORD"] = new_root
+    subprocess.check_call(["python3", str(ROOT / "scripts/verify_tdengine_exclusive.py"), "--container", identifier,
+                           "--volume", volume, "--network", network_name, "--database", "s02_project"], env=ENV)
 
 
 def main():
     assert os.environ.get("S02_INFRA_IT_ISOLATED") == "true", "explicit isolated test opt-in required"
     try:
-        for check in [compose_boundaries, redis_template, emqx_template, tdengine_accounts]:
+        for check in [compose_boundaries, redis_template, emqx_template, tdengine_exclusive_instance]:
             check()
             print(check.__name__ + "=PASS", flush=True)
     finally:
@@ -250,6 +289,10 @@ def main():
             data = json.loads(docker("network", "inspect", network))[0]
             assert data["Labels"]["bec.s02.test"] == NONCE, "network cleanup owner mismatch"
             docker("network", "rm", network)
+        for volume in VOLUMES:
+            data = json.loads(docker("volume", "inspect", volume))[0]
+            assert data["Labels"]["bec.s02.test"] == NONCE, "volume cleanup owner mismatch"
+            docker("volume", "rm", volume)
         print("owned_container_cleanup=PASS", flush=True)
 
 
