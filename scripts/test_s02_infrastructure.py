@@ -243,7 +243,12 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
     await_ready(lambda: sql("SELECT SERVER_VERSION()", "root", new_root))
     after_restart = json.loads(docker("inspect", identifier))[0]
-    assert before_restart["Id"] == after_restart["Id"] and before_restart["Mounts"] == after_restart["Mounts"]
+    def data_mount(details):
+        mount = next(item for item in details["Mounts"] if item["Destination"] == "/var/lib/taos")
+        return mount["Type"], mount.get("Name"), mount["Source"], mount["RW"]
+    assert before_restart["Id"] == after_restart["Id"], "credential rotation recreated the container"
+    assert data_mount(before_restart) == data_mount(after_restart), "credential rotation replaced the data volume"
+    assert data_mount(after_restart)[:2] == ("volume", volume), "unexpected post-restart data volume"
     await_ready(lambda: json.loads(docker("inspect", identifier))[0]["State"]["Health"]["Status"] == "healthy")
     def rejected_password(username, secret):
         header = {"Authorization": "Basic " + base64.b64encode((username + ":" + secret).encode()).decode()}
