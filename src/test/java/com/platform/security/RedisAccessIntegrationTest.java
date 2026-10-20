@@ -56,7 +56,7 @@ class RedisAccessIntegrationTest {
                         tokens.removeFromWhitelistIfMatches(7L, "new-test-token");
                         assertThat(tokens.getFromWhitelist(7L)).isNull();
                         assertThatThrownBy(() -> redis.opsForValue().get("other-project:probe"))
-                                .isInstanceOf(org.springframework.dao.DataAccessException.class);
+                                .isInstanceOf(org.springframework.dao.DataAccessException.class).hasStackTraceContaining("NOPERM");
                         for (String command : List.of("FLUSHDB", "FLUSHALL", "KEYS", "ACL", "CONFIG")) {
                             String[] args = switch (command) {
                                 case "KEYS" -> new String[]{"*"};
@@ -65,15 +65,15 @@ class RedisAccessIntegrationTest {
                                 default -> new String[0];
                             };
                             assertThatThrownBy(() -> execute(redis, command, args))
-                                    .as(command).isInstanceOf(org.springframework.dao.DataAccessException.class);
+                                    .as(command).isInstanceOf(org.springframework.dao.DataAccessException.class).hasStackTraceContaining("NOPERM");
                         }
                     }
                 } finally {
                     // 仅恢复本次创建的隔离实例 ACL；不对任何部署实例执行这些命令。
                     execute(administrator, "ACL", "SETUSER", "default", "on", "nopass");
-                    execute(administrator, "DEL", "iot:token:whitelist:7");
-                    execute(administrator, "ACL", "DELUSER", "s02-app");
-                    execute(bootstrap, "ACL", "DELUSER", "s02-admin");
+                    administrator.delete("iot:token:whitelist:7");
+                    removeUsers(admin, "s02-app");
+                    removeUsers(initial, "s02-admin");
                 }
             }
         }
@@ -94,6 +94,14 @@ class RedisAccessIntegrationTest {
             super(configuration, LettuceClientConfiguration.builder().commandTimeout(Duration.ofSeconds(2)).build());
         }
         @Override public void close() { destroy(); }
+    }
+
+    private static void removeUsers(TestFactory factory, String user) {
+        try (var connection = factory.getConnection()) {
+            ((org.springframework.data.redis.connection.lettuce.LettuceConnection) connection).execute("ACL",
+                    new io.lettuce.core.output.IntegerOutput<>(io.lettuce.core.codec.ByteArrayCodec.INSTANCE),
+                    "DELUSER".getBytes(StandardCharsets.UTF_8), user.getBytes(StandardCharsets.UTF_8));
+        }
     }
 
     private static Object execute(StringRedisTemplate redis, String command, String... arguments) {

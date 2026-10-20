@@ -106,7 +106,11 @@ services:
 
 networks:
   data:
-    internal: true
+    # 应用在宿主机通过回环发布端口连接；internal:true 会禁用该发布路径。
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: 127.0.0.1
+      com.docker.network.bridge.enable_icc: 'false'
   mqtt-ingress: {}
 
 volumes:

@@ -24,8 +24,8 @@ def docker(*arguments, env=None):
     return subprocess.check_output(["docker", *arguments], text=True, stderr=subprocess.PIPE, env=env or ENV).strip()
 
 
-def container(image, ports, options):
-    identifier = docker("run", "-d", "--label", LABEL, *sum((["-p", "127.0.0.1::" + str(p)] for p in ports), []), *options, image)
+def container(image, ports, options, command=()):
+    identifier = docker("run", "-d", "--label", LABEL, *sum((["-p", "127.0.0.1::" + str(p)] for p in ports), []), *options, image, *command)
     OWNED.append(identifier)
     return identifier
 
@@ -67,7 +67,9 @@ def compose_boundaries():
     for service in result["services"].values():
         assert all(p["host_ip"] == "127.0.0.1" for p in service.get("ports", [])), "unexpected non-loopback default"
     assert [p["target"] for p in result["services"]["tdengine"]["ports"]] == [6041]
-    assert result["networks"]["data"]["internal"] is True
+    assert result["networks"]["data"]["driver"] == "bridge"
+    assert result["networks"]["data"]["driver_opts"]["com.docker.network.bridge.host_binding_ipv4"] == "127.0.0.1"
+    assert result["networks"]["data"]["driver_opts"]["com.docker.network.bridge.enable_icc"] == "false"
     assert "data" not in result["services"]["emqx"]["networks"]
     del configuration["REDIS_PASSWORD"]
     try:
@@ -185,7 +187,8 @@ def emqx_template():
 
 
 def tdengine_accounts():
-    network = docker("network", "create", "--internal", "--label", LABEL, "s02-data-" + NONCE[:12])
+    network = docker("network", "create", "--label", LABEL, "--opt", "com.docker.network.bridge.host_binding_ipv4=127.0.0.1",
+                     "--opt", "com.docker.network.bridge.enable_icc=false", "s02-data-" + NONCE[:12])
     NETWORKS.append(network)
     identifier = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network])
     api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
@@ -194,6 +197,21 @@ def tdengine_accounts():
         status, result = request(api, statement.encode(), header)
         return status == 200 and result.get("code") == 0
     await_ready(lambda: sql("SELECT SERVER_VERSION()"))
+    details = json.loads(docker("inspect", identifier))[0]
+    connection = next(iter(details["NetworkSettings"]["Networks"].values()))
+    probe_code = """import socket,sys
+for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
+    try:
+        with socket.create_connection((host,int(port)),timeout=2): pass
+    except OSError: continue
+    raise SystemExit('unauthorized network reached data service')
+"""
+    probe = container("python:3.12-alpine", [], ["--network=bridge"], ["python", "-c", probe_code,
+                      connection["Gateway"], str(port(identifier, 6041)), connection["IPAddress"], "6041",
+                      connection["IPAddress"], "6030"])
+    await_ready(lambda: json.loads(docker("inspect", probe))[0]["State"]["Status"] == "exited")
+    assert json.loads(docker("inspect", probe))[0]["State"]["ExitCode"] == 0, "data service reachable from Broker-side network"
+    print("cross_network_boundary=PASS", flush=True)
     assert request(api, b"SELECT SERVER_VERSION()")[0] == 401
     assert sql("CREATE DATABASE s02_project") and sql("CREATE DATABASE s02_other")
     password = uuid.uuid4().hex[:24]

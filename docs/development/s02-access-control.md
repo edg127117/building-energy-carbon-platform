@@ -22,7 +22,7 @@ Redis 模板关闭匿名 default 用户，使用 `REDIS_USER/PASSWORD` 和 [权�
 
 TDengine 运行账号限定本项目数据库的读取、写入及业务实际需要的子表操作。必须先用管理员完成结构初始化与验证，再配置非 root 运行账号并设置 `TDENGINE_INITIALIZATION_ENABLED=false`。后续结构升级继续单独审核，不能因关闭启动初始化而跳过。固定 3.2.3.0 的权限能力须用该版本验证，不套用新版企业版的授权选项；已有 root 密码也须单独核查、轮换，改应用环境变量不会修改 root。
 
-Compose 数据服务使用独立内部网络，与 Broker 接入网络分开。Compose 只将 MySQL、Redis、TDengine REST 和 Broker 管理台发布到回环地址；不再发布 TDengine 整段原生端口。设备 MQTT/TCP、WebSocket 默认也为回环，跨主机接入须单独确认绑定地址及来源规则。现有稳定 TDengine hostname、MySQL/Redis/TDengine 数据卷不变。Broker 新增固定数据卷以保留认证库，不能用改名或重建的方式替代迁移。
+Compose 数据服务使用专用桥接网络并关闭容器间直连，与 Broker 接入网络分开。应用在宿主机通过回环发布端口连接，不使用会禁用该发布路径的 internal:true。Compose 只将 MySQL、Redis、TDengine REST 和 Broker 管理台发布到回环地址；不再发布 TDengine 整段原生端口。设备 MQTT/TCP、WebSocket 默认也为回环，跨主机接入须单独确认绑定地址及来源规则。现有稳定 TDengine hostname、MySQL/Redis/TDengine 数据卷不变。Broker 新增固定数据卷以保留认证库，不能用改名或重建的方式替代迁移。
 
 Broker 管理密码使用独立 `EMQX_DASHBOARD_PASSWORD`；MQTT 客户端密码使用 `MQTT_PASSWORD`。模板启用内置认证库，初始无用户时拒绝客户端连接。通过受限管理台/API 创建非超级用户 `platform-backend`、`platform-device`，分别配置独立密码；[Topic 白名单](../../src/env/emqx-acl.conf)仅覆盖当前默认遥测和 ACK。自定义 Topic、适配器独立身份及远端 Broker 必须另行核对，禁止通过末尾全放行恢复连接。当前 ACK 使用共享 Topic，模板不承诺逐设备隔离；需要该能力时须先确认 ACK Topic 契约，不能把账号认证等同于逐设备数据权限。
 
