@@ -200,6 +200,7 @@ def tdengine_exclusive_instance():
     VOLUMES.append(volume)
     identifier = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network,
                            "--label", PROJECT_LABEL + "=" + PROJECT, "--label", "bec.security.tdengine-exclusive=true",
+                           "--health-cmd", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6041'", "--health-interval=1s",
                            "--mount", "type=volume,src=" + volume + ",dst=/var/lib/taos"])
     api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
     def sql(statement, username="root", password="taosdata"):
@@ -224,19 +225,36 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
         assert json.loads(docker("inspect", probe))[0]["State"]["ExitCode"] == 0, "data service reachable from an unauthorized container"
     print("cross_network_boundary=PASS", flush=True)
     assert request(api, b"SELECT SERVER_VERSION()")[0] == 401
-    new_root = uuid.uuid4().hex[:24]
-    assert sql("ALTER USER root PASS '" + new_root + "'"), "rotate isolated default administrator password"
-    assert not sql("SELECT SERVER_VERSION()"), "old TDengine default password still works"
-    assert sql("SELECT SERVER_VERSION()", "root", new_root)
-    assert sql("CREATE DATABASE s02_project", "root", new_root)
+    assert sql("CREATE DATABASE s02_project")
     password = uuid.uuid4().hex[:24]
-    assert sql("CREATE USER s02_app PASS '" + password + "' SYSINFO 0", "root", new_root), "create dedicated TDengine account"
+    assert sql("CREATE USER s02_app PASS '" + password + "' SYSINFO 0"), "create dedicated TDengine account"
     for permission in ["READ", "WRITE"]:
-        assert sql("GRANT " + permission + " ON s02_project.* TO s02_app", "root", new_root)
-    assert not sql("SELECT SERVER_VERSION()", "s02_app", "incorrect-password"), "wrong application password accepted"
+        assert sql("GRANT " + permission + " ON s02_project.* TO s02_app")
     assert sql("CREATE STABLE s02_project.st(ts TIMESTAMP,v INT) TAGS(d INT)", "s02_app", password)
     assert sql("INSERT INTO s02_project.t USING s02_project.st TAGS(1) VALUES(NOW,1)", "s02_app", password)
     assert sql("SELECT COUNT(*) FROM s02_project.st", "s02_app", password)
+    new_root = uuid.uuid4().hex[:24]
+    assert sql("ALTER USER root PASS '" + new_root + "'"), "rotate isolated default administrator password"
+    print("tdengine_old_password_cached_before_restart=" + str(sql("SELECT SERVER_VERSION()")), flush=True)
+    # 只重启本测试创建且标签核对的容器；保留同一数据卷，不能用新建库掩盖恢复失败。
+    before_restart = json.loads(docker("inspect", identifier))[0]
+    assert before_restart["Config"]["Labels"]["bec.s02.test"] == NONCE
+    docker("restart", "--time", "10", identifier)
+    api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
+    await_ready(lambda: sql("SELECT SERVER_VERSION()", "root", new_root))
+    after_restart = json.loads(docker("inspect", identifier))[0]
+    assert before_restart["Id"] == after_restart["Id"] and before_restart["Mounts"] == after_restart["Mounts"]
+    await_ready(lambda: json.loads(docker("inspect", identifier))[0]["State"]["Health"]["Status"] == "healthy")
+    def rejected_password(username, secret):
+        header = {"Authorization": "Basic " + base64.b64encode((username + ":" + secret).encode()).decode()}
+        status, result = request(api, b"SELECT SERVER_VERSION()", header)
+        return status == 401 or (result.get("code", 0) != 0 and "authentication failure" in result.get("desc", "").lower())
+    assert rejected_password("root", "taosdata"), "old TDengine default password still works after restart"
+    assert rejected_password("s02_app", "incorrect-password"), "wrong application password accepted"
+    app_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, preserved = request(api, b"SELECT COUNT(*) FROM s02_project.st", app_header)
+    assert status == 200 and preserved.get("code") == 0 and preserved.get("data") == [[1]], "project data lost across credential rotation restart"
+    print("tdengine_rotation_restart_and_data_preserved=PASS", flush=True)
     verify_instance(identifier, volume, network_name, "s02_project", new_root)
     print("tdengine_exclusive_project=PASS", flush=True)
 

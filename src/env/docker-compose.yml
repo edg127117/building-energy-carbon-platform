@@ -82,7 +82,8 @@ services:
       # 固定名称 Volume 不依赖短期 Git worktree，删除 worktree 不会删除时序数据。
       - tdengine-data:/var/lib/taos
     healthcheck:
-      test: ["CMD-SHELL", "taos -s 'SHOW DATABASES;' >/dev/null 2>&1"]
+      # 仅探测 REST 监听存活，避免改密后仍依赖默认 root；认证、结构及独占由部署核验承担。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6041"]
       interval: 5s
       timeout: 5s
       retries: 30
