@@ -1,7 +1,6 @@
 package com.platform.energy.classification;
 
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -20,8 +19,8 @@ public class ClassificationRepository {
     public record StoredReading(String id, String batchId, String json, BigDecimal quantity, long author, String batchStatus) {}
 
     public void lock(String buildingId) {
-        try { jdbc.update("INSERT INTO biz_energy_classification_scope(building_id,revision) VALUES (?,0)", buildingId); }
-        catch (DuplicateKeyException ignored) { /* 已存在的建筑行仍需加锁，不能依靠进程内同步。 */ }
+        // MySQL 上重复键异常会留下共享锁；原子 upsert 直接取得写锁，避免多个事务同时升级锁导致死锁。
+        jdbc.update("INSERT INTO biz_energy_classification_scope(building_id,revision) VALUES (?,0) ON DUPLICATE KEY UPDATE revision=revision", buildingId);
         jdbc.queryForObject("SELECT revision FROM biz_energy_classification_scope WHERE building_id=? FOR UPDATE", Long.class, buildingId);
     }
     public boolean buildingExists(String id) { return count("SELECT COUNT(*) FROM building WHERE building_id=? AND del_flag=0", id)>0; }

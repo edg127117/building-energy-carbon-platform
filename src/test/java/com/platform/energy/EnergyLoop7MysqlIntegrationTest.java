@@ -49,8 +49,14 @@ class EnergyLoop7MysqlIntegrationTest {
                 "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()",
                 Integer.class)).as("隔离库必须为空").isZero();
 
+        Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init")
+                .target("74").load().migrate();
+        Integer equipmentBefore = jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class);
+        Integer pointsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class);
         Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
-        flyway.migrate();
+        assertThat(flyway.migrate().migrationsExecuted).as("从既有V74升级只执行新增V75").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
 
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
