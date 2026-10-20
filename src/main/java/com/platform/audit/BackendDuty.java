@@ -2,6 +2,7 @@ package com.platform.audit;
 
 /** 固定后台职责目录。职责不是正式业务角色，也不写入 JWT。 */
 public enum BackendDuty {
+    OPERATIONS_OBSERVER,
     HVAC_DEVICE_CONTROL,
     BACKOFFICE_CHANGE_SUBMITTER,
     BACKOFFICE_CHANGE_REVIEWER,

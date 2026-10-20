@@ -8,7 +8,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -23,24 +22,25 @@ public class BackendDutyAssignmentService {
     public void grant(long userId, BackendDuty duty, LocalDateTime effectiveAt, LocalDateTime expiresAt,
                       String sourceRequestId, long operatorId) {
         requireUser(userId);
-        LocalDateTime effective = effectiveAt == null ? LocalDateTime.now() : effectiveAt;
+        // DATETIME 使用数据库会话的墙上时间；JVM 默认时区不参与默认生效时间或 JDBC 参数换算。
+        LocalDateTime effective = effectiveAt == null ? jdbcTemplate.queryForObject("SELECT CURRENT_TIMESTAMP",
+                (result, row) -> result.getObject(1, LocalDateTime.class)) : effectiveAt;
         if (expiresAt != null && !expiresAt.isAfter(effective)) {
             throw AuditGovernanceErrors.conflict(AuditGovernanceErrors.REQUEST_CONFLICT, "职责失效时间必须晚于生效时间");
         }
         int updated = jdbcTemplate.update("""
                 UPDATE sys_user_backend_duty
-                SET status='ACTIVE',effective_at=?,expires_at=?,source_request_id=?,created_by=?,created_at=?,
+                SET status='ACTIVE',effective_at=?,expires_at=?,source_request_id=?,created_by=?,created_at=CURRENT_TIMESTAMP,
                     revoked_by=NULL,revoked_at=NULL,revoke_request_id=NULL
                 WHERE user_id=? AND duty_key=?
-                """, timestamp(effective), timestamp(expiresAt), sourceRequestId, operatorId,
-                timestamp(LocalDateTime.now()), userId, duty.name());
+                """, databaseTime(effective), databaseTime(expiresAt), sourceRequestId, operatorId, userId, duty.name());
         if (updated == 0) {
             jdbcTemplate.update("""
                     INSERT INTO sys_user_backend_duty
                     (assignment_id,user_id,duty_key,status,effective_at,expires_at,source_request_id,created_by,created_at)
-                    VALUES (?,?,?,'ACTIVE',?,?,?,?,?)
-                    """, id(), userId, duty.name(), timestamp(effective), timestamp(expiresAt),
-                    sourceRequestId, operatorId, timestamp(LocalDateTime.now()));
+                    VALUES (?,?,?,'ACTIVE',?,?,?,?,CURRENT_TIMESTAMP)
+                    """, id(), userId, duty.name(), databaseTime(effective), databaseTime(expiresAt),
+                    sourceRequestId, operatorId);
         }
         dutyService.evict(userId);
     }
@@ -48,12 +48,11 @@ public class BackendDutyAssignmentService {
     @Transactional(rollbackFor = Exception.class)
     public void revoke(long userId, BackendDuty duty, String requestId, long operatorId) {
         requireUser(userId);
-        LocalDateTime now = LocalDateTime.now();
         int updated = jdbcTemplate.update("""
                 UPDATE sys_user_backend_duty
-                SET status='REVOKED',revoked_by=?,revoked_at=?,revoke_request_id=?
+                SET status='REVOKED',revoked_by=?,revoked_at=CURRENT_TIMESTAMP,revoke_request_id=?
                 WHERE user_id=? AND duty_key=? AND status='ACTIVE'
-                """, operatorId, timestamp(now), requestId, userId, duty.name());
+                """, operatorId, requestId, userId, duty.name());
         if (updated != 1) {
             throw AuditGovernanceErrors.conflict(AuditGovernanceErrors.REQUEST_CONFLICT, "职责授权状态已变化");
         }
@@ -67,8 +66,8 @@ public class BackendDutyAssignmentService {
         }
     }
 
-    private static Timestamp timestamp(LocalDateTime value) {
-        return value == null ? null : Timestamp.valueOf(value);
+    private static String databaseTime(LocalDateTime value) {
+        return value == null ? null : value.toString().replace('T', ' ');
     }
 
     private static String id() {

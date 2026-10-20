@@ -3,6 +3,7 @@ param(
     [switch]$ResetData,
     [string]$LegacyEnvRoot,
     [int]$BackendPort = 8081,
+    [int]$ManagementPort = 19091,
     [int]$MySqlPort = 13306,
     [int]$RedisPort = 16379,
     [int]$MqttPort = 11883,
@@ -39,6 +40,7 @@ $knownDataVolumes = @(
     'iot-platform-demo-hvac-smoke-mysql-data',
     'iot-platform-demo-hvac-smoke-tdengine-data',
     'iot-platform-demo-hvac-smoke-redis-data'
+    'iot-platform-demo-hvac-smoke-emqx-data'
 )
 $expectedPointCodes = @(
     'WCR1_TWin',
@@ -186,7 +188,7 @@ function Assert-ContainerDataMounts(
 
     foreach ($mount in $inspection.Mounts) {
         if ($mount.Destination -notin
-            @('/var/lib/mysql', '/var/lib/taos', '/data')) {
+            @('/var/lib/mysql', '/var/lib/taos', '/data', '/opt/emqx/data')) {
             continue
         }
 
@@ -278,7 +280,7 @@ function Wait-ContainerHealthy(
 
 function Wait-ApplicationHealthy([datetime]$Deadline) {
     $loginUrl = "$apiBase/auth/login"
-    $healthUrl = "$apiBase/actuator/health"
+    $healthUrl = "http://127.0.0.1:$ManagementPort/actuator/health"
     $loginBody = @{
         username = 'admin'
         password = $smokeAccountPassword
@@ -289,7 +291,7 @@ function Wait-ApplicationHealthy([datetime]$Deadline) {
             throw 'Spring Boot 在健康检查通过前退出'
         }
         try {
-            # 健康接口沿用生产鉴权，不为冒烟测试放宽 SecurityConfig。
+            # 登录仍验证业务入口；独立回环健康端点只返回最小状态。
             $login = Invoke-RestMethod `
                 -Method Post `
                 -Uri $loginUrl `
@@ -302,9 +304,6 @@ function Wait-ApplicationHealthy([datetime]$Deadline) {
             }
             $response = Invoke-RestMethod `
                 -Uri $healthUrl `
-                -Headers @{
-                    Authorization = "Bearer $token"
-                } `
                 -TimeoutSec 3
             if ($response.status -eq 'UP') {
                 Write-Output 'Spring Boot 健康检查通过'
@@ -319,11 +318,7 @@ function Wait-ApplicationHealthy([datetime]$Deadline) {
 }
 
 function Invoke-MySqlScalar([string]$Sql) {
-    $password = if ($env:MYSQL_PASSWORD) {
-        $env:MYSQL_PASSWORD
-    } else {
-        'change-me'
-    }
+    $password = $env:MYSQL_ROOT_PASSWORD
     $lines = Invoke-Docker `
         -Arguments @(
             'exec',
@@ -358,11 +353,7 @@ function Invoke-OnboardingMigrations {
         'V15__mysql_asset_management_menu.sql',
         'V16__mysql_device_onboarding_menu.sql'
     )
-    $password = if ($env:MYSQL_PASSWORD) {
-        $env:MYSQL_PASSWORD
-    } else {
-        'change-me'
-    }
+    $password = $env:MYSQL_ROOT_PASSWORD
 
     foreach ($migrationName in $migrationNames) {
         $migration = Join-Path $currentEnvRoot "init\$migrationName"
@@ -464,7 +455,16 @@ function Publish-And-AssertFrozenPoints {
     $simulator = Join-Path `
         $repoRoot `
         '.scripts\simulate-hvac-19-points.mjs'
-    & node $simulator
+    $backendUser = $env:MQTT_USER
+    $backendPassword = $env:MQTT_PASSWORD
+    try {
+        $env:MQTT_USER = 'platform-device'
+        $env:MQTT_PASSWORD = $smokeDevicePassword
+        & node $simulator
+    } finally {
+        $env:MQTT_USER = $backendUser
+        $env:MQTT_PASSWORD = $backendPassword
+    }
     if ($LASTEXITCODE -ne 0) {
         throw 'HVAC 19 测点 MQTT 发布失败'
     }
@@ -589,6 +589,29 @@ if (Test-PortListening $BackendPort) {
 $dockerCli = Resolve-DockerCli
 Import-ServerEnvironment $serverEnvFile
 
+# 仅重建上面明确列出的冒烟卷；不继承部署凭据。TDengine root 仅供该隔离测试初始化，不能用于部署。
+$env:MYSQL_ROOT_PASSWORD = [guid]::NewGuid().ToString('N')
+$env:MYSQL_USER = 'platform_app'
+$env:MYSQL_PASSWORD = [guid]::NewGuid().ToString('N')
+$env:MYSQL_MIGRATION_USER = 'root'
+$env:MYSQL_MIGRATION_PASSWORD = $env:MYSQL_ROOT_PASSWORD
+$env:REDIS_USER = 'platform_app'
+$env:REDIS_PASSWORD = [guid]::NewGuid().ToString('N')
+$env:EMQX_DASHBOARD_USER = 'ops-admin'
+$env:EMQX_DASHBOARD_PASSWORD = [guid]::NewGuid().ToString('N')
+$env:MQTT_USER = 'platform-backend'
+$env:MQTT_PASSWORD = [guid]::NewGuid().ToString('N')
+$smokeDevicePassword = [guid]::NewGuid().ToString('N')
+$env:SECURITY_DEPENDENCY_CREDENTIALS_REQUIRED = 'false'
+$env:TDENGINE_USER = 'root'
+$env:TDENGINE_PASSWORD = 'taosdata'
+$env:TDENGINE_INITIALIZATION_ENABLED = 'true'
+$env:MQTT_TLS_ENABLED = 'false'
+$env:MQTT_ALLOW_PLAINTEXT_TEST_MODE = 'true'
+$env:MANAGEMENT_SERVER_PORT = $ManagementPort.ToString()
+$env:MQTT_BIND_ADDRESS = '127.0.0.1'
+$env:JWT_SECRET = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+
 # 冒烟端口覆盖只作用于当前进程，不修改用户的 server.env。
 [Environment]::SetEnvironmentVariable(
     'MYSQL_PORT', $MySqlPort.ToString(), 'Process')
@@ -628,6 +651,8 @@ Import-ServerEnvironment $serverEnvFile
     'TDENGINE_VOLUME_NAME', $knownDataVolumes[1], 'Process')
 [Environment]::SetEnvironmentVariable(
     'REDIS_VOLUME_NAME', $knownDataVolumes[2], 'Process')
+[Environment]::SetEnvironmentVariable(
+    'EMQX_VOLUME_NAME', $knownDataVolumes[3], 'Process')
 [Environment]::SetEnvironmentVariable(
     'MQTT_ENABLED', 'true', 'Process')
 [Environment]::SetEnvironmentVariable(
@@ -685,6 +710,7 @@ Wait-PortAvailable -Port $MySqlPort -Resource 'MySQL'
 Wait-PortAvailable -Port $RedisPort -Resource 'Redis'
 Wait-PortAvailable -Port $MqttPort -Resource 'MQTT'
 Wait-PortAvailable -Port $TdengineRestPort -Resource 'TDengine REST'
+Wait-PortAvailable -Port $ManagementPort -Resource 'management'
 
 Invoke-Docker -Arguments @(
     'compose',
@@ -705,6 +731,17 @@ foreach ($container in $knownContainers) {
     Wait-ContainerHealthy `
         -Container $container `
         -Deadline $infrastructureDeadline
+}
+
+# 5.6 使用受认证的回环管理 API 建立独立 MQTT 账号；控制台凭据不能直接当作接入凭据。
+$brokerAdmin = "http://127.0.0.1:$EmqxDashboardPort/api/v5"
+$brokerLogin = Invoke-RestMethod -Method Post -Uri "$brokerAdmin/login" -ContentType 'application/json' `
+    -Body (@{ username=$env:EMQX_DASHBOARD_USER; password=$env:EMQX_DASHBOARD_PASSWORD } | ConvertTo-Json)
+foreach ($account in @(@{ user_id='platform-backend'; password=$env:MQTT_PASSWORD; is_superuser=$false },
+        @{ user_id='platform-device'; password=$smokeDevicePassword; is_superuser=$false })) {
+    Invoke-RestMethod -Method Post -Uri "$brokerAdmin/authentication/password_based:built_in_database/users" `
+        -Headers @{ Authorization="Bearer $($brokerLogin.token)" } -ContentType 'application/json' `
+        -Body ($account | ConvertTo-Json) | Out-Null
 }
 
 Invoke-OnboardingMigrations

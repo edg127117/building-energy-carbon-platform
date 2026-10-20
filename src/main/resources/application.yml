@@ -19,8 +19,8 @@ spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
     url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/iot_platform?useUnicode=true&characterEncoding=UTF-8&connectionCollation=utf8mb4_unicode_ci&serverTimezone=Asia/Shanghai
-    username: ${MYSQL_USER:root}
-    password: ${MYSQL_PASSWORD:change-me}
+    username: ${MYSQL_USER:platform_app}
+    password: ${MYSQL_PASSWORD:}
     hikari:
       maximum-pool-size: 30
       minimum-idle: 5
@@ -31,6 +31,8 @@ spring:
   # 核验后才可通过一次性环境变量显式启用 baseline-on-migrate。
   flyway:
     enabled: ${MYSQL_FLYWAY_ENABLED:true}
+    user: ${MYSQL_MIGRATION_USER:}
+    password: ${MYSQL_MIGRATION_PASSWORD:}
     locations: classpath:db/migration/mysql
     validate-on-migrate: true
     validate-migration-naming: true
@@ -44,6 +46,7 @@ spring:
       host: ${REDIS_HOST:127.0.0.1}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      username: ${REDIS_USER:default}
       database: ${REDIS_DB:0}
       timeout: 3000ms
       lettuce:
@@ -72,8 +75,8 @@ mqtt:
   enabled: ${MQTT_ENABLED:true}
   broker-url: ${MQTT_BROKER_URL:ssl://127.0.0.1:8883}
   client-id: ${MQTT_CLIENT_ID:platform-backend-01}
-  username: ${MQTT_USER:admin}
-  password: ${MQTT_PASSWORD:change-me}
+  username: ${MQTT_USER:platform-backend}
+  password: ${MQTT_PASSWORD:}
   initial-retry-millis: ${MQTT_INITIAL_RETRY_MILLIS:5000}
   max-retry-millis: ${MQTT_MAX_RETRY_MILLIS:120000}
   security-retry-millis: ${MQTT_SECURITY_RETRY_MILLIS:300000}
@@ -102,10 +105,10 @@ mqtt:
 # TDengine 配置 (使用 RESTful 端口 6041)
 tdengine:
   # true：应用启动时连接 TDengine 并自动建库、建表；测试环境会覆盖为 false。
-  initialization-enabled: true
+  initialization-enabled: ${TDENGINE_INITIALIZATION_ENABLED:true}
   url: jdbc:TAOS-RS://${TDENGINE_HOST:127.0.0.1}:${TDENGINE_PORT:6041}?httpConnectTimeout=${TDENGINE_HTTP_CONNECT_TIMEOUT_MS:5000}&httpSocketTimeout=${TDENGINE_HTTP_SOCKET_TIMEOUT_MS:30000}
-  username: ${TDENGINE_USER:root}
-  password: ${TDENGINE_PASSWORD:taosdata}
+  username: ${TDENGINE_USER:platform_app}
+  password: ${TDENGINE_PASSWORD:}
   st-energy-period-result: ${TDENGINE_ST_ENERGY_PERIOD_RESULT:st_energy_period_result}
   database: iot_telemetry
   st-raw-event: st_raw_event
@@ -258,10 +261,28 @@ logging:
     com.platform: debug
 
 management:
+  server:
+    port: ${MANAGEMENT_SERVER_PORT:9091}
+    address: 127.0.0.1
   endpoints:
+    enabled-by-default: false
+    jmx:
+      exposure:
+        exclude: '*'
     web:
       exposure:
-        include: health,metrics,threaddump
+        include: health,metrics
+      discovery:
+        enabled: false
+  endpoint:
+    health:
+      enabled: true
+      show-details: never
+      show-components: never
+    metrics:
+      enabled: true
+    threaddump:
+      enabled: false
   metrics:
     export:
       simple:
