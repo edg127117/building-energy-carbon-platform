@@ -3,6 +3,7 @@ import argparse
 import base64
 import json
 import os
+import posixpath
 import re
 import subprocess
 import urllib.request
@@ -12,6 +13,7 @@ PROJECT_LABEL = "bec.security.project"
 PROJECT = "building-energy-carbon-platform"
 EXCLUSIVE_LABEL = "bec.security.tdengine-exclusive"
 SYSTEM_DATABASES = {"information_schema", "performance_schema"}
+DATA_DIRECTORY = "/var/lib/taos"
 
 
 class BoundaryError(RuntimeError):
@@ -35,6 +37,12 @@ def inspect(kind, name):
     return json.loads(docker(kind, "inspect", name))[0]
 
 
+def mount_target(path):
+    require(isinstance(path, str) and path.startswith("/"), "Invalid TDengine mount target")
+    # Docker 运行在 Linux；双前导斜杠不能成为绕过数据目录比较的另一种写法。
+    return posixpath.normpath("/" + path.lstrip("/"))
+
+
 def check_container(details, volume, network):
     require(details["State"]["Running"], "TDengine container is not running")
     require(details["Config"]["Image"] == "tdengine/tdengine:3.2.3.0", "TDengine image needs separate validation")
@@ -48,7 +56,18 @@ def check_container(details, volume, network):
     require(len(endpoints) == 1 and endpoints[0]["HostIp"] == "127.0.0.1", "TDengine REST must bind IPv4 loopback only")
     port = endpoints[0]["HostPort"]
     require(str(port).isdigit() and 0 < int(port) < 65536, "Invalid TDengine REST port")
-    mounts = [item for item in details["Mounts"] if item["Destination"] == "/var/lib/taos"]
+    host_config = details.get("HostConfig") or {}
+    targets = [item["Destination"] for item in details["Mounts"]]
+    declared_mounts = host_config.get("Mounts") or []
+    targets.extend(item["Target"] for item in declared_mounts)
+    tmpfs_targets = list((host_config.get("Tmpfs") or {}).keys())
+    # 根卷存在并不保证子目录仍落在该卷；tmpfs 还可能只记录在 HostConfig 中。
+    require(not any(mount_target(target).startswith(DATA_DIRECTORY + "/") for target in targets + tmpfs_targets)
+            and not any(mount_target(target) == DATA_DIRECTORY for target in tmpfs_targets)
+            and not any(mount_target(item["Target"]) == DATA_DIRECTORY and item["Type"] == "tmpfs"
+                        for item in declared_mounts),
+            "TDengine data directory has an overriding submount")
+    mounts = [item for item in details["Mounts"] if mount_target(item["Destination"]) == DATA_DIRECTORY]
     require(len(mounts) == 1 and mounts[0]["Type"] == "volume" and mounts[0].get("Name") == volume,
             "TDengine must use the expected dedicated named data volume")
     return "http://127.0.0.1:" + str(port) + "/rest/sql"

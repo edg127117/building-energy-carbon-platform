@@ -26,7 +26,7 @@ TDengine 3.2.3.0 社区版以**本项目独占实例**作为隔离边界，替�
 
 3.2.3.0 的 REST [连接池](https://github.com/taosdata/taosadapter/blob/ver-3.2.3.0/db/commonpool/pool.go)通过异步通知释放改密用户的旧连接，实测 `ALTER USER` 成功后旧密码仍可请求，未测定自动失效时限，不能将 SQL 成功作为轮换完成标志。拟执行顺序为先暂停本项目访问并保持网络封闭、改密、受控重启本项目专用实例（保留原卷及 hostname）、验证旧密码明确认证失败而新密码可用、确认原数据与结构仍在，再恢复应用；每一步服务器动作仍须另行批准。恢复验收须等待 dnode 心跳/容量就绪并验证实际操作；实测 REST 已可读存量表时，建库仍可能报 `Out of dnodes`。容器健康检查仅探测 REST 监听存活，不使用默认 root 密码，不代表数据库、凭据、独占或业务验收通过。
 
-部署前必须执行 [只读独占核验](../../scripts/verify_tdengine_exclusive.py)：容器须携带本项目及独占标签，只挂载预期的命名数据卷（包括停止的其他容器也不得引用该卷），仅连接本项目受限数据桥接网络，只发布回环 6041 REST；同网成员必须有本项目标识。脚本使用受保护的管理员密码读取完整 `SHOW DATABASES`，仅允许 `iot_telemetry` 和两个系统库。不能使用 `SYSINFO 0` 的应用账号代查目录，避免可见范围不足形成假通过。检查失败、认证失败、目录不可读或混放其他库均以非零退出，须停止发布并处理；脚本不会删库、改密或修改 Docker 配置。
+部署前必须执行 [只读独占核验](../../scripts/verify_tdengine_exclusive.py)：容器须携带本项目及独占标签，只挂载预期的命名数据卷（包括停止的其他容器也不得引用该卷），数据子目录不得再被 bind、其他卷或 tmpfs 覆盖；仅连接本项目受限数据桥接网络，只发布回环 6041 REST，同网成员必须有本项目标识。脚本同时核对实际挂载及 HostConfig 中的声明，按 POSIX 路径规范化后拒绝子目录覆盖；日志目录等不覆盖数据的挂载不受影响。脚本使用受保护的管理员密码读取完整 `SHOW DATABASES`，仅允许 `iot_telemetry` 和两个系统库。不能使用 `SYSINFO 0` 的应用账号代查目录，避免可见范围不足形成假通过。检查失败、认证失败、目录不可读或混放其他库均以非零退出，须停止发布并处理；脚本不会删库、改密或修改 Docker 配置。
 
 ```sh
 # 名称应从本项目实际部署清单核实；密码由受保护环境注入，禁止写入命令参数或日志。
@@ -67,7 +67,7 @@ Broker 管理密码使用独立 `EMQX_DASHBOARD_PASSWORD`；MQTT 客户端密码
 - `ManagementAccessIntegrationTest`：真实 HTTP 双端口，四种业务角色默认拒绝、授权/撤销、到期、依赖故障、旧白名单、转发头及禁止端点。
 - `BackendDutyTimeTest` / `BackendDutyMysqlIntegrationTest`：JVM 上海与数据库 UTC，不改写到期时间，验证默认授权、未来生效、到期、撤销与旧事务快照。
 - `RedisAccessIntegrationTest`：一次性 Redis 上认证、密码错误、Key/命令限制及 S01 Lua 比较删除。
-- `python3 -m unittest discover -s scripts -p test_tdengine_exclusive.py -v`：核验器对公开端口、额外网络、错误/共享卷、缺失归属、混放/不完整库清单、目录不可读的拒绝路径。
-- `S02_INFRA_IT_ISOLATED=true python3 scripts/test_s02_infrastructure.py`：只新建随机标签的容器和命名卷，验证 Compose 绑定及缺失凭据拒绝、实际 Redis 启动脚本与降权、EMQX 5.6 认证/Topic 权限、TDengine 3.2.3.0 独立账号认证/读写/管理员改密，以及宿主机正向访问、异网/同数据桥容器直连拒绝、独占核验 CLI。保留非空跨库读取成功的社区版限制反例，并要求核验器拒绝该混放目录及共享卷；不会把跨库读取成功当作授权隔离通过。结束按标签核对身份后清理自建资源，不使用现存部署服务。
+- `python3 -m unittest discover -s scripts -p test_tdengine_exclusive.py -v`：核验器对公开端口、额外网络、错误/共享卷、数据子目录覆盖（含 tmpfs 只在 HostConfig 中声明、路径规范化）、缺失归属、混放/不完整库清单、目录不可读的拒绝路径，以及非数据挂载的兼容性。
+- `S02_INFRA_IT_ISOLATED=true python3 scripts/test_s02_infrastructure.py`：只新建随机标签的容器和命名卷，验证 Compose 绑定及缺失凭据拒绝、实际 Redis 启动脚本与降权、EMQX 5.6 认证/Topic 权限、TDengine 3.2.3.0 独立账号认证/读写，以及宿主机正向访问、异网/同数据桥容器直连拒绝、独占核验 CLI。管理员及应用账号分别真实改密后保留原卷重启，验证旧密码明确认证失败、新密码可用、原数据保留；应用账号还覆盖新凭据写入新子表再读取、原子表内容不变及旧凭据不再生效。保留非空跨库读取成功的社区版限制反例，要求核验器拒绝混放目录、共享卷及真实 Docker 的 bind/卷/tmpfs 子目录覆盖。覆盖挂载探针只休眠，不启动第二个数据库或接触原数据卷。结束按标签核对身份后清理自建资源，不使用现存部署服务。
 - `AccountSecurityConcurrencyTest`、`AuthStateFailureFlowTest`、`AccountSessionCommitFailureTest` 和显式隔离的 `AccountSecurityMysqlRedisIntegrationTest`：S01 并发、事务失败、撤权、强杀重启、多 JVM 补偿及异时区恢复回归。
 - 自动化通过只证明相应用例。防火墙、远端 Broker、目标专用账号切换和真实网络来源须在变更批准后独立验证，不能提前宣称 S02 部署验收完成。

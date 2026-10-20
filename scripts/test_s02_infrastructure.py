@@ -240,20 +240,34 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     new_root = uuid.uuid4().hex[:24]
     assert sql("ALTER USER root PASS '" + new_root + "'"), "rotate isolated default administrator password"
     print("tdengine_old_password_cached_before_restart=" + str(sql("SELECT SERVER_VERSION()")), flush=True)
-    # 只重启本测试创建且标签核对的容器；保留同一数据卷，不能用新建库掩盖恢复失败。
-    before_restart = json.loads(docker("inspect", identifier))[0]
-    assert before_restart["Config"]["Labels"]["bec.s02.test"] == NONCE
-    docker("restart", "--time", "10", identifier)
-    api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
-    await_ready(lambda: sql("SELECT SERVER_VERSION()", "root", new_root))
-    after_restart = json.loads(docker("inspect", identifier))[0]
+    def dnode_ready_for_new_database():
+        header = {"Authorization": "Basic " + base64.b64encode(("root:" + new_root).encode()).decode()}
+        status, result = request(api, b"SHOW DNODES", header)
+        if status != 200 or result.get("code") != 0:
+            return False
+        columns = [column[0].lower() for column in result["column_meta"]]
+        assert {"status", "vnodes", "support_vnodes"} <= set(columns), "missing TDengine dnode readiness/capacity fields"
+        return bool(result["data"]) and all(row[columns.index("status")] == "ready"
+                    and row[columns.index("support_vnodes")] > row[columns.index("vnodes")] for row in result["data"])
     def data_mount(details):
         mount = next(item for item in details["Mounts"] if item["Destination"] == "/var/lib/taos")
         return mount["Type"], mount.get("Name"), mount["Source"], mount["RW"]
-    assert before_restart["Id"] == after_restart["Id"], "credential rotation recreated the container"
-    assert data_mount(before_restart) == data_mount(after_restart), "credential rotation replaced the data volume"
-    assert data_mount(after_restart)[:2] == ("volume", volume), "unexpected post-restart data volume"
-    await_ready(lambda: json.loads(docker("inspect", identifier))[0]["State"]["Health"]["Status"] == "healthy")
+    def restart_preserving_data():
+        nonlocal api
+        # 只重启本测试创建且标签核对的容器；保留原卷，不能用重新建库代替恢复验证。
+        before = json.loads(docker("inspect", identifier))[0]
+        assert before["Config"]["Labels"]["bec.s02.test"] == NONCE
+        docker("restart", "--time", "10", identifier)
+        api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
+        await_ready(lambda: sql("SELECT SERVER_VERSION()", "root", new_root))
+        after = json.loads(docker("inspect", identifier))[0]
+        assert before["Id"] == after["Id"], "credential rotation recreated the container"
+        assert data_mount(before) == data_mount(after), "credential rotation replaced the data volume"
+        assert data_mount(after)[:2] == ("volume", volume), "unexpected post-restart data volume"
+        await_ready(lambda: json.loads(docker("inspect", identifier))[0]["State"]["Health"]["Status"] == "healthy")
+        # REST 能读存量表不代表 mnode 已收到 dnode 心跳/容量；业务写入前等待真实就绪。
+        await_ready(dnode_ready_for_new_database)
+    restart_preserving_data()
     def rejected_password(username, secret):
         header = {"Authorization": "Basic " + base64.b64encode((username + ":" + secret).encode()).decode()}
         status, result = request(api, b"SELECT SERVER_VERSION()", header)
@@ -264,17 +278,29 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     status, preserved = request(api, b"SELECT COUNT(*) FROM s02_project.st", app_header)
     assert status == 200 and preserved.get("code") == 0 and preserved.get("data") == [[1]], "project data lost across credential rotation restart"
     print("tdengine_rotation_restart_and_data_preserved=PASS", flush=True)
-    def dnode_ready_for_new_database():
-        header = {"Authorization": "Basic " + base64.b64encode(("root:" + new_root).encode()).decode()}
-        status, result = request(api, b"SHOW DNODES", header)
-        if status != 200 or result.get("code") != 0:
-            return False
-        columns = [column[0].lower() for column in result["column_meta"]]
-        assert {"status", "vnodes", "support_vnodes"} <= set(columns), "missing TDengine dnode readiness/capacity fields"
-        return bool(result["data"]) and all(row[columns.index("status")] == "ready"
-                    and row[columns.index("support_vnodes")] > row[columns.index("vnodes")] for row in result["data"])
-    # REST 能读存量表不代表 mnode 已收到 dnode 心跳/容量；未就绪时 CREATE DATABASE 报 Out of dnodes。
-    await_ready(dnode_ready_for_new_database)
+
+    # 旧应用密码先成功读取原数据，再真实改密；任意错误密码不能代替旧凭据失效断言。
+    status, original = request(api, b"SELECT v FROM s02_project.t", app_header)
+    assert status == 200 and original.get("code") == 0 and original.get("data") == [[1]]
+    old_application_password = password
+    password = uuid.uuid4().hex[:24]
+    assert password != old_application_password
+    assert sql("ALTER USER s02_app PASS '" + password + "'", "root", new_root), "rotate real application password"
+    print("tdengine_old_application_password_cached_before_restart="
+          + str(sql("SELECT SERVER_VERSION()", "s02_app", old_application_password)), flush=True)
+    restart_preserving_data()
+    assert rejected_password("s02_app", old_application_password), "previously valid application password still works"
+    assert rejected_password("root", "taosdata"), "administrator old password revived after second restart"
+    app_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, restored = request(api, b"SELECT v FROM s02_project.t", app_header)
+    assert status == 200 and restored.get("code") == 0 and restored.get("data") == original["data"], "application rotation changed original data"
+    assert sql("INSERT INTO s02_project.t_after_rotate USING s02_project.st TAGS(2) VALUES(NOW,2)", "s02_app", password)
+    status, written = request(api, b"SELECT v FROM s02_project.t_after_rotate", app_header)
+    assert status == 200 and written.get("code") == 0 and written.get("data") == [[2]], "new application credentials cannot read/write"
+    status, unchanged = request(api, b"SELECT v FROM s02_project.t", app_header)
+    assert status == 200 and unchanged.get("code") == 0 and unchanged.get("data") == original["data"]
+    assert rejected_password("s02_app", old_application_password), "new application connection revived old credentials"
+    print("tdengine_application_rotation_old_rejected_new_read_write_and_data_preserved=PASS", flush=True)
     print("tdengine_dnode_capacity_ready=PASS", flush=True)
     verify_instance(identifier, volume, network_name, "s02_project", new_root)
     print("tdengine_exclusive_project=PASS", flush=True)
@@ -311,6 +337,31 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     ENV["TDENGINE_AUDIT_PASSWORD"] = new_root
     subprocess.check_call(["python3", str(ROOT / "scripts/verify_tdengine_exclusive.py"), "--container", identifier,
                            "--volume", volume, "--network", network_name, "--database", "s02_project"], env=ENV)
+
+    # 使用真实 Docker 挂载元数据验证覆盖拒绝；探针只睡眠，不启动第二个数据库或访问原数据卷。
+    overlay_root = docker("volume", "create", "--label", LABEL, "s02-overlay-root-" + NONCE[:12])
+    VOLUMES.append(overlay_root)
+    overlay_child = docker("volume", "create", "--label", LABEL, "s02-overlay-child-" + NONCE[:12])
+    VOLUMES.append(overlay_child)
+    child_source = json.loads(docker("volume", "inspect", overlay_child))[0]["Mountpoint"]
+    for kind, options in [
+            ("bind", ["--mount", "type=bind,src=" + child_source + ",dst=/var/lib/taos/vnode"]),
+            ("volume", ["--mount", "type=volume,src=" + overlay_child + ",dst=/var/lib/taos/vnode"]),
+            ("tmpfs", ["--tmpfs", "/var/lib/taos/vnode"])]:
+        overlay = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network,
+                            "--label", PROJECT_LABEL + "=" + PROJECT, "--label", "bec.security.tdengine-exclusive=true",
+                            "--mount", "type=volume,src=" + overlay_root + ",dst=/var/lib/taos",
+                            "--entrypoint", "/bin/sh", *options], ["-c", "sleep 120"])
+        try:
+            verify_instance(overlay, overlay_root, network_name, "s02_project", new_root)
+        except BoundaryError as error:
+            assert "overriding submount" in str(error), "overlay was rejected for an unrelated reason"
+        else:
+            raise AssertionError("deployment guard accepted a real nested " + kind + " mount")
+        assert json.loads(docker("inspect", overlay))[0]["Config"]["Labels"]["bec.s02.test"] == NONCE
+        docker("rm", "-f", "-v", overlay)
+        OWNED.remove(overlay)
+        print("tdengine_nested_" + kind + "_mount_rejected=PASS", flush=True)
 
 
 def main():

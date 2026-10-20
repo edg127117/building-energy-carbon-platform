@@ -26,6 +26,45 @@ class ExclusiveBoundaryTest(unittest.TestCase):
         guard.check_network(self.network)
         guard.check_catalog(guard.SYSTEM_DATABASES | {"iot_telemetry"}, "iot_telemetry")
 
+    def test_data_subdirectory_bind_volume_and_tmpfs_mounts_are_rejected(self):
+        for kind in ["bind", "volume", "tmpfs"]:
+            for destination in ["/var/lib/taos/vnode", "/var/lib/taos/dnode/", "/var/lib/taos/vnode/data",
+                                "/var/lib/taos/./mnode", "/var/lib/taos/vnode/../dnode", "//var/lib/taos/vnode"]:
+                with self.subTest(kind=kind, destination=destination):
+                    details = copy.deepcopy(self.details)
+                    details["Mounts"].append({"Type": kind, "Destination": destination})
+                    with self.assertRaisesRegex(guard.BoundaryError, "overriding submount"):
+                        guard.check_container(details, "owned-volume", "owned-network")
+
+    def test_tmpfs_declared_only_in_host_config_is_also_rejected(self):
+        for host_config in [{"Tmpfs": {"/var/lib/taos/vnode": "rw"}},
+                            {"Tmpfs": {"/var/lib/taos": "rw"}},
+                            {"Mounts": [{"Type": "tmpfs", "Target": "/var/lib/taos/vnode"}]},
+                            {"Mounts": [{"Type": "tmpfs", "Target": "/var/lib/taos"}]}]:
+            with self.subTest(host_config=host_config):
+                details = copy.deepcopy(self.details)
+                details["HostConfig"] = host_config
+                with self.assertRaisesRegex(guard.BoundaryError, "overriding submount"):
+                    guard.check_container(details, "owned-volume", "owned-network")
+
+    def test_unrelated_logs_and_similar_prefix_mounts_remain_allowed(self):
+        self.details["Mounts"].extend([{"Type": "volume", "Destination": "/var/log/taos"},
+                                       {"Type": "bind", "Destination": "/var/lib/taos-backup"}])
+        self.details["HostConfig"] = {"Tmpfs": {"/tmp": "rw"}, "Mounts": [
+            {"Type": "volume", "Target": "/var/lib/taos", "Source": "owned-volume"}]}
+        guard.check_container(self.details, "owned-volume", "owned-network")
+        self.details["HostConfig"]["Mounts"] = None
+        guard.check_container(self.details, "owned-volume", "owned-network")
+
+    def test_submount_is_rejected_before_shared_volume_or_catalog_probes(self):
+        self.details["Mounts"].append({"Type": "bind", "Destination": "/var/lib/taos/vnode"})
+        with patch.object(guard, "inspect", return_value=self.details), \
+                patch.object(guard, "docker") as docker, patch.object(guard, "read_catalog") as catalog:
+            with self.assertRaisesRegex(guard.BoundaryError, "overriding submount"):
+                guard.verify_instance("owned-id", "owned-volume", "owned-network", "iot_telemetry", "x" * 24)
+        docker.assert_not_called()
+        catalog.assert_not_called()
+
     def test_public_ipv4_ipv6_and_native_publications_are_rejected(self):
         for address in ["0.0.0.0", "::", "::1", "192.168.3.22"]:
             with self.subTest(address=address):
