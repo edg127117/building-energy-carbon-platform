@@ -53,6 +53,17 @@ class SensitiveChangeServiceIntegrationTest {
     }
 
     @Test
+    void operationsObserverRequiresApprovedGrantAndCanBeRevokedThroughSameWorkflow() {
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
+        execute("GRANT_BACKEND_DUTY", objectMapper.createObjectNode().put("userId", TARGET_USER_ID)
+                .put("dutyKey", "OPERATIONS_OBSERVER"), "s02-grant");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM sys_user_backend_duty WHERE user_id=? AND duty_key='OPERATIONS_OBSERVER'", String.class, TARGET_USER_ID)).isEqualTo("ACTIVE");
+        execute("REVOKE_BACKEND_DUTY", objectMapper.createObjectNode().put("userId", TARGET_USER_ID)
+                .put("dutyKey", "OPERATIONS_OBSERVER"), "s02-revoke");
+        assertThat(jdbcTemplate.queryForObject("SELECT status FROM sys_user_backend_duty WHERE user_id=? AND duty_key='OPERATIONS_OBSERVER'", String.class, TARGET_USER_ID)).isEqualTo("REVOKED");
+    }
+
+    @Test
     void developmentSelfApprovalStillUsesDraftSubmitApproveAndExecute() {
         SensitiveChangeRecord draft = service.createDraft(ADMIN_ID, "GRANT_BACKEND_DUTY",
                 objectMapper.createObjectNode().put("userId", ADMIN_ID)

@@ -1,0 +1,1 @@
+~iot:* +auth +hello +ping +echo +quit +info +get +set +setex +psetex +del +exists +expire +pexpire +ttl +pttl +select +eval +evalsha +script|load +client|setname +client|setinfo

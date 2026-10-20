@@ -61,6 +61,8 @@ public class SecurityConfig {
                 .requestMatchers("/auth/**", "/api/auth/**").permitAll()
                 // 仅放行 WebSocket 传输升级；首帧 SUBSCRIBE 在端点内完成 JWT 与建筑权限校验。
                 .requestMatchers("/ws/**", "/api/ws/**").permitAll()
+                // 业务入口永不提供运行管理信息；独立管理端口由专用安全链处理。
+                .requestMatchers("/actuator", "/actuator/**", "/api/actuator", "/api/actuator/**").denyAll()
                 // 3. 其他所有请求必须携带 Token 并通过鉴权
                 .anyRequest().authenticated()
         );

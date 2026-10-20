@@ -53,6 +53,9 @@ public class RedisConfig {
     @Value("${spring.data.redis.password:}")
     private String redisPassword;
 
+    @Value("${spring.data.redis.username:default}")
+    private String redisUsername;
+
     @Value("${spring.data.redis.database:0}")
     private int redisDatabase;
 
@@ -73,6 +76,7 @@ public class RedisConfig {
                 .setConnectionMinimumIdleSize(2)
                 .setConnectionPoolSize(8);
         if (redisPassword != null && !redisPassword.isBlank()) {
+            config.useSingleServer().setUsername(redisUsername);
             config.useSingleServer().setPassword(redisPassword);
         }
         log.info("✅ RedissonClient 已启用（分布式锁能力已激活）");

@@ -95,7 +95,8 @@ class FlywayMigrationConfigurationTest {
                 "V72__mysql_daikin_batch_parallel.sql",
                 "V73__mysql_account_security_version.sql",
                 "V74__mysql_auth_cleanup_outbox.sql",
-                "V75__mysql_energy_classification.sql");
+                "V75__mysql_energy_classification.sql",
+                "V76__mysql_operations_observer_duty.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

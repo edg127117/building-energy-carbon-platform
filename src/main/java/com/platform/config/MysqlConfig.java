@@ -1,6 +1,9 @@
 package com.platform.config;
 
 import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
+import org.springframework.core.env.Environment;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,6 +23,13 @@ import javax.sql.DataSource;
  */
 @Configuration
 public class MysqlConfig {
+    /** 在连接池、迁移及外部客户端创建前校验凭据，避免用不合格账号先执行初始化。 */
+    @Bean
+    @ConditionalOnProperty(name = "security.dependency-credentials-required", matchIfMissing = true)
+    static BeanFactoryPostProcessor dependencyAccessGuard(Environment environment) {
+        return beanFactory -> new DependencyAccessGuard(environment);
+    }
+
     /**
      * 绑定 {@code spring.datasource}，由 Spring Boot 负责把通用 {@code url} 等属性转换成
      * 实际连接池需要的配置字段。

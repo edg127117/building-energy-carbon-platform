@@ -1,0 +1,390 @@
+"""一次性容器验证 S02 模板；只清理带本次随机标签的自建资源，不连接部署服务。"""
+import base64
+import json
+import os
+import pathlib
+import socket
+import struct
+import subprocess
+import time
+import urllib.error
+import urllib.request
+import uuid
+
+from verify_tdengine_exclusive import BoundaryError, PROJECT, PROJECT_LABEL, verify_instance
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+NONCE = uuid.uuid4().hex
+LABEL = "bec.s02.test=" + NONCE
+OWNED = []
+NETWORKS = []
+VOLUMES = []
+ENV = os.environ.copy()
+
+
+def docker(*arguments, env=None):
+    return subprocess.check_output(["docker", *arguments], text=True, stderr=subprocess.PIPE, env=env or ENV).strip()
+
+
+def container(image, ports, options, command=()):
+    identifier = docker("run", "-d", "--label", LABEL, *sum((["-p", "127.0.0.1::" + str(p)] for p in ports), []), *options, image, *command)
+    OWNED.append(identifier)
+    return identifier
+
+
+def port(identifier, internal):
+    data = json.loads(docker("inspect", identifier))[0]
+    assert data["Config"]["Labels"]["bec.s02.test"] == NONCE
+    mapping = data["NetworkSettings"]["Ports"][str(internal) + "/tcp"][0]
+    assert mapping["HostIp"] == "127.0.0.1"
+    return int(mapping["HostPort"])
+
+
+def request(url, payload=None, headers=None):
+    data = None if payload is None else (payload if isinstance(payload, bytes) else json.dumps(payload).encode())
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, data=data, headers=headers or {}), timeout=5) as result:
+            return result.status, json.load(result)
+    except urllib.error.HTTPError as error:
+        return error.code, {}
+
+
+def await_ready(probe):
+    deadline = time.monotonic() + 100
+    while time.monotonic() < deadline:
+        try:
+            if probe():
+                return
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+        time.sleep(1)
+    raise AssertionError("isolated container readiness timed out")
+
+
+def compose_boundaries():
+    configuration = ENV.copy()
+    for key in ["MYSQL_ROOT_PASSWORD", "MYSQL_PASSWORD", "REDIS_PASSWORD", "EMQX_DASHBOARD_PASSWORD"]:
+        configuration[key] = uuid.uuid4().hex
+    result = json.loads(docker("compose", "-f", str(ROOT / "src/env/docker-compose.yml"), "config", "--format=json", env=configuration))
+    for service in result["services"].values():
+        assert all(p["host_ip"] == "127.0.0.1" for p in service.get("ports", [])), "unexpected non-loopback default"
+    assert [p["target"] for p in result["services"]["tdengine"]["ports"]] == [6041]
+    assert result["networks"]["data"]["driver"] == "bridge"
+    assert result["networks"]["data"]["driver_opts"]["com.docker.network.bridge.host_binding_ipv4"] == "127.0.0.1"
+    assert result["networks"]["data"]["driver_opts"]["com.docker.network.bridge.enable_icc"] == "false"
+    assert "data" not in result["services"]["emqx"]["networks"]
+    del configuration["REDIS_PASSWORD"]
+    try:
+        docker("compose", "-f", str(ROOT / "src/env/docker-compose.yml"), "config", "--quiet", env=configuration)
+    except subprocess.CalledProcessError:
+        pass
+    else:
+        raise AssertionError("Compose accepted a missing Redis secret")
+
+
+def redis_template():
+    ENV["REDIS_PASSWORD"] = uuid.uuid4().hex
+    # 启动真实仓库脚本，而不是在测试里重新实现 ACL。
+    identifier = docker("run", "-d", "--label", LABEL, "--network=none", "-e", "REDIS_PASSWORD", "-e", "REDIS_USER=platform_app",
+                        "-v", str(ROOT / "src/env/redis-start.sh") + ":/usr/local/bin/platform-redis-start:ro",
+                        "-v", str(ROOT / "src/env/redis-app.permissions") + ":/usr/local/etc/platform-redis-permissions:ro",
+                        "--entrypoint", "/bin/sh", "redis:7.2-alpine", "/usr/local/bin/platform-redis-start")
+    OWNED.append(identifier)
+    ENV["REDISCLI_AUTH"] = ENV["REDIS_PASSWORD"]
+    await_ready(lambda: docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "ping") == "PONG")
+    assert docker("exec", identifier, "sh", "-c", "awk '/^Uid:/{print $2}' /proc/1/status") != "0", "Redis must drop root"
+    assert "NOAUTH" in docker("exec", identifier, "redis-cli", "ping")
+    assert docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "SETEX", "iot:seconds", "10", "probe") == "OK"
+    assert docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "PSETEX", "iot:milliseconds", "10000", "probe") == "OK"
+    assert "NOPERM" in docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "FLUSHDB")
+    assert "NOPERM" in docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "GET", "other-project:key")
+
+
+def mqtt_string(value):
+    value = value.encode()
+    return struct.pack("!H", len(value)) + value
+
+
+def packet(connection):
+    def read(size):
+        data = b""
+        while len(data) < size:
+            chunk = connection.recv(size - len(data))
+            if not chunk:
+                raise ConnectionError("MQTT peer closed")
+            data += chunk
+        return data
+    kind = read(1)[0]
+    length, multiplier = 0, 1
+    while True:
+        digit = read(1)[0]
+        length += (digit & 127) * multiplier
+        if not digit & 128:
+            break
+        multiplier *= 128
+    return kind, read(length)
+
+
+def send(connection, kind, body):
+    size, encoded = len(body), bytearray()
+    while True:
+        digit = size % 128
+        size //= 128
+        encoded.append(digit | (128 if size else 0))
+        if not size:
+            break
+    connection.sendall(bytes([kind]) + encoded + body)
+
+
+def connect_mqtt(number, user=None, password=None, accepted=True):
+    connection = socket.create_connection(("127.0.0.1", number), timeout=3)
+    connection.settimeout(2)
+    body = mqtt_string("MQTT") + bytes([4, 0xC2 if user else 2]) + b"\x00\x1e" + mqtt_string("s02-" + uuid.uuid4().hex[:12])
+    if user:
+        body += mqtt_string(user) + mqtt_string(password)
+    send(connection, 0x10, body)
+    kind, result = packet(connection)
+    assert kind == 0x20 and (result[1] == 0) == accepted, "MQTT authentication boundary"
+    return connection
+
+
+def subscribe(connection, topic, allowed):
+    send(connection, 0x82, b"\x00\x01" + mqtt_string(topic) + b"\x00")
+    kind, result = packet(connection)
+    assert kind == 0x90 and (result[2] != 128) == allowed, "MQTT subscription ACL boundary"
+
+
+def emqx_template():
+    ENV["EMQX_DASHBOARD__DEFAULT_PASSWORD"] = uuid.uuid4().hex
+    identifier = container("emqx/emqx:5.6.0", [18083, 1883], [
+        "-e", "EMQX_DASHBOARD__DEFAULT_USERNAME=ops-admin", "-e", "EMQX_DASHBOARD__DEFAULT_PASSWORD",
+        "-e", "EMQX_AUTHENTICATION__1__MECHANISM=password_based", "-e", "EMQX_AUTHENTICATION__1__BACKEND=built_in_database",
+        "-e", "EMQX_AUTHENTICATION__1__USER_ID_TYPE=username", "-e", "EMQX_AUTHORIZATION__NO_MATCH=deny",
+        "-v", str(ROOT / "src/env/emqx-acl.conf") + ":/opt/emqx/etc/acl.conf:ro"])
+    api = "http://127.0.0.1:" + str(port(identifier, 18083)) + "/api/v5"
+    number = port(identifier, 1883)
+    credentials = {"username": "ops-admin", "password": ENV["EMQX_DASHBOARD__DEFAULT_PASSWORD"]}
+    await_ready(lambda: request(api + "/login", credentials, {"Content-Type": "application/json"})[0] == 200)
+    status, login = request(api + "/login", credentials, {"Content-Type": "application/json"})
+    assert status == 200
+    assert request(api + "/clients")[0] == 401, "Broker management must authenticate"
+    header = {"Authorization": "Bearer " + login["token"], "Content-Type": "application/json"}
+    passwords = {name: uuid.uuid4().hex for name in ["platform-backend", "platform-device"]}
+    for user, password in passwords.items():
+        assert request(api + "/authentication/password_based:built_in_database/users",
+                       {"user_id": user, "password": password, "is_superuser": False}, header)[0] == 201
+    with connect_mqtt(number, accepted=False):
+        pass
+    with connect_mqtt(number, "platform-backend", "wrong-test-password", accepted=False):
+        pass
+    with connect_mqtt(number, "platform-backend", credentials["password"], accepted=False):
+        pass
+    with connect_mqtt(number, "platform-backend", passwords["platform-backend"]) as backend:
+        subscribe(backend, "device/data/up", True)
+        subscribe(backend, "#", False)
+        with connect_mqtt(number, "platform-device", passwords["platform-device"]) as device:
+            subscribe(device, "device/data/up", False)
+            subscribe(device, "platform/telemetry/v2/ack/adapter", True)
+            send(device, 0x30, mqtt_string("device/data/up") + b"s02-isolated-probe")
+            kind, body = packet(backend)
+            assert kind == 0x30 and body.endswith(b"s02-isolated-probe"), "authorized telemetry did not arrive"
+
+
+def tdengine_exclusive_instance():
+    network = docker("network", "create", "--label", LABEL, "--opt", "com.docker.network.bridge.host_binding_ipv4=127.0.0.1",
+                     "--opt", "com.docker.network.bridge.enable_icc=false", "--label", PROJECT_LABEL + "=" + PROJECT,
+                     "s02-data-" + NONCE[:12])
+    NETWORKS.append(network)
+    network_name = "s02-data-" + NONCE[:12]
+    volume = docker("volume", "create", "--label", LABEL, "s02-taos-" + NONCE[:12])
+    VOLUMES.append(volume)
+    identifier = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network,
+                           "--label", PROJECT_LABEL + "=" + PROJECT, "--label", "bec.security.tdengine-exclusive=true",
+                           "--health-cmd", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6041'", "--health-interval=1s",
+                           "--mount", "type=volume,src=" + volume + ",dst=/var/lib/taos"])
+    api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
+    def sql(statement, username="root", password="taosdata"):
+        header = {"Authorization": "Basic " + base64.b64encode((username + ":" + password).encode()).decode()}
+        status, result = request(api, statement.encode(), header)
+        if statement.startswith("CREATE DATABASE") and not (status == 200 and result.get("code") == 0):
+            # 仅记录本测试固定建库语句的错误；账号创建/改密语句及认证头绝不输出。
+            print("tdengine_database_probe_failure=" + json.dumps({"http": status, "code": result.get("code"),
+                                                                   "reason": result.get("desc")}), flush=True)
+        return status == 200 and result.get("code") == 0
+    await_ready(lambda: sql("SELECT SERVER_VERSION()"))
+    details = json.loads(docker("inspect", identifier))[0]
+    connection = next(iter(details["NetworkSettings"]["Networks"].values()))
+    probe_code = """import socket,sys
+for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
+    try:
+        with socket.create_connection((host,int(port)),timeout=2): pass
+    except OSError: continue
+    raise SystemExit('unauthorized network reached data service')
+"""
+    for source in ["bridge", network]:
+        probe = container("python:3.12-alpine", [], ["--network", source, "--label", PROJECT_LABEL + "=" + PROJECT],
+                          ["python", "-c", probe_code, connection["Gateway"], str(port(identifier, 6041)),
+                           connection["IPAddress"], "6041", connection["IPAddress"], "6030"])
+        await_ready(lambda: json.loads(docker("inspect", probe))[0]["State"]["Status"] == "exited")
+        assert json.loads(docker("inspect", probe))[0]["State"]["ExitCode"] == 0, "data service reachable from an unauthorized container"
+    print("cross_network_boundary=PASS", flush=True)
+    assert request(api, b"SELECT SERVER_VERSION()")[0] == 401
+    assert sql("CREATE DATABASE s02_project VGROUPS 1")
+    password = uuid.uuid4().hex[:24]
+    assert sql("CREATE USER s02_app PASS '" + password + "' SYSINFO 0"), "create dedicated TDengine account"
+    for permission in ["READ", "WRITE"]:
+        assert sql("GRANT " + permission + " ON s02_project.* TO s02_app")
+    assert sql("CREATE STABLE s02_project.st(ts TIMESTAMP,v INT) TAGS(d INT)", "s02_app", password)
+    assert sql("INSERT INTO s02_project.t USING s02_project.st TAGS(1) VALUES(NOW,1)", "s02_app", password)
+    assert sql("SELECT COUNT(*) FROM s02_project.st", "s02_app", password)
+    new_root = uuid.uuid4().hex[:24]
+    assert sql("ALTER USER root PASS '" + new_root + "'"), "rotate isolated default administrator password"
+    print("tdengine_old_password_cached_before_restart=" + str(sql("SELECT SERVER_VERSION()")), flush=True)
+    def dnode_ready_for_new_database():
+        header = {"Authorization": "Basic " + base64.b64encode(("root:" + new_root).encode()).decode()}
+        status, result = request(api, b"SHOW DNODES", header)
+        if status != 200 or result.get("code") != 0:
+            return False
+        columns = [column[0].lower() for column in result["column_meta"]]
+        assert {"status", "vnodes", "support_vnodes"} <= set(columns), "missing TDengine dnode readiness/capacity fields"
+        return bool(result["data"]) and all(row[columns.index("status")] == "ready"
+                    and row[columns.index("support_vnodes")] > row[columns.index("vnodes")] for row in result["data"])
+    def data_mount(details):
+        mount = next(item for item in details["Mounts"] if item["Destination"] == "/var/lib/taos")
+        return mount["Type"], mount.get("Name"), mount["Source"], mount["RW"]
+    def restart_preserving_data():
+        nonlocal api
+        # 只重启本测试创建且标签核对的容器；保留原卷，不能用重新建库代替恢复验证。
+        before = json.loads(docker("inspect", identifier))[0]
+        assert before["Config"]["Labels"]["bec.s02.test"] == NONCE
+        docker("restart", "--time", "10", identifier)
+        api = "http://127.0.0.1:" + str(port(identifier, 6041)) + "/rest/sql"
+        await_ready(lambda: sql("SELECT SERVER_VERSION()", "root", new_root))
+        after = json.loads(docker("inspect", identifier))[0]
+        assert before["Id"] == after["Id"], "credential rotation recreated the container"
+        assert data_mount(before) == data_mount(after), "credential rotation replaced the data volume"
+        assert data_mount(after)[:2] == ("volume", volume), "unexpected post-restart data volume"
+        await_ready(lambda: json.loads(docker("inspect", identifier))[0]["State"]["Health"]["Status"] == "healthy")
+        # REST 能读存量表不代表 mnode 已收到 dnode 心跳/容量；业务写入前等待真实就绪。
+        await_ready(dnode_ready_for_new_database)
+    restart_preserving_data()
+    def rejected_password(username, secret):
+        header = {"Authorization": "Basic " + base64.b64encode((username + ":" + secret).encode()).decode()}
+        status, result = request(api, b"SELECT SERVER_VERSION()", header)
+        return status == 401 or (result.get("code", 0) != 0 and "authentication failure" in result.get("desc", "").lower())
+    assert rejected_password("root", "taosdata"), "old TDengine default password still works after restart"
+    assert rejected_password("s02_app", "incorrect-password"), "wrong application password accepted"
+    app_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, preserved = request(api, b"SELECT COUNT(*) FROM s02_project.st", app_header)
+    assert status == 200 and preserved.get("code") == 0 and preserved.get("data") == [[1]], "project data lost across credential rotation restart"
+    print("tdengine_rotation_restart_and_data_preserved=PASS", flush=True)
+
+    # 旧应用密码先成功读取原数据，再真实改密；任意错误密码不能代替旧凭据失效断言。
+    status, original = request(api, b"SELECT v FROM s02_project.t", app_header)
+    assert status == 200 and original.get("code") == 0 and original.get("data") == [[1]]
+    old_application_password = password
+    password = uuid.uuid4().hex[:24]
+    assert password != old_application_password
+    assert sql("ALTER USER s02_app PASS '" + password + "'", "root", new_root), "rotate real application password"
+    print("tdengine_old_application_password_cached_before_restart="
+          + str(sql("SELECT SERVER_VERSION()", "s02_app", old_application_password)), flush=True)
+    restart_preserving_data()
+    assert rejected_password("s02_app", old_application_password), "previously valid application password still works"
+    assert rejected_password("root", "taosdata"), "administrator old password revived after second restart"
+    app_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, restored = request(api, b"SELECT v FROM s02_project.t", app_header)
+    assert status == 200 and restored.get("code") == 0 and restored.get("data") == original["data"], "application rotation changed original data"
+    assert sql("INSERT INTO s02_project.t_after_rotate USING s02_project.st TAGS(2) VALUES(NOW,2)", "s02_app", password)
+    status, written = request(api, b"SELECT v FROM s02_project.t_after_rotate", app_header)
+    assert status == 200 and written.get("code") == 0 and written.get("data") == [[2]], "new application credentials cannot read/write"
+    status, unchanged = request(api, b"SELECT v FROM s02_project.t", app_header)
+    assert status == 200 and unchanged.get("code") == 0 and unchanged.get("data") == original["data"]
+    assert rejected_password("s02_app", old_application_password), "new application connection revived old credentials"
+    print("tdengine_application_rotation_old_rejected_new_read_write_and_data_preserved=PASS", flush=True)
+    print("tdengine_dnode_capacity_ready=PASS", flush=True)
+    verify_instance(identifier, volume, network_name, "s02_project", new_root)
+    print("tdengine_exclusive_project=PASS", flush=True)
+
+    # 保留社区版授权无效的真实反例；安全断言改由实际部署核验器拒绝混放实例承担。
+    assert sql("CREATE DATABASE s02_other VGROUPS 1", "root", new_root)
+    assert sql("CREATE STABLE s02_other.st(ts TIMESTAMP,v INT) TAGS(d INT)", "root", new_root)
+    assert sql("INSERT INTO s02_other.t USING s02_other.st TAGS(1) VALUES(NOW,777)", "root", new_root)
+    other_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, other = request(api, b"SELECT COUNT(*) FROM s02_other.st", other_header)
+    print("tdengine_cross_db_probe=" + json.dumps({"http": status, "code": other.get("code"), "counts": other.get("data")}), flush=True)
+    assert status == 200 and other.get("code") == 0 and other.get("data") == [[1]], "revalidate Community GRANT limitation"
+    try:
+        verify_instance(identifier, volume, network_name, "s02_project", new_root)
+    except BoundaryError as error:
+        assert "another business database" in str(error)
+    else:
+        raise AssertionError("deployment guard accepted a shared TDengine catalog")
+    print("tdengine_shared_catalog_rejected=PASS", flush=True)
+    # 仅清理由本测试在新建容器中创建的反例库，不接触既有数据库。
+    assert sql("DROP DATABASE s02_other", "root", new_root)
+    shared = container("python:3.12-alpine", [], ["--network=none",
+                       "--mount", "type=volume,src=" + volume + ",dst=/shared:ro"], ["python", "-c", "import time; time.sleep(120)"])
+    try:
+        verify_instance(identifier, volume, network_name, "s02_project", new_root)
+    except BoundaryError as error:
+        assert "volume is attached" in str(error)
+    else:
+        raise AssertionError("deployment guard accepted a shared TDengine volume")
+    assert json.loads(docker("inspect", shared))[0]["Config"]["Labels"]["bec.s02.test"] == NONCE
+    docker("rm", "-f", "-v", shared)
+    OWNED.remove(shared)
+    print("tdengine_shared_volume_rejected=PASS", flush=True)
+    ENV["TDENGINE_AUDIT_PASSWORD"] = new_root
+    subprocess.check_call(["python3", str(ROOT / "scripts/verify_tdengine_exclusive.py"), "--container", identifier,
+                           "--volume", volume, "--network", network_name, "--database", "s02_project"], env=ENV)
+
+    # 使用真实 Docker 挂载元数据验证覆盖拒绝；探针只睡眠，不启动第二个数据库或访问原数据卷。
+    overlay_root = docker("volume", "create", "--label", LABEL, "s02-overlay-root-" + NONCE[:12])
+    VOLUMES.append(overlay_root)
+    overlay_child = docker("volume", "create", "--label", LABEL, "s02-overlay-child-" + NONCE[:12])
+    VOLUMES.append(overlay_child)
+    child_source = json.loads(docker("volume", "inspect", overlay_child))[0]["Mountpoint"]
+    for kind, options in [
+            ("bind", ["--mount", "type=bind,src=" + child_source + ",dst=/var/lib/taos/vnode"]),
+            ("volume", ["--mount", "type=volume,src=" + overlay_child + ",dst=/var/lib/taos/vnode"]),
+            ("tmpfs", ["--tmpfs", "/var/lib/taos/vnode"])]:
+        overlay = container("tdengine/tdengine:3.2.3.0", [6041], ["--network", network,
+                            "--label", PROJECT_LABEL + "=" + PROJECT, "--label", "bec.security.tdengine-exclusive=true",
+                            "--mount", "type=volume,src=" + overlay_root + ",dst=/var/lib/taos",
+                            "--entrypoint", "/bin/sh", *options], ["-c", "sleep 120"])
+        try:
+            verify_instance(overlay, overlay_root, network_name, "s02_project", new_root)
+        except BoundaryError as error:
+            assert "overriding submount" in str(error), "overlay was rejected for an unrelated reason"
+        else:
+            raise AssertionError("deployment guard accepted a real nested " + kind + " mount")
+        assert json.loads(docker("inspect", overlay))[0]["Config"]["Labels"]["bec.s02.test"] == NONCE
+        docker("rm", "-f", "-v", overlay)
+        OWNED.remove(overlay)
+        print("tdengine_nested_" + kind + "_mount_rejected=PASS", flush=True)
+
+
+def main():
+    assert os.environ.get("S02_INFRA_IT_ISOLATED") == "true", "explicit isolated test opt-in required"
+    try:
+        for check in [compose_boundaries, redis_template, emqx_template, tdengine_exclusive_instance]:
+            check()
+            print(check.__name__ + "=PASS", flush=True)
+    finally:
+        for identifier in reversed(OWNED):
+            data = json.loads(docker("inspect", identifier))[0]
+            assert data["Config"]["Labels"]["bec.s02.test"] == NONCE, "cleanup owner mismatch"
+            docker("rm", "-f", "-v", identifier)
+        for network in NETWORKS:
+            data = json.loads(docker("network", "inspect", network))[0]
+            assert data["Labels"]["bec.s02.test"] == NONCE, "network cleanup owner mismatch"
+            docker("network", "rm", network)
+        for volume in VOLUMES:
+            data = json.loads(docker("volume", "inspect", volume))[0]
+            assert data["Labels"]["bec.s02.test"] == NONCE, "volume cleanup owner mismatch"
+            docker("volume", "rm", volume)
+        print("owned_container_cleanup=PASS", flush=True)
+
+
+if __name__ == "__main__":
+    main()

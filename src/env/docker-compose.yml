@@ -1,13 +1,18 @@
 services:
   # 1. 关系型数据底座（正式权限、建筑、设备和测点档案）
   mysql:
+    labels:
+      bec.security.project: building-energy-carbon-platform
+    networks: [data]
     image: mysql:8.0
     container_name: ${MYSQL_CONTAINER_NAME:-iot-mysql}
     restart: always
     ports:
-      - "${MYSQL_PORT:-3306}:3306"
+      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:-change-me} # 与后端环境变量保持一致
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set an independent MySQL administrator password}
+      MYSQL_USER: ${MYSQL_USER:-platform_app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set the application MySQL password}
       MYSQL_DATABASE: iot_platform       # 启动时自动创建此数据库
       TZ: Asia/Shanghai
     volumes:
@@ -17,7 +22,7 @@ services:
       # 不再把 SQL 挂入 docker-entrypoint-initdb.d，避免新库和已有库使用两套结构来源。
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      test: ["CMD-SHELL", "MYSQL_PWD=\"$${MYSQL_ROOT_PASSWORD}\" mysqladmin ping -h 127.0.0.1 -uroot --silent"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -25,19 +30,29 @@ services:
 
   # 2. MQTT 消息接入中枢（接收 HVAC 19 测点上行）
   emqx:
+    labels:
+      bec.security.project: building-energy-carbon-platform
+    networks: [mqtt-ingress]
     image: emqx/emqx:5.6.0
     container_name: ${EMQX_CONTAINER_NAME:-iot-emqx}
     restart: always
     ports:
-      - "${MQTT_PORT:-1883}:1883"       # MQTT 硬件端点
-      - "${EMQX_DASHBOARD_PORT:-18083}:18083" # Web 管理控制台
-      - "${MQTT_WEBSOCKET_PORT:-8083}:8083"   # MQTT WebSocket 端口
+      # 跨主机设备接入须单独批准绑定地址及来源规则；管理控制台始终只经回环/SSH 访问。
+      - "${MQTT_BIND_ADDRESS:-127.0.0.1}:${MQTT_PORT:-1883}:1883"
+      - "127.0.0.1:${EMQX_DASHBOARD_PORT:-18083}:18083"
+      - "${MQTT_BIND_ADDRESS:-127.0.0.1}:${MQTT_WEBSOCKET_PORT:-8083}:8083"
     environment:
-      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
-      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${MQTT_PASSWORD:-change-me} # 与后端环境变量保持一致
+      EMQX_DASHBOARD__DEFAULT_USERNAME: ${EMQX_DASHBOARD_USER:-ops-admin}
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: ${EMQX_DASHBOARD_PASSWORD:?set an independent Broker administrator password}
+      # 认证库默认无用户；经回环管理 API 创建独立接入账号后才可连接，禁止匿名兜底。
+      EMQX_AUTHENTICATION__1__MECHANISM: password_based
+      EMQX_AUTHENTICATION__1__BACKEND: built_in_database
+      EMQX_AUTHENTICATION__1__USER_ID_TYPE: username
+      EMQX_AUTHORIZATION__NO_MATCH: deny
       TZ: Asia/Shanghai
     volumes:
       - ./emqx-acl.conf:/opt/emqx/etc/acl.conf:ro
+      - emqx-data:/opt/emqx/data
     healthcheck:
       test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
       interval: 5s
@@ -47,14 +62,18 @@ services:
 
   # 3. 时序数据底座（保存 HVAC 原始事件、分钟数据和指标结果）
   tdengine:
+    # 社区版不提供库级授权隔离；本容器及数据卷只能服务本项目。
+    labels:
+      bec.security.project: building-energy-carbon-platform
+      bec.security.tdengine-exclusive: 'true'
+    networks: [data]
     image: tdengine/tdengine:3.2.3.0
     container_name: ${TDENGINE_CONTAINER_NAME:-iot-tdengine}
     # TDengine 会把 FQDN 写入 dnode 元数据；容器重建后 hostname 变化会拒绝启动。
     hostname: iot-tdengine
     restart: always
     ports:
-      - "${TDENGINE_NATIVE_PORT_START:-6030}-${TDENGINE_NATIVE_PORT_END:-6049}:6030-6049"
-      - "${TDENGINE_REST_PORT:-6041}:6041" # REST API 端口 (Java JDBC 使用此端口通信)
+      - "127.0.0.1:${TDENGINE_REST_PORT:-6041}:6041" # 仅发布 Java 实际使用的 REST 入口
     environment:
       TZ: Asia/Shanghai
       TAOS_FQDN: iot-tdengine
@@ -63,7 +82,8 @@ services:
       # 固定名称 Volume 不依赖短期 Git worktree，删除 worktree 不会删除时序数据。
       - tdengine-data:/var/lib/taos
     healthcheck:
-      test: ["CMD-SHELL", "taos -s 'SHOW DATABASES;' >/dev/null 2>&1"]
+      # 仅探测 REST 监听存活，避免改密后仍依赖默认 root；认证、结构及独占由部署核验承担。
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6041"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -71,23 +91,44 @@ services:
 
   # 4. 最新指标状态缓存
   redis:
+    labels:
+      bec.security.project: building-energy-carbon-platform
+    networks: [data]
     image: redis:7.2-alpine
     container_name: ${REDIS_CONTAINER_NAME:-iot-redis}
     restart: always
     ports:
-      - "${REDIS_PORT:-6379}:6379"
-    command: ["redis-server", "--appendonly", "yes"]
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    environment:
+      REDIS_USER: ${REDIS_USER:-platform_app}
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set the application Redis password}
+    entrypoint: ["/bin/sh", "/usr/local/bin/platform-redis-start"]
     volumes:
       # Redis 缓存允许重建，但固定名称 Volume 可避免普通容器重建产生无意义的缓存空窗。
       - redis-data:/data
+      - ./redis-start.sh:/usr/local/bin/platform-redis-start:ro
+      - ./redis-app.permissions:/usr/local/etc/platform-redis-permissions:ro
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$${REDIS_PASSWORD}\" redis-cli --user \"$${REDIS_USER}\" ping | grep -qx PONG"]
       interval: 5s
       timeout: 5s
       retries: 30
       start_period: 5s
 
+networks:
+  data:
+    labels:
+      bec.security.project: building-energy-carbon-platform
+    # 应用在宿主机通过回环发布端口连接；internal:true 会禁用该发布路径。
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: 127.0.0.1
+      com.docker.network.bridge.enable_icc: 'false'
+  mqtt-ingress: {}
+
 volumes:
+  emqx-data:
+    name: ${EMQX_VOLUME_NAME:-iot-platform-demo-emqx-data}
   mysql-data:
     # 显式名称保证从不同目录执行 Compose 时仍使用同一个 MySQL 数据卷。
     name: ${MYSQL_VOLUME_NAME:-iot-platform-demo-mysql-data}

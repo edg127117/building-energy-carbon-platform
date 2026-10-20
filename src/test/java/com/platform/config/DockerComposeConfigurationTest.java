@@ -14,6 +14,21 @@ class DockerComposeConfigurationTest {
     private final String compose = readCompose();
 
     @Test
+    void onlyExplicitDeviceIngressCanLeaveLoopbackAndRedisMustAuthenticate() throws IOException {
+        assertThat(compose).contains("127.0.0.1:${MYSQL_PORT:-3306}:3306",
+                "127.0.0.1:${REDIS_PORT:-6379}:6379", "127.0.0.1:${TDENGINE_REST_PORT:-6041}:6041",
+                "127.0.0.1:${EMQX_DASHBOARD_PORT:-18083}:18083", "${MQTT_BIND_ADDRESS:-127.0.0.1}")
+                .doesNotContain("6030-6049", "--requirepass", "${MYSQL_PASSWORD:-change-me}");
+        var permissions = Files.readString(Path.of("src/env/redis-app.permissions"));
+        assertThat(permissions).contains("~iot:*", "+evalsha", "+script|load", "+get", "+del")
+                .doesNotContain("+@all", "+flushdb", "+config", "~*");
+        assertThat(Files.readString(Path.of("src/env/redis-start.sh")))
+                .contains("user default off", "sha256sum", "--aclfile");
+        assertThat(compose).contains("REDIS_PASSWORD:?", "EMQX_DASHBOARD_PASSWORD:?", "MYSQL_ROOT_PASSWORD:?")
+                .contains("EMQX_AUTHENTICATION__1__BACKEND: built_in_database");
+    }
+
+    @Test
     void composeDoesNotReferenceDeletedMeterInitialization() {
         assertThat(compose)
                 .doesNotContain("02-init-10000-devices.sql")

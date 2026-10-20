@@ -53,8 +53,8 @@ class EnergyLoop7MysqlIntegrationTest {
                 .target("74").load().migrate();
         Integer equipmentBefore = jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class);
         Integer pointsBefore = jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class);
-        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
-        assertThat(flyway.migrate().migrationsExecuted).as("从既有V74升级只执行新增V75").isEqualTo(1);
+        Flyway classification = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").target("75").load();
+        assertThat(classification.migrate().migrationsExecuted).as("从既有V74升级只执行新增V75").isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
 
@@ -62,6 +62,15 @@ class EnergyLoop7MysqlIntegrationTest {
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
                 """, String.class)).isEqualTo("75");
+        var historyBeforeAccess = jdbc.queryForList("SELECT version,checksum,success FROM flyway_schema_history ORDER BY installed_rank");
+        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
+        assertThat(flyway.migrate().migrationsExecuted).as("V75到V76只登记运维职责目录").isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
+        assertThat(jdbc.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version<>'76' ORDER BY installed_rank"))
+                .isEqualTo(historyBeforeAccess);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).as("重跑迁移不得重复建表或改写历史").isZero();
         assertThat(jdbc.queryForObject("""

@@ -1,5 +1,10 @@
 # 仅供隔离自动化测试，不作为部署环境密钥。
+management:
+  server:
+    port: 0
+
 security:
+  dependency-credentials-required: false
   auth-cleanup-enabled: false
   jwt:
     secret: test-only-jwt-secret-with-more-than-thirty-two-bytes

@@ -229,6 +229,7 @@ CREATE INDEX idx_audit_cleanup_status ON sys_audit_cleanup_run(status,started_at
 INSERT INTO sys_backend_duty
   (duty_key,duty_name,description,status,risk_level,version)
 VALUES
+  ('OPERATIONS_OBSERVER','运行指标观测','经独立管理端口读取运行指标','ENABLED','HIGH',1),
   ('BACKOFFICE_CHANGE_SUBMITTER','后台敏感变更提交','提交系统级敏感变更申请','ENABLED','HIGH',1),
   ('BACKOFFICE_CHANGE_REVIEWER','后台敏感变更审核','批准或拒绝系统级敏感变更申请','ENABLED','CRITICAL',1),
   ('AUDIT_EVIDENCE_VIEWER','审计证据查看','查询审计证据','ENABLED','HIGH',1),
