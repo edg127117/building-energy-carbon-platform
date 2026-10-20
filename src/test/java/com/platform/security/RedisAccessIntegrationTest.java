@@ -48,6 +48,8 @@ class RedisAccessIntegrationTest {
                         assertThatThrownBy(() -> new StringRedisTemplate(wrong).opsForValue().get("iot:probe"))
                                 .isInstanceOf(org.springframework.dao.DataAccessException.class);
                         var redis = new StringRedisTemplate(application);
+                        redis.opsForValue().set("iot:s02:ttl-probe", "milliseconds", Duration.ofMillis(12500));
+                        assertThat(redis.opsForValue().get("iot:s02:ttl-probe")).isEqualTo("milliseconds");
                         var tokens = new TokenCacheService(redis, 120);
                         tokens.addToWhitelist(7L, "old-test-token");
                         tokens.addToWhitelist(7L, "new-test-token");
@@ -71,7 +73,7 @@ class RedisAccessIntegrationTest {
                 } finally {
                     // 仅恢复本次创建的隔离实例 ACL；不对任何部署实例执行这些命令。
                     execute(administrator, "ACL", "SETUSER", "default", "on", "nopass");
-                    administrator.delete("iot:token:whitelist:7");
+                    administrator.delete(List.of("iot:token:whitelist:7", "iot:s02:ttl-probe"));
                     removeUsers(admin, "s02-app");
                     removeUsers(initial, "s02-admin");
                 }

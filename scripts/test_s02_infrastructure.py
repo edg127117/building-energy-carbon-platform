@@ -92,6 +92,8 @@ def redis_template():
     await_ready(lambda: docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "ping") == "PONG")
     assert docker("exec", identifier, "sh", "-c", "awk '/^Uid:/{print $2}' /proc/1/status") != "0", "Redis must drop root"
     assert "NOAUTH" in docker("exec", identifier, "redis-cli", "ping")
+    assert docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "SETEX", "iot:seconds", "10", "probe") == "OK"
+    assert docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "PSETEX", "iot:milliseconds", "10000", "probe") == "OK"
     assert "NOPERM" in docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "FLUSHDB")
     assert "NOPERM" in docker("exec", "-e", "REDISCLI_AUTH", identifier, "redis-cli", "--user", "platform_app", "GET", "other-project:key")
 
