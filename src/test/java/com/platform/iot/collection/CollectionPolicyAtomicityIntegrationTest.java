@@ -5,6 +5,7 @@ import com.platform.iot.collection.api.CollectionPolicyContracts.AliasCreateRequ
 import com.platform.iot.collection.api.CollectionPolicyContracts.InitialPolicyRequest;
 import com.platform.iot.collection.api.CollectionPolicyContracts.SourceCreateRequest;
 import com.platform.iot.collection.api.CollectionPolicyContracts.DataSourceView;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -14,6 +15,8 @@ import org.springframework.test.context.ActiveProfiles;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -26,6 +29,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CollectionPolicyAtomicityIntegrationTest {
     @Autowired private CollectionPolicyService service;
     @Autowired private JdbcTemplate jdbcTemplate;
+    private final List<String> dutyAssignmentIds = new ArrayList<>();
+
+    @AfterEach
+    void removeGrantedDuties() {
+        // 关闭测试上下文不会清空共享 H2；仅回收本用例创建的职责，避免污染后续角色拒绝测试。
+        for (String assignmentId : dutyAssignmentIds) {
+            jdbcTemplate.update("DELETE FROM sys_user_backend_duty WHERE assignment_id=?", assignmentId);
+        }
+    }
 
     @Test
     void firstActivationRollsBackEveryAliasAndVersionWhenOnePointBecomesInvalid() {
@@ -67,11 +79,13 @@ class CollectionPolicyAtomicityIntegrationTest {
 
     private void grant(BackendDuty duty) {
         LocalDateTime now = LocalDateTime.now().minusMinutes(1);
+        String assignmentId = UUID.randomUUID().toString().replace("-", "");
+        dutyAssignmentIds.add(assignmentId);
         jdbcTemplate.update("""
                 INSERT INTO sys_user_backend_duty
                 (assignment_id,user_id,duty_key,status,effective_at,created_by,created_at)
                 VALUES (?,?,?,'ACTIVE',?,?,?)
-                """, UUID.randomUUID().toString().replace("-", ""), 1L, duty.name(),
+                """, assignmentId, 1L, duty.name(),
                 Timestamp.valueOf(now), 1L, Timestamp.valueOf(now));
     }
 }
