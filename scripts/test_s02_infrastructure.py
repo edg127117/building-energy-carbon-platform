@@ -229,7 +229,7 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
         assert json.loads(docker("inspect", probe))[0]["State"]["ExitCode"] == 0, "data service reachable from an unauthorized container"
     print("cross_network_boundary=PASS", flush=True)
     assert request(api, b"SELECT SERVER_VERSION()")[0] == 401
-    assert sql("CREATE DATABASE s02_project")
+    assert sql("CREATE DATABASE s02_project VGROUPS 1")
     password = uuid.uuid4().hex[:24]
     assert sql("CREATE USER s02_app PASS '" + password + "' SYSINFO 0"), "create dedicated TDengine account"
     for permission in ["READ", "WRITE"]:
@@ -264,11 +264,23 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     status, preserved = request(api, b"SELECT COUNT(*) FROM s02_project.st", app_header)
     assert status == 200 and preserved.get("code") == 0 and preserved.get("data") == [[1]], "project data lost across credential rotation restart"
     print("tdengine_rotation_restart_and_data_preserved=PASS", flush=True)
+    def dnode_ready_for_new_database():
+        header = {"Authorization": "Basic " + base64.b64encode(("root:" + new_root).encode()).decode()}
+        status, result = request(api, b"SHOW DNODES", header)
+        if status != 200 or result.get("code") != 0:
+            return False
+        columns = [column[0].lower() for column in result["column_meta"]]
+        assert {"status", "vnodes", "support_vnodes"} <= set(columns), "missing TDengine dnode readiness/capacity fields"
+        return bool(result["data"]) and all(row[columns.index("status")] == "ready"
+                    and row[columns.index("support_vnodes")] > row[columns.index("vnodes")] for row in result["data"])
+    # REST 能读存量表不代表 mnode 已收到 dnode 心跳/容量；未就绪时 CREATE DATABASE 报 Out of dnodes。
+    await_ready(dnode_ready_for_new_database)
+    print("tdengine_dnode_capacity_ready=PASS", flush=True)
     verify_instance(identifier, volume, network_name, "s02_project", new_root)
     print("tdengine_exclusive_project=PASS", flush=True)
 
     # 保留社区版授权无效的真实反例；安全断言改由实际部署核验器拒绝混放实例承担。
-    assert sql("CREATE DATABASE s02_other", "root", new_root)
+    assert sql("CREATE DATABASE s02_other VGROUPS 1", "root", new_root)
     assert sql("CREATE STABLE s02_other.st(ts TIMESTAMP,v INT) TAGS(d INT)", "root", new_root)
     assert sql("INSERT INTO s02_other.t USING s02_other.st TAGS(1) VALUES(NOW,777)", "root", new_root)
     other_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
