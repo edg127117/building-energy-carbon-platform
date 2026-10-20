@@ -222,7 +222,11 @@ for host,port in zip(sys.argv[1::2],sys.argv[2::2]):
     assert sql("INSERT INTO s02_project.t USING s02_project.st TAGS(1) VALUES(NOW,1)", "s02_app", password)
     assert sql("SELECT COUNT(*) FROM s02_project.st", "s02_app", password)
     assert sql("CREATE STABLE s02_other.st(ts TIMESTAMP,v INT) TAGS(d INT)")
-    assert not sql("SELECT COUNT(*) FROM s02_other.st", "s02_app", password), "TDengine cross-database access"
+    assert sql("INSERT INTO s02_other.t USING s02_other.st TAGS(1) VALUES(NOW,777)")
+    other_header = {"Authorization": "Basic " + base64.b64encode(("s02_app:" + password).encode()).decode()}
+    status, other = request(api, b"SELECT COUNT(*) FROM s02_other.st", other_header)
+    print("tdengine_cross_db_probe=" + json.dumps({"http": status, "code": other.get("code"), "counts": other.get("data")}), flush=True)
+    assert status != 200 or other.get("code") != 0, "TDengine cross-database access to populated stable"
     new_root = uuid.uuid4().hex[:24]
     assert sql("ALTER USER root PASS '" + new_root + "'"), "rotate isolated default administrator password"
     assert not sql("SELECT SERVER_VERSION()"), "old TDengine default password still works"
