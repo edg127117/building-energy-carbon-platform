@@ -1,0 +1,41 @@
+name: Meter Cloud CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'cloud/meter-cloud/**'
+      - '.github/workflows/meter-cloud-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'cloud/meter-cloud/**'
+      - '.github/workflows/meter-cloud-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  offline-tests:
+    name: Meter cloud offline tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install MQTT client dependency
+        run: python3 -m pip install -r cloud/meter-cloud/requirements.txt
+      - name: Verify supported MQTT client API without connecting
+        run: |
+          python3 - <<'PY'
+          import paho.mqtt.client as mqtt
+          client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2,
+                               client_id="offline-api-check", clean_session=False,
+                               manual_ack=True)
+          assert callable(client.ack)
+          PY
+      - name: Verify raw archive and receipt boundaries offline
+        run: python3 -m unittest discover -s cloud/meter-cloud -p 'test_*.py' -v
