@@ -33,6 +33,7 @@ import static com.platform.iot.temperature.TemperatureContracts.*;
 @RequiredArgsConstructor
 public class TemperaturePlanService {
     private static final long PREVIEW_TTL = 15 * 60_000L;
+    private final com.platform.relation.RelationGovernanceGuard relationGuard;
     private final List<TemperatureAdapter> adapters;
     private final BizPendingDeviceMapper pendingMapper;
     private final BizDeviceProductMapper products;
@@ -284,6 +285,7 @@ public class TemperaturePlanService {
                 point = points.selectOne(new LambdaQueryWrapper<BizDataPoint>().eq(BizDataPoint::getPointId, item.pointId()).last("FOR UPDATE"));
                 validatePoint(point, target, template);
             } else {
+                relationGuard.requireLegacyForStructuralCreate(target.getBuildingId());
                 String code = target.getEquipCode() + "_" + template.getSuffixCode();
                 var namingRule = namingRule(code);
                 point = new BizDataPoint();

@@ -93,6 +93,20 @@ class CarbonCalculationServiceTest {
                         .isEqualByComparingTo("0.000000"));
     }
 
+    @Test void fullyExcludedActivityIsRecordedWithoutMatchingAnEmissionFactor() {
+        when(ruleRepository.activeRoundingPolicyId()).thenReturn("CRP_DECIMAL128_V1");
+        var trace=CarbonEvidence.object();trace.put("activityStatus","EXCLUDED");trace.putArray("excludedSources").addObject().put("pointId","A");
+        when(input.read("BLD001",PeriodType.YEAR,START,END,500)).thenReturn(List.of(new ActivitySegment("EXCLUDED","BLD001",PeriodType.MONTH,
+                START,Instant.parse("2026-01-31T16:00:00Z"),"Asia/Shanghai","ELECTRICITY",BigDecimal.ZERO,"KWH","LOCKED_COMPLETE","COMPLETE",ResultNature.FORMAL,CarbonCalculationCore.sha256(CarbonEvidence.canonical(trace)),trace)));
+        when(repository.detail(anyString())).thenAnswer(invocation->detail(invocation.getArgument(0),"COMPLETED_COMPLETE"));
+        service.run(11L,Set.of("PLATFORM_ADMIN"),request(ResultNature.FORMAL));
+        ArgumentCaptor<CalculationResult> captured=ArgumentCaptor.forClass(CalculationResult.class);
+        verify(persistence).complete(anyString(),captured.capture(),eq(0),eq(false),anyLong(),any(LocalDateTime.class));
+        assertThat(captured.getValue().items()).isEmpty();assertThat(captured.getValue().complete()).isTrue();
+        assertThat(CarbonEvidence.parse(captured.getValue().sharedEvidenceJson()).path("excludedActivities")).hasSize(1);
+        verify(ruleRepository,never()).findCandidateFactors(anyString(),any(),any());
+    }
+
     @Test
     void ruleReuseIsLimitedToIdenticalWindowsWithinOneCalculation() {
         Instant february = Instant.parse("2026-01-31T16:00:00Z");
@@ -132,6 +146,59 @@ class CarbonCalculationServiceTest {
                 .extracting("errorCode").isEqualTo(CarbonErrors.ACTIVITY_INCOMPLETE);
         verify(persistence).fail(anyString(), eq(CarbonErrors.ACTIVITY_INCOMPLETE),
                 anyString(), any(LocalDateTime.class), anyLong());
+    }
+
+    @Test
+    void candidateReusesTheOriginalMonthAndQuarterWindows() {
+        Instant monthStart = Instant.parse("2025-12-31T16:00:00Z");
+        Instant monthEnd = Instant.parse("2026-01-31T16:00:00Z");
+        Instant quarterEnd = Instant.parse("2026-03-31T16:00:00Z");
+        CalculationBatch month = report("OLD_MONTH", PeriodType.MONTH, monthStart, monthEnd);
+        CalculationBatch quarter = report("OLD_QUARTER", PeriodType.QUARTER, monthStart, quarterEnd);
+        when(repository.findBatch("OLD_MONTH")).thenReturn(month);
+        when(repository.findBatch("OLD_QUARTER")).thenReturn(quarter);
+        when(repository.detail(anyString())).thenAnswer(invocation -> {
+            String batchId = invocation.getArgument(0);
+            CalculationBatch source = "OLD_QUARTER".equals(batchId) ? quarter : month;
+            return new CalculationDetail(source, List.of(), List.of(), List.of());
+        });
+        when(ruleRepository.activeRoundingPolicyId()).thenReturn("CRP_DECIMAL128_V1");
+        when(input.read("BLD001", PeriodType.MONTH, monthStart, monthEnd, 500))
+                .thenReturn(List.of(excludedActivity("MONTH", PeriodType.MONTH, monthStart, monthEnd)));
+        when(input.read("BLD001", PeriodType.QUARTER, monthStart, quarterEnd, 500))
+                .thenReturn(List.of(excludedActivity("QUARTER", PeriodType.QUARTER,
+                        monthStart, quarterEnd)));
+
+        service.runCandidate("BLD001", 2026, ResultNature.FORMAL,
+                "OLD_MONTH", "candidate-month");
+        service.runCandidate("BLD001", 2026, ResultNature.FORMAL,
+                "OLD_QUARTER", "candidate-quarter");
+
+        ArgumentCaptor<CalculationBatch> captured = ArgumentCaptor.forClass(CalculationBatch.class);
+        verify(persistence, org.mockito.Mockito.times(2)).create(captured.capture());
+        assertThat(captured.getAllValues()).extracting(CalculationBatch::periodType)
+                .containsExactly(PeriodType.MONTH, PeriodType.QUARTER);
+        assertThat(captured.getAllValues()).extracting(CalculationBatch::periodStart)
+                .containsExactly(monthStart, monthStart);
+        assertThat(captured.getAllValues()).extracting(CalculationBatch::periodEnd)
+                .containsExactly(monthEnd, quarterEnd);
+        assertThat(captured.getAllValues()).extracting(CalculationBatch::supersedesBatchId)
+                .containsExactly("OLD_MONTH", "OLD_QUARTER");
+        verify(input).read("BLD001", PeriodType.MONTH, monthStart, monthEnd, 500);
+        verify(input).read("BLD001", PeriodType.QUARTER, monthStart, quarterEnd, 500);
+    }
+
+    @Test
+    void candidateRejectsAnOriginalReportOutsideItsBuildingBeforeReadingActivities() {
+        CalculationBatch foreign = report("FOREIGN", "BLD002", PeriodType.MONTH, START,
+                Instant.parse("2026-01-31T16:00:00Z"));
+        when(repository.findBatch("FOREIGN")).thenReturn(foreign);
+
+        assertThatThrownBy(() -> service.runCandidate("BLD001", 2026, ResultNature.FORMAL,
+                "FOREIGN", "candidate-foreign"))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(CarbonErrors.RECALCULATION_CONFLICT);
+        verify(input, never()).read(anyString(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -255,6 +322,28 @@ class CarbonCalculationServiceTest {
         return new ActivitySegment("SNAP001", "BLD001", PeriodType.YEAR, START, END,
                 "Asia/Shanghai", "ELECTRICITY", new BigDecimal("1000"), "KWH",
                 lock, completeness, nature, "e".repeat(64));
+    }
+
+    private static ActivitySegment excludedActivity(String id, PeriodType periodType,
+                                                    Instant start, Instant end) {
+        var trace = CarbonEvidence.object();
+        trace.put("activityStatus", "EXCLUDED");
+        return new ActivitySegment(id, "BLD001", periodType, start, end, "Asia/Shanghai",
+                "ELECTRICITY", BigDecimal.ZERO, "KWH", "LOCKED_COMPLETE", "COMPLETE",
+                ResultNature.FORMAL, CarbonCalculationCore.sha256(CarbonEvidence.canonical(trace)), trace);
+    }
+
+    private static CalculationBatch report(String id, PeriodType periodType, Instant start, Instant end) {
+        return report(id, "BLD001", periodType, start, end);
+    }
+
+    private static CalculationBatch report(String id, String buildingId, PeriodType periodType,
+                                           Instant start, Instant end) {
+        LocalDateTime now = LocalDateTime.of(2026, 9, 2, 12, 0);
+        return new CalculationBatch(id, buildingId, periodType, start, end, "Asia/Shanghai",
+                ResultNature.FORMAL, "PUBLISHED", "COMPLETED_COMPLETE", "source-" + id,
+                "HASH", null, "CRP_DECIMAL128_V1", null, now, now.plusSeconds(20), now,
+                1L, 1, 1, false, null, null, 11L, now);
     }
 
     private static CalculationDetail detail(String id, String status) {

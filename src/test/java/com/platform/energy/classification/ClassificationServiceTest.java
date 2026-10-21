@@ -91,6 +91,41 @@ class ClassificationServiceTest {
     private ImportView importApproved(String key,Reading... r){var imported=service.importReadings(1,ROLES,BUILDING,request(key,r));return service.approveReadings(2,ROLES,BUILDING,imported.batchId(),new TransitionRequest(0L,"reviewed",null));}
     private QueryRequest query(String version){return new QueryRequest(FROM,TO,"MONTH","ELECTRICITY","kWh","use",version,List.of());}
 
+    @Test void batchDetailReturnsAuthoritativeRevisionAndKeepsBuildingBoundary() {
+        var imported = service.importReadings(1, ROLES, BUILDING,
+                request("review-detail", reading("B", "10", null)));
+        var detail = service.readingBatch(2, ROLES, BUILDING, imported.batchId());
+        assertThat(detail.status()).isEqualTo("PENDING_REVIEW");
+        assertThat(detail.revision()).isZero();
+        assertThat(detail.createdBy()).isEqualTo(1L);
+        assertThat(detail.count()).isEqualTo(1);
+        assertThatThrownBy(() -> service.readingBatch(2, ROLES, "OTHER", imported.batchId()))
+                .isInstanceOf(BusinessException.class);
+        service.approveReadings(2, ROLES, BUILDING, imported.batchId(),
+                new TransitionRequest(detail.revision(), "独立审核合成来源", null));
+        assertThat(service.readingBatch(2, ROLES, BUILDING, imported.batchId()).revision()).isEqualTo(1);
+        assertThatThrownBy(() -> service.approveReadings(2, ROLES, BUILDING, imported.batchId(),
+                new TransitionRequest(detail.revision(), "重复旧版本审核", null)))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test void sealedProjectionNeverUsesReviewedManualReadingsToFillMissingSnapshots() {
+        var version=approved("R1");
+        importApproved("manual",reading("A","1000",null),reading("B","600",null),reading("C","200",null),reading("D","300",null));
+        var snapshots=List.of(sealed("A","1000"),sealed("B","600"),sealed("C","200"),sealed("D","300"));
+        var result=service.projectSealed(1,ROLES,BUILDING,version.versionId(),FROM,TO,"ELECTRICITY","kWh",snapshots);
+        assertThat(result.total()).isEqualByComparingTo("1000");
+        assertThat(result.slices().stream().map(ClassificationCore.SourceSlice::quantity).reduce(BigDecimal.ZERO,BigDecimal::add)).isEqualByComparingTo("1000");
+        assertThatThrownBy(()->service.projectSealed(1,ROLES,BUILDING,version.versionId(),FROM,TO,"ELECTRICITY","kWh",List.of())).hasMessageContaining("不完整");
+        assertThatThrownBy(()->service.projectSealed(1,ROLES,"OTHER",version.versionId(),FROM,TO,"ELECTRICITY","kWh",snapshots)).isInstanceOf(BusinessException.class);
+    }
+
+    private com.platform.energy.period.EnergyPeriodModels.PeriodSnapshot sealed(String point,String quantity) {
+        return new com.platform.energy.period.EnergyPeriodModels.PeriodSnapshot("sealed-"+point,"key-"+point,"projection",BUILDING,point,"MONTH",FROM,TO,
+                "Asia/Shanghai","period",1,"LOCKED_COMPLETE","FORMAL","ELECTRICITY",new BigDecimal(quantity),"kWh",BigDecimal.ZERO,"TCE",BigDecimal.ONE,
+                "","","{\"relationVersionId\":\"R1\"}","hash-"+point,"{}",TO,null,null,1,LocalDateTime.of(2026,9,2,0,0));
+    }
+
     @Test void versionLifecycleRejectsStaleRevisionAndPreservesApprovedPayload(){
         var v=draft("R1");final String id=v.versionId();
         assertThatThrownBy(()->service.save(1,ROLES,BUILDING,id,new SaveRequest(0L,config("R1"),"stale"))).isInstanceOf(BusinessException.class);

@@ -71,6 +71,7 @@ public class DeviceOnboardingService {
     private static final String DAIKIN_SOURCE_SYSTEM = "DAIKIN_V2";
 
     private final com.platform.iot.daikin.onboarding.DaikinDirectoryService directoryService;
+    private final com.platform.relation.RelationGovernanceGuard relationGuard;
     private final BizPendingDeviceMapper pendingMapper;
     private final BizDeviceProductMapper productMapper;
     private final BizProductPointTemplateMapper templateMapper;
@@ -594,6 +595,7 @@ public class DeviceOnboardingService {
             }
             return equipment;
         }
+        relationGuard.requireLegacyForStructuralCreate(request.buildingId());
         BizEquipmentType type = equipmentTypeMapper.selectById(product.getEquipmentTypeCode());
         if (type == null || !Integer.valueOf(1).equals(type.getStatus())) {
             throw error(409, VALIDATION_FAILED, "产品关联的设备类型不可用");
@@ -788,6 +790,7 @@ public class DeviceOnboardingService {
             validateExistingPoint(equipment, template, point);
             return point;
         }
+        relationGuard.requireLegacyForStructuralCreate(equipment.getBuildingId());
         requireNewPointFields(request);
         BizPointNamingRule rule = namingRuleMapper.selectById(request.namingRuleId());
         if (rule == null || !Integer.valueOf(1).equals(rule.getStatus())

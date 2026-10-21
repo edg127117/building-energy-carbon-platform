@@ -3,9 +3,11 @@ import {
   BarChart,
   LineChart,
   PieChart,
+  SankeyChart,
   type BarSeriesOption,
   type LineSeriesOption,
   type PieSeriesOption,
+  type SankeySeriesOption,
 } from 'echarts/charts'
 import {
   AriaComponent,
@@ -24,6 +26,7 @@ echarts.use([
   LineChart,
   BarChart,
   PieChart,
+  SankeyChart,
   GridComponent,
   LegendComponent,
   TooltipComponent,
@@ -35,6 +38,7 @@ export type ChartOption = ComposeOption<
   | LineSeriesOption
   | BarSeriesOption
   | PieSeriesOption
+  | SankeySeriesOption
   | GridComponentOption
   | LegendComponentOption
   | TooltipComponentOption

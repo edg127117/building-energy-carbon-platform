@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { classificationApi } from '../api/classification'
 import { emptyConfiguration, type ClassificationQueryRequest, type ClassificationQueryView, type ClassificationVersion } from '../models/classification'
+import { createBindingBatch } from '../models/classification-editor'
 import { useEnergyClassification } from './use-energy-classification'
 
 vi.mock('../api/classification', () => ({
   classificationApi: {
     listVersions: vi.fn(), getVersion: vi.fn(), createVersion: vi.fn(), saveVersion: vi.fn(), submitVersion: vi.fn(), withdrawVersion: vi.fn(), rejectVersion: vi.fn(), approveVersion: vi.fn(),
-    query: vi.fn(), previewReadings: vi.fn(), importReadings: vi.fn(), approveReadingBatch: vi.fn(), listReadings: vi.fn(),
+    query: vi.fn(), previewReadings: vi.fn(), importReadings: vi.fn(), getReadingBatch: vi.fn(), approveReadingBatch: vi.fn(), listReadings: vi.fn(),
   },
 }))
 vi.mock('@/shared/utils/request-error', () => ({ requestErrorMessage: () => '请求失败', requestErrorCode: () => null }))
@@ -25,6 +26,7 @@ describe('通用计量分类异步状态', () => {
     vi.mocked(classificationApi.query).mockResolvedValue(queryView('V-01'))
     vi.mocked(classificationApi.previewReadings).mockResolvedValue({ batchId: 'batch-1', status: 'PENDING_REVIEW', accepted: 0, issues: [] })
     vi.mocked(classificationApi.importReadings).mockResolvedValue({ batchId: 'batch-1', status: 'PENDING_REVIEW', accepted: 0, issues: [] })
+    vi.mocked(classificationApi.getReadingBatch).mockResolvedValue({ batchId: 'batch-1', buildingId: 'B-01', status: 'PENDING_REVIEW', revision: 7, createdBy: 1, count: 1 })
     vi.mocked(classificationApi.approveReadingBatch).mockResolvedValue({ batchId: 'batch-1', status: 'APPROVED', accepted: 0, issues: [] })
     vi.mocked(classificationApi.listReadings).mockResolvedValue([])
   })
@@ -75,6 +77,24 @@ describe('通用计量分类异步状态', () => {
     expect(workspace.selectedVersion.value?.revision).toBe(1)
   })
 
+  it('批量绑定随整份配置单次保存', async () => {
+    vi.mocked(classificationApi.listVersions).mockResolvedValueOnce([version('V-01')])
+    const workspace = useEnergyClassification()
+    await workspace.loadBuilding('B-01')
+    workspace.configuration.value.schemes.push({ code: 'USAGE', name: '用途', dimension: 'USAGE', mode: 'ADDITIVE' })
+    workspace.configuration.value.nodes.push({ schemeCode: 'USAGE', code: 'HVAC', name: '空调', parentCode: null })
+    workspace.configuration.value.bindings.push(...createBindingBatch({
+      schemeCode: 'USAGE', nodeCode: 'HVAC', objectType: 'EQUIPMENT',
+      objectIds: Array.from({ length: 100 }, (_, index) => `equipment-${index}`),
+      evidence: '来自设备清单',
+    }))
+
+    await workspace.saveSelectedVersion('批量保存绑定')
+
+    expect(classificationApi.saveVersion).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(classificationApi.saveVersion).mock.calls[0]?.[2].configuration.bindings).toHaveLength(100)
+  })
+
   it('查询响应在版本切换后清空，不能冒充新版本结果', async () => {
     vi.mocked(classificationApi.listVersions).mockResolvedValueOnce([version('V-01')])
     const delayed = deferred<ClassificationQueryView>()
@@ -92,6 +112,19 @@ describe('通用计量分类异步状态', () => {
     expect(workspace.selectedVersion.value?.versionId).toBe('V-02')
     expect(workspace.queryResult.value).toBeNull()
     expect(workspace.queryError.value).toBeNull()
+  })
+
+  it('导入批次审核先读取当前服务端修订号，不再硬编码初始修订号', async () => {
+    const workspace = useEnergyClassification()
+    await workspace.loadBuilding('B-01')
+    workspace.importedBatch.value = { batchId: 'batch-1', status: 'PENDING_REVIEW', accepted: 1, issues: [] }
+
+    await workspace.approveImportedBatch('独立审核原因')
+
+    expect(classificationApi.getReadingBatch).toHaveBeenCalledWith('B-01', 'batch-1')
+    expect(classificationApi.approveReadingBatch).toHaveBeenCalledWith('B-01', 'batch-1', {
+      expectedRevision: 7, reason: '独立审核原因', effectiveFrom: null,
+    })
   })
 })
 

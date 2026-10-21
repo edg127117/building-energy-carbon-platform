@@ -16,6 +16,23 @@ import java.util.List;
 @Repository
 /** 保存碳规则稳定身份和不可覆盖版本；状态迁移只修改审核与生效元数据。 */
 class CarbonRuleRepository {
+    List<CarbonRuleService.FormulaOption> formulaOptions() {
+        return jdbc.query("""
+                SELECT formula_version_id,formula_code,version_no,algorithm_code,result_basis,usage_nature,
+                  effective_from,effective_to FROM biz_carbon_formula_version WHERE status='ACTIVE'
+                ORDER BY formula_code,version_no DESC LIMIT 500
+                """, (r,n)->new CarbonRuleService.FormulaOption(r.getString(1),r.getString(2),r.getInt(3),
+                r.getString(4),r.getString(5),r.getString(6),r.getTimestamp(7).toLocalDateTime(),
+                r.getTimestamp(8)==null?null:r.getTimestamp(8).toLocalDateTime()));
+    }
+    List<CarbonRuleService.RoundingOption> roundingOptions() {
+        return jdbc.query("""
+                SELECT rounding_policy_version_id,policy_code,version_no,total_scale,intensity_scale,
+                  share_scale,rounding_mode FROM biz_carbon_rounding_policy_version WHERE status='ACTIVE'
+                ORDER BY policy_code,version_no DESC LIMIT 500
+                """, (r,n)->new CarbonRuleService.RoundingOption(r.getString(1),r.getString(2),r.getInt(3),
+                r.getInt(4),r.getInt(5),r.getInt(6),r.getString(7)));
+    }
     private final JdbcTemplate jdbc;
 
     CarbonRuleRepository(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc) {

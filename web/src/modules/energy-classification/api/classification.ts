@@ -4,6 +4,7 @@ import type {
   ClassificationQueryView,
   ClassificationVersion,
   CreateVersionRequest,
+  ReadingBatchView,
   ReadingImportRequest,
   ReadingImportView,
   ReadingView,
@@ -49,6 +50,9 @@ export const classificationApi = {
   },
   importReadings(buildingId: string, data: ReadingImportRequest) {
     return requestApi<ReadingImportView>({ method: 'post', url: `${buildingPath(buildingId)}/readings/import`, data })
+  },
+  getReadingBatch(buildingId: string, batchId: string, signal?: AbortSignal) {
+    return requestApi<ReadingBatchView>({ method: 'get', url: `${buildingPath(buildingId)}/readings/batches/${encoded(batchId)}`, signal })
   },
   approveReadingBatch(buildingId: string, batchId: string, data: TransitionRequest) {
     return requestApi<ReadingImportView>({ method: 'post', url: `${buildingPath(buildingId)}/readings/batches/${encoded(batchId)}/approve`, data })

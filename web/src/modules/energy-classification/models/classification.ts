@@ -174,6 +174,15 @@ export interface ReadingImportView {
   issues: ClassificationIssue[]
 }
 
+export interface ReadingBatchView {
+  batchId: string
+  buildingId: string
+  status: string
+  revision: number
+  createdBy: number
+  count: number
+}
+
 export interface ReadingView {
   factId: string
   batchId: string

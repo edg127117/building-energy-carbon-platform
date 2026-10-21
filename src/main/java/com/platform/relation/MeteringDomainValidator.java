@@ -114,9 +114,7 @@ public class MeteringDomainValidator {
         if (!version.buildingId().equals(node.buildingId())) {
             throw error(409, CROSS_BUILDING, "关系节点不属于当前建筑");
         }
-        if (!"ACTIVE".equals(node.status())
-                || !repository.objectExistsInBuilding(
-                node.nodeType(), node.businessObjectId(), version.buildingId())) {
+        if (!repository.usableNode(version,node)) {
             throw error(409, REFERENCE_CONFLICT, "关系节点对应业务对象不存在或已停用");
         }
         return node;

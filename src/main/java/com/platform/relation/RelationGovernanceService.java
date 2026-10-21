@@ -21,6 +21,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -59,6 +61,8 @@ public class RelationGovernanceService {
     private final BuildingScopeService buildingScopeService;
     private final RelationGovernanceProperties properties;
     private final MeteringDomainValidator meteringValidator;
+    private final RelationStagingRepository staging;
+    private final com.platform.iot.quality.MySqlDataPointConfigProvider pointConfig;
 
     public ModelView model(Long userId, Collection<String> roles, String buildingId) {
         requireReader(roles);
@@ -684,6 +688,8 @@ public class RelationGovernanceService {
             throw error(409, REVIEW_CONFLICT, "生效前快照校验失败");
         }
         requireNoBlockingIssues(validateInternal(version));
+        boolean stagedPublication=staging.unpublishedCount(versionId,"EQUIPMENT")+staging.unpublishedCount(versionId,"POINT")>0;
+        staging.publish(versionId);
         repository.activateProjection(version);
         if (repository.activateVersion(model, version, request.expectedModelRevision(), userId) != 1) {
             throw error(409, VERSION_CONFLICT, "生效指针切换发生并发冲突");
@@ -691,6 +697,9 @@ public class RelationGovernanceService {
         repository.insertAudit(version.buildingId(), userId, "ACTIVATE", "RELATION_VERSION", versionId,
                 versionId, review.requestId(), "APPROVED", "EFFECTIVE", request.reason().trim(),
                 "立即生效并更新兼容投影", key, requestHash);
+        if(stagedPublication)TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override public void afterCommit() { pointConfig.refreshAll(); }
+        });
         return toView(requireVersion(versionId, false));
     }
 
@@ -842,9 +851,9 @@ public class RelationGovernanceService {
         ModelRow model=requireModel(buildingId,false);VersionRow version=requireVersion(versionId,false);
         requireSameBuilding(buildingId,version.buildingId());
         if(nodeType!=null&&!NODE_TYPES.contains(nodeType))throw error(400,VALIDATION_FAILED,"节点类型不支持");
-        int bounded=Math.min(size,properties.getMaxPageSize());long total=repository.countNodeCatalogue(buildingId,nodeType);
+        int bounded=Math.min(size,properties.getMaxPageSize());long total=repository.countNodeCatalogue(versionId,buildingId,nodeType);
         return new NodeCatalogueView(metadata(model,version,0,page*(long)bounded<total),page,bounded,total,
-                "CURRENT_ASSET_LABELS",repository.nodeCatalogue(buildingId,nodeType,bounded,pageOffset(page,bounded)));
+                "CURRENT_ASSET_LABELS",repository.nodeCatalogue(versionId,buildingId,nodeType,bounded,pageOffset(page,bounded)));
     }
 
     public MeteringAssignmentsView historicalMeteringAssignments(
@@ -977,16 +986,16 @@ public class RelationGovernanceService {
         List<AssignmentRow> assignments = repository.listAssignments(version.versionId());
         long equipmentCount = assignments.stream().filter(v -> "EQUIPMENT".equals(v.objectType())).count();
         long pointCount = assignments.stream().filter(v -> "POINT".equals(v.objectType())).count();
-        if (equipmentCount != repository.activeEquipmentCount(version.buildingId())) {
+        if (equipmentCount != repository.activeEquipmentCount(version.buildingId())+staging.unpublishedCount(version.versionId(),"EQUIPMENT")) {
             issue(version, "ERROR", REFERENCE_CONFLICT, "EQUIPMENT", null, "设备归属快照未覆盖全部有效设备");
         }
-        if (pointCount != repository.activePointCount(version.buildingId())) {
+        if (pointCount != repository.activePointCount(version.buildingId())+staging.unpublishedCount(version.versionId(),"POINT")) {
             issue(version, "ERROR", REFERENCE_CONFLICT, "POINT", null, "测点归属快照未覆盖全部有效测点");
         }
         Map<String, AssignmentRow> equipment = new HashMap<>();
         for (AssignmentRow item : assignments) {
             if (!Objects.equals(version.buildingId(), item.buildingId())
-                    || !repository.objectExistsInBuilding(item.objectType(), item.objectId(), version.buildingId())) {
+                    || !repository.objectExistsInVersion(version.versionId(),item.objectType(),item.objectId(),version.buildingId())) {
                 issue(version, "ERROR", CROSS_BUILDING, item.objectType(), item.objectId(), "归属对象不存在或跨建筑");
                 continue;
             }
@@ -1043,6 +1052,10 @@ public class RelationGovernanceService {
             }
         }
         detectMeterCycles(version, structureByPoint);
+        try { staging.validateDefinitions(version.versionId()); }
+        catch(com.platform.framework.exception.BusinessException exception) {
+            issue(version,"ERROR",REFERENCE_CONFLICT,"STAGED_ASSET",null,exception.getMessage());
+        }
         for (MeteringAssignmentRow assignment : repository.listMeteringAssignments(version.versionId())) {
             if ("PENDING_EXPERT".equals(assignment.allocationStatus())) {
                 issue(version, "PENDING_EXPERT", PENDING_EXPERT, "METERING_ASSIGNMENT",
@@ -1124,6 +1137,7 @@ public class RelationGovernanceService {
 
     private List<String> snapshotItems(String versionId) {
         List<String> items = new ArrayList<>();
+        staging.list(versionId).forEach(v->items.add("STAGED_ASSET:"+v.type()+":"+v.object()+":code="+v.code()+":name="+v.name()+":definition="+v.hash()));
         repository.listSpaceItems(versionId).forEach(v -> items.add("SPACE:" + v.spaceId()
                 + ":parent=" + safe(v.parentSpaceId()) + ":sort=" + v.sortOrder()));
         repository.listAssignments(versionId).forEach(v -> items.add("ASSET:" + v.objectType()
@@ -1251,15 +1265,14 @@ public class RelationGovernanceService {
         NodeRow node = repository.findNode(nodeId)
                 .orElseThrow(() -> error(404, NOT_FOUND, "关系节点不存在"));
         requireSameBuilding(version.buildingId(), node.buildingId());
-        if (!"ACTIVE".equals(node.status())
-                || !repository.objectExistsInBuilding(node.nodeType(), node.businessObjectId(), version.buildingId())) {
+        if (!repository.usableNode(version,node)) {
             throw error(409, REFERENCE_CONFLICT, "关系节点已停用或业务对象不存在");
         }
         return node;
     }
 
     private void requireObject(VersionRow version, String nodeType, String objectId) {
-        if (!repository.objectExistsInBuilding(nodeType, objectId, version.buildingId())) {
+        if (!repository.objectExistsInVersion(version.versionId(),nodeType,objectId,version.buildingId())) {
             throw error(409, CROSS_BUILDING, "对象不存在或不属于版本建筑");
         }
     }
@@ -1273,7 +1286,7 @@ public class RelationGovernanceService {
     }
 
     private void checkReference(VersionRow version, String type, String id, String message) {
-        if (!repository.objectExistsInBuilding(type, id, version.buildingId())) {
+        if (!repository.objectExistsInVersion(version.versionId(),type,id,version.buildingId())) {
             issue(version, "ERROR", CROSS_BUILDING, type, id, message);
         }
     }

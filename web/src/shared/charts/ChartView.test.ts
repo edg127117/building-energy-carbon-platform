@@ -19,6 +19,7 @@ vi.mock('echarts/charts', () => ({
   LineChart: {},
   BarChart: {},
   PieChart: {},
+  SankeyChart: {},
 }))
 vi.mock('echarts/components', () => ({
   AriaComponent: {},
@@ -143,7 +144,7 @@ describe('ChartView', () => {
   it('registers the requested SVG chart modules and initializes only after a sized container exists', () => {
     const wrapper = mountChart()
 
-    expect(registeredModules).toHaveLength(8)
+    expect(registeredModules).toHaveLength(9)
     expect(mocks.init).toHaveBeenCalledWith(
       wrapper.get('[data-test="chart-canvas"]').element,
       undefined,

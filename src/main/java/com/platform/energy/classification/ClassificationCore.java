@@ -22,7 +22,20 @@ public class ClassificationCore {
     public record Computation(BigDecimal total, BigDecimal assigned, BigDecimal unallocated,
                               BigDecimal residual, String status, String nature, boolean additive,
                               List<NodeResult> nodes, List<Balance> balances, List<Issue> issues,
-                              List<String> evidenceIds) {}
+                              List<String> evidenceIds, List<SourceSlice> sourceSlices) {}
+    /** 同一计量树的互斥组成；分类仅投影归属，不另生成一份活动量。 */
+    public record SourceSlice(String pointId, BigDecimal quantity, Set<String> ancestors,
+                              boolean residual, List<String> evidenceIds,
+                              Map<String, Set<String>> classifications) {
+        public SourceSlice {
+            // 集合会进入冻结证据摘要，必须稳定排序，不能依赖JVM的Set迭代顺序。
+            ancestors=Collections.unmodifiableSet(new TreeSet<>(ancestors));
+            evidenceIds=evidenceIds.stream().distinct().sorted().toList();
+            Map<String,Set<String>> ordered=new TreeMap<>();
+            classifications.forEach((scheme,nodes)->ordered.put(scheme,Collections.unmodifiableSet(new TreeSet<>(nodes))));
+            classifications=Collections.unmodifiableMap(ordered);
+        }
+    }
     private record Atom(String pointId, BigDecimal quantity, Set<String> ancestors,
                         boolean residual, List<String> evidenceIds) {}
 
@@ -187,7 +200,14 @@ public class ClassificationCore {
         return new Computation(totalKnown && !unknownFilter ? total : null, unknownFilter ? null : assignedTotal,
                 unknownFilter ? null : unallocated, atoms.stream().filter(Atom::residual).map(Atom::quantity).reduce(BigDecimal.ZERO, BigDecimal::add),
                 status, nature, additive, results, balances, issues,
-                atoms.stream().flatMap(a -> a.evidenceIds().stream()).distinct().toList());
+                atoms.stream().flatMap(a -> a.evidenceIds().stream()).distinct().toList(),
+                atoms.stream().map(a -> {
+                    Map<String,Set<String>> assignments=new LinkedHashMap<>();
+                    for(Scheme s:config.schemes()) assignments.put(s.code(),Set.copyOf(
+                            assigned(config,s.code(),a,input.resolvedBindingPoints(),nodeMap)));
+                    return new SourceSlice(a.pointId(),a.quantity(),a.ancestors(),a.residual(),
+                            a.evidenceIds(),Map.copyOf(assignments));
+                }).toList());
     }
 
     private void split(Meter meter, Map<String, Meter> meters, Map<String, Fact> facts, List<Atom> atoms,

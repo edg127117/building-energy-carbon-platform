@@ -97,7 +97,7 @@ class CarbonRecalculationRepository {
     List<CalculationBatch> findImpactedResults(DependencyChange change, int limit) {
         return jdbc.query("""
                 SELECT b.* FROM biz_carbon_calculation_batch b
-                WHERE b.period_type='YEAR'
+                WHERE b.period_type IN ('MONTH','QUARTER','YEAR')
                   AND b.status IN ('COMPLETED_COMPLETE','COMPLETED_INCOMPLETE')
                   AND b.publication_status IN ('DIRECT','PUBLISHED')
                   AND ((SELECT requested_result_nature FROM biz_carbon_dependency_change
@@ -212,8 +212,7 @@ class CarbonRecalculationRepository {
     }
 
     int insertItem(String batchId, CalculationBatch oldResult, int accountingYear) {
-        String activeLock = oldResult.buildingId() + '|' + accountingYear + '|'
-                + oldResult.resultNature();
+        String activeLock = activeLockKey(oldResult, accountingYear);
         return jdbc.update("""
                 INSERT INTO biz_carbon_recalculation_item
                 (recalculation_item_id,recalculation_batch_id,building_id,accounting_year,
@@ -224,15 +223,23 @@ class CarbonRecalculationRepository {
                 oldResult.batchId(), activeLock, timestamp(LocalDateTime.now()));
     }
 
-    String findActiveBatchForItem(String buildingId, int accountingYear, ResultNature nature) {
+    String findActiveBatchForItem(CalculationBatch result, int accountingYear) {
         return one("""
                 SELECT i.recalculation_batch_id FROM biz_carbon_recalculation_item i
-                JOIN biz_carbon_recalculation_batch b
-                  ON b.recalculation_batch_id=i.recalculation_batch_id
-                WHERE i.building_id=? AND i.accounting_year=? AND b.result_nature=?
-                  AND i.active_lock_key IS NOT NULL
+                WHERE i.active_lock_key=?
                 LIMIT 1
-                """, (rs, row) -> rs.getString(1), buildingId, accountingYear, nature.name());
+                """, (rs, row) -> rs.getString(1), activeLockKey(result, accountingYear));
+    }
+
+    /** 年报保留既有年度占用；月/季报告使用定长精确期间键，避免越过字段长度或同年互相阻塞。 */
+    static String activeLockKey(CalculationBatch result, int accountingYear) {
+        if (result.periodType() == PeriodType.YEAR) {
+            return result.buildingId() + '|' + accountingYear + '|' + result.resultNature();
+        }
+        return "PERIOD:" + CarbonCalculationCore.sha256(result.buildingId() + '|'
+                + result.periodType() + '|' + result.periodStart() + '|'
+                + result.periodEnd() + '|' + result.timezoneId() + '|'
+                + result.resultNature());
     }
 
     void refreshBatchItemCount(String batchId) {
@@ -302,6 +309,15 @@ class CarbonRecalculationRepository {
     RecalculationBatch findBatch(String batchId) {
         return one("SELECT * FROM biz_carbon_recalculation_batch WHERE recalculation_batch_id=?",
                 CarbonRecalculationRepository::batch, batchId);
+    }
+
+    List<RecalculationBatch> listForBuilding(String buildingId, int limit) {
+        return jdbc.query("""
+                SELECT b.* FROM biz_carbon_recalculation_batch b
+                WHERE EXISTS (SELECT 1 FROM biz_carbon_recalculation_item i
+                    WHERE i.recalculation_batch_id=b.recalculation_batch_id AND i.building_id=?)
+                ORDER BY b.created_at DESC,b.recalculation_batch_id DESC LIMIT ?
+                """, CarbonRecalculationRepository::batch, buildingId, limit);
     }
 
     /** 调用方须在同一短事务内保持批次行锁至写项/结果结束，禁止验完 token 后另开事务写入。 */

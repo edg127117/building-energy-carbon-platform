@@ -37,7 +37,7 @@ public class CarbonCalculationCore {
 
     private FactorMatch match(ActivitySegment activity, String buildingRegionCode,
                               ResultNature nature, List<FactorVersion> candidates, boolean locked) {
-        FactorCategory category = category(activity.energyItemCode());
+        FactorCategory category = category(activity);
         String provinceCode = ElectricityGridRegions.provinceCode(buildingRegionCode);
         String gridRegionCode = ElectricityGridRegions.gridRegionCode(buildingRegionCode);
         List<FactorVersion> filtered = candidates.stream()
@@ -341,7 +341,16 @@ public class CarbonCalculationCore {
         };
     }
 
-    private static FactorCategory category(String energyItemCode) {
+    private static FactorCategory category(ActivitySegment activity) {
+        var trace=activity.traceEvidence();
+        String pathway=trace==null?"":trace.path("projectEnergyPathway").asText();
+        if(!pathway.isEmpty())return switch(pathway) {
+            case "PURCHASED_ELECTRICITY" -> FactorCategory.PURCHASED_ELECTRICITY_LOCATION;
+            case "PURCHASED_HEAT" -> FactorCategory.PURCHASED_HEAT;
+            case "STATIONARY_COMBUSTION" -> FactorCategory.STATIONARY_COMBUSTION;
+            default -> throw error(409,FACTOR_CONFLICT,"项目能源路径尚未支持核算");
+        };
+        String energyItemCode=activity.energyItemCode();
         return switch (energyItemCode) {
             case "ELECTRICITY" -> FactorCategory.PURCHASED_ELECTRICITY_LOCATION;
             case "HEAT" -> FactorCategory.PURCHASED_HEAT;

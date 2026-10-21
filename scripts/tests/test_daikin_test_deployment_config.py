@@ -90,6 +90,22 @@ class TestDeploymentControlConfig(unittest.TestCase):
         with self.assertRaises(SystemExit):
             config_tool.verify({**config_tool.TEST_SETTINGS, "AUDIT_ENVIRONMENT_MODE": "PRODUCTION"})
 
+    def test_preserved_mode_keeps_bytes_and_existing_runtime_including_missing_settings(self):
+        runtime = {"AUDIT_ENVIRONMENT_MODE": "TEST", "DAIKIN_CONTROL_ENABLED": "false"}
+        config_tool.preserve(self.config, self.backup, runtime)
+        self.assertEqual(self.config.read_bytes(), self.original)
+        config_tool.verify_preserved(self.config, self.backup, runtime)
+        with self.assertRaises(SystemExit):
+            config_tool.verify_preserved(self.config, self.backup, {**runtime, "DAIKIN_CONTROL_ENABLED": "true"})
+        self.config.write_bytes(b"changed")
+        with self.assertRaises(SystemExit):
+            config_tool.verify_preserved(self.config, self.backup, runtime)
+
+    def test_preserved_mode_rejects_production_before_creating_backup(self):
+        with self.assertRaises(SystemExit):
+            config_tool.preserve(self.config, self.backup, {"AUDIT_ENVIRONMENT_MODE": "PRODUCTION"})
+        self.assertFalse(self.backup.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

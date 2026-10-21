@@ -139,6 +139,13 @@ public final class EnergyPeriodContracts {
             List<String> exceptionPolicyVersions, String evidenceHash,
             String supersedesSnapshotId, String sourceBatchId, long lockedBy,
             LocalDateTime lockedAt) {
+        @com.fasterxml.jackson.annotation.JsonProperty
+        public String nativeQuantityStatus() {
+            return java.util.Set.of("LOCKED_COMPLETE","LOCKED_NATIVE_COMPLETE").contains(status)?"COMPLETE"
+                    :"LOCKED_WITH_EXCEPTIONS".equals(status)?"COMPLETE_WITH_EXCEPTIONS":"INCOMPLETE";
+        }
+        @com.fasterxml.jackson.annotation.JsonProperty
+        public String tceStatus() {return tce==null?"NOT_CALCULATED":"COMPLETE".equals(nativeQuantityStatus())?"COMPLETE":"INCOMPLETE";}
     }
 
     public record RecalculationBatchView(

@@ -75,6 +75,16 @@ public class EnergyBoundarySummaryRepository {
                 """, versionId);
     }
 
+    public List<BoundaryPolicyVersion> listPolicies(String buildingId, int limit) {
+        return jdbc.query("""
+                SELECT v.*,p.building_id,p.metering_boundary_id,p.energy_item_code
+                FROM biz_energy_boundary_summary_policy_version v
+                JOIN biz_energy_boundary_summary_policy p ON p.policy_id=v.policy_id
+                WHERE p.building_id=?
+                ORDER BY v.created_at DESC,v.version_id DESC LIMIT ?
+                """, this::row, buildingId, limit);
+    }
+
     public BoundaryPolicyVersion findApproved(
             String buildingId, String boundaryId, String energyItemCode,
             LocalDateTime effectiveAt) {

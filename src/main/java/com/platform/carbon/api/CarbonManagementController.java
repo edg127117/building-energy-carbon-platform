@@ -52,6 +52,11 @@ public class CarbonManagementController {
     private final CarbonCalculationService calculationService;
     private final CarbonRecalculationService recalculationService;
 
+    @GetMapping("/rule-options")
+    public Result<CarbonRuleService.RuleOptions> ruleOptions(Authentication authentication) {
+        return Result.success(ruleService.options(SecurityUser.userId(authentication), SecurityUser.roles(authentication)));
+    }
+
     @PostMapping("/factor-sources")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<FactorSourceView> createSource(Authentication authentication,
@@ -187,6 +192,16 @@ public class CarbonManagementController {
             @Valid @RequestBody ManualRecalculationRequest request) {
         return Result.success(recalculationService.submitManual(
                 SecurityUser.userId(authentication), SecurityUser.roles(authentication), request));
+    }
+
+    @GetMapping("/recalculations")
+    public Result<List<RecalculationBatchView>> recalculations(
+            Authentication authentication, @RequestParam String buildingId) {
+        long userId = SecurityUser.userId(authentication);
+        var roles = SecurityUser.roles(authentication);
+        return Result.success(recalculationService.listForBuilding(userId, roles, buildingId)
+                .stream().map(batch -> recalculation(batch,
+                        recalculationService.items(userId, roles, batch.batchId()))).toList());
     }
 
     @GetMapping("/recalculations/{batchId}")

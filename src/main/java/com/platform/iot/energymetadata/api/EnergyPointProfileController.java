@@ -43,6 +43,12 @@ import static com.platform.iot.energymetadata.api.EnergyPointProfileContracts.*;
 public class EnergyPointProfileController {
     private final EnergyPointProfileService service;
 
+    @PostMapping("/v1/energy-point-profiles/batch")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<BatchView> batch(Authentication authentication, @Valid @RequestBody BatchRequest request) {
+        return Result.success(service.batch(SecurityUser.userId(authentication),SecurityUser.roles(authentication),request));
+    }
+
     @GetMapping("/v1/energy-point-profiles")
     public Result<PageResponse<ProfileView>> list(
             Authentication authentication,

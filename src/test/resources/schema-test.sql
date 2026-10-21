@@ -1590,7 +1590,7 @@ CREATE TABLE biz_relation_node (
   CONSTRAINT uk_relation_node_building_identity UNIQUE (building_id, node_id),
   CONSTRAINT chk_relation_node_type CHECK
     (node_type IN ('SPACE','SYSTEM','EQUIPMENT','POINT','METERING_BOUNDARY')),
-  CONSTRAINT chk_relation_node_status CHECK (status IN ('ACTIVE','RETIRED'))
+  CONSTRAINT chk_relation_node_status CHECK (status IN ('ACTIVE','RETIRED','STAGED'))
 );
 
 CREATE TABLE biz_space_parent_version_item (
@@ -1610,6 +1610,7 @@ CREATE TABLE biz_asset_assignment_version_item (
   space_id VARCHAR(32),
   system_group_id VARCHAR(32),
   equipment_id VARCHAR(32),
+  staged_equipment_id VARCHAR(32),
   source_type VARCHAR(24) NOT NULL,
   PRIMARY KEY (version_id, object_type, object_id),
   CONSTRAINT chk_relation_assignment_object CHECK (object_type IN ('EQUIPMENT','POINT')),

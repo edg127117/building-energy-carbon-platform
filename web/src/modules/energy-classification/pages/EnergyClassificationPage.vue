@@ -11,11 +11,21 @@ import { useClassificationBuildings } from '../composables/use-classification-bu
 import { useRelationGovernanceOptions } from '../composables/use-relation-governance-options'
 import IssueList from '../components/IssueList.vue'
 import RelationGovernanceEditor from '../components/RelationGovernanceEditor.vue'
+import BindingBatchEditor from '../components/BindingBatchEditor.vue'
+import CarbonProjectPanel from '../components/CarbonProjectPanel.vue'
+import CarbonResultsPanel from '../components/CarbonResultsPanel.vue'
+import BoundarySummaryPolicyPanel from '../components/BoundarySummaryPolicyPanel.vue'
+import CarbonFactorPanel from '../components/CarbonFactorPanel.vue'
+import EnergyProfileBatchPanel from '../components/EnergyProfileBatchPanel.vue'
+import ReadingWorkbookPanel from '../components/ReadingWorkbookPanel.vue'
+import ReadingBatchReviewPanel from '../components/ReadingBatchReviewPanel.vue'
+import ManualPeriodPanel from '../components/ManualPeriodPanel.vue'
 import {
-  mapCsvReadings, parseCsv, readingCsvFields, validateManualReadings,
+  cloneConfiguration, mapCsvReadings, parseCsv, readingCsvFields, validateManualReadings,
   type ClassificationDimension, type ClassificationMode,
-  type ClassificationNode, type ClassificationObjectType, type CsvRecord, type ReadingCsvField, type ReadingCsvMapping,
+  type ClassificationNode, type ClassificationObjectType, type CsvRecord, type ReadingCsvField, type ReadingCsvMapping, type ReadingImportView,
 } from '../models/classification'
+import { localDateTimeToUtc, mergeBindingBatch, nextClassificationNodeCode, parentOptionsForNode, updateBindingBatch } from '../models/classification-editor'
 
 interface ClassificationTreeNode {
   key: string
@@ -33,6 +43,15 @@ const actionReason = ref('')
 const copiedFromVersionId = ref<string | null>(null)
 const effectiveFrom = ref('')
 const localError = ref('')
+const localNotice = ref('')
+const projectDirty = ref(false)
+const relationDirty = ref(false)
+const factorDirty = ref(false)
+const profileDirty = ref(false)
+const workbookDirty = ref(false)
+const manualPeriodDirty = ref(false)
+const boundarySummaryPolicyDirty = ref(false)
+const carbonResultsDirty = ref(false)
 const queryForm = ref({ startInclusive: '', endExclusive: '', periodType: '', energyItemCode: '', unit: '', schemeCode: '' })
 const queryFilters = ref<Array<{ schemeCode: string; nodeCode: string }>>([])
 const readingRange = ref({ startInclusive: '', endExclusive: '' })
@@ -43,6 +62,7 @@ const csvMapping = ref<ReadingCsvMapping>(emptyMapping())
 const importReason = ref('')
 const importKey = ref(nextImportKey())
 const previewSignature = ref('')
+const readingReviewBatchId = ref('')
 
 const dimensionOptions: ClassificationDimension[] = ['USAGE', 'DEPARTMENT', 'CIRCUIT', 'REGION', 'SPACE']
 const modeOptions: ClassificationMode[] = ['ADDITIVE', 'OVERLAPPING']
@@ -53,6 +73,7 @@ const boundaryModes = ['MAIN_METER_TOTAL', 'SUBMETER_SUM', 'INDEPENDENT_METER_SU
 const knownStatuses = new Set(['CONFIRMED', 'PENDING_EXPERT', 'DRAFT', 'SUBMITTED', 'PENDING_REVIEW', 'APPROVED', 'EFFECTIVE', 'REJECTED', 'ACTIVE', 'SUPERSEDED', 'WITHDRAWN'])
 
 const configurationEditable = computed(() => workspace.selectedVersion.value?.status === 'DRAFT')
+const configurationDirty = computed(() => configurationEditable.value && JSON.stringify(workspace.configuration.value) !== JSON.stringify(workspace.selectedVersion.value?.configuration))
 const schemeOptions = computed(() => workspace.configuration.value.schemes.map(scheme => ({ value: scheme.code, label: scheme.code || t('common.missing') })))
 const relationVersionOptions = computed(() => relationWorkspace.formalVersions.value.map(version => ({
   value: version.versionId,
@@ -63,6 +84,13 @@ const boundaryOptions = computed(() => relationWorkspace.boundaries.value.map(bo
   label: `${boundary.boundaryCode} · ${boundary.boundaryName}`,
 })))
 const pointObjectOptions = computed(() => bindingObjectOptions('POINT'))
+const carbonProjectPointOptions = computed(() => workspace.configuration.value.bindings.flatMap((binding, index) => {
+  const values = [
+    ...(binding.objectType === 'POINT' && binding.objectId.trim() ? [{ value: binding.objectId, label: binding.objectId }] : []),
+    ...(binding.meterPointId?.trim() ? [{ value: binding.meterPointId, label: binding.meterPointId }] : []),
+  ]
+  return values.map((item, optionIndex) => ({ ...item, key: `${index}:${optionIndex}` }))
+}))
 const selectedVersionId = computed(() => workspace.selectedVersion.value?.versionId ?? '')
 const mappedReadings = computed(() => mapCsvReadings(csvRows.value, csvMapping.value))
 const importSignature = computed(() => JSON.stringify({ readings: mappedReadings.value, reason: importReason.value.trim(), key: importKey.value.trim() }))
@@ -75,6 +103,11 @@ const querySummary = computed(() => {
     { key: 'unallocated', label: t('energyClassification.analysis.unallocated'), value: result.unallocated }, { key: 'residual', label: t('energyClassification.analysis.residual'), value: result.residual },
   ]
 })
+const configurationProgress = computed(() => ({
+  schemes: workspace.configuration.value.schemes.length,
+  nodes: workspace.configuration.value.nodes.length,
+  bindings: workspace.configuration.value.bindings.length,
+}))
 const schemeTrees = computed(() => workspace.configuration.value.schemes.map(scheme => ({
   key: scheme.code,
   label: scheme.name ? `${scheme.code} · ${scheme.name}` : scheme.code || t('common.missing'),
@@ -95,12 +128,18 @@ watch(
 onMounted(() => { void buildings.search() })
 
 function loadBuilding() {
+  if (projectDirty.value || relationDirty.value || factorDirty.value || profileDirty.value || workbookDirty.value || manualPeriodDirty.value
+    || boundarySummaryPolicyDirty.value || carbonResultsDirty.value || configurationDirty.value) {
+    localError.value = t('energyClassification.validation.unsaved')
+    return
+  }
   if (!buildingInput.value) {
     localError.value = t('energyClassification.validation.building')
     return
   }
   localError.value = ''
   copiedFromVersionId.value = null
+  readingReviewBatchId.value = ''
   void workspace.loadBuilding(buildingInput.value)
   void relationWorkspace.loadBuilding(buildingInput.value)
 }
@@ -109,7 +148,15 @@ function searchBuildings(keyword: string) {
   void buildings.search(1, keyword)
 }
 
+function navigateProjectGuide(domain: string) {
+  if (domain === 'RELATION' || domain === 'CLASSIFICATION') activeTab.value = 'configuration'
+  else if (domain === 'PROJECT') activeTab.value = 'carbonProject'
+  else if (domain === 'FACTORS') activeTab.value = 'carbonFactors'
+  else if (domain === 'SEALED_SOURCE') activeTab.value = 'readings'
+}
+
 function selectVersion(versionId: string) {
+  if (configurationDirty.value) { localError.value = t('energyClassification.validation.unsaved'); return }
   localError.value = ''
   void workspace.selectVersion(versionId)
 }
@@ -119,18 +166,29 @@ function selectRelationVersion(versionId: string | null | undefined) {
 }
 
 function createVersion() {
+  if (configurationDirty.value) { localError.value = t('energyClassification.validation.unsaved'); return }
   if (!ensureBuilding() || !ensureReason(actionReason.value)) return
   void workspace.createVersion({ reason: actionReason.value.trim(), copiedFromVersionId: copiedFromVersionId.value })
 }
 
 function saveVersion() {
   if (!ensureVersion() || !ensureReason(actionReason.value)) return
-  void workspace.saveSelectedVersion(actionReason.value)
+  const savedBuildingId = workspace.buildingId.value
+  const savedVersionId = workspace.selectedVersion.value?.versionId
+  void workspace.saveSelectedVersion(actionReason.value).then(result => {
+    if (result && workspace.buildingId.value === savedBuildingId && workspace.selectedVersion.value?.versionId === savedVersionId) localNotice.value = ''
+  })
 }
 
 function submitVersion() {
+  if (configurationDirty.value) { localError.value = t('energyClassification.validation.unsaved'); return }
   if (!ensureVersion() || !ensureReason(actionReason.value)) return
   void workspace.submitSelectedVersion(actionReason.value)
+}
+
+function restoreDraft() {
+  workspace.configuration.value = cloneConfiguration(workspace.selectedVersion.value?.configuration)
+  localNotice.value = ''
 }
 
 function withdrawVersion() {
@@ -145,11 +203,12 @@ function rejectVersion() {
 
 function approveVersion() {
   if (!ensureVersion() || !ensureReason(actionReason.value)) return
-  if (!effectiveFrom.value.trim() || !effectiveFrom.value.trim().endsWith('Z')) {
+  const effectiveFromUtc = localDateTimeToUtc(effectiveFrom.value)
+  if (!effectiveFromUtc) {
     localError.value = t('energyClassification.validation.effectiveFrom')
     return
   }
-  void workspace.approveSelectedVersion(actionReason.value, effectiveFrom.value)
+  void workspace.approveSelectedVersion(actionReason.value, effectiveFromUtc)
 }
 
 function addScheme() {
@@ -157,7 +216,7 @@ function addScheme() {
 }
 
 function addNode() {
-  workspace.configuration.value.nodes.push({ schemeCode: '', code: '', name: '', parentCode: null })
+  workspace.configuration.value.nodes.push({ schemeCode: '', code: nextClassificationNodeCode(workspace.configuration.value.nodes), name: '', parentCode: null })
 }
 
 function addBinding() {
@@ -165,6 +224,25 @@ function addBinding() {
     schemeCode: '', nodeCode: '', objectType: 'POINT', objectId: '', meterPointId: null,
     semantics: 'DESCRIPTION', status: 'PENDING_EXPERT', evidence: null,
   })
+}
+
+function addBindingBatch(bindings: import('../models/classification').ClassificationBinding[]) {
+  if (!configurationEditable.value || !bindings.length) return
+  const added = mergeBindingBatch(workspace.configuration.value.bindings, bindings)
+  workspace.configuration.value.bindings.push(...added)
+  localNotice.value = t('energyClassification.binding.batchAdded', { count: added.length })
+}
+
+function updateExistingBindings(bindings: import('../models/classification').ClassificationBinding[]) {
+  if (!configurationEditable.value || !bindings.length) return
+  const result = updateBindingBatch(workspace.configuration.value.bindings, bindings)
+  workspace.configuration.value.bindings = result.bindings
+  localNotice.value = t('energyClassification.binding.batchUpdated', { count: result.matched })
+}
+
+function parentOptions(node: Pick<ClassificationNode, 'schemeCode' | 'code'>) {
+  return parentOptionsForNode(node, workspace.configuration.value.nodes)
+    .map(item => ({ value: item.code, label: item.name ? `${item.code} · ${item.name}` : item.code }))
 }
 
 function addBoundaryRule() {
@@ -226,13 +304,15 @@ function bindingObjectOptions(objectType: ClassificationObjectType) {
 function runQuery() {
   if (!ensureBuilding() || !ensureVersion()) return
   const form = queryForm.value
-  if (!form.startInclusive.trim() || !form.endExclusive.trim() || !form.periodType.trim() || !form.energyItemCode.trim() || !form.unit.trim() || !form.schemeCode.trim() || queryFilters.value.length > 5 || queryFilters.value.some(filter => !filter.schemeCode.trim() || !filter.nodeCode.trim())) {
+  const startInclusive = localDateTimeToUtc(form.startInclusive)
+  const endExclusive = localDateTimeToUtc(form.endExclusive)
+  if (!startInclusive || !endExclusive || !form.periodType.trim() || !form.energyItemCode.trim() || !form.unit.trim() || !form.schemeCode.trim() || queryFilters.value.length > 5 || queryFilters.value.some(filter => !filter.schemeCode.trim() || !filter.nodeCode.trim())) {
     localError.value = t('energyClassification.validation.query')
     return
   }
   localError.value = ''
   void workspace.runQuery({
-    startInclusive: form.startInclusive.trim(), endExclusive: form.endExclusive.trim(), periodType: form.periodType.trim(),
+    startInclusive, endExclusive, periodType: form.periodType.trim(),
     energyItemCode: form.energyItemCode.trim(), unit: form.unit.trim(), schemeCode: form.schemeCode.trim(),
     versionId: workspace.selectedVersion.value!.versionId,
     filters: queryFilters.value.map(filter => ({ schemeCode: filter.schemeCode.trim(), nodeCode: filter.nodeCode.trim() })),
@@ -291,20 +371,39 @@ function importReadings() {
   void workspace.importReadings(readingImportRequest())
 }
 
-function approveImportedBatch() {
-  if (!workspace.importedBatch.value || !ensureReason(importReason.value)) return
+function receiveWorkbookImport(batch: ReadingImportView) {
+  workspace.importedBatch.value = batch
+}
+
+function openReadingBatchReview(batchId: string) {
+  const value = batchId.trim()
+  if (!value || !ensureBuilding()) return
+  readingReviewBatchId.value = value
+}
+
+function refreshReadingsAfterBatchReview() {
+  const startInclusive = localDateTimeToUtc(readingRange.value.startInclusive)
+  const endExclusive = localDateTimeToUtc(readingRange.value.endExclusive)
+  if (!startInclusive || !endExclusive) return
   localError.value = ''
-  void workspace.approveImportedBatch(importReason.value)
+  void workspace.loadReadings({ startInclusive, endExclusive })
+}
+
+function handleReadingBatchApproved(result: ReadingImportView) {
+  if (workspace.importedBatch.value?.batchId === result.batchId) workspace.importedBatch.value = result
+  refreshReadingsAfterBatchReview()
 }
 
 function loadReadings() {
   if (!ensureBuilding()) return
-  if (!readingRange.value.startInclusive.trim() || !readingRange.value.endExclusive.trim()) {
+  const startInclusive = localDateTimeToUtc(readingRange.value.startInclusive)
+  const endExclusive = localDateTimeToUtc(readingRange.value.endExclusive)
+  if (!startInclusive || !endExclusive) {
     localError.value = t('energyClassification.validation.query')
     return
   }
   localError.value = ''
-  void workspace.loadReadings({ startInclusive: readingRange.value.startInclusive.trim(), endExclusive: readingRange.value.endExclusive.trim() })
+  void workspace.loadReadings({ startInclusive, endExclusive })
 }
 
 function downloadTemplate() {
@@ -410,6 +509,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
         </ElButton>
       </ElForm>
       <ElAlert v-if="localError" :title="localError" type="error" :closable="false" show-icon />
+      <ElAlert v-if="localNotice" :title="localNotice" type="success" show-icon @close="localNotice = ''" />
       <ElAlert v-if="buildings.error.value" :title="buildings.error.value" type="error" :closable="false" show-icon />
       <ElAlert v-if="workspace.versionsError.value" :title="workspace.versionsError.value.message" type="error" :closable="false" show-icon />
     </ElCard>
@@ -430,7 +530,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
             <template v-else>
               <div class="version-controls">
                 <ElFormItem :label="t('energyClassification.version.select')" class="version-selector">
-                  <ElSelect :model-value="selectedVersionId" clearable filterable :placeholder="t('energyClassification.placeholders.select')" :loading="workspace.versionLoading.value" :disabled="workspace.commandLoading.value" @update:model-value="selectVersion">
+                  <ElSelect :model-value="selectedVersionId" clearable filterable :placeholder="t('energyClassification.placeholders.select')" :loading="workspace.versionLoading.value" :disabled="configurationDirty || workspace.commandLoading.value" @update:model-value="selectVersion">
                     <ElOption v-for="version in workspace.versions.value" :key="version.versionId" :value="version.versionId" :label="`${t('energyClassification.version.number')} ${version.versionNo} · ${statusText(version.status)}`" />
                   </ElSelect>
                 </ElFormItem>
@@ -458,6 +558,13 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
 
           <ElCard shadow="never">
             <template #header><div class="card-heading"><div><h2>{{ t('energyClassification.configuration.title') }}</h2></div></div></template>
+            <ElAlert :title="t('energyClassification.configuration.progressHint')" type="info" :closable="false" show-icon />
+            <ElButton v-if="configurationDirty" :disabled="workspace.commandLoading.value" @click="restoreDraft">{{ t('energyClassification.actions.restoreDraft') }}</ElButton>
+            <div class="configuration-progress" :aria-label="t('energyClassification.configuration.localProgress')">
+              <span>{{ t('energyClassification.configuration.progressSchemes', { count: configurationProgress.schemes }) }}</span>
+              <span>{{ t('energyClassification.configuration.progressNodes', { count: configurationProgress.nodes }) }}</span>
+              <span>{{ t('energyClassification.configuration.progressBindings', { count: configurationProgress.bindings }) }}</span>
+            </div>
             <ElAlert v-if="workspace.selectedVersion.value && !configurationEditable" :title="t('energyClassification.configuration.frozen')" type="info" :closable="false" show-icon />
             <ElForm label-position="top" class="configuration-form">
               <div class="form-grid">
@@ -470,7 +577,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
                   <ElInput v-model="actionReason" :placeholder="t('energyClassification.fields.reasonPlaceholder')" :disabled="!workspace.buildingId.value" clearable />
                 </ElFormItem>
                 <ElFormItem :label="t('energyClassification.fields.effectiveFrom')">
-                  <ElInput v-model="effectiveFrom" :placeholder="t('energyClassification.placeholders.utc')" :disabled="!workspace.selectedVersion.value" clearable />
+                  <input v-model="effectiveFrom" type="datetime-local" class="local-datetime-input" :aria-label="t('energyClassification.fields.effectiveFrom')" :disabled="!workspace.selectedVersion.value">
                 </ElFormItem>
               </div>
               <ElSpace wrap class="version-actions">
@@ -521,7 +628,8 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
             </template>
           </ElCard>
 
-          <RelationGovernanceEditor :building-id="workspace.buildingId.value" />
+          <RelationGovernanceEditor :building-id="workspace.buildingId.value" @dirty-change="relationDirty = $event" />
+          <EnergyProfileBatchPanel :building-id="workspace.buildingId.value" :point-options="pointObjectOptions" @dirty-change="profileDirty = $event" />
 
           <ElCard shadow="never" class="editor-card">
             <template #header>
@@ -545,7 +653,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
               <ElTableColumn :label="t('energyClassification.fields.schemeCode')" min-width="150"><template #default="{ row }"><ElSelect v-model="row.schemeCode" :disabled="!configurationEditable"><ElOption v-for="item in schemeOptions" :key="item.value" :value="item.value" :label="item.label" /></ElSelect></template></ElTableColumn>
               <ElTableColumn :label="t('energyClassification.fields.nodeCode')" min-width="150"><template #default="{ row }"><ElInput v-model="row.code" :disabled="!configurationEditable" :placeholder="t('energyClassification.placeholders.code')" /></template></ElTableColumn>
               <ElTableColumn :label="t('energyClassification.fields.nodeName')" min-width="180"><template #default="{ row }"><ElInput v-model="row.name" :disabled="!configurationEditable" :placeholder="t('energyClassification.placeholders.name')" /></template></ElTableColumn>
-              <ElTableColumn :label="t('energyClassification.fields.parentCode')" min-width="160"><template #default="{ row }"><ElInput v-model="row.parentCode" :disabled="!configurationEditable" :placeholder="t('energyClassification.placeholders.optional')" clearable /></template></ElTableColumn>
+              <ElTableColumn :label="t('energyClassification.fields.parentCode')" min-width="180"><template #default="{ row }"><ElSelect :model-value="row.parentCode ?? undefined" clearable filterable :disabled="!configurationEditable || !parentOptions(row as ClassificationNode).length" :placeholder="t('energyClassification.node.rootNode')" @update:model-value="row.parentCode = $event || null"><ElOption v-for="item in parentOptions(row as ClassificationNode)" :key="item.value" :value="item.value" :label="item.label" /></ElSelect></template></ElTableColumn>
               <ElTableColumn :label="t('energyClassification.actions.remove')" width="100" fixed="right"><template #default="{ $index }"><ElButton link type="danger" :disabled="!configurationEditable" @click="removeRow(workspace.configuration.value.nodes, $index)">{{ t('energyClassification.actions.remove') }}</ElButton></template></ElTableColumn>
             </ElTable>
             <ElEmpty v-else :description="t('energyClassification.node.empty')" :image-size="48" />
@@ -567,6 +675,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
             <template #header>
               <div class="card-heading"><div><h2>{{ t('energyClassification.binding.title') }}</h2><p>{{ t('energyClassification.binding.description') }}</p></div><ElButton :disabled="!configurationEditable" @click="addBinding">{{ t('energyClassification.actions.add') }}</ElButton></div>
             </template>
+            <BindingBatchEditor :context-key="`${workspace.buildingId.value}/${workspace.selectedVersion.value?.versionId}`" :disabled="!configurationEditable" :schemes="schemeOptions" :nodes="nodeOptions" :objects="bindingObjectOptions" :object-types="objectTypeOptions" @add="addBindingBatch" @update="updateExistingBindings" />
             <ElTable v-if="workspace.configuration.value.bindings.length" :data="workspace.configuration.value.bindings">
               <ElTableColumn :label="t('energyClassification.fields.schemeCode')" min-width="140"><template #default="{ row }"><ElSelect v-model="row.schemeCode" :disabled="!configurationEditable"><ElOption v-for="item in schemeOptions" :key="item.value" :value="item.value" :label="item.label" /></ElSelect></template></ElTableColumn>
               <ElTableColumn :label="t('energyClassification.fields.nodeCode')" min-width="140"><template #default="{ row }"><ElSelect v-model="row.nodeCode" :disabled="!configurationEditable"><ElOption v-for="item in nodeOptions(row.schemeCode)" :key="item.value" :value="item.value" :label="item.label" /></ElSelect></template></ElTableColumn>
@@ -605,6 +714,23 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
         </section>
       </ElTabPane>
 
+      <ElTabPane :label="t('energyClassification.tabs.carbonProject')" name="carbonProject">
+        <section class="tab-content">
+          <CarbonProjectPanel :building-id="workspace.buildingId.value" :classification-versions="workspace.versions.value" :point-options="carbonProjectPointOptions" @dirty-change="projectDirty = $event" @navigate="navigateProjectGuide" />
+        </section>
+      </ElTabPane>
+
+      <ElTabPane :label="t('energyClassification.tabs.carbonFactors')" name="carbonFactors">
+        <CarbonFactorPanel :building-id="workspace.buildingId.value" @dirty-change="factorDirty = $event" />
+      </ElTabPane>
+
+      <ElTabPane :label="t('energyClassification.carbonResults.title')" name="carbonResults">
+        <section class="tab-content">
+          <BoundarySummaryPolicyPanel :building-id="workspace.buildingId.value" @dirty-change="boundarySummaryPolicyDirty = $event" />
+          <CarbonResultsPanel :building-id="workspace.buildingId.value" @dirty-change="carbonResultsDirty = $event" />
+        </section>
+      </ElTabPane>
+
       <ElTabPane :label="t('energyClassification.tabs.analysis')" name="analysis">
         <section class="tab-content">
           <ElCard shadow="never">
@@ -612,8 +738,8 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
             <ElForm label-position="top" class="query-form" @submit.prevent="runQuery">
               <div class="form-grid">
                 <ElFormItem :label="t('energyClassification.analysis.selectedVersion')"><ElInput :model-value="workspace.selectedVersion.value ? String(workspace.selectedVersion.value.versionNo) : ''" disabled /></ElFormItem>
-                <ElFormItem :label="t('energyClassification.fields.startInclusive')"><ElInput v-model="queryForm.startInclusive" :placeholder="t('energyClassification.placeholders.utc')" /></ElFormItem>
-                <ElFormItem :label="t('energyClassification.fields.endExclusive')"><ElInput v-model="queryForm.endExclusive" :placeholder="t('energyClassification.placeholders.utc')" /></ElFormItem>
+                <ElFormItem :label="t('energyClassification.fields.startInclusive')"><input v-model="queryForm.startInclusive" type="datetime-local" class="local-datetime-input" :aria-label="t('energyClassification.fields.startInclusive')"></ElFormItem>
+                <ElFormItem :label="t('energyClassification.fields.endExclusive')"><input v-model="queryForm.endExclusive" type="datetime-local" class="local-datetime-input" :aria-label="t('energyClassification.fields.endExclusive')"></ElFormItem>
                 <ElFormItem :label="t('energyClassification.fields.periodType')"><ElInput v-model="queryForm.periodType" :placeholder="t('energyClassification.placeholders.periodType')" /></ElFormItem>
                 <ElFormItem :label="t('energyClassification.fields.energyItemCode')"><ElInput v-model="queryForm.energyItemCode" :placeholder="t('energyClassification.placeholders.code')" /></ElFormItem>
                 <ElFormItem :label="t('energyClassification.fields.unit')"><ElInput v-model="queryForm.unit" :placeholder="t('energyClassification.placeholders.code')" /></ElFormItem>
@@ -667,6 +793,8 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
       </ElTabPane>
 
       <ElTabPane :label="t('energyClassification.tabs.readings')" name="readings">
+        <ReadingWorkbookPanel :building-id="workspace.buildingId.value" @dirty-change="workbookDirty = $event" @imported="receiveWorkbookImport" />
+        <ManualPeriodPanel :building-id="workspace.buildingId.value" :point-options="pointObjectOptions" @dirty-change="manualPeriodDirty = $event" />
         <section class="tab-content">
           <ElCard shadow="never">
             <template #header><div class="card-heading"><div><h2>{{ t('energyClassification.readings.title') }}</h2><p>{{ t('energyClassification.readings.description') }}</p></div><ElButton @click="downloadTemplate">{{ t('energyClassification.actions.downloadTemplate') }}</ElButton></div></template>
@@ -702,10 +830,11 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
 
           <ElCard v-if="workspace.readingPreview.value" shadow="never"><template #header><div class="card-heading"><div><h2>{{ t('energyClassification.readings.previewResult') }}</h2></div></div></template><ElDescriptions :column="3" border><ElDescriptionsItem :label="t('energyClassification.readings.batchId')">{{ workspace.readingPreview.value.batchId }}</ElDescriptionsItem><ElDescriptionsItem :label="t('energyClassification.fields.status')"><ElTag :type="statusType(workspace.readingPreview.value.status)">{{ statusText(workspace.readingPreview.value.status) }}</ElTag></ElDescriptionsItem><ElDescriptionsItem :label="t('energyClassification.readings.accepted')">{{ workspace.readingPreview.value.accepted }}</ElDescriptionsItem></ElDescriptions><IssueList :issues="workspace.readingPreview.value.issues" /></ElCard>
 
-          <ElCard v-if="workspace.importedBatch.value" shadow="never"><template #header><div class="card-heading"><div><h2>{{ t('energyClassification.readings.importedBatch') }}</h2></div><ElButton type="primary" :disabled="workspace.commandLoading.value" :loading="workspace.commandLoading.value" @click="approveImportedBatch">{{ t('energyClassification.actions.approveBatch') }}</ElButton></div></template><ElDescriptions :column="3" border><ElDescriptionsItem :label="t('energyClassification.readings.batchId')">{{ workspace.importedBatch.value.batchId }}</ElDescriptionsItem><ElDescriptionsItem :label="t('energyClassification.fields.status')"><ElTag :type="statusType(workspace.importedBatch.value.status)">{{ statusText(workspace.importedBatch.value.status) }}</ElTag></ElDescriptionsItem><ElDescriptionsItem :label="t('energyClassification.readings.accepted')">{{ workspace.importedBatch.value.accepted }}</ElDescriptionsItem></ElDescriptions><IssueList :issues="workspace.importedBatch.value.issues" /></ElCard>
+          <ElCard v-if="workspace.importedBatch.value" shadow="never"><template #header><div class="card-heading"><div><h2>{{ t('energyClassification.readings.importedBatch') }}</h2></div><ElButton v-if="workspace.importedBatch.value.status === 'PENDING_REVIEW'" type="primary" @click="openReadingBatchReview(workspace.importedBatch.value.batchId)">{{ t('energyClassification.actions.reviewReadingBatch') }}</ElButton></div></template><ElDescriptions :column="3" border><ElDescriptionsItem :label="t('energyClassification.readings.batchId')">{{ workspace.importedBatch.value.batchId }}</ElDescriptionsItem><ElDescriptionsItem :label="t('energyClassification.fields.status')"><ElTag :type="statusType(workspace.importedBatch.value.status)">{{ statusText(workspace.importedBatch.value.status) }}</ElTag></ElDescriptionsItem><ElDescriptionsItem :label="t('energyClassification.readings.accepted')">{{ workspace.importedBatch.value.accepted }}</ElDescriptionsItem></ElDescriptions><IssueList :issues="workspace.importedBatch.value.issues" /></ElCard>
 
-          <ElCard shadow="never"><template #header><div class="card-heading"><div><h2>{{ t('energyClassification.readings.storedReadings') }}</h2></div></div></template><ElForm label-position="top" class="reading-query-form" @submit.prevent="loadReadings"><div class="form-grid"><ElFormItem :label="t('energyClassification.fields.startInclusive')"><ElInput v-model="readingRange.startInclusive" :placeholder="t('energyClassification.placeholders.utc')" /></ElFormItem><ElFormItem :label="t('energyClassification.fields.endExclusive')"><ElInput v-model="readingRange.endExclusive" :placeholder="t('energyClassification.placeholders.utc')" /></ElFormItem></div><ElButton native-type="submit" :loading="workspace.readingsLoading.value">{{ t('energyClassification.actions.loadReadings') }}</ElButton></ElForm><ElAlert v-if="workspace.readingsError.value" :title="workspace.readingsError.value.message" type="error" :closable="false" show-icon /><ElTable v-if="workspace.readings.value.length" :data="workspace.readings.value"><ElTableColumn prop="factId" :label="t('energyClassification.fields.factId')" min-width="160" /><ElTableColumn prop="batchId" :label="t('energyClassification.readings.batchId')" min-width="160" /><ElTableColumn :label="t('energyClassification.fields.batchStatus')" min-width="140"><template #default="{ row }"><ElTag :type="statusType(row.batchStatus)">{{ statusText(row.batchStatus) }}</ElTag></template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.meterPointId')" min-width="160"><template #default="{ row }">{{ row.reading.pointId }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.semantics')" min-width="130"><template #default="{ row }">{{ t(`energyClassification.semantics.${row.reading.semantics}`) }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.supersedesFactId')" min-width="180"><template #default="{ row }">{{ display(row.reading.supersedesFactId) }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.readings.normalizedQuantity')" min-width="160"><template #default="{ row }">{{ display(row.normalizedQuantity) }} {{ row.reading.unit }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.status')" min-width="130"><template #default="{ row }"><ElTag :type="statusType(row.reading.status)">{{ statusText(row.reading.status) }}</ElTag></template></ElTableColumn></ElTable><ElEmpty v-else-if="!workspace.readingsLoading.value" :description="t('energyClassification.readings.readingEmpty')" :image-size="48" /></ElCard>
+          <ElCard shadow="never"><template #header><div class="card-heading"><div><h2>{{ t('energyClassification.readings.storedReadings') }}</h2></div></div></template><ElForm label-position="top" class="reading-query-form" @submit.prevent="loadReadings"><div class="form-grid"><ElFormItem :label="t('energyClassification.fields.startInclusive')"><input v-model="readingRange.startInclusive" type="datetime-local" class="local-datetime-input" :aria-label="t('energyClassification.fields.startInclusive')"></ElFormItem><ElFormItem :label="t('energyClassification.fields.endExclusive')"><input v-model="readingRange.endExclusive" type="datetime-local" class="local-datetime-input" :aria-label="t('energyClassification.fields.endExclusive')"></ElFormItem></div><ElButton native-type="submit" :loading="workspace.readingsLoading.value">{{ t('energyClassification.actions.loadReadings') }}</ElButton></ElForm><ElAlert v-if="workspace.readingsError.value" :title="workspace.readingsError.value.message" type="error" :closable="false" show-icon /><ElTable v-if="workspace.readings.value.length" :data="workspace.readings.value"><ElTableColumn prop="factId" :label="t('energyClassification.fields.factId')" min-width="160" /><ElTableColumn prop="batchId" :label="t('energyClassification.readings.batchId')" min-width="160" /><ElTableColumn :label="t('energyClassification.fields.batchStatus')" min-width="140"><template #default="{ row }"><ElTag :type="statusType(row.batchStatus)">{{ statusText(row.batchStatus) }}</ElTag></template></ElTableColumn><ElTableColumn :label="t('energyClassification.actions.reviewReadingBatch')" min-width="150" fixed="right"><template #default="{ row }"><ElButton v-if="row.batchStatus === 'PENDING_REVIEW'" :data-test="`reading-batch-review-${row.batchId}`" link @click="openReadingBatchReview(row.batchId)">{{ t('energyClassification.actions.reviewReadingBatch') }}</ElButton></template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.meterPointId')" min-width="160"><template #default="{ row }">{{ row.reading.pointId }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.semantics')" min-width="130"><template #default="{ row }">{{ t(`energyClassification.semantics.${row.reading.semantics}`) }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.supersedesFactId')" min-width="180"><template #default="{ row }">{{ display(row.reading.supersedesFactId) }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.readings.normalizedQuantity')" min-width="160"><template #default="{ row }">{{ display(row.normalizedQuantity) }} {{ row.reading.unit }}</template></ElTableColumn><ElTableColumn :label="t('energyClassification.fields.status')" min-width="130"><template #default="{ row }"><ElTag :type="statusType(row.reading.status)">{{ statusText(row.reading.status) }}</ElTag></template></ElTableColumn></ElTable><ElEmpty v-else-if="!workspace.readingsLoading.value" :description="t('energyClassification.readings.readingEmpty')" :image-size="48" /></ElCard>
         </section>
+        <ReadingBatchReviewPanel :building-id="workspace.buildingId.value" :batch-id="readingReviewBatchId" @approved="handleReadingBatchApproved" @close="readingReviewBatchId = ''" />
       </ElTabPane>
     </ElTabs>
   </main>
@@ -732,6 +861,9 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
 .file-row { align-items: center; margin-top: var(--bec-space-section); }
 .file-label { font-weight: var(--bec-font-weight-heading); color: var(--bec-color-text-primary); }
 .csv-file-input { max-width: 100%; color: var(--bec-color-text-secondary); }
+.configuration-progress { display: flex; flex-wrap: wrap; gap: var(--bec-space-group); margin-block: var(--bec-space-group); color: var(--bec-color-text-secondary); }
+.local-datetime-input { width: 100%; min-width: 0; min-height: var(--bec-ref-space-40); padding-inline: var(--bec-space-group); color: var(--bec-color-text-primary); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-control); font: inherit; }
+.local-datetime-input:focus-visible { outline: var(--bec-focus-width) solid var(--bec-color-action-primary); outline-offset: var(--bec-focus-offset); }
 .tree-preview-list { display: grid; gap: var(--bec-space-group); }
 .tree-preview-section { display: grid; gap: var(--bec-space-tight); padding: var(--bec-space-group); background: var(--bec-color-surface-secondary); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-card); }
 </style>

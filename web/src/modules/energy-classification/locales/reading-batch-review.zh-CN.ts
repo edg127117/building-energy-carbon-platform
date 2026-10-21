@@ -1,0 +1,17 @@
+export default {
+  title: '审核已入库读数批次',
+  loading: '正在读取批次详情。',
+  empty: '未读取到批次详情。',
+  status: '批次状态',
+  author: '导入人',
+  revision: '当前修订号',
+  count: '已入库读数数',
+  independence: '审核人必须独立于导入人；服务端会校验职责与职责分离要求。',
+  notPending: '当前批次不是待审核状态，不能提交审核。',
+  reason: '独立审核原因',
+  reasonPlaceholder: '由独立审核人填写可追溯的审核原因',
+  refresh: '刷新批次详情',
+  submit: '提交独立审核',
+  cancel: '关闭',
+  approved: '服务端已返回审核结果，已刷新已入库读数列表。',
+} as const

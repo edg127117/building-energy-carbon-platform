@@ -15,6 +15,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -33,6 +34,35 @@ class CarbonRecalculationServiceTest {
     private final CarbonRecalculationService service = new CarbonRecalculationService(
             authorization, ruleRepository, repository, persistence, calculationService,
             properties, auditWriter, auditProperties);
+
+    @Test
+    void listHidesWholeCrossBuildingBatchWhenAnyBuildingIsForbidden() {
+        when(repository.listForBuilding("BLD001", 101)).thenReturn(List.of(
+                batch("PENDING_APPROVAL", ResultNature.FORMAL, 41L, null)));
+        when(repository.listBuildingIds("RB001")).thenReturn(List.of("BLD001", "BLD002"));
+        doThrow(CarbonErrors.error(403, CarbonErrors.FORBIDDEN, "建筑无权限"))
+                .when(authorization).requireReader(99L, Set.of("ENERGY_MANAGER"), "BLD002");
+
+        assertThat(service.listForBuilding(99L, Set.of("ENERGY_MANAGER"), "BLD001")).isEmpty();
+        verify(authorization).requireReader(99L, Set.of("ENERGY_MANAGER"), "BLD002");
+    }
+
+    @Test
+    void listChecksRequestedBuildingBeforeQueryAndRejectsSilentTruncation() {
+        doThrow(CarbonErrors.error(403, CarbonErrors.FORBIDDEN, "建筑无权限"))
+                .when(authorization).requireReader(99L, Set.of("BUILDING_OWNER"), "BLD002");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listForBuilding(
+                99L, Set.of("BUILDING_OWNER"), "BLD002"))
+                .isInstanceOf(com.platform.framework.exception.BusinessException.class);
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never())
+                .listForBuilding(eq("BLD002"), anyInt());
+        when(repository.listForBuilding("BLD001", 101)).thenReturn(java.util.Collections.nCopies(
+                101, batch("COMPLETED", ResultNature.FORMAL, 41L, 99L)));
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.listForBuilding(
+                99L, Set.of("ENERGY_MANAGER"), "BLD001"))
+                .isInstanceOf(com.platform.framework.exception.BusinessException.class)
+                .hasMessageContaining("查询上限");
+    }
 
     @Test
     void approvesOneFormalBatchOnlyAfterAllBuildingAndSeparationChecks() {

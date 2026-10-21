@@ -5,6 +5,7 @@ import com.platform.audit.AuditEvidenceWriter;
 import com.platform.audit.AuditGovernanceProperties;
 import com.platform.energy.period.EnergyPeriodModels.*;
 import com.platform.energy.period.api.EnergyPeriodContracts.RefreshProjectionRequest;
+import com.platform.energy.period.api.EnergyPeriodContracts.ApproveLockRequest;
 import com.platform.energy.period.api.EnergyPeriodContracts.SubmitLockRequest;
 import com.platform.energy.period.api.EnergyPeriodContracts.SubmitRecalculationRequest;
 import com.platform.framework.exception.BusinessException;
@@ -42,6 +43,7 @@ class EnergyPeriodLifecycleServiceTest {
     @Mock private EnergyPeriodValueStore valueStore;
     @Mock private EnergyPeriodSnapshotChangePublisher snapshotChangePublisher;
     @Mock private AuditEvidenceWriter auditWriter;
+    @Mock private ManualPeriodInputService manualInputs;
 
     private EnergyPeriodLifecycleService service;
 
@@ -49,7 +51,7 @@ class EnergyPeriodLifecycleServiceTest {
     void setUp() {
         service = new EnergyPeriodLifecycleService(authorization, governance, repository,
                 calculation, valueStore, snapshotChangePublisher, new ObjectMapper(), auditWriter,
-                new AuditGovernanceProperties());
+                new AuditGovernanceProperties(), manualInputs);
     }
 
     @Test
@@ -86,6 +88,22 @@ class EnergyPeriodLifecycleServiceTest {
     }
 
     @Test
+    void manualRefreshKeepsFirstReadRevisionWhenConcurrentPublicationWins() {
+        var request = new ManualPeriodInputService.Request("POINT001", LocalDate.of(2026, 8, 1),
+                "PPV1", "REL1", List.of("FACT1"), 1L, "经审核人工来源");
+        when(manualInputs.prepare(USER, ROLES, "BLD001", request)).thenReturn(calculation(List.of()));
+        when(repository.findCurrent(eq("BLD001"), eq("POINT001"), eq("MONTH"), any(), any()))
+                .thenReturn(current("TCE_RULE_UNAVAILABLE"));
+        when(repository.updateCurrent(any(), eq(1L))).thenReturn(0);
+        assertThatThrownBy(() -> service.refreshManual(USER, ROLES, "BLD001", request))
+                .isInstanceOf(BusinessException.class).extracting("errorCode").isEqualTo(EnergyPeriodErrors.VERSION_CONFLICT);
+        verify(repository, times(1)).findCurrent(eq("BLD001"), eq("POINT001"), eq("MONTH"), any(), any());
+        verify(repository).updateCurrent(any(), eq(1L));
+        verify(repository, never()).insertCurrent(any());
+        verifyNoInteractions(auditWriter);
+    }
+
+    @Test
     void permitsNativeOnlyLockOnlyThroughOneReviewedExceptionPolicy() {
         CurrentProjection current = current("TCE_RULE_UNAVAILABLE");
         when(repository.findCurrent("PROJECTION1")).thenReturn(current);
@@ -101,6 +119,36 @@ class EnergyPeriodLifecycleServiceTest {
         assertThat(result.status()).isEqualTo("PENDING_REVIEW");
         assertThat(result.issuePolicyVersions()).containsExactly("EPV1");
         assertThat(request.getValue().evidenceReference()).isEqualTo("模拟证据LOCK-1");
+    }
+
+    @Test
+    void formalManualMonthHasSeparateNativeCompletenessAndStillRequiresIndependentLockApproval() {
+        var original=current("TCE_RULE_UNAVAILABLE");
+        var current=new CurrentProjection(original.projectionId(),original.resultKey(),original.buildingId(),original.pointId(),original.periodType(),
+                original.startInclusive(),original.endExclusive(),original.timezoneId(),original.periodPolicyVersionId(),original.status(),original.revision(),
+                "FORMAL",original.energyItemCode(),original.nativeQuantity(),original.nativeUnitCode(),null,null,BigDecimal.ONE,original.issueCodes(),
+                "{\"inputKind\":\"REVIEWED_MANUAL_MONTH\"}","HASH",null,original.activityWatermark(),original.calculatedAt(),original.updatedAt());
+        var oldPolicy=policy();
+        var formalPolicy=new PeriodPolicyVersion(oldPolicy.policyId(),oldPolicy.versionId(),oldPolicy.versionNo(),oldPolicy.buildingId(),oldPolicy.timezoneId(),
+                oldPolicy.closingDelayHours(),oldPolicy.lockMode(),oldPolicy.status(),"FORMAL",oldPolicy.evidenceReference(),oldPolicy.effectiveFrom(),oldPolicy.effectiveTo(),oldPolicy.configRevision(),
+                oldPolicy.createdBy(),oldPolicy.createdAt(),oldPolicy.approvedBy(),oldPolicy.approvedAt());
+        when(repository.findCurrent("PROJECTION1")).thenReturn(current);
+        when(governance.periodPolicyVersion("PPV1")).thenReturn(formalPolicy);
+        var submitted=service.submitLock(USER,ROLES,new SubmitLockRequest("PROJECTION1",1L,"完整原生月量","抄表证据"));
+        assertThat(submitted.status()).isEqualTo("PENDING_REVIEW");
+        verify(repository,never()).insertSnapshot(any());
+        var lock=new LockRequest(submitted.requestId(),"PROJECTION1",1,"BLD001","PENDING_REVIEW","","原因","依据",USER,LocalDateTime.now(),null,null,null);
+        when(repository.findLockRequest(submitted.requestId())).thenReturn(lock);
+        when(repository.nextSnapshotVersion("PROJECTION1")).thenReturn(1);
+        when(repository.approveLockRequest(eq(submitted.requestId()),eq(USER+1),any(),any())).thenReturn(1);
+        var sealed=service.approveLock(USER+1,ROLES,submitted.requestId(),new ApproveLockRequest("独立审核通过"));
+        assertThat(sealed.status()).isEqualTo("LOCKED_NATIVE_COMPLETE");
+        assertThat(sealed.nativeQuantityStatus()).isEqualTo("COMPLETE");
+        assertThat(sealed.tceStatus()).isEqualTo("NOT_CALCULATED");
+        assertThat(sealed.tce()).isNull();
+        verify(authorization).requireSeparation(USER,USER+1);
+        verify(manualInputs,times(2)).verifyStored(anyLong(),eq(ROLES),eq(current));
+        verify(governance,never()).effectiveExceptionPolicies(anyString(),anyList(),any());
     }
 
     @Test

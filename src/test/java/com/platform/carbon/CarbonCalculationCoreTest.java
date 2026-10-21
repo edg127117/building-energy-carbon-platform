@@ -16,6 +16,20 @@ class CarbonCalculationCoreTest {
     private final CarbonCalculationCore core = new CarbonCalculationCore();
 
     @Test
+    void approvedProjectPathSupportsCustomEnergyCodesWithoutGuessingFromNames() {
+        var original=activity("CUSTOM_ELEC",new BigDecimal("1000"),"KWH");
+        var trace=CarbonEvidence.object();trace.put("projectEnergyPathway","PURCHASED_ELECTRICITY");
+        var segment=new ActivitySegment(original.snapshotId(),original.buildingId(),original.periodType(),
+                original.startInclusive(),original.endExclusive(),original.timezoneId(),original.energyItemCode(),
+                original.quantity(),original.unitCode(),original.lockStatus(),original.completeness(),original.resultNature(),
+                original.evidenceHash(),trace);
+        var factor=direct("CUSTOM_FACTOR","CUSTOM_ELEC",FactorCategory.PURCHASED_ELECTRICITY_LOCATION,
+                ApplicabilityLevel.NATIONAL,null,"0.5");
+        var match=core.match(segment,"310000",ResultNature.DEVELOPMENT_SIMULATION,List.of(factor));
+        assertThat(core.calculate(segment,match,null).exactEmissionKgCo2e()).isEqualByComparingTo("500");
+    }
+
+    @Test
     void calculatesStationaryCombustionWithoutIntermediateRounding() {
         ActivitySegment activity = activity("DIESEL", new BigDecimal("10"), "KG");
         FactorVersion factor = factor("DIESEL", FactorCategory.STATIONARY_COMBUSTION,

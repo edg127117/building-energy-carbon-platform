@@ -85,7 +85,9 @@ Repository Guardrails 还会检查全部 `docs/superpowers/specs` 和 `plans`：
 
 局域网 `building-energy-carbon-test` 的正式测试页面入口是 `18080`，API 经该入口转发到 `18081`。后续测试发布使用仓库内的 [`Deploy-BuildingEnergyCarbonTest.sh`](../../scripts/Deploy-BuildingEnergyCarbonTest.sh)；脚本只切换测试发布目录的 `current`，并在发布前后核验路由及 80 端口站点软链接未变化。`/var/www/iot-platform/current` 与 80 端口不属于本测试发布目标。发布前在测试服务器上运行该脚本的 `--check-route` 做只读检查。此约束不改变 80 端口现状。
 
-发布包为 `tar.gz`，放在测试目录的 `incoming` 下，根目录需包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`。清单分别填写 `commit=<40位提交号>`、`backendJarSha256=<64位哈希>`、`webIndexSha256=<64位哈希>`。把仓库脚本放到测试服务器的 `incoming` 后，执行 `sudo bash /home/user1/deployments/building-energy-carbon-test/incoming/Deploy-BuildingEnergyCarbonTest.sh <发布名> <发布包绝对路径> <发布包SHA256>`。脚本核对包与内容哈希、测试服务和实际 HTTP 响应；失败时仅回退测试目录的 `current`。
+发布包为 `tar.gz`，放在测试目录的 `incoming` 下，根目录需包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`。清单分别填写 `commit=<40位提交号>`、`backendJarSha256=<64位哈希>`、`webIndexSha256=<64位哈希>`。把仓库脚本放到测试服务器的 `incoming` 后，执行 `sudo bash /home/user1/deployments/building-energy-carbon-test/incoming/Deploy-BuildingEnergyCarbonTest.sh <发布名> <发布包绝对路径> <发布包SHA256>`。脚本核对包与内容哈希、测试服务和实际 HTTP 响应；失败时恢复原测试控制配置，并回退已切换的测试目录 `current`，不自动回滚数据库。
+
+只更新应用产物、须保留已有控制设置的发布，应在提权后的发布进程显式设置 `BEC_TEST_PRESERVE_CONTROL_CONFIG=true`，并把 `daikin_test_deployment_config.py` 放在发布脚本同目录。该模式分别备份配置文件原始字节与生效进程的控制参数，发布前要求明确TEST环境，重启后逐项核对；缺失参数保持缺失，不按默认测试参数补齐。未启用此模式时继续沿用既有测试控制配置准备逻辑。应用发布脚本不承担数据库迁移；升级须使用独立迁移凭据、事先备份和升级验证，不能为发布重新授予应用账号DDL权限。
 
 ## 6. 合并后安全清理
 

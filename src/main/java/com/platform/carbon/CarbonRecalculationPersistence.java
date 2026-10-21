@@ -59,10 +59,10 @@ class CarbonRecalculationPersistence {
                 }
             }
         }
-        // 已冻结或边界不同的活动项仍占有建筑年度锁；保留原变化等待后继批次，不能吞入旧审批依据。
+        // 已冻结或边界不同的活动项仍保留精确报告期间占用；不能吞入旧审批依据。
         for (CalculationBatch oldResult : impacted) {
             int year = oldResult.periodStart().atZone(ZoneId.of(oldResult.timezoneId())).getYear();
-            String active = repository.findActiveBatchForItem(oldResult.buildingId(), year, oldResult.resultNature());
+            String active = repository.findActiveBatchForItem(oldResult, year);
             if (active != null && !repository.canMerge(active, mergeKey(change, oldResult))) {
                 repository.deferChange(change.changeId(), lease.token(), now.plus(properties.getRetryBackoff()));
                 return List.of();
@@ -82,8 +82,7 @@ class CarbonRecalculationPersistence {
         List<String> batchIds = new ArrayList<>();
         for (CalculationBatch oldResult : impacted) {
             int year = oldResult.periodStart().atZone(ZoneId.of(oldResult.timezoneId())).getYear();
-            String activeBatch = repository.findActiveBatchForItem(oldResult.buildingId(), year,
-                    oldResult.resultNature());
+            String activeBatch = repository.findActiveBatchForItem(oldResult, year);
             if (activeBatch != null) {
                 if (!repository.canMerge(activeBatch, mergeKey(change, oldResult))) {
                     throw CarbonErrors.error(409, CarbonErrors.RECALCULATION_CONFLICT, "批次范围已冻结");
@@ -97,6 +96,18 @@ class CarbonRecalculationPersistence {
             // 影响查询与建项之间可能恰逢审批发布；旧基线已替代时回滚本次分析，重新读取后继结果。
             if (!repository.lockCurrentResult(oldResult.batchId())) {
                 throw CarbonErrors.error(409, CarbonErrors.RECALCULATION_CONFLICT, "原结果已被替代，需要重新分析影响");
+            }
+            // 锁住原报告后再读一次，覆盖并发变化刚创建同一精确期间占用的窗口。
+            String concurrentBatch = repository.findActiveBatchForItem(oldResult, year);
+            if (concurrentBatch != null) {
+                if (!repository.canMerge(concurrentBatch, mergeKey(change, oldResult))) {
+                    throw CarbonErrors.error(409, CarbonErrors.RECALCULATION_CONFLICT, "同周期重算批次范围已冻结");
+                }
+                repository.attachTrigger(concurrentBatch, triggerId);
+                repository.setMergeWindow(concurrentBatch, mergeKey(change, oldResult),
+                        now.plus(properties.getRecalculationMergeWindow()));
+                if (!batchIds.contains(concurrentBatch)) batchIds.add(concurrentBatch);
+                continue;
             }
             String boundary = boundary(change, oldResult);
             RecalculationBatch batch = repository.findMergeableBatch(mergeKey(change, oldResult),
@@ -223,7 +234,10 @@ class CarbonRecalculationPersistence {
     private static String mergeKey(DependencyChange change, CalculationBatch result) {
         return CarbonCalculationCore.sha256(change.changeType() + "|" + boundary(change, result)
                 + "|" + result.resultNature() + "|" + change.effectiveFrom() + "|" + change.effectiveTo()
-                + ("MANUAL".equals(change.changeType()) ? "|" + change.changeDetail() : ""));
+                + ("MANUAL".equals(change.changeType()) ? "|" + change.changeDetail() : "")
+                // 年报继续按既有年度批次归并；月/季报告必须保持精确周期，避免同年报告互相覆盖。
+                + (result.periodType() == PeriodType.YEAR ? "" : "|" + result.periodType()
+                + "|" + result.periodStart() + "|" + result.periodEnd() + "|" + result.timezoneId()));
     }
 
     private static final class SetLike {

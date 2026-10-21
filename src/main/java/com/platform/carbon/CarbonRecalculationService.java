@@ -108,6 +108,27 @@ public class CarbonRecalculationService {
         return value;
     }
 
+    public List<RecalculationBatch> listForBuilding(
+            long userId, Collection<String> roles, String requestedBuildingId) {
+        String buildingId = text(requestedBuildingId, 32, "建筑编码无效");
+        authorization.requireReader(userId, roles, buildingId);
+        List<RecalculationBatch> batches = repository.listForBuilding(buildingId, 101);
+        if (batches.size() > 100) {
+            throw error(409, RECALCULATION_CONFLICT, "重算批次超过查询上限，请缩小查询范围");
+        }
+        // 一个批次可能跨建筑；与详情相同，全部建筑可读时才允许披露整批信息。
+        return batches.stream().filter(batch -> {
+            try {
+                repository.listBuildingIds(batch.batchId()).forEach(id ->
+                        authorization.requireReader(userId, roles, id));
+                return true;
+            } catch (BusinessException exception) {
+                if (Integer.valueOf(403).equals(exception.getCode())) return false;
+                throw exception;
+            }
+        }).toList();
+    }
+
     public List<RecalculationItem> items(long userId, Collection<String> roles, String batchId) {
         RecalculationBatch batch = detail(userId, roles, batchId);
         return repository.listItems(batch.batchId());
