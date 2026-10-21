@@ -612,6 +612,23 @@ public class EdgeAdapter {
     Assert-Contains $moduleJavadoc.Output 'JAVA_CLASS_JAVADOC_MISSING' 'module Javadoc failure must use a stable error'
     Complete-Case 'new Java classes in top-level Maven modules require Javadoc'
 
+    $pythonRoot = New-TestRepository 'meter-cloud-production'
+    Set-Utf8File $pythonRoot 'README.md' "baseline`n"
+    Commit-All $pythonRoot 'baseline'
+    Invoke-GitChecked $pythonRoot @('switch', '-c', 'fix/meter-cloud') | Out-Null
+    Set-Utf8File $pythonRoot 'cloud/meter-cloud/test_archive.py' "import unittest`n"
+    Commit-All $pythonRoot 'add offline test'
+    $pythonTestsOnly = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $pythonRoot @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码') }
+    Assert-True ($pythonTestsOnly.ExitCode -eq 0) "Python tests alone should not be production code: $($pythonTestsOnly.Output)"
+    Set-Utf8File $pythonRoot 'cloud/meter-cloud/service.py' "def persist(payload):`n    return payload`n"
+    Commit-All $pythonRoot 'add cloud production service'
+    $pythonValid = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $pythonRoot @{ PR_BODY = $unifiedBody }
+    Assert-True ($pythonValid.ExitCode -eq 0) "cloud Python service requires a production risk level: $($pythonValid.Output)"
+    $pythonWrongRisk = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $pythonRoot @{ PR_BODY = (New-RiskBody -Risk '不涉及生产代码') }
+    Assert-True ($pythonWrongRisk.ExitCode -ne 0) 'cloud Python service cannot claim no production code'
+    Assert-Contains $pythonWrongRisk.Output 'COMMENT_RISK_LEVEL_INVALID' 'Python production risk mismatch must use a stable error'
+    Complete-Case 'meter cloud production code is guarded while offline tests are excluded'
+
     $legacyAudit = New-CompletedAuditContent $root
     $legacy = Invoke-PowerShellScript $guardrailScript @('-Mode', 'PullRequest', '-BaseRef', 'main', '-HeadRef', 'HEAD') $root @{ PR_BODY = (New-LegacyAuditBody $legacyAudit) }
     Assert-True ($legacy.ExitCode -eq 0) "legacy inline audit should remain compatible: $($legacy.Output)"
