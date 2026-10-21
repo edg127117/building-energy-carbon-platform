@@ -103,6 +103,7 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 | `com.platform.relation` | 建筑关系版本、表计层级和方向、计量边界、分层查询及 Excel 草稿导入 |
 | `com.platform.cache`、`config` | Redis 缓存和基础设施装配 |
 | `telemetry-adapter` | 厂商 Topic 到内部 V2 契约的 MQTT 适配与代理 ACK；不等于边缘持久化网关 |
+| [`cloud/meter-cloud`](cloud/meter-cloud/README.md) | 既有 Python 云端原始报文留档及新协议回执；先保存原始字节，旧版报文不伪造应用 ACK，不替代 V2 业务解析或平台双库入库 |
 | `modbus-edge-adapter` | 只读 Modbus TCP/RTU 采集并生成内部 V2 报文；不包含控制或持久化补传 |
 
 ### 数据源职责

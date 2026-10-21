@@ -101,6 +101,7 @@ function Test-IsJavaProductionPath {
 function Test-IsProductionPath {
     param([string]$Path)
     if (Test-IsJavaProductionPath $Path) { return $true }
+    if ($Path -eq 'cloud/meter-cloud/service.py') { return $true }
     return $Path -match '^web/src/.+\.(?:vue|ts)$' -and
         $Path -notmatch '(^|/)(?:__tests__|tests?)/' -and
         $Path -notmatch '\.(?:test|spec)\.(?:ts|tsx)$'
