@@ -125,6 +125,37 @@ class D01ReleaseTest(unittest.TestCase):
             release.freeze(self.state, True, True)
         self.assertEqual(self.events, [])
 
+    def test_accepted_ingress_loss_is_recorded_without_claiming_retention(self):
+        self.prepare()
+        release.freeze(self.state, True, False, True, "approved test maintenance")
+        state = release.protected_json(self.state)
+        self.assertFalse(state["ingress_retained"])
+        self.assertTrue(state["ingress_loss_accepted"])
+        self.assertEqual(state["loss_acceptance_reference"], "approved test maintenance")
+        self.assertEqual(self.events, [("systemctl", "stop", release.WEB, release.BACKEND)])
+        self.schema.reset_mock()
+        self.restore.side_effect = RuntimeError("D01_RESTORE_EVIDENCE_REQUIRED")
+        for action in (release.migrate, release.cutover):
+            with self.assertRaisesRegex(RuntimeError, "RESTORE_EVIDENCE_REQUIRED"):
+                action(self.state, self.base, self.base)
+        self.schema.assert_not_called()
+
+    def test_loss_acceptance_cannot_replace_writer_fence_or_conflict_with_retention(self):
+        self.prepare()
+        for fenced, retained in ((False, False), (True, True)):
+            with self.subTest(fenced=fenced, retained=retained):
+                with self.assertRaisesRegex(RuntimeError, "EXTERNAL_WRITERS"):
+                    release.freeze(self.state, fenced, retained, True, "approved test maintenance")
+        self.assertEqual(self.events, [])
+
+    def test_loss_acceptance_requires_nonempty_bounded_reference_before_stop(self):
+        self.prepare()
+        for reference in (None, "", "  ", "a" * 513, "a" + " " * 512, "bad\nreference"):
+            with self.subTest(reference=reference):
+                with self.assertRaisesRegex(RuntimeError, "LOSS_ACCEPTANCE_REFERENCE_REQUIRED"):
+                    release.freeze(self.state, True, False, True, reference)
+        self.assertEqual(self.events, [])
+
     def test_freeze_only_stops_test_web_and_backend(self):
         self.freeze()
         self.assertEqual(self.events, [("systemctl", "stop", release.WEB, release.BACKEND)])

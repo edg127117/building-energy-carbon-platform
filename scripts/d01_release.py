@@ -183,10 +183,16 @@ def prepare(name, archive, expected_sha, credentials):
         raise
 
 
-def freeze(state_path, writers_fenced, ingress_retained):
+def freeze(state_path, writers_fenced, ingress_retained, accept_ingress_loss=False,
+           loss_acceptance_reference=None):
     state = protected_json(state_path)
     require(state["phase"] == "PREPARED", "D01_PREPARED_STATE_REQUIRED")
-    require(writers_fenced and ingress_retained, "D01_EXTERNAL_WRITERS_AND_RETRY_CONFIRMATION_REQUIRED")
+    require(writers_fenced and (ingress_retained != accept_ingress_loss),
+            "D01_EXTERNAL_WRITERS_AND_INGRESS_DECISION_REQUIRED")
+    require(not accept_ingress_loss or (isinstance(loss_acceptance_reference, str)
+            and loss_acceptance_reference.strip() and len(loss_acceptance_reference) <= 512
+            and not any(c in loss_acceptance_reference for c in "\0\r\n")),
+            "D01_LOSS_ACCEPTANCE_REFERENCE_REQUIRED")
     check_unchanged(state)
     require(runtime() == state["runtime_controls"], "D01_RUNTIME_CONTROLS_CHANGED")
     # 此动作只供维护窗口调用；失败不启动任何旧包，保留停写现场。
@@ -194,7 +200,9 @@ def freeze(state_path, writers_fenced, ingress_retained):
     inactive()
     state.update(format="D01_FROZEN_V1", phase="FROZEN", freeze_id=str(uuid.uuid4()), frozen_at=int(time.time()),
                  prepared_plan_hash=sha(state_path),
-                 writers_fenced=True, ingress_retained=True)
+                 writers_fenced=True, ingress_retained=ingress_retained,
+                 ingress_loss_accepted=accept_ingress_loss,
+                 loss_acceptance_reference=loss_acceptance_reference if accept_ingress_loss else None)
     write_state(state_path, state)
 
 
@@ -324,7 +332,10 @@ def main():
     parser.add_argument("--schema-credentials", type=Path)
     parser.add_argument("--restore-report", type=Path)
     parser.add_argument("--writers-fenced", action="store_true")
-    parser.add_argument("--ingress-retained", action="store_true")
+    ingress = parser.add_mutually_exclusive_group()
+    ingress.add_argument("--ingress-retained", action="store_true")
+    ingress.add_argument("--accept-ingress-loss", action="store_true")
+    parser.add_argument("--loss-acceptance-reference")
     args = parser.parse_args()
     require(os.geteuid() == 0, "D01_ROOT_REQUIRED")
     with release_lock():
@@ -332,7 +343,8 @@ def main():
             require(args.release and args.archive and args.sha256 and args.schema_credentials, "D01_PACKAGE_ARGUMENTS_REQUIRED")
             print(prepare(args.release, args.archive, args.sha256, args.schema_credentials))
         elif args.action == "freeze":
-            freeze(args.state, args.writers_fenced, args.ingress_retained)
+            freeze(args.state, args.writers_fenced, args.ingress_retained,
+                   args.accept_ingress_loss, args.loss_acceptance_reference)
         elif args.action == "migrate":
             migrate(args.state, args.backup_dir, args.schema_credentials, args.restore_report)
         else:

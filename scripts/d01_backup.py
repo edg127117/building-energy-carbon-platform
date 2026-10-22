@@ -118,12 +118,23 @@ def _backup_targets(value: Any, label: str) -> dict[str, str]:
     return targets
 
 
-def _freeze_state(path: Path) -> dict[str, str]:
+def _freeze_state(path: Path) -> dict[str, Any]:
     value, digest = _json_file(path, "FREEZE_STATE", protected=True)
     if value.get("format") != FREEZE_FORMAT or value.get("phase") != "FROZEN":
         raise _fail("FREEZE_STATE_NOT_FROZEN")
-    if value.get("writers_fenced") is not True or value.get("ingress_retained") is not True:
+    retained = value.get("ingress_retained") is True
+    loss_accepted = value.get("ingress_loss_accepted") is True
+    if value.get("writers_fenced") is not True or retained == loss_accepted:
         raise _fail("FREEZE_STATE_WRITER_PROOF_MISSING")
+    # Accepting missing ingress never substitutes for stopping database writers
+    # or restoring this backup; preserve the authorization separately from retention.
+    loss_reference = value.get("loss_acceptance_reference")
+    if loss_accepted:
+        if value.get("ingress_retained") is not False:
+            raise _fail("FREEZE_STATE_INGRESS_DECISION_INVALID")
+        _text(loss_reference, "LOSS_ACCEPTANCE_REFERENCE")
+        if not loss_reference.strip():
+            raise _fail("INVALID_LOSS_ACCEPTANCE_REFERENCE")
     freeze_id = _text(value.get("freeze_id"), "FREEZE_ID")
     try:
         if str(uuid.UUID(freeze_id)) != freeze_id.lower():
@@ -142,6 +153,9 @@ def _freeze_state(path: Path) -> dict[str, str]:
         "backend_service": _text(value.get("backend_service"), "BACKEND_SERVICE"),
         "web_service": _text(value.get("web_service"), "WEB_SERVICE"),
         "backup_targets": _backup_targets(value.get("backup_targets"), "BACKUP_TARGETS"),
+        "ingress_retained": retained,
+        "ingress_loss_accepted": loss_accepted,
+        "loss_acceptance_reference": loss_reference if loss_accepted else None,
     }
 
 
@@ -378,13 +392,16 @@ def _dump_tdengine(output: Path, credentials: dict[str, str], docker: str, conta
         raise operation_error
 
 
-def _write_manifest(root: Path, freeze: dict[str, str], mysql: dict[str, str], tdengine: dict[str, str], database: str) -> None:
+def _write_manifest(root: Path, freeze: dict[str, Any], mysql: dict[str, str], tdengine: dict[str, str], database: str) -> None:
     _write_json(root / MANIFEST_FILE, {
         "format": MANIFEST_FORMAT,
         "created_at": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "freeze_id": freeze["freeze_id"],
         "freeze_state_sha256": freeze["freeze_state_sha256"],
         "prepared_plan_sha256": freeze["prepared_plan_hash"],
+        "ingress_retained": freeze["ingress_retained"],
+        "ingress_loss_accepted": freeze["ingress_loss_accepted"],
+        "loss_acceptance_reference": freeze["loss_acceptance_reference"],
         "sources": {"mysql": {**mysql, "databases": list(MYSQL_DATABASES)},
                     "tdengine": {**tdengine, "database": database}},
         "integrity": {"algorithm": "sha256", "checksum_file": CHECKSUM_FILE,

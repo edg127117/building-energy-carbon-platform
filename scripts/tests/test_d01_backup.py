@@ -200,6 +200,39 @@ class TestD01Backup(unittest.TestCase):
         with self.assertRaisesRegex(backup_tool.BackupError, "PARTIAL_BACKUP_REJECTED"):
             backup_tool.validate(partials[0])
 
+    def test_accepted_loss_backup_preserves_authorization_and_still_checks_writers(self):
+        state = json.loads(self.freeze.read_text(encoding="utf-8"))
+        state.update(ingress_retained=False, ingress_loss_accepted=True,
+                     loss_acceptance_reference="approved test maintenance")
+        self.write_json(self.freeze, state)
+        folder = self.create()
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        self.assertFalse(manifest["ingress_retained"])
+        self.assertTrue(manifest["ingress_loss_accepted"])
+        self.assertEqual(manifest["loss_acceptance_reference"], "approved test maintenance")
+        backup_tool.validate(folder)
+        with self.assertRaisesRegex(backup_tool.BackupError, "WRITER_SERVICE_NOT_INACTIVE"):
+            self.create(FakeRunner(active_after_dump=True))
+
+    def test_incomplete_or_contradictory_ingress_decision_never_runs_backup(self):
+        original = json.loads(self.freeze.read_text(encoding="utf-8"))
+        for changes in (
+            {"ingress_retained": False},
+            {"ingress_retained": True, "ingress_loss_accepted": True},
+            {"ingress_retained": False, "ingress_loss_accepted": True},
+            {"ingress_retained": False, "ingress_loss_accepted": True, "loss_acceptance_reference": " "},
+            {"ingress_retained": False, "ingress_loss_accepted": True,
+             "loss_acceptance_reference": "approved", "writers_fenced": False},
+            {"ingress_retained": None, "ingress_loss_accepted": True, "loss_acceptance_reference": "approved"},
+        ):
+            with self.subTest(changes=changes):
+                self.write_json(self.freeze, {**original, **changes})
+                runner = FakeRunner()
+                with self.assertRaises(backup_tool.BackupError):
+                    self.create(runner)
+                self.assertEqual([], runner.calls)
+                self.assertEqual([], list(self.root.iterdir()))
+
     def test_all_external_commands_receive_metadata_or_dump_deadlines(self):
         runner = FakeRunner()
         self.create(runner)
