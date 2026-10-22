@@ -131,24 +131,17 @@ else:print((pathlib.Path(os.environ['TEST_BASE'])/'current/web/index.html').read
         self.assertEqual(self.config.read_bytes(), self.original)
         self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
 
-    def test_preserved_mode_keeps_existing_control_configuration(self):
+    def test_obsolete_preserve_flag_cannot_keep_test_controls_closed(self):
         self.env["BEC_TEST_PRESERVE_CONTROL_CONFIG"] = "true"
         self.runtime.write_text("AUDIT_ENVIRONMENT_MODE=TEST\0DAIKIN_CONTROL_ENABLED=false\0")
         result = self.deploy()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertIn("DAIKIN_TEST_CONFIG_PRESERVED", result.stdout)
-
-    def test_preserved_mode_rejects_runtime_override_and_restores_release(self):
-        self.env.update(BEC_TEST_PRESERVE_CONTROL_CONFIG="true", TEST_RUNTIME_OVERRIDE="1")
-        self.original = b"UNRELATED=preserved\nDAIKIN_CONTROL_ENABLED=true\n"
-        self.config.write_bytes(self.original)
-        self.runtime.write_text("AUDIT_ENVIRONMENT_MODE=TEST\0DAIKIN_CONTROL_ENABLED=true\0")
-        result = self.deploy()
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("TEST_CONTROL_PRESERVED_CONFIG_MISMATCH", result.stderr)
-        self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertIn("DAIKIN_TEST_OPEN_DEPLOY_VERIFIED", result.stdout)
+        self.assertIn(b"DAIKIN_CONTROL_ENABLED=true\n", self.config.read_bytes())
+        self.assertIn(b"DAIKIN_CONTROL_TEST_OPEN_CONTROLS=true\n", self.config.read_bytes())
+        backups = list((self.base / "backups").glob("*/control-before.env"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), self.original)
 
 
 if __name__ == "__main__":

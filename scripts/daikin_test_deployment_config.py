@@ -1,7 +1,6 @@
 """仅供固定测试发布入口使用；配置不随应用产物替换，也不发送控制。"""
 
 import os
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -74,24 +73,6 @@ def verify(runtime):
         raise SystemExit("TEST_CONTROL_RUNTIME_CONFIG_MISMATCH")
 
 
-def preserve(config, backup, runtime):
-    require_test(runtime)
-    with backup.open("xb") as stream:
-        os.chmod(backup, 0o600)
-        stream.write(config.read_bytes())
-    # 文件与实际进程分别留证，重启后不能因另一份环境文件覆盖而悄悄改变控制边界。
-    with backup.with_suffix(".runtime.json").open("x", encoding="utf-8") as stream:
-        os.chmod(stream.name, 0o600)
-        json.dump({key: runtime.get(key) for key in TEST_SETTINGS}, stream)
-
-
-def verify_preserved(config, backup, runtime):
-    require_test(runtime)
-    before = json.loads(backup.with_suffix(".runtime.json").read_text())
-    if config.read_bytes() != backup.read_bytes() or before != {key: runtime.get(key) for key in TEST_SETTINGS}:
-        raise SystemExit("TEST_CONTROL_PRESERVED_CONFIG_MISMATCH")
-
-
 def restore(config, backup):
     atomic_write(config, backup.read_bytes())
 
@@ -102,11 +83,6 @@ if __name__ == "__main__":
     service = "building-energy-carbon-test-platform.service"
     if action == "prepare":
         prepare(config, Path(sys.argv[2]), runtime_settings(service))
-    elif action == "preserve":
-        preserve(config, Path(sys.argv[2]), runtime_settings(service))
-    elif action == "verify-preserved":
-        verify_preserved(config, Path(sys.argv[2]), runtime_settings(service))
-        print("DAIKIN_TEST_CONFIG_PRESERVED")
     elif action == "verify":
         verify(runtime_settings(service))
         print("DAIKIN_TEST_OPEN_DEPLOY_VERIFIED")
