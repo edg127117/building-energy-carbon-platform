@@ -107,20 +107,21 @@ else:print((pathlib.Path(os.environ['TEST_BASE'])/'current/web/index.html').read
         self.assertEqual((self.base / "current").resolve(), self.base / "releases/next-candidate")
         self.assertEqual(len(list((self.base / "backups").glob("*/control-before.env"))), 2)
 
-    def test_restart_failure_restores_release_and_exact_configuration(self):
+    def test_restart_failure_keeps_candidate_stopped_and_restores_exact_configuration(self):
         self.env["TEST_FAIL_RESTART"] = "1"
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("TEST_DEPLOY_FAIL_STOP_D01_GUARD", result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/candidate")
 
-    def test_runtime_override_fails_acceptance_and_rolls_back(self):
+    def test_runtime_override_fails_acceptance_and_keeps_candidate_stopped(self):
         self.env["TEST_RUNTIME_OVERRIDE"] = "1"
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("TEST_CONTROL_RUNTIME_CONFIG_MISMATCH", result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/candidate")
 
     def test_non_test_environment_never_opens_or_switches_release(self):
         self.env["TEST_MODE"] = "PRODUCTION"

@@ -197,7 +197,8 @@ public class EnergyAggregationGovernanceRepository {
     public void correctionChanged(CorrectionVersionRow row) {
         long time=Long.parseLong(row.originalFactIdentity().substring(row.originalFactIdentity().lastIndexOf('@')+1));
         com.platform.iot.reliability.TelemetryConflictService.enqueue(jdbc,row.meterPointId(),row.buildingId(),time,row.correctionVersionId(),maxDerived);
-        jdbc.update("UPDATE biz_telemetry_raw_intent SET conflict_state='RESOLVED' WHERE point_id=? AND event_ms=? AND conflict_state='PENDING_REVIEW'",row.meterPointId(),time);
+        // 批准与派生入队、审计同事务；移交普通选择时只清当前指针，原处置版本仍保留作证据。
+        jdbc.update("UPDATE biz_telemetry_raw_intent SET selected_json=NULL,conflict_state=CASE WHEN conflict_state='PENDING_REVIEW' THEN 'RESOLVED' ELSE conflict_state END WHERE point_id=? AND event_ms=?",row.meterPointId(),time);
     }
 
     public List<CorrectionVersionRow> correctionsAsOf(String building,String point,LocalDateTime asOf) {

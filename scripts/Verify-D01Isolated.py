@@ -154,6 +154,9 @@ def scenarios(mysql_id, td_id):
     run("verify", "HISTORICAL", "50", "0")
     assert "RESULT=PLATFORM_PERSISTED" in run(*write("historical_same", "HISTORICAL", 50))
     run("verify", "HISTORICAL", "50", "1")
+    run(*write("retire_id", "retire", 70))
+    assert "RESULT=MESSAGE_CONFLICT" in run(*write("retire_id", "retire", 80))
+    run("archive_retired", "retire", "retire_id")
     emit("D01_APPLICATION_COMPONENT_CHECKS_PASSED")
     emit("BOUNDARY: real repository, ledger, message journal, V2 service, MyBatis receipt and two-metric replay; normalized validation/config dependencies are controlled fixtures. No MQTT, real devices, running test system or throughput acceptance.")
 

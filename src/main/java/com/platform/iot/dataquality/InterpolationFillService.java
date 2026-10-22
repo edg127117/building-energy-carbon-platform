@@ -49,6 +49,7 @@ public class InterpolationFillService {
 
     public static final String ALGORITHM_VERSION = "LINEAR_V1";
     private static final long MINUTE_MILLIS = 60_000L;
+    private static final int MAX_CONFIRMED_GAP_MINUTES = 5000;
     private static final ZoneId PROJECT_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final DataQualityProperties properties;
@@ -122,12 +123,33 @@ public class InterpolationFillService {
         if(changed.dataQuality()!=0)throw new IllegalArgumentException("Confirmed endpoint must be Q0");
         PointRuntimeConfig point=pointConfigProvider.findAll().stream()
                 .filter(p->p.pointId().equals(changed.pointId())&&p.buildingId().equals(changed.buildingId()))
-                .filter(this::isEligiblePoint).findFirst().orElse(null);
-        if(point==null)return;
+                .findFirst().orElseThrow(()->new IllegalStateException("Confirmed interpolation point unavailable"));
+        if(!isEligiblePoint(point)) {
+            // 累计量等本来不参与插值的点可正常结束；只有遗留 Q1 依赖才需要阻止假完成。
+            boolean hasQ1=correctionRows(point,changed.minuteStart()-MINUTE_MILLIS,
+                    changed.minuteStart()+2*MINUTE_MILLIS).stream()
+                    .anyMatch(r->r.dataQuality()==1&&r.minuteStart()!=changed.minuteStart());
+            if(hasQ1)throw new IllegalStateException("Confirmed interpolation point ineligible with historical Q1");
+            return;
+        }
         int gap=properties.getInterpolation().getMaxGapMinutes();
+        if(gap<1||gap>MAX_CONFIRMED_GAP_MINUTES)throw new IllegalStateException("Confirmed interpolation capacity exceeded");
         long radius=(gap+1L)*MINUTE_MILLIS;
-        List<RawMinuteAggregate> range=minuteRepository.findRange(Set.of(point.pointId()),
-                changed.minuteStart()-radius,changed.minuteStart()+radius+MINUTE_MILLIS);
+        long from=changed.minuteStart()-radius,to=changed.minuteStart()+radius+MINUTE_MILLIS;
+        List<RawMinuteAggregate> range=correctionRows(point,from,to);
+        // 当前自动补点范围可能已缩小；只按相邻现存 Q1 的冻结证据扩展，不能漏掉旧任务依赖。
+        for(int direction:new int[]{-1,1}) {
+            long adjacentAt=changed.minuteStart()+direction*MINUTE_MILLIS;
+            var adjacent=range.stream().filter(r->r.minuteStart()==adjacentAt&&r.dataQuality()==1).findFirst();
+            boolean endpointPresent=range.stream().anyMatch(r->r.dataQuality()==0
+                    &&(direction<0?r.minuteStart()<changed.minuteStart():r.minuteStart()>changed.minuteStart()));
+            if(adjacent.isPresent()&&!endpointPresent) {
+                long endpoint=historicalEndpoint(point,changed.minuteStart(),adjacent.orElseThrow(),direction);
+                if(direction<0)from=Math.min(from,endpoint);else to=Math.max(to,endpoint+MINUTE_MILLIS);
+            }
+        }
+        if(from<changed.minuteStart()-radius||to>changed.minuteStart()+radius+MINUTE_MILLIS)
+            range=correctionRows(point,from,to);
         RawMinuteAggregate confirmed=range.stream().filter(r->r.pointId().equals(point.pointId())
                 &&r.buildingId().equals(point.buildingId())&&r.minuteStart()==changed.minuteStart()&&r.dataQuality()==0)
                 .findFirst().orElseThrow(()->new IllegalStateException("Confirmed endpoint unavailable"));
@@ -138,8 +160,39 @@ public class InterpolationFillService {
                 .max(Comparator.comparingLong(RawMinuteAggregate::minuteStart)).orElse(null);
         RawMinuteAggregate right=rows.stream().filter(r->r.dataQuality()==0&&r.minuteStart()>changed.minuteStart())
                 .min(Comparator.comparingLong(RawMinuteAggregate::minuteStart)).orElse(null);
-        if(left!=null)correctGap(point,left,confirmed,rows,finalizedAt,gap);
-        if(right!=null)correctGap(point,confirmed,right,rows,finalizedAt,gap);
+        for(int direction:new int[]{-1,1}) {
+            boolean hasQ1=rows.stream().anyMatch(r->r.dataQuality()==1
+                    &&r.minuteStart()==changed.minuteStart()+direction*MINUTE_MILLIS);
+            if(hasQ1&&(direction<0?left:right)==null)
+                throw new IllegalStateException("Historical interpolation endpoint unavailable");
+        }
+        if(left!=null)correctGap(point,left,confirmed,rows,finalizedAt,
+                Math.max(gap,Math.toIntExact((confirmed.minuteStart()-left.minuteStart())/MINUTE_MILLIS-1)));
+        if(right!=null)correctGap(point,confirmed,right,rows,finalizedAt,
+                Math.max(gap,Math.toIntExact((right.minuteStart()-confirmed.minuteStart())/MINUTE_MILLIS-1)));
+    }
+
+    private List<RawMinuteAggregate> correctionRows(PointRuntimeConfig point,long from,long to) {
+        return minuteRepository.findRange(Set.of(point.pointId()),from,to).stream()
+                .filter(r->r.pointId().equals(point.pointId())&&r.buildingId().equals(point.buildingId())).toList();
+    }
+
+    /** 历史端点只限定依赖范围，数值仍须回读现存 Q0；证据损坏或过大时保留失败任务。 */
+    private long historicalEndpoint(PointRuntimeConfig point,long changed,RawMinuteAggregate adjacent,int direction) {
+        var task=fillTaskRepository.findByIdForUpdate(requireText(adjacent.qualityTaskId(),"previousTaskId"))
+                .orElseThrow(()->new IllegalStateException("Previous interpolation evidence unavailable"));
+        if(task.getSourceType()!=FillSourceType.INTERPOLATION||!point.pointId().equals(task.getPointId())
+                ||!point.buildingId().equals(task.getBuildingId())||task.getApplyStatus()==FillApplyStatus.VOIDED)
+            throw new IllegalStateException("Previous interpolation ownership or status mismatch");
+        var evidence=(FillTaskEvidence.Interpolation)evidenceCodec.decode(task.getSourceType(),task.getEvidenceJson());
+        if(!ALGORITHM_VERSION.equals(evidence.algorithmVersion())||evidence.leftMinute()>changed||evidence.rightMinute()<changed
+                ||adjacent.minuteStart()<=evidence.leftMinute()||adjacent.minuteStart()>=evidence.rightMinute())
+            throw new IllegalStateException("Previous interpolation endpoint mismatch");
+        long endpoint=direction<0?evidence.leftMinute():evidence.rightMinute();
+        long distance=direction<0?Math.subtractExact(changed,endpoint):Math.subtractExact(endpoint,changed);
+        if(distance<MINUTE_MILLIS||distance>(MAX_CONFIRMED_GAP_MINUTES+1L)*MINUTE_MILLIS)
+            throw new IllegalStateException("Historical interpolation capacity exceeded");
+        return endpoint;
     }
 
     private void correctGap(PointRuntimeConfig point,RawMinuteAggregate left,RawMinuteAggregate right,
@@ -151,6 +204,22 @@ public class InterpolationFillService {
             throw new IllegalStateException("Confirmed interpolation outside point range");
         Map<Long,RawMinuteAggregate> existing=rows.stream().collect(Collectors.toMap(
                 RawMinuteAggregate::minuteStart,r->r,(first,ignored)->first));
+        // 复用人工作废的任务行锁；先核验旧归属再独立建任务，避免留下可恢复的无效 WAITING 任务。
+        Set<String> checked=new java.util.HashSet<>();
+        for(var minute:interpolation) {
+            var old=existing.get(minute.minuteStart());
+            if(old!=null&&old.dataQuality()==1) {
+                String prior=requireText(old.qualityTaskId(),"previousTaskId");
+                if(checked.add(prior)) {
+                    var evidence=fillTaskRepository.findByIdForUpdate(prior)
+                            .orElseThrow(()->new IllegalStateException("Previous interpolation evidence unavailable"));
+                    if(evidence.getSourceType()!=FillSourceType.INTERPOLATION
+                            ||!point.pointId().equals(evidence.getPointId())||!point.buildingId().equals(evidence.getBuildingId())
+                            ||evidence.getApplyStatus()==FillApplyStatus.VOIDED)
+                        throw new IllegalStateException("Previous interpolation ownership or status mismatch");
+                }
+            }
+        }
         var candidate=newTask(point,left,right,interpolation.size(),finalizedAt);
         // 幂等键包含端点值；不能复用原自动任务中已冻结的旧端点证据。
         String content=point.pointId()+":"+left.minuteStart()+":"+Double.toString(left.averageValue())+":"+left.finalizedAt()
@@ -170,11 +239,6 @@ public class InterpolationFillService {
             String prior=null;
             if(old!=null&&old.dataQuality()==1&&!taskId.equals(old.qualityTaskId())) {
                 prior=requireText(old.qualityTaskId(),"previousTaskId");
-                var evidence=fillTaskRepository.findById(prior)
-                        .orElseThrow(()->new IllegalStateException("Previous interpolation evidence unavailable"));
-                if(evidence.getSourceType()!=FillSourceType.INTERPOLATION
-                        ||!point.pointId().equals(evidence.getPointId())||!point.buildingId().equals(evidence.getBuildingId()))
-                    throw new IllegalStateException("Previous interpolation ownership mismatch");
             }
             replacements.computeIfAbsent(prior,ignored->new ArrayList<>())
                     .add(generatedMinute(point,minute,finalizedAt,taskId));

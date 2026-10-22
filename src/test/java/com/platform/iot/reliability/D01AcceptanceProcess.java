@@ -111,6 +111,17 @@ public class D01AcceptanceProcess {
             check(jdbc.queryForObject("SELECT COUNT(*) FROM biz_telemetry_raw_intent WHERE point_id=? AND storage_state<>'PERSISTED'",Integer.class,point)==0,"Pending raw");
             System.out.println("VERIFIED point="+point+" original="+value);return;
         }
+        if(mode.equals("archive_retired")) {
+            String point=args[1],id=args[2];
+            raw.deletePointBefore("st_raw_event_"+point,time()+1);
+            raw.deletePointBefore("st_raw_event_"+point+"_2",time()+1);
+            check(ledger.find(point,time())==null,"Retired raw intent remains");
+            journal.materializeConflicts(id,ledger,codec);
+            check(jdbc.queryForObject("SELECT materialized FROM biz_telemetry_message_conflict WHERE canonical_message_id=?",Integer.class,id)==3,"Retired message did not archive");
+            check("ORIGINAL_RETIRED_USE_HISTORICAL_REVIEW".equals(jdbc.queryForObject("SELECT last_error FROM biz_telemetry_message_conflict WHERE canonical_message_id=?",String.class,id)),"Archive reason missing");
+            check(td.queryForList("SELECT val FROM "+database+".st_raw_event WHERE point_id='"+point+"' AND ts="+time()).isEmpty(),"Retired raw was resurrected");
+            System.out.println("VERIFIED retired_message_archived_without_resurrection=yes");return;
+        }
         if(mode.equals("correct")) {
             String point=args[1];var scope=mock(BuildingScopeService.class);
             var service=new TelemetryConflictService(jdbc,ledger,codec,new EnergyAggregationAuthorization(mock(BackendDutyService.class),scope),mock(EnergyAggregationGovernanceService.class),scope,e->jdbc.update("INSERT INTO d01_audit VALUES (?)",e.actionType()),new AuditGovernanceProperties());
@@ -118,11 +129,35 @@ public class D01AcceptanceProcess {
             var view=service.detail(7,List.of("BUILDING_OWNER"),point,time());
             double chosen=Double.parseDouble(args[2]);String evidence=view.variants().stream().filter(v->v.event().value()==chosen).findFirst().orElseThrow().evidenceId();
             var tx=new TransactionTemplate(new DataSourceTransactionManager(ds));tx.executeWithoutResult(s->service.resolve(7,List.of("BUILDING_OWNER"),point,time(),new TelemetryConflictService.ResolveRequest(evidence,view.revision(),"设备报文核实","隔离验收工单")));
-            check(raw.findMeterPointHistory("B1","E_"+point,point,time(),time()+1,null,10).getFirst().value()==chosen,"History correction missing");
-            check(raw.findLatestByEquipmentPoints("B1","E_"+point,List.of(point)).getFirst().value()==chosen,"Latest correction missing");
-            check(Math.abs(raw.findEquipmentTrend("B1","E_"+point,List.of(point),time(),time()+1,60).getFirst().average()-chosen)<1e-9,"Trend correction missing");
-            check(raw.findWindow(time(),time()+1,true).stream().filter(e->e.pointId().equals(point)).findFirst().orElseThrow().value()==chosen,"Calculation correction missing");
+            checkEffectiveReads(raw,point,chosen);
             System.out.println("VERIFIED effective_reads_and_calculation="+chosen+" original="+view.original().value());
+            // 审核权限由 H2/HTTP 回归覆盖；此处只验证真实 MySQL 批准事务的交接、回滚与 TDengine 查询。
+            jdbc.update("INSERT INTO biz_energy_activity_correction VALUES ('C_HANDOFF',?,'B1',?)",point,RawTelemetryLedger.identity(point,time()));
+            jdbc.update("INSERT INTO biz_energy_activity_correction_version VALUES ('CV_HANDOFF','C_HANDOFF',?,130,'PENDING_REVIEW')",view.original().value());
+            checkEffectiveReads(raw,point,chosen);
+            var approved=mock(EnergyAggregationGovernanceRepository.CorrectionVersionRow.class);
+            when(approved.meterPointId()).thenReturn(point);when(approved.buildingId()).thenReturn("B1");
+            when(approved.originalFactIdentity()).thenReturn(RawTelemetryLedger.identity(point,time()));
+            when(approved.correctionVersionId()).thenReturn("CV_HANDOFF");
+            var governance=new EnergyAggregationGovernanceRepository(jdbc);
+            tx.executeWithoutResult(s->{
+                jdbc.update("UPDATE biz_energy_activity_correction_version SET status='APPROVED' WHERE correction_version_id='CV_HANDOFF'");
+                governance.correctionChanged(approved);checkEffectiveReads(raw,point,130);s.setRollbackOnly();
+            });
+            checkEffectiveReads(raw,point,chosen);
+            tx.executeWithoutResult(s->{
+                jdbc.update("UPDATE biz_energy_activity_correction_version SET status='APPROVED' WHERE correction_version_id='CV_HANDOFF'");
+                governance.correctionChanged(approved);
+            });
+            checkEffectiveReads(raw,point,130);
+            System.out.println("VERIFIED energy_handoff_pending_rollback_approval_effective_reads=130");
         }
+    }
+
+    private static void checkEffectiveReads(TdengineHvacRawEventRepository raw,String point,double chosen) {
+        check(raw.findMeterPointHistory("B1","E_"+point,point,time(),time()+1,null,10).getFirst().value()==chosen,"History correction missing");
+        check(raw.findLatestByEquipmentPoints("B1","E_"+point,List.of(point)).getFirst().value()==chosen,"Latest correction missing");
+        check(Math.abs(raw.findEquipmentTrend("B1","E_"+point,List.of(point),time(),time()+1,60).getFirst().average()-chosen)<1e-9,"Trend correction missing");
+        check(raw.findWindow(time(),time()+1,true).stream().filter(e->e.pointId().equals(point)).findFirst().orElseThrow().value()==chosen,"Calculation correction missing");
     }
 }

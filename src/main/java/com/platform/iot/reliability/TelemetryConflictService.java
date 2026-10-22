@@ -127,7 +127,7 @@ public class TelemetryConflictService {
         var buildings=jdbc.queryForList("SELECT building_id FROM biz_telemetry_message_intent WHERE canonical_message_id=?",String.class,id);
         if(buildings.isEmpty())throw new BusinessException(404,"消息证据不存在");
         read(user,roles,buildings.getFirst());
-        return jdbc.queryForList("SELECT payload_hash,snapshot_json,first_seen_ms,last_seen_ms,attempt_count,materialized FROM biz_telemetry_message_conflict WHERE canonical_message_id=? ORDER BY first_seen_ms LIMIT 16",id);
+        return jdbc.queryForList("SELECT payload_hash,snapshot_json,first_seen_ms,last_seen_ms,attempt_count,materialized,last_error FROM biz_telemetry_message_conflict WHERE canonical_message_id=? ORDER BY first_seen_ms LIMIT 16",id);
     }
 
     @Transactional(rollbackFor=Exception.class)
@@ -189,8 +189,9 @@ public class TelemetryConflictService {
                 VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """,RawTelemetryLedger.id(),fact.pointKey(),time,version,fact.conflictRevision()+1,request.evidenceId(),codec.encode(candidate),
                 reason,user,System.currentTimeMillis(),correction);
-        jdbc.update("UPDATE biz_telemetry_raw_intent SET conflict_state=?,selection_version=?,selected_json=?,conflict_revision=conflict_revision+1 WHERE point_key=? AND event_ms=?",
-                state,version,energyPoint?null:codec.encode(candidate),fact.pointKey(),time);
+        // 转为能源治理后，待审版本不能提前撤销原有普通选择；批准事务再原子移交有效值来源。
+        jdbc.update("UPDATE biz_telemetry_raw_intent SET conflict_state=?,selection_version=?,selected_json=CASE WHEN ? THEN selected_json ELSE ? END,conflict_revision=conflict_revision+1 WHERE point_key=? AND event_ms=?",
+                state,version,energyPoint,codec.encode(candidate),fact.pointKey(),time);
         if (!energyPoint) enqueue(jdbc,point,fact.buildingId(),time,"telemetry:"+version,maxDerived);
         audit(user,fact.buildingId(),"RESOLVE_TELEMETRY_CONFLICT",RawTelemetryLedger.identity(point,time),correction,
                 "state="+state+";selection="+version+";evidence="+request.evidenceId()+";reference="+reference+";reason="+reason);

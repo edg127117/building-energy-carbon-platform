@@ -135,10 +135,10 @@ public class TelemetryConflictRecovery {
             for(String id:old)jdbc.update("DELETE FROM biz_telemetry_message_intent WHERE canonical_message_id=? AND state='COMPLETE' AND NOT EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=biz_telemetry_message_intent.canonical_message_id)",id);
             if(old.size()<500)break;
         }
-        var messageIds=jdbc.queryForList("SELECT i.canonical_message_id FROM biz_telemetry_message_intent i WHERE i.state='COMPLETE' AND EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=i.canonical_message_id AND c.last_seen_ms<? AND c.materialized IN (1,2)) ORDER BY i.created_ms LIMIT 100",String.class,cutoff);
+        var messageIds=jdbc.queryForList("SELECT i.canonical_message_id FROM biz_telemetry_message_intent i WHERE i.state='COMPLETE' AND EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=i.canonical_message_id AND c.last_seen_ms<? AND c.materialized IN (1,2,3)) ORDER BY i.created_ms LIMIT 100",String.class,cutoff);
         for(String id:messageIds)tx.executeWithoutResult(status->{
             jdbc.queryForObject("SELECT canonical_message_id FROM biz_telemetry_message_intent WHERE canonical_message_id=? FOR UPDATE",String.class,id);
-            int removed=jdbc.update("DELETE FROM biz_telemetry_message_conflict WHERE canonical_message_id=? AND last_seen_ms<? AND materialized IN (1,2)",id,cutoff);
+            int removed=jdbc.update("DELETE FROM biz_telemetry_message_conflict WHERE canonical_message_id=? AND last_seen_ms<? AND materialized IN (1,2,3)",id,cutoff);
             if(removed>0)jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-? WHERE budget_key='MESSAGE_EVIDENCE'",removed);
         });
         var retired=jdbc.query("SELECT i.* FROM biz_telemetry_raw_intent i JOIN biz_telemetry_retention_boundary b ON i.point_key=b.point_key WHERE i.storage_state='PERSISTED' AND i.event_ms<b.before_ms AND i.first_conflict_ms<? AND NOT EXISTS(SELECT 1 FROM biz_telemetry_resolution r WHERE r.point_key=i.point_key AND r.event_ms=i.event_ms) ORDER BY i.first_conflict_ms LIMIT 100",RawTelemetryLedger::mapFact,cutoff);

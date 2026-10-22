@@ -94,15 +94,20 @@ public class RawTelemetryLedger {
         });
     }
 
-    public void retainIfKnown(RawTelemetryEvent incoming) {
-        tx.executeWithoutResult(status->{
+    public enum RetentionResult { RETAINED, UNKNOWN, RETIRED }
+
+    /** 与退役共用点锁，区分暂缺意图和永久退役，避免不可恢复的消息长期占用恢复配额。 */
+    public RetentionResult retainIfKnown(RawTelemetryEvent incoming) {
+        return tx.execute(status->{
             String key=codec.key(incoming.pointId());
             var boundaries=jdbc.queryForList("SELECT before_ms FROM biz_telemetry_retention_boundary WHERE point_key=? FOR UPDATE",Long.class,key);
-            if(boundaries.isEmpty()||incoming.eventTime()<boundaries.getFirst())return;
+            if(boundaries.isEmpty())return RetentionResult.UNKNOWN;
+            if(incoming.eventTime()<boundaries.getFirst())return RetentionResult.RETIRED;
             var rows=jdbc.query("SELECT * FROM biz_telemetry_raw_intent WHERE point_key=? AND event_ms=? FOR UPDATE",RawTelemetryLedger::mapFact,key,incoming.eventTime());
-            if(rows.isEmpty())return;
+            if(rows.isEmpty())return RetentionResult.UNKNOWN;
             String hash=codec.hash(incoming);
             if(!hash.equals(rows.getFirst().hash()))appendConflict(rows.getFirst(),incoming,hash);
+            return RetentionResult.RETAINED;
         });
     }
 
@@ -192,30 +197,41 @@ public class RawTelemetryLedger {
         String marks = String.join(",", Collections.nCopies(pointIds.size(), "?"));
         List<Object> args = new ArrayList<>(pointIds); args.add(from); args.add(to);
         Map<String, Selection> result = new HashMap<>();
-        jdbc.query("SELECT * FROM biz_telemetry_raw_intent WHERE point_id IN (" + marks + ") AND event_ms>=? AND event_ms<? AND selected_json IS NOT NULL LIMIT 5001",
-                (ResultSet rs) -> {
-                    if (result.size()>=5000) throw new IllegalStateException("Correction query capacity exceeded");
-                    RawTelemetryEvent base = codec.decode(rs.getString("snapshot_json"));
-                    RawTelemetryEvent chosen = codec.decode(rs.getString("selected_json"));
-                    result.put(identity(base.pointId(), base.eventTime()), new Selection(base.pointId(), base.eventTime(), base.value(), chosen.value(), "telemetry:" + rs.getInt("selection_version")));
-                }, args.toArray());
-        // 能源治理以 pointId@eventTime 标识原始事实，保持已有审批和精度边界。
-        final int[] correctionCount = {0};
-        jdbc.query("""
-                SELECT c.meter_point_id,c.original_fact_identity,v.original_value,v.corrected_value,v.correction_version_id
+        // 两类来源必须在同一 SQL 快照读取，避免批准恰好发生在两次查询之间而读到交接前后两份值。
+        // selection_version 也指向待审提交，普通取值证据仍指向最后一次普通处置。
+        String sql="""
+                (SELECT i.point_id,i.event_ms,i.snapshot_json,i.selected_json,
+                  (SELECT MAX(r.version_no) FROM biz_telemetry_resolution r WHERE r.point_key=i.point_key
+                    AND r.event_ms=i.event_ms AND r.energy_correction_version IS NULL) AS direct_version,
+                  NULL AS original_value,NULL AS corrected_value,NULL AS correction_version_id
+                 FROM biz_telemetry_raw_intent i WHERE i.point_id IN (%s)
+                 AND i.event_ms>=? AND i.event_ms<? AND i.selected_json IS NOT NULL LIMIT 5001)
+                UNION ALL
+                (SELECT c.meter_point_id,CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0)),
+                  NULL,NULL,NULL,v.original_value,v.corrected_value,v.correction_version_id
                 FROM biz_energy_activity_correction c JOIN biz_energy_activity_correction_version v ON v.correction_id=c.correction_id
                 WHERE c.meter_point_id IN (%s) AND v.status='APPROVED'
                 AND CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0))>=?
-                AND CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0))<? LIMIT 5001
-                """.formatted(marks), (ResultSet rs) -> {
-            if (++correctionCount[0]>5000) throw new IllegalStateException("Correction query capacity exceeded");
-            String point = rs.getString(1), fact = rs.getString(2);
-            long time = Long.parseLong(fact.substring(fact.lastIndexOf('@') + 1));
-            if (time >= from && time < to) {
-                Selection value = new Selection(point, time, rs.getBigDecimal(3).doubleValue(), rs.getBigDecimal(4).doubleValue(), rs.getString(5));
-                if (result.putIfAbsent(identity(point, time), value) != null) throw new IllegalStateException("Multiple effective corrections for one fact");
+                AND CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0))<? LIMIT 5001)
+                """.formatted(marks,marks);
+        args.addAll(new ArrayList<>(args));
+        final int[] counts={0,0};
+        jdbc.query(sql,(ResultSet rs)->{
+            String correction=rs.getString("correction_version_id");
+            Selection value;
+            if(correction==null) {
+                if(++counts[0]>5000)throw new IllegalStateException("Correction query capacity exceeded");
+                RawTelemetryEvent base=codec.decode(rs.getString("snapshot_json"));
+                RawTelemetryEvent chosen=codec.decode(rs.getString("selected_json"));
+                value=new Selection(base.pointId(),base.eventTime(),base.value(),chosen.value(),"telemetry:"+rs.getInt("direct_version"));
+            } else {
+                if(++counts[1]>5000)throw new IllegalStateException("Correction query capacity exceeded");
+                value=new Selection(rs.getString("point_id"),rs.getLong("event_ms"),
+                        rs.getBigDecimal("original_value").doubleValue(),rs.getBigDecimal("corrected_value").doubleValue(),correction);
             }
-        }, args.toArray());
+            if(result.putIfAbsent(identity(value.pointId(),value.eventTime()),value)!=null)
+                throw new IllegalStateException("Multiple effective corrections for one fact");
+        },args.toArray());
         return result;
     }
 

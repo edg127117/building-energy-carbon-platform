@@ -91,7 +91,7 @@ public class TelemetryMessageJournal {
         for(var variant:variants) {
             try {
             String json=(String)variant.get("snapshot_json");
-            boolean ready=true,applicable=false;
+            boolean ready=true,applicable=false,retired=false;
             TelemetryV2Message candidate;
             try{candidate=mapper.readValue(json,TelemetryV2Message.class);}catch(JsonProcessingException failure){throw new IllegalStateException(failure);}
             var base=original.snapshot();
@@ -105,15 +105,18 @@ public class TelemetryMessageJournal {
             for(int i=0;i<base.events().size();i++) {
                 var event=base.events().get(i);
                 if(event.eventTime()!=time)continue;
-                if(ledger.find(event.pointId(),time)==null){ready=false;continue;}
                 var metric=base.message().metrics().get(i);
                 var value=candidate.metrics().stream().filter(m->metric.code().equals(m.code())&&metric.unit().equals(m.unit())).findFirst();
                 if(value.isPresent()&&Double.isFinite(value.get().value().doubleValue())) {
-                    ledger.retainIfKnown(codec.withValue(event,value.get().value().doubleValue()));applicable=true;
+                    var retained=ledger.retainIfKnown(codec.withValue(event,value.get().value().doubleValue()));
+                    if(retained==RawTelemetryLedger.RetentionResult.UNKNOWN)ready=false;
+                    else if(retained==RawTelemetryLedger.RetentionResult.RETIRED)retired=true;
+                    else applicable=true;
                 }
             }
             if(!ready)throw new IllegalStateException("Message conflict original unavailable");
-            jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=?,retry_count=0,last_error=NULL,next_retry_ms=0 WHERE canonical_message_id=? AND payload_hash=? AND materialized=0",applicable?1:2,id,variant.get("payload_hash"));
+            // 退役不补造原始事实，也不宣称更正已采用；完整报文归档至证据保留期，供既有历史审核使用。
+            jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=?,retry_count=0,last_error=?,next_retry_ms=0 WHERE canonical_message_id=? AND payload_hash=? AND materialized=0",retired?3:applicable?1:2,retired?"ORIGINAL_RETIRED_USE_HISTORICAL_REVIEW":null,id,variant.get("payload_hash"));
             } catch(RuntimeException failure) {
                 deferVariant(id,(String)variant.get("payload_hash"));
             }
