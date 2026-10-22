@@ -1,6 +1,8 @@
 package com.platform.iot.temporal.impl;
 
 import com.platform.config.TdengineProperties;
+import com.platform.iot.reliability.RawTelemetryLedger;
+import com.platform.iot.reliability.RawTelemetryCodec;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LateRawMinuteEvidence;
 import com.platform.iot.temporal.model.LatestRawReading;
@@ -22,14 +24,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
-/**
- * 使用专用 TDengine {@link JdbcTemplate} 保存和读取 HVAC 逐条真实事件。
- *
- * <p>每个标准测点使用独立子表，设备采集时间 {@code ts} 是子表内唯一键；相同
- * 时间戳再次写入会更新旧行，因此仓储先比较值与来源身份，区分完全重复和“最后上报
- * 生效”的冲突更新。分钟冻结从超级表按半开区间批量取样，迟到恢复则在 TDengine
- * 侧按测点和分钟分组，避免把大窗口原始样本全部拉回 JVM。</p>
- */
+/** 原始事实由 MySQL 唯一意图仲裁；所有入口只向 TDengine 回放首次冻结快照。 */
 @Repository
 public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
 
@@ -37,6 +32,8 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
 
     private final JdbcTemplate template;
     private final TdengineProperties properties;
+    private final RawTelemetryLedger ledger;
+    private final RawTelemetryCodec codec;
     /**
      * 只缓存本进程已经确认存在的子表，避免每条 MQTT 消息都执行一次 DDL。
      * CREATE 成功后才写入集合；如果 TDengine 暂时不可用，异常会交给上层重试，
@@ -46,62 +43,69 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
 
     public TdengineHvacRawEventRepository(
             @Qualifier("taosJdbcTemplate") JdbcTemplate template,
-            TdengineProperties properties) {
+            TdengineProperties properties, RawTelemetryLedger ledger, RawTelemetryCodec codec) {
         this.template = template;
         this.properties = properties;
+        this.ledger = ledger;
+        this.codec = codec;
     }
 
-    /**
-     * 先确保带完整标准身份标签的测点子表存在，再按事件时间执行幂等写入。
-     * 首条事件不能先查询不存在的子表，否则会把正常首报误判为存储失败。
-     */
     @Override
     public RawEventWriteResult upsert(RawTelemetryEvent event) {
-        return write(event, true);
+        return insertImmutable(event);
     }
+
+    @Override
+    public void retainConflict(RawTelemetryEvent event) {ledger.retainIfKnown(event);}
 
     @Override
     public RawEventWriteResult insertImmutable(RawTelemetryEvent event) {
-        return write(event, false);
+        var reservation = ledger.reserve(event, () -> original(event));
+        if (reservation.expired()) return RawEventWriteResult.EXPIRED;
+        if (reservation.conflict()) return RawEventWriteResult.CONFLICT_REJECTED;
+        return replayFrozen(reservation.original());
     }
 
-    private RawEventWriteResult write(RawTelemetryEvent event, boolean overwriteConflict) {
-        String table = qualifiedChild(event.pointId());
-        ensureChildTable(event, table);
-        Timestamp eventTimestamp = new Timestamp(event.eventTime());
-        List<Map<String, Object>> existing = template.queryForList(
-                "SELECT val,source_system,source_point_code,source_device_id FROM "
-                        + table + " WHERE ts=" + quote(eventTimestamp.toString()) + " LIMIT 1");
-        if (!existing.isEmpty()) {
-            Map<String, Object> currentRow = existing.getFirst();
-            double current = number(currentRow, "val").doubleValue();
-            if (Double.compare(current, event.value()) == 0
-                    && event.sourceSystem().equals(text(currentRow, "source_system"))
-                    && event.sourcePointCode().equals(text(currentRow, "source_point_code"))
-                    && event.sourceDeviceId().equals(text(currentRow, "source_device_id"))) {
+    /** 恢复只读取持久化意图，不重新解析已经变化的设备或测点绑定。 */
+    public RawEventWriteResult replayFrozen(RawTelemetryEvent event) { return replayFrozen(event,false); }
+
+    public RawEventWriteResult replayRecovered(RawTelemetryEvent event) { return replayFrozen(event,true); }
+
+    private RawEventWriteResult replayFrozen(RawTelemetryEvent event,boolean recovery) {
+        return ledger.storeFrozen(event, () -> {
+            RawTelemetryEvent existing = original(event);
+            if (existing != null) {
+                if (!codec.hash(existing).equals(codec.hash(event))
+                        || existing.receivedTime() != event.receivedTime() || existing.late() != event.late()) {
+                    throw new IllegalStateException("TDengine original differs from frozen intent");
+                }
+                if(recovery)ledger.queueRecovered(event);
                 return RawEventWriteResult.DUPLICATE;
             }
-            if (!overwriteConflict) {
-                return RawEventWriteResult.CONFLICT_UPDATED;
+            String table = qualifiedChild(event.pointId());
+            ensureChildTable(event, table);
+            template.execute("INSERT INTO " + table
+                    + " (ts,received_time,val,data_quality,late_flag,source_system,source_point_code,source_device_id) VALUES ("
+                    + event.eventTime() + "," + event.receivedTime() + "," + formatDouble(event.value()) + ","
+                    + event.dataQuality() + "," + (event.late() ? 1 : 0) + ","
+                    + quote(event.sourceSystem()) + "," + quote(event.sourcePointCode()) + ","
+                    + quote(event.sourceDeviceId()) + ")");
+            RawTelemetryEvent stored = original(event);
+            if (stored == null || !codec.hash(stored).equals(codec.hash(event))) {
+                throw new IllegalStateException("TDengine write verification failed");
             }
-        }
+            if(recovery)ledger.queueRecovered(event);
+            return RawEventWriteResult.INSERTED;
+        });
+    }
 
-        // 子表已经由 ensureChildTable 建立，这里只写普通数据列。
-        // 对相同事件时间的冲突值，TDengine 3 会覆盖旧行，从而实现“最后一次上报生效”。
-        String sql = "INSERT INTO " + table
-                + " (ts,received_time,val,data_quality,late_flag,"
-                + "source_system,source_point_code,source_device_id) VALUES ("
-                + quote(eventTimestamp.toString()) + ","
-                + quote(new Timestamp(event.receivedTime()).toString()) + ","
-                + formatDouble(event.value()) + ","
-                + event.dataQuality() + ","
-                + (event.late() ? 1 : 0) + ","
-                + quote(event.sourceSystem()) + ","
-                + quote(event.sourcePointCode()) + ","
-                + quote(event.sourceDeviceId()) + ")";
-        template.execute(sql);
-        return existing.isEmpty()
-                ? RawEventWriteResult.INSERTED : RawEventWriteResult.CONFLICT_UPDATED;
+    private RawTelemetryEvent original(RawTelemetryEvent event) {
+        // 超级表查询同时接管历史自定义子表，不能只检查约定名称而制造第二份原始事实。
+        String stable = safeIdentifier(properties.getDatabase()) + "." + safeIdentifier(properties.getStRawEvent());
+        List<Map<String, Object>> rows = template.queryForList("SELECT * FROM " + stable
+                + " WHERE LOWER(point_id)=" + quote(codec.key(event.pointId())) + " AND ts=" + event.eventTime() + " LIMIT 2");
+        if (rows.size() > 1) throw new IllegalStateException("Multiple historical raw identities");
+        return rows.isEmpty() ? null : mapEvent(rows.getFirst());
     }
 
     /**
@@ -147,12 +151,23 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + " WHERE ts >= " + quote(new Timestamp(startInclusive).toString())
                 + " AND ts < " + quote(new Timestamp(endExclusive).toString())
                 + (includeLate ? "" : " AND late_flag=0");
-        return template.queryForList(sql).stream().map(this::mapEvent).toList();
+        return ledger.effective(template.queryForList(sql).stream().map(this::mapEvent).toList());
     }
 
     @Override
     public List<RawTelemetryEvent> findPointHistory(String buildingId, String equipmentId, String pointId,
             long startInclusive, long endExclusive, Long afterExclusive, int limit) {
+        return pointHistory(buildingId,equipmentId,pointId,startInclusive,endExclusive,afterExclusive,limit,true);
+    }
+
+    @Override
+    public List<RawTelemetryEvent> findOriginalPointHistory(String buildingId,String equipmentId,String pointId,
+            long startInclusive,long endExclusive,Long afterExclusive,int limit) {
+        return pointHistory(buildingId,equipmentId,pointId,startInclusive,endExclusive,afterExclusive,limit,false);
+    }
+
+    private List<RawTelemetryEvent> pointHistory(String buildingId,String equipmentId,String pointId,
+            long startInclusive,long endExclusive,Long afterExclusive,int limit,boolean effective) {
         if (startInclusive < 0 || startInclusive >= endExclusive || limit < 1 || limit > 1001) {
             throw new IllegalArgumentException("Invalid bounded history query");
         }
@@ -163,7 +178,8 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + " AND ts<" + quote(new Timestamp(endExclusive).toString())
                 + (afterExclusive == null ? "" : " AND ts>" + quote(new Timestamp(afterExclusive).toString()))
                 + " ORDER BY ts ASC LIMIT " + limit;
-        return template.queryForList(sql).stream().map(this::mapEvent).toList();
+        var events=template.queryForList(sql).stream().map(this::mapEvent).toList();
+        return effective?ledger.effective(events):events;
     }
 
     @Override
@@ -179,7 +195,7 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + " AND ts<" + quote(new Timestamp(endExclusive).toString())
                 + (afterExclusive == null ? "" : " AND ts>" + quote(new Timestamp(afterExclusive).toString()))
                 + " ORDER BY ts ASC LIMIT " + limit;
-        return template.queryForList(sql).stream().map(this::mapEvent).toList();
+        return ledger.effective(template.queryForList(sql).stream().map(this::mapEvent).toList());
     }
 
     @Override
@@ -205,10 +221,17 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 + " AND point_id IN (" + ids + ")"
                 + " PARTITION BY point_id, point_code, building_id, system_group_id,"
                 + " equip_id, equip_code, family_code, component_code, suffix_code, is_for_calc";
-        return template.queryForList(sql).stream()
+        var rows = template.queryForList(sql);
+        if (rows.isEmpty()) return List.of();
+        long from = rows.stream().mapToLong(row -> timestamp(row,"event_time").getTime()).min().orElseThrow();
+        long to = rows.stream().mapToLong(row -> timestamp(row,"event_time").getTime()).max().orElseThrow()+1;
+        var selected = ledger.selections(pointIds, from, to);
+        return rows.stream()
                 .map(row -> new LatestRawReading(
                         text(row, "point_id"),
-                        number(row, "latest_value").doubleValue(),
+                        selected.containsKey(RawTelemetryLedger.identity(text(row, "point_id"), timestamp(row, "event_time").getTime()))
+                                ? selected.get(RawTelemetryLedger.identity(text(row, "point_id"), timestamp(row, "event_time").getTime())).selectedValue()
+                                : number(row, "latest_value").doubleValue(),
                         timestamp(row, "event_time").getTime(),
                         timestamp(row, "latest_received_time").getTime(),
                         number(row, "latest_data_quality").intValue()))
@@ -240,6 +263,7 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 SELECT point_id,
                        _wstart AS bucket_time,
                        AVG(val) AS average_value,
+                       COUNT(*) AS sample_count,
                        MAX(data_quality) AS data_quality
                 FROM %s
                 WHERE building_id=%s
@@ -258,11 +282,12 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 quote(new Timestamp(startInclusive).toString()),
                 quote(new Timestamp(endExclusive).toString()),
                 intervalSeconds);
+        var selected = ledger.selections(pointIds, startInclusive, endExclusive);
         return template.queryForList(sql).stream()
                 .map(row -> new RawTrendBucket(
                         text(row, "point_id"),
                         timestamp(row, "bucket_time").getTime(),
-                        number(row, "average_value").doubleValue(),
+                        effectiveAverage(row, selected.values(), intervalSeconds * 1000L),
                         number(row, "data_quality").intValue()))
                 .toList();
     }
@@ -368,10 +393,13 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
 
     @Override
     public void deleteBefore(long eventTimeExclusive) {
-        String stable = safeIdentifier(properties.getDatabase()) + "."
-                + safeIdentifier(properties.getStRawEvent());
-        template.execute("DELETE FROM " + stable + " WHERE ts < "
-                + quote(new Timestamp(eventTimeExclusive).toString()));
+        String cursor = null;
+        while (true) {
+            var page = findRetentionPoints(cursor, 100, "MQTT_STANDARD_V1");
+            for (var point : page) deletePointBefore(point.tableName(), eventTimeExclusive);
+            if (page.size() < 100) return;
+            cursor = page.getLast().tableName();
+        }
     }
 
     @Override
@@ -394,9 +422,11 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
 
     @Override
     public void deletePointBefore(String tableName, long eventTimeExclusive) {
-        template.execute("DELETE FROM " + safeIdentifier(properties.getDatabase()) + "."
-                + safeIdentifier(tableName) + " WHERE ts < "
-                + eventTimeExclusive);
+        String table = safeIdentifier(properties.getDatabase()) + "." + safeIdentifier(tableName);
+        var tags = template.queryForList("SELECT point_id FROM " + table + " LIMIT 1");
+        if (tags.isEmpty()) return;
+        long safe = ledger.retireBefore(text(tags.getFirst(), "point_id"), eventTimeExclusive);
+        template.execute("DELETE FROM " + table + " WHERE ts < " + safe);
     }
 
     @Override
@@ -430,11 +460,31 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
                 cursor = tableName;
                 continue;
             }
-            template.execute("DELETE FROM " + child + range);
+            long safe = ledger.retireBefore(pointId, end);
+            if (safe <= start) continue;
+            template.execute("DELETE FROM " + child + " WHERE ts >= " + start + " AND ts < " + safe);
             return new SourceDeletionScan(true, false, cursor);
         }
         boolean endOfScan = candidates.size() < 100;
         return new SourceDeletionScan(!candidates.isEmpty(), endOfScan, endOfScan ? null : cursor);
+    }
+
+    /** 前后锚点限定累计量/积分受影响窗口；缺失的一侧保守包含该点已有周期。 */
+    public long[] correctionInfluence(String pointId,long time) {
+        String stable=safeIdentifier(properties.getDatabase())+"."+safeIdentifier(properties.getStRawEvent());
+        String scope=" FROM "+stable+" WHERE point_id="+quote(pointId);
+        var before=template.queryForList("SELECT ts"+scope+" AND ts<"+time+" ORDER BY ts DESC LIMIT 1");
+        var after=template.queryForList("SELECT ts"+scope+" AND ts>"+time+" ORDER BY ts ASC LIMIT 1");
+        return new long[]{before.isEmpty()?0:timestamp(before.getFirst(),"ts").getTime(),
+                after.isEmpty()?253402214400000L:timestamp(after.getFirst(),"ts").getTime()};
+    }
+
+    private double effectiveAverage(Map<String, Object> row, Collection<RawTelemetryLedger.Selection> selected, long width) {
+        long start = timestamp(row, "bucket_time").getTime();
+        double delta = selected.stream().filter(s -> s.pointId().equals(text(row, "point_id"))
+                && s.eventTime() >= start && s.eventTime() < start + width)
+                .mapToDouble(s -> s.selectedValue() - s.originalValue()).sum();
+        return number(row, "average_value").doubleValue() + delta / number(row, "sample_count").longValue();
     }
 
     private RawTelemetryEvent mapEvent(Map<String, Object> row) {
@@ -482,7 +532,8 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
     }
 
     private String formatDouble(double value) {
-        return String.format(Locale.ROOT, "%.12f", value);
+        if (!Double.isFinite(value)) throw new IllegalArgumentException("Non-finite raw value");
+        return Double.toString(value);
     }
 
     private Object value(Map<String, Object> row, String key) {

@@ -6,6 +6,7 @@ import com.platform.iot.identity.DeviceIdentityProvider;
 import com.platform.iot.identity.DeviceIdentitySnapshotUnavailableException;
 import com.platform.iot.identity.UnknownDeviceHandler;
 import com.platform.iot.ingest.HvacIngestionResult;
+import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.ingest.HvacIngestionService;
 import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.quality.PointAliasKey;
@@ -15,6 +16,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.math.BigDecimal;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -58,17 +60,17 @@ public class StandardTelemetryIngestionService {
     /** 使用本地 MQTT 接收时间执行整批预检和单点幂等写入。 */
     public StandardTelemetryResult ingest(
             StandardTelemetryMessage message, long localReceivedTime) {
-        return ingestInternal(message, localReceivedTime, false);
+        return ingestInternal(message, localReceivedTime, false, null);
     }
 
     /** V2 复用整批校验，但禁止同一测点同一事件时间的新值覆盖旧证据。 */
     public StandardTelemetryResult ingestImmutable(
             StandardTelemetryMessage message, long localReceivedTime) {
-        return ingestInternal(message, localReceivedTime, true);
+        return ingestInternal(message, localReceivedTime, true, null);
     }
 
     private StandardTelemetryResult ingestInternal(
-            StandardTelemetryMessage message, long localReceivedTime, boolean immutable) {
+            StandardTelemetryMessage message, long localReceivedTime, boolean immutable, List<RawTelemetryEvent> capture) {
         String malformed = validateEnvelope(message, localReceivedTime);
         if (malformed != null) {
             return StandardTelemetryResult.rejected(malformed);
@@ -130,6 +132,12 @@ public class StandardTelemetryIngestionService {
                     "pointCode", item.sourcePointCode(),
                     "val", item.metric().value(),
                     "timestamp", message.eventTime());
+            if (capture!=null) {
+                try { capture.add(hvacIngestionService.prepare(singlePointPayload,localReceivedTime,standardSourceSystem)); }
+                catch (IllegalArgumentException invalid) { return StandardTelemetryResult.rejected(invalid.getMessage()); }
+                processed++;
+                continue;
+            }
             HvacIngestionResult result = immutable
                     ? hvacIngestionService.ingestImmutable(
                             singlePointPayload, localReceivedTime, standardSourceSystem)
@@ -141,14 +149,39 @@ public class StandardTelemetryIngestionService {
             if (result.outcome() == com.platform.iot.ingest.IngestionOutcome.REJECTED) {
                 return StandardTelemetryResult.rejected(result.detail());
             }
-            if (immutable && result.outcome()
-                    == com.platform.iot.ingest.IngestionOutcome.CONFLICT_UPDATED) {
+            if (result.outcome() == com.platform.iot.ingest.IngestionOutcome.CONFLICT_REJECTED) {
                 return StandardTelemetryResult.rejected(
                         "MESSAGE_CONFLICT: 同一测点同一采集时间存在不同值");
             }
             processed++;
         }
         return StandardTelemetryResult.accepted(processed);
+    }
+
+    public record PreparedBatch(StandardTelemetryResult result, List<RawTelemetryEvent> events) { }
+
+    public PreparedBatch prepareImmutable(StandardTelemetryMessage message,long received) {
+        List<RawTelemetryEvent> events=new ArrayList<>();
+        var result=ingestInternal(message,received,true,events);
+        return new PreparedBatch(result,result.outcome()==StandardTelemetryOutcome.ACCEPTED?List.copyOf(events):List.of());
+    }
+
+    public StandardTelemetryResult ingestPrepared(List<RawTelemetryEvent> events) {
+        int processed=0;
+        boolean conflict=false;
+        for (var event:events.stream().sorted(java.util.Comparator.comparing(RawTelemetryEvent::pointId)).toList()) {
+            if(conflict) {
+                try {hvacIngestionService.retainConflict(event);}
+                catch(RuntimeException unavailable){return StandardTelemetryResult.retryable(processed,"冲突证据暂时无法留存");}
+                continue;
+            }
+            var result=hvacIngestionService.writePrepared(event,true);
+            if (!result.shouldAcknowledge()) return StandardTelemetryResult.retryable(processed,result.detail());
+            if (result.outcome()==com.platform.iot.ingest.IngestionOutcome.CONFLICT_REJECTED) conflict=true;
+            else if (result.outcome()==com.platform.iot.ingest.IngestionOutcome.REJECTED) return StandardTelemetryResult.rejected(result.detail());
+            processed++;
+        }
+        return conflict?StandardTelemetryResult.rejected("MESSAGE_CONFLICT: 冲突证据已保存"):StandardTelemetryResult.accepted(processed);
     }
 
     private String validateEnvelope(StandardTelemetryMessage message, long localReceivedTime) {
@@ -164,7 +197,7 @@ public class StandardTelemetryIngestionService {
                 || !("DEVICE_REPORTED".equals(message.timeSource())
                 || "SERVER_RECEIVED".equals(message.timeSource()))
                 || message.seq() != null && message.seq() < 0
-                || message.metrics() == null || message.metrics().isEmpty()) {
+                || message.metrics() == null || message.metrics().isEmpty() || message.metrics().size()>500) {
             return "标准报文结构、版本或时间字段无效";
         }
         return null;
@@ -175,6 +208,10 @@ public class StandardTelemetryIngestionService {
                 || metric.value() == null || metric.unit() == null || metric.unit().isBlank()
                 || metric.sourceField() == null || metric.sourceField().isBlank()) {
             return "标准指标字段缺失";
+        }
+        double value=metric.value().doubleValue();
+        if(!Double.isFinite(value)||BigDecimal.valueOf(value).compareTo(metric.value())!=0) {
+            return "指标超出原始 DOUBLE 可往返精度，不能静默舍入";
         }
         if (!metricCodes.add(metric.code())) {
             return "标准报文包含重复指标: " + metric.code();

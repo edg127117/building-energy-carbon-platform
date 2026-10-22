@@ -77,8 +77,7 @@ class HvacIngestionServiceTest {
         service.ingest(payload, receivedTime);
 
         verify(repository).upsert(argThat(RawTelemetryEvent::late));
-        verify(eventPublisher).publishEvent(new HvacLateRealEventStoredEvent(
-                "POINT001", "BLD001", minuteStart, receivedTime));
+        verify(eventPublisher).publishEvent(new HvacLateRealEventStoredEvent("POINT001","BLD001",minuteStart,receivedTime));
     }
 
     @Test
@@ -101,12 +100,12 @@ class HvacIngestionServiceTest {
                 .thenReturn(accepted(EVENT_TIME));
         when(repository.upsert(any()))
                 .thenReturn(RawEventWriteResult.DUPLICATE)
-                .thenReturn(RawEventWriteResult.CONFLICT_UPDATED);
+                .thenReturn(RawEventWriteResult.CONFLICT_REJECTED);
 
         assertThat(service.ingest(payload, EVENT_TIME).outcome())
                 .isEqualTo(IngestionOutcome.DUPLICATE);
         assertThat(service.ingest(payload, EVENT_TIME).outcome())
-                .isEqualTo(IngestionOutcome.CONFLICT_UPDATED);
+                .isEqualTo(IngestionOutcome.CONFLICT_REJECTED);
     }
 
     @Test
@@ -123,18 +122,17 @@ class HvacIngestionServiceTest {
     }
 
     @Test
-    void conflictUpdatedLateEventPublishesCorrection() {
+    void conflictRejectedLateEventDoesNotPublishCorrection() {
         long minuteStart = EVENT_TIME - Math.floorMod(EVENT_TIME, 60_000L);
         long receivedTime = minuteStart + 90_001L;
         when(validator.validate(payload, receivedTime, "MQTT_FREEZE_V1"))
                 .thenReturn(accepted(receivedTime));
         when(repository.upsert(any()))
-                .thenReturn(RawEventWriteResult.CONFLICT_UPDATED);
+                .thenReturn(RawEventWriteResult.CONFLICT_REJECTED);
 
         service.ingest(payload, receivedTime);
 
-        verify(eventPublisher).publishEvent(new HvacLateRealEventStoredEvent(
-                "POINT001", "BLD001", minuteStart, receivedTime));
+        verify(eventPublisher,never()).publishEvent(any(Object.class));
     }
 
     @Test

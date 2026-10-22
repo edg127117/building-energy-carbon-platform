@@ -344,3 +344,12 @@ daikin:
     fast-readback-timeout-millis: ${DAIKIN_CONTROL_FAST_READBACK_TIMEOUT_MILLIS:60000}
     test-equipment-ids: ${DAIKIN_CONTROL_TEST_EQUIPMENT_IDS:}
     test-window-expires-at: ${DAIKIN_CONTROL_TEST_WINDOW_EXPIRES_AT:0}
+
+# D01 冲突只持久留证；容量不足保留重试，过期不自动采用未知值。
+telemetry-conflicts:
+  recovery-enabled: ${TELEMETRY_CONFLICT_RECOVERY_ENABLED:true}
+  max-variants-per-fact: ${TELEMETRY_CONFLICT_MAX_VARIANTS:16}
+  max-evidence-rows: ${TELEMETRY_CONFLICT_MAX_EVIDENCE_ROWS:50000}
+  max-pending-intents: ${TELEMETRY_CONFLICT_MAX_PENDING_INTENTS:50000}
+  unverified-days: ${TELEMETRY_CONFLICT_UNVERIFIED_DAYS:7}
+  recovery-delay-ms: ${TELEMETRY_CONFLICT_RECOVERY_DELAY_MS:60000}

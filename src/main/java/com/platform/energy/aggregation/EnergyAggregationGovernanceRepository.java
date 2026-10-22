@@ -175,6 +175,38 @@ public class EnergyAggregationGovernanceRepository {
                 """, EnergyAggregationGovernanceRepository::correctionVersion, buildingId, pointId, limit);
     }
 
+    /** 同一事实的并发审核共用身份行锁，避免两个 APPROVED 版本同时生效。 */
+    public void lockCorrectionIdentity(String correctionId) {
+        var identity=findCorrectionIdentity(correctionId);
+        String key=identity.meterPointId().toLowerCase(java.util.Locale.ROOT);
+        jdbc.update("INSERT INTO biz_telemetry_retention_boundary(point_key,before_ms) VALUES (?,0) ON DUPLICATE KEY UPDATE point_key=VALUES(point_key)",key);
+        jdbc.queryForObject("SELECT point_key FROM biz_telemetry_retention_boundary WHERE point_key=? FOR UPDATE",String.class,key);
+        jdbc.queryForObject("SELECT correction_id FROM biz_energy_activity_correction WHERE correction_id=? FOR UPDATE", String.class, correctionId);
+    }
+
+    public void requireCurrentTelemetryResolution(String versionId) {
+        var links=jdbc.queryForList("SELECT point_key,event_ms,version_no,conflict_revision FROM biz_telemetry_resolution WHERE energy_correction_version=?",versionId);
+        if(links.isEmpty())return;
+        var link=links.getFirst();
+        int current=jdbc.queryForObject("SELECT COUNT(*) FROM biz_telemetry_raw_intent WHERE point_key=? AND event_ms=? AND selection_version=? AND conflict_revision=? AND conflict_state='PENDING_REVIEW'",Integer.class,link.get("point_key"),link.get("event_ms"),link.get("version_no"),link.get("conflict_revision"));
+        if(current!=1)throw new com.platform.framework.exception.BusinessException(409,"TELEMETRY_CONFLICT_REVISION","候选冲突已变化，请重新核实后提交更正");
+    }
+
+    public void correctionChanged(CorrectionVersionRow row) {
+        long time=Long.parseLong(row.originalFactIdentity().substring(row.originalFactIdentity().lastIndexOf('@')+1));
+        com.platform.iot.reliability.TelemetryConflictService.enqueue(jdbc,row.meterPointId(),row.buildingId(),time,row.correctionVersionId());
+        jdbc.update("UPDATE biz_telemetry_raw_intent SET conflict_state='RESOLVED' WHERE point_id=? AND event_ms=? AND conflict_state='PENDING_REVIEW'",row.meterPointId(),time);
+    }
+
+    public List<CorrectionVersionRow> correctionsAsOf(String building,String point,LocalDateTime asOf) {
+        var rows=jdbc.query(correctionSelect()+" WHERE c.building_id=? AND c.meter_point_id=? AND v.status IN ('APPROVED','DISABLED') AND v.approved_at<=? ORDER BY v.approved_at DESC,v.version_no DESC LIMIT 5001",
+                EnergyAggregationGovernanceRepository::correctionVersion,building,point,asOf);
+        if(rows.size()>5000)throw new com.platform.framework.exception.BusinessException(409,"能源更正历史超出计算容量");
+        var selected=new java.util.LinkedHashMap<String,CorrectionVersionRow>();
+        for(var row:rows)selected.putIfAbsent(row.correctionId(),row);
+        return List.copyOf(selected.values());
+    }
+
     public CorrectionVersionRow findLatestApprovedCorrection(String correctionId) {
         return one(correctionSelect() + """
                  WHERE c.correction_id=? AND v.status='APPROVED'

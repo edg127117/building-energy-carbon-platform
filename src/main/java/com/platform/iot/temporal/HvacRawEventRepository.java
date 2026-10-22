@@ -26,6 +26,12 @@ public interface HvacRawEventRepository {
         throw new UnsupportedOperationException("Point history query is unavailable");
     }
 
+    /** 核算链读取原始证据后自行应用已审核更正，避免与业务展示选择重复应用。 */
+    default List<RawTelemetryEvent> findOriginalPointHistory(String buildingId,String equipmentId,String pointId,
+            long startInclusive,long endExclusive,Long afterExclusive,int limit) {
+        return findPointHistory(buildingId,equipmentId,pointId,startInclusive,endExclusive,afterExclusive,limit);
+    }
+
     /** 电表正向累计量的有界原始事件页；来源身份由分析服务逐日核验。 */
     default List<RawTelemetryEvent> findMeterPointHistory(String buildingId, String equipmentId, String pointId,
             long startInclusive, long endExclusive, Long afterExclusive, int limit) {
@@ -33,9 +39,12 @@ public interface HvacRawEventRepository {
     }
 
     /**
-     * 写入或覆盖同一测点、同一设备采集时间的事件，并区分新行、完全重复和冲突更新。
+     * 按测点和采集时间冻结首次原始事实；不同内容只留存冲突，禁止覆盖。
      */
     RawEventWriteResult upsert(RawTelemetryEvent event);
+
+    /** 仅对已经存在的事实留存候选，不为已拒绝的批次创建新的原始事实。 */
+    default void retainConflict(RawTelemetryEvent event) { throw new UnsupportedOperationException("Conflict evidence unavailable"); }
 
     /**
      * V2 可靠链使用的不可覆盖写入；相同键不同值返回冲突，但保留原值。

@@ -96,7 +96,7 @@ public class EerpPeriodCalculator {
         validateMetadata(point,input);
         var rows = input.facts().stream().filter(f -> point.pointId().equals(f.pointId())
                 && !f.eventTime().isBefore(request.fromInclusive()) && !f.eventTime().isAfter(request.toExclusive())).toList();
-        var governed = aggregation.governedEvidence(user,roles,c.buildingId(),point.pointId(),request.fromInclusive(),request.toExclusive());
+        var governed = aggregation.governedEvidence(user,roles,c.buildingId(),point.pointId(),request.fromInclusive(),request.toExclusive(),request.asOf());
         evidence.put(source+":governed",governed);
         // 累计量中的被阻断事实也不能被静默过滤；完整性失败仍保留整组原始与修正证据。
         if (rows.stream().anyMatch(f -> !allowed(f))) return new Measure(source,type,coverage,null,BigDecimal.ZERO,false,null,List.of("QUALITY_BLOCKED"));

@@ -23,7 +23,7 @@ import java.util.Map;
  * <p>上游 {@link HvacMqttMessageHandler} 传入未校验载荷；本服务先调用
  * {@link TelemetryQualityValidator} 解析 19 测点身份和质量边界，再按设备采集时间
  * 判断所属分钟及是否迟到，最后通过 {@link HvacRawEventRepository} 幂等写入
- * TDengine。返回结果由 MQTT 回调决定 QoS 1 确认：业务拒绝、重复和冲突更新均可
+ * TDengine。返回结果由 MQTT 回调决定 QoS 1 确认：业务拒绝、重复和已留存冲突均可
  * 确认，只有原始事件存储失败保留重投机会。</p>
  *
  * <p>成功写入的迟到事件还会发布 {@link HvacLateRealEventStoredEvent}，触发质量修正
@@ -112,12 +112,23 @@ public class HvacIngestionService {
             return HvacIngestionResult.rejected(validation.reason(), validation.detail());
         }
 
-        ValidatedHvacTelemetry telemetry = validation.telemetry();
+        RawTelemetryEvent event = toEvent(validation.telemetry());
+        return writePrepared(event, immutable);
+    }
+
+    /** 在任何时序写入前冻结已校验身份，恢复时不重新选择当前别名。 */
+    public RawTelemetryEvent prepare(Map<String,Object> payload,long receivedTime,String trustedSourceSystem) {
+        var validation=validator.validate(payload,receivedTime,trustedSourceSystem);
+        if (!validation.accepted()) throw new IllegalArgumentException(validation.detail());
+        return toEvent(validation.telemetry());
+    }
+
+    private RawTelemetryEvent toEvent(ValidatedHvacTelemetry telemetry) {
         long minuteStart = telemetry.eventTime() - Math.floorMod(telemetry.eventTime(), 60_000L);
         // 30秒仅决定窗口何时冻结；事件是否属于该分钟始终只看设备采集时间。
         boolean late = telemetry.receivedTime()
                 >= minuteStart + 60_000L + finalizationDelayMillis;
-        RawTelemetryEvent event = new RawTelemetryEvent(
+        return new RawTelemetryEvent(
                 telemetry.pointId(), telemetry.pointCode(),
                 telemetry.sourceSystem(), telemetry.sourcePointCode(), telemetry.sourceDeviceId(),
                 telemetry.buildingId(), telemetry.systemGroupId(),
@@ -126,6 +137,11 @@ public class HvacIngestionService {
                 telemetry.value(), telemetry.eventTime(),
                 telemetry.receivedTime(), 0, telemetry.isForCalc(), late);
 
+    }
+
+    public void retainConflict(RawTelemetryEvent event) {repository.retainConflict(event);}
+
+    public HvacIngestionResult writePrepared(RawTelemetryEvent event, boolean immutable) {
         try {
             RawEventWriteResult writeResult = retryTemplate.execute(context -> immutable
                     ? repository.insertImmutable(event) : repository.upsert(event));
@@ -141,7 +157,7 @@ public class HvacIngestionService {
     /**
      * 把 TDengine 的幂等写入语义转换为 MQTT 可消费的业务结果。
      *
-     * <p>新插入和同时间戳冲突更新会触发迟到修正通知；完全重复的数据已经存在，
+     * <p>新插入会触发迟到修正通知，未确认冲突不改变业务取值；完全重复的数据已经存在，
      * 只需确认而不重复发布修正事件。</p>
      */
     private HvacIngestionResult mapOutcome(RawEventWriteResult result, RawTelemetryEvent event) {
@@ -155,13 +171,13 @@ public class HvacIngestionService {
                 meterRegistry.counter("iot.hvac.ingestion.duplicate").increment();
                 yield HvacIngestionResult.of(IngestionOutcome.DUPLICATE);
             }
-            case CONFLICT_UPDATED -> {
+            case CONFLICT_REJECTED -> {
                 meterRegistry.counter("iot.hvac.ingestion.conflict").increment();
-                log.warn("同一测点同一设备时间出现冲突值，最后收到值生效: pointCode={}, eventTime={}, value={}",
-                        event.pointCode(), event.eventTime(), event.value());
-                publishLateStored(event);
-                yield HvacIngestionResult.of(IngestionOutcome.CONFLICT_UPDATED);
+                yield new HvacIngestionResult(IngestionOutcome.CONFLICT_REJECTED, null,
+                        "MESSAGE_CONFLICT: 冲突证据已保存，等待核实");
             }
+            case EXPIRED -> new HvacIngestionResult(IngestionOutcome.REJECTED, null, "原始事实已超出保留水位");
+
         };
     }
 

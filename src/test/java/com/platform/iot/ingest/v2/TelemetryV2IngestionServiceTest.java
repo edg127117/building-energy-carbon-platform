@@ -8,6 +8,7 @@ import com.platform.iot.ingest.standard.StandardMetric;
 import com.platform.iot.ingest.standard.StandardTelemetryIngestionService;
 import com.platform.iot.ingest.standard.StandardTelemetryResult;
 import com.platform.iot.reliability.AckMode;
+import com.platform.iot.reliability.TelemetryMessageJournal;
 import com.platform.iot.reliability.CorrelationPolicy;
 import com.platform.iot.reliability.ReceiptStatus;
 import com.platform.iot.reliability.mapper.TelemetryReceiptFailureMapper;
@@ -48,16 +49,34 @@ class TelemetryV2IngestionServiceTest {
         receiptMapper = mock(TelemetryReceiptMapper.class);
         failureMapper = mock(TelemetryReceiptFailureMapper.class);
         unknownDeviceHandler = mock(UnknownDeviceHandler.class);
+        var journal=mock(TelemetryMessageJournal.class);
+        var entries=new java.util.HashMap<String,TelemetryMessageJournal.Entry>();
+        org.mockito.Mockito.lenient().when(journal.find(any())).thenAnswer(i->entries.get(i.getArgument(0)));
+        org.mockito.Mockito.lenient().when(journal.freeze(any(),any())).thenAnswer(i->{
+            TelemetryMessageJournal.Snapshot snap=i.getArgument(1);
+            var entry=new TelemetryMessageJournal.Entry(snap.message().canonicalMessageId(),i.getArgument(0),snap,"PENDING",null);
+            entries.put(entry.id(),entry);return entry;
+        });
+        org.mockito.Mockito.lenient().when(journal.freezeLegacy(any(),any(),any())).thenAnswer(i->{
+            TelemetryMessageJournal.Snapshot snap=i.getArgument(1);
+            var entry=new TelemetryMessageJournal.Entry(snap.message().canonicalMessageId(),i.getArgument(0),snap,"COMPLETE",i.getArgument(2));entries.put(entry.id(),entry);return entry;
+        });
+        org.mockito.Mockito.lenient().when(journal.locked(any(),any())).thenAnswer(i->((java.util.function.Function<TelemetryMessageJournal.Entry,Object>)i.getArgument(1)).apply(entries.get(i.getArgument(0))));
+        org.mockito.Mockito.lenient().when(standardService.prepareImmutable(any(),anyLong())).thenReturn(new StandardTelemetryIngestionService.PreparedBatch(StandardTelemetryResult.accepted(1),List.of(new com.platform.iot.temporal.model.RawTelemetryEvent("P1","T","S","T","D","B",null,"E","D","T",null,"T",1,1785398400000L,1785398400500L,0,0,false))));
+        org.mockito.Mockito.doAnswer(i->{
+            String id=i.getArgument(0);var entry=entries.get(id);
+            entries.put(id,new TelemetryMessageJournal.Entry(id,entry.hash(),entry.snapshot(),"COMPLETE",i.getArgument(1)));return null;
+        }).when(journal).complete(any(),any());
         service = new TelemetryV2IngestionService(identityProvider,
                 unknownDeviceHandler, standardService, receiptMapper,
                 failureMapper, new AckModeResolver(), new SimpleMeterRegistry(),
-                "platform/telemetry/v2/ack/adapter");
+                "platform/telemetry/v2/ack/adapter",journal);
         when(identityProvider.find(any())).thenReturn(Optional.of(binding()));
     }
 
     @Test
     void persistsMessageWhenAllSourceCorrelationFieldsAreMissing() {
-        when(standardService.ingestImmutable(any(), anyLong()))
+        when(standardService.ingestPrepared(any()))
                 .thenReturn(StandardTelemetryResult.accepted(1));
 
         V2ProcessingResult result = service.ingest(message("C1", BigDecimal.ONE),
@@ -80,19 +99,19 @@ class TelemetryV2IngestionServiceTest {
         TelemetryReceipt existing = new TelemetryReceipt();
         existing.setPayloadHash("different-hash");
         existing.setPersistedAt(java.time.LocalDateTime.now());
-        when(receiptMapper.selectForUpdate("C1")).thenReturn(existing);
+        when(receiptMapper.selectById("C1")).thenReturn(existing);
 
         V2ProcessingResult result = service.ingest(message("C1", BigDecimal.TEN),
                 1_785_398_400_500L);
 
         assertThat(result.status()).isEqualTo(ReceiptStatus.MESSAGE_CONFLICT);
-        verify(standardService, never()).ingestImmutable(any(), anyLong());
+        verify(standardService, never()).ingestPrepared(any());
         verify(failureMapper).insert(any());
     }
 
     @Test
     void sameCanonicalIdAndSamePayloadIsIdempotentDuplicate() {
-        when(standardService.ingestImmutable(any(), anyLong()))
+        when(standardService.ingestPrepared(any()))
                 .thenReturn(StandardTelemetryResult.accepted(1));
         service.ingest(message("C1", BigDecimal.ONE), 1_785_398_400_500L);
         ArgumentCaptor<TelemetryReceipt> inserted =
@@ -108,12 +127,12 @@ class TelemetryV2IngestionServiceTest {
 
         assertThat(duplicate.status()).isEqualTo(ReceiptStatus.DUPLICATE_PERSISTED);
         verify(receiptMapper).incrementAttempt(any(), any(), any(), any());
-        verify(standardService).ingestImmutable(any(), anyLong());
+        verify(standardService).ingestPrepared(any());
     }
 
     @Test
     void storageFailureKeepsBrokerRedeliveryAndDoesNotCreateSuccessReceipt() {
-        when(standardService.ingestImmutable(any(), anyLong()))
+        when(standardService.ingestPrepared(any()))
                 .thenReturn(StandardTelemetryResult.retryable(1, "tdengine unavailable"));
 
         V2ProcessingResult result = service.ingest(message("C2", BigDecimal.ONE),
@@ -143,12 +162,12 @@ class TelemetryV2IngestionServiceTest {
         assertThat(result.ackTopic()).isEqualTo("platform/telemetry/v2/ack/adapter");
         assertThat(result.applicationAck().deliveryScope()).isEqualTo("ADAPTER_ONLY");
         verify(unknownDeviceHandler).recordDiscovered(any(), anyLong());
-        verify(standardService, never()).ingestImmutable(any(), anyLong());
+        verify(standardService, never()).ingestPrepared(any());
     }
 
     @Test
     void sustainsTwoHundredMessagesPerSecondInSoftwareHotPathSimulation() {
-        when(standardService.ingestImmutable(any(), anyLong()))
+        when(standardService.ingestPrepared(any()))
                 .thenReturn(StandardTelemetryResult.accepted(5));
         int messages = 1_000;
 
@@ -163,7 +182,7 @@ class TelemetryV2IngestionServiceTest {
 
         assertThat(elapsed).isLessThan(Duration.ofSeconds(5));
         verify(receiptMapper, times(messages)).insert(any());
-        verify(standardService, times(messages)).ingestImmutable(any(), anyLong());
+        verify(standardService, times(messages)).ingestPrepared(any());
     }
 
     @Test

@@ -156,6 +156,21 @@ class LateRealMinuteCorrectionServiceTest {
     }
 
     @Test
+    void confirmedOldCorrectionRetriesDownstreamWhenQ0WasAlreadyWritten() {
+        var current=minute(12.0,0,1,MINUTE+2000L,MINUTE+2000L,null);
+        when(minuteRepository.findPointMinute("P1",MINUTE)).thenReturn(Optional.of(current));
+        when(rawRepository.findWindow(MINUTE,MINUTE+60000,true)).thenReturn(List.of(event(12.0,1000L,2000L,false)));
+        when(minuteRepository.findByMinute(MINUTE,Set.of("B1"))).thenReturn(List.of(current));
+        doThrow(new IllegalStateException("interpolation unavailable")).doNothing().when(interpolationFillService).fillFromRightEndpoints(anyList(),anyLong());
+        var old=new HvacLateRealEventStoredEvent("P1","B1",MINUTE,MINUTE+7*86400000L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->service.applyConfirmedCorrection(old)).isInstanceOf(IllegalStateException.class);
+        service.applyConfirmedCorrection(old);
+        verify(eventPublisher,times(2)).publishEvent(any(Object.class));
+        verify(minuteRepository,never()).saveAllWithQualityPriority(anyList(),any());
+        verify(interpolationFillService,times(2)).fillFromRightEndpoints(anyList(),anyLong());
+    }
+
+    @Test
     void realMinuteIsUpdatedWhenAnotherLateSampleWasStoredAfterFirstAggregation() {
         RawMinuteAggregate incomplete = minute(
                 10.0, 0, 1,

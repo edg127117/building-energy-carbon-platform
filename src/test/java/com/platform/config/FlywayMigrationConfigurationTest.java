@@ -103,7 +103,9 @@ class FlywayMigrationConfigurationTest {
                 "V80__mysql_carbon_configuration_work_order.sql",
                 "V81__mysql_native_quantity_complete_snapshot.sql",
                 "V82__mysql_energy_configuration_menus.sql",
-                "V83__mysql_formal_boundary_summary_policy.sql");
+                "V83__mysql_formal_boundary_summary_policy.sql",
+                "V84__mysql_telemetry_immutable_conflicts.sql");
+
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)
