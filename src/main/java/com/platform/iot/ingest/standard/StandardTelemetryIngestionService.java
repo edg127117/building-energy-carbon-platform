@@ -57,16 +57,26 @@ public class StandardTelemetryIngestionService {
         this.standardSourceSystem = standardSourceSystem;
     }
 
-    /** 使用本地 MQTT 接收时间执行整批预检和单点幂等写入。 */
+    /**
+     * 使用本地 MQTT 接收时间完成整批预检、冻结身份后再写入。
+     *
+     * <p>首个不可覆盖写入冲突后，后续测点只对已经存在的原始事实留存候选证据，
+     * 不创建新事实。任一候选证据留存失败都会保留 MQTT 重投，避免确认后丢失
+     * 同批冲突。</p>
+     */
     public StandardTelemetryResult ingest(
             StandardTelemetryMessage message, long localReceivedTime) {
-        return ingestInternal(message, localReceivedTime, false, null);
+        PreparedBatch prepared = prepareImmutable(message, localReceivedTime);
+        if (prepared.result().outcome() != StandardTelemetryOutcome.ACCEPTED) {
+            return prepared.result();
+        }
+        return ingestPrepared(prepared.events());
     }
 
     /** V2 复用整批校验，但禁止同一测点同一事件时间的新值覆盖旧证据。 */
     public StandardTelemetryResult ingestImmutable(
             StandardTelemetryMessage message, long localReceivedTime) {
-        return ingestInternal(message, localReceivedTime, true, null);
+        return ingest(message,localReceivedTime);
     }
 
     private StandardTelemetryResult ingestInternal(
@@ -166,22 +176,40 @@ public class StandardTelemetryIngestionService {
         return new PreparedBatch(result,result.outcome()==StandardTelemetryOutcome.ACCEPTED?List.copyOf(events):List.of());
     }
 
+    /**
+     * 写入已经完成整批预检且身份已冻结的事件。
+     *
+     * <p>首个冲突会拒绝整个批次；其后的事件只尝试给既有事实留存候选，避免已拒绝
+     * 批次为未知测点创建新原始事实。候选留存失败必须让 MQTT 重投。</p>
+     */
     public StandardTelemetryResult ingestPrepared(List<RawTelemetryEvent> events) {
-        int processed=0;
-        boolean conflict=false;
-        for (var event:events.stream().sorted(java.util.Comparator.comparing(RawTelemetryEvent::pointId)).toList()) {
-            if(conflict) {
-                try {hvacIngestionService.retainConflict(event);}
-                catch(RuntimeException unavailable){return StandardTelemetryResult.retryable(processed,"冲突证据暂时无法留存");}
+        int processed = 0;
+        boolean conflict = false;
+        for (RawTelemetryEvent event : events.stream()
+                .sorted(java.util.Comparator.comparing(RawTelemetryEvent::pointId))
+                .toList()) {
+            if (conflict) {
+                try {
+                    hvacIngestionService.retainConflict(event);
+                } catch (RuntimeException unavailable) {
+                    return StandardTelemetryResult.retryable(processed, "冲突证据暂时无法留存");
+                }
                 continue;
             }
-            var result=hvacIngestionService.writePrepared(event,true);
-            if (!result.shouldAcknowledge()) return StandardTelemetryResult.retryable(processed,result.detail());
-            if (result.outcome()==com.platform.iot.ingest.IngestionOutcome.CONFLICT_REJECTED) conflict=true;
-            else if (result.outcome()==com.platform.iot.ingest.IngestionOutcome.REJECTED) return StandardTelemetryResult.rejected(result.detail());
+            var result = hvacIngestionService.writePrepared(event, true);
+            if (!result.shouldAcknowledge()) {
+                return StandardTelemetryResult.retryable(processed, result.detail());
+            }
+            if (result.outcome() == com.platform.iot.ingest.IngestionOutcome.CONFLICT_REJECTED) {
+                conflict = true;
+            } else if (result.outcome() == com.platform.iot.ingest.IngestionOutcome.REJECTED) {
+                return StandardTelemetryResult.rejected(result.detail());
+            }
             processed++;
         }
-        return conflict?StandardTelemetryResult.rejected("MESSAGE_CONFLICT: 冲突证据已保存"):StandardTelemetryResult.accepted(processed);
+        return conflict
+                ? StandardTelemetryResult.rejected("MESSAGE_CONFLICT: 冲突证据已保存")
+                : StandardTelemetryResult.accepted(processed);
     }
 
     private String validateEnvelope(StandardTelemetryMessage message, long localReceivedTime) {

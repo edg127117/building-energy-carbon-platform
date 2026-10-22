@@ -143,6 +143,20 @@ class TelemetryConflictEnergyTest {
     }
 
     @Test
+    void derivedCapacityFailureRollsBackEnergyApproval() {
+        submitPendingCorrection("CV_CAPACITY");insertPendingCorrection("CV_CAPACITY");
+        TelemetryConflictService.enqueue(fixture.jdbc,"P2","B1",EVENT_TIME,"other",1);
+        org.springframework.test.util.ReflectionTestUtils.setField(repository,"maxDerived",1);
+        assertThatThrownBy(()->fixture.transaction(()->{
+            repository.lockCorrectionIdentity(CORRECTION_ID);repository.requireCurrentTelemetryResolution("CV_CAPACITY");
+            repository.approveCorrection("CV_CAPACITY",0,9L,LocalDateTime.now(),"审核通过","Q0:1");
+            repository.correctionChanged(repository.findCorrectionVersion("CV_CAPACITY"));return null;
+        })).hasMessageContaining("capacity");
+        assertThat(repository.findCorrectionVersion("CV_CAPACITY").status()).isEqualTo("PENDING_REVIEW");
+        assertThat(fixture.ledger.effective(List.of(fixture.event(100)))).containsExactly(fixture.event(100));
+    }
+
+    @Test
     void restoringOriginalAfterAnApprovedCorrectionStillUsesTheExistingReview() {
         submitPendingCorrection("CV_APPROVED");insertPendingCorrection("CV_APPROVED");
         repository.approveCorrection("CV_APPROVED",0,9L,LocalDateTime.now(),"审核通过","Q0:1");

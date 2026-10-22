@@ -15,6 +15,8 @@ import java.util.List;
 /** 持久化不可覆盖的计量事件、活动修正和瞬时量积分策略版本。 */
 public class EnergyAggregationGovernanceRepository {
     private final JdbcTemplate jdbc;
+    @org.springframework.beans.factory.annotation.Value("${telemetry-conflicts.max-pending-derived-tasks:50000}")
+    private int maxDerived=50000;
 
     public EnergyAggregationGovernanceRepository(
             @Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc) {
@@ -194,7 +196,7 @@ public class EnergyAggregationGovernanceRepository {
 
     public void correctionChanged(CorrectionVersionRow row) {
         long time=Long.parseLong(row.originalFactIdentity().substring(row.originalFactIdentity().lastIndexOf('@')+1));
-        com.platform.iot.reliability.TelemetryConflictService.enqueue(jdbc,row.meterPointId(),row.buildingId(),time,row.correctionVersionId());
+        com.platform.iot.reliability.TelemetryConflictService.enqueue(jdbc,row.meterPointId(),row.buildingId(),time,row.correctionVersionId(),maxDerived);
         jdbc.update("UPDATE biz_telemetry_raw_intent SET conflict_state='RESOLVED' WHERE point_id=? AND event_ms=? AND conflict_state='PENDING_REVIEW'",row.meterPointId(),time);
     }
 

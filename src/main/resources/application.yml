@@ -351,5 +351,6 @@ telemetry-conflicts:
   max-variants-per-fact: ${TELEMETRY_CONFLICT_MAX_VARIANTS:16}
   max-evidence-rows: ${TELEMETRY_CONFLICT_MAX_EVIDENCE_ROWS:50000}
   max-pending-intents: ${TELEMETRY_CONFLICT_MAX_PENDING_INTENTS:50000}
+  max-pending-derived-tasks: ${TELEMETRY_CONFLICT_MAX_PENDING_DERIVED_TASKS:50000}
   unverified-days: ${TELEMETRY_CONFLICT_UNVERIFIED_DAYS:7}
   recovery-delay-ms: ${TELEMETRY_CONFLICT_RECOVERY_DELAY_MS:60000}

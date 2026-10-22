@@ -25,6 +25,8 @@ public class TelemetryMessageJournal {
     private final TransactionTemplate tx;
     @org.springframework.beans.factory.annotation.Value("${telemetry-conflicts.max-pending-intents:50000}")
     private int maxPending=50000;
+    @org.springframework.beans.factory.annotation.Value("${telemetry-conflicts.max-pending-derived-tasks:50000}")
+    private int maxDerived=50000;
     private final int maxVariants;
     private final long maxEvidence;
     public TelemetryMessageJournal(JdbcTemplate jdbc,ObjectMapper mapper) {this(jdbc,mapper,16,50000);}
@@ -73,20 +75,21 @@ public class TelemetryMessageJournal {
         tx.executeWithoutResult(status->{
             jdbc.queryForObject("SELECT canonical_message_id FROM biz_telemetry_message_intent WHERE canonical_message_id=? FOR UPDATE",String.class,id);
             long now=System.currentTimeMillis();
-            if(jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=0,next_retry_ms=0,last_seen_ms=?,attempt_count=attempt_count+1 WHERE canonical_message_id=? AND payload_hash=?",now,id,hash)==1)return;
+            if(jdbc.update("UPDATE biz_telemetry_message_conflict SET last_seen_ms=?,attempt_count=attempt_count+1 WHERE canonical_message_id=? AND payload_hash=?",now,id,hash)==1)return;
             if(jdbc.queryForObject("SELECT COUNT(*) FROM biz_telemetry_message_conflict WHERE canonical_message_id=?",Integer.class,id)>=maxVariants
-                    || jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='EVIDENCE' AND used_rows<?",maxEvidence)!=1)
+                    || jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='MESSAGE_EVIDENCE' AND used_rows<?",maxEvidence)!=1)
                 throw new IllegalStateException("Message conflict evidence capacity exceeded");
             jdbc.update("INSERT INTO biz_telemetry_message_conflict (canonical_message_id,payload_hash,snapshot_json,first_seen_ms,last_seen_ms,attempt_count) VALUES (?,?,?,?,?,1)",id,hash,encode(message),now,now);
         });
     }
 
-    /** 同业务键换值同样进入可处置的测点冲突；仅复用首次冻结的映射，不采用当前别名。 */
+    /** 两类证据分别限额，避免消息占满自身物化所需空间；失败有界且重传不重置失败次数。 */
     public void materializeConflicts(String id,RawTelemetryLedger ledger,RawTelemetryCodec codec) {
         Entry original=find(id);
         if(original==null)return;
         var variants=jdbc.queryForList("SELECT snapshot_json,payload_hash FROM biz_telemetry_message_conflict WHERE canonical_message_id=? AND materialized=0 ORDER BY first_seen_ms LIMIT 16",id);
         for(var variant:variants) {
+            try {
             String json=(String)variant.get("snapshot_json");
             boolean ready=true,applicable=false;
             TelemetryV2Message candidate;
@@ -109,12 +112,20 @@ public class TelemetryMessageJournal {
                     ledger.retainIfKnown(codec.withValue(event,value.get().value().doubleValue()));applicable=true;
                 }
             }
-            jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=?,next_retry_ms=? WHERE canonical_message_id=? AND payload_hash=?",ready?(applicable?1:2):0,System.currentTimeMillis()+60000,id,variant.get("payload_hash"));
+            if(!ready)throw new IllegalStateException("Message conflict original unavailable");
+            jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=?,retry_count=0,last_error=NULL,next_retry_ms=0 WHERE canonical_message_id=? AND payload_hash=? AND materialized=0",applicable?1:2,id,variant.get("payload_hash"));
+            } catch(RuntimeException failure) {
+                deferVariant(id,(String)variant.get("payload_hash"));
+            }
         }
     }
 
     public void deferConflicts(String id) {
-        jdbc.update("UPDATE biz_telemetry_message_conflict SET next_retry_ms=? WHERE canonical_message_id=? AND materialized=0",System.currentTimeMillis()+60000,id);
+        jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=CASE WHEN retry_count>=9 THEN -1 ELSE 0 END,retry_count=retry_count+1,last_error='MESSAGE_CONFLICT_RECOVERY_FAILED',next_retry_ms=? WHERE canonical_message_id=? AND materialized=0",System.currentTimeMillis()+60000,id);
+    }
+
+    private void deferVariant(String id,String hash) {
+        jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=CASE WHEN retry_count>=9 THEN -1 ELSE 0 END,retry_count=retry_count+1,last_error='MESSAGE_CONFLICT_RECOVERY_FAILED',next_retry_ms=? WHERE canonical_message_id=? AND payload_hash=? AND materialized=0",System.currentTimeMillis()+60000,id,hash);
     }
 
     public List<String> conflictMessages() {
@@ -128,7 +139,8 @@ public class TelemetryMessageJournal {
         });
     }
     public void queueRecovered(List<RawTelemetryEvent> events) {
-        for(var event:events)TelemetryConflictService.enqueue(jdbc,event.pointId(),event.buildingId(),event.eventTime(),"message-recovery");
+        for(var event:events.stream().sorted(java.util.Comparator.comparing(e->e.pointId().toLowerCase(Locale.ROOT))).toList())
+            TelemetryConflictService.enqueue(jdbc,event.pointId(),event.buildingId(),event.eventTime(),"message-recovery",maxDerived);
     }
     public void complete(String id,V2ProcessingResult result) {
         int changed=jdbc.update("UPDATE biz_telemetry_message_intent SET terminal_json=?,state='COMPLETE',retry_count=0,next_retry_ms=0 WHERE canonical_message_id=? AND state IN ('PENDING','FAILED')",encode(result),id);

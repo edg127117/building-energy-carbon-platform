@@ -28,6 +28,8 @@ public class TelemetryConflictService {
     private final BuildingScopeService scope;
     private final AuditEvidenceWriter audit;
     private final AuditGovernanceProperties auditProperties;
+    @org.springframework.beans.factory.annotation.Value("${telemetry-conflicts.max-pending-derived-tasks:50000}")
+    private int maxDerived=50000;
 
     public TelemetryConflictService(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc,
             RawTelemetryLedger ledger, RawTelemetryCodec codec, EnergyAggregationAuthorization authorization,
@@ -81,11 +83,23 @@ public class TelemetryConflictService {
                 (rs,n)->new RecoveryView("MESSAGE",rs.getString(1),null,null,rs.getInt(2),rs.getString(3)),building));
         result.addAll(jdbc.query("SELECT task_id,point_id,event_ms,retry_count,last_error FROM biz_telemetry_change_task WHERE building_id=? AND state='FAILED' ORDER BY event_ms LIMIT 100",
                 (rs,n)->new RecoveryView("DERIVED",rs.getString(1),rs.getString(2),rs.getLong(3),rs.getInt(4),rs.getString(5)),building));
+        result.addAll(jdbc.query("SELECT c.canonical_message_id,MAX(c.retry_count),MAX(c.last_error) FROM biz_telemetry_message_conflict c JOIN biz_telemetry_message_intent i ON i.canonical_message_id=c.canonical_message_id WHERE i.building_id=? AND c.materialized=-1 GROUP BY c.canonical_message_id ORDER BY c.canonical_message_id LIMIT 100",
+                (rs,n)->new RecoveryView("MESSAGE_CONFLICT",rs.getString(1),null,null,rs.getInt(2),rs.getString(3)),building));
         return List.copyOf(result);
     }
 
     @Transactional(rollbackFor=Exception.class)
     public void retry(long user,Collection<String> roles,RetryRequest request) {
+        if("MESSAGE_CONFLICT".equals(request.kind())) {
+            String id=text(request.id(),64);
+            var buildings=jdbc.queryForList("SELECT i.building_id FROM biz_telemetry_message_intent i WHERE i.canonical_message_id=? AND EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=i.canonical_message_id AND c.materialized=-1) FOR UPDATE",String.class,id);
+            if(buildings.isEmpty())throw new BusinessException(409,"失败任务已变化，请刷新");
+            String building=buildings.getFirst();read(user,roles,building);
+            if(!roles.contains("PLATFORM_ADMIN")&&!Objects.equals(ownerId(building),user))forbidden();
+            jdbc.update("UPDATE biz_telemetry_message_conflict SET materialized=0,retry_count=0,next_retry_ms=0,last_error=NULL WHERE canonical_message_id=? AND materialized=-1",id);
+            audit(user,building,"RETRY_TELEMETRY_RECOVERY",id,null,"kind=MESSAGE_CONFLICT");
+            return;
+        }
         String table,key,state;List<Object> args=new ArrayList<>();
         switch(text(request.kind(),20)) {
             case "RAW" -> {
@@ -103,7 +117,8 @@ public class TelemetryConflictService {
         if(buildings.isEmpty())throw new BusinessException(409,"失败任务已变化，请刷新");
         String building=buildings.getFirst();read(user,roles,building);
         if(!roles.contains("PLATFORM_ADMIN")&&!Objects.equals(ownerId(building),user))forbidden();
-        jdbc.update("UPDATE "+table+" SET "+state+"='PENDING',retry_count=0,next_retry_ms=0,last_error=NULL WHERE "+key,args.toArray());
+        String revision="DERIVED".equals(request.kind())?",request_revision=request_revision+1":"";
+        jdbc.update("UPDATE "+table+" SET "+state+"='PENDING',retry_count=0,next_retry_ms=0,last_error=NULL"+revision+" WHERE "+key,args.toArray());
         audit(user,building,"RETRY_TELEMETRY_RECOVERY",request.id(),null,"kind="+request.kind());
     }
 
@@ -176,7 +191,7 @@ public class TelemetryConflictService {
                 reason,user,System.currentTimeMillis(),correction);
         jdbc.update("UPDATE biz_telemetry_raw_intent SET conflict_state=?,selection_version=?,selected_json=?,conflict_revision=conflict_revision+1 WHERE point_key=? AND event_ms=?",
                 state,version,energyPoint?null:codec.encode(candidate),fact.pointKey(),time);
-        if (!energyPoint) enqueue(jdbc,point,fact.buildingId(),time,"telemetry:"+version);
+        if (!energyPoint) enqueue(jdbc,point,fact.buildingId(),time,"telemetry:"+version,maxDerived);
         audit(user,fact.buildingId(),"RESOLVE_TELEMETRY_CONFLICT",RawTelemetryLedger.identity(point,time),correction,
                 "state="+state+";selection="+version+";evidence="+request.evidenceId()+";reference="+reference+";reason="+reason);
         return view(user,roles,require(point,time));
@@ -224,7 +239,25 @@ public class TelemetryConflictService {
                 null,null,summary,"SUCCESS",null,TraceContext.current(),LocalDateTime.now(),auditProperties.getEnvironmentMode(),false));
     }
     public static void enqueue(JdbcTemplate jdbc,String point,String building,long time,String version) {
-        jdbc.update("INSERT INTO biz_telemetry_change_task (task_id,point_id,building_id,event_ms,state) VALUES (?,?,?,?,'PENDING')",
-                RawTelemetryLedger.id(),point,building,time);
+        enqueue(jdbc,point,building,time,version,50000);
+    }
+
+    /** 同一事实只保留一个派生待办；失败仍占额度，满额时回滚选择/审批而不丢失补偿。 */
+    public static void enqueue(JdbcTemplate jdbc,String point,String building,long time,String version,int capacity) {
+        if(capacity<1)throw new IllegalArgumentException("Invalid derived capacity");
+        var tx=new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
+        tx.executeWithoutResult(status->{
+            String key=point.toLowerCase(Locale.ROOT);
+            jdbc.update("INSERT INTO biz_telemetry_retention_boundary(point_key,before_ms) VALUES (?,0) ON DUPLICATE KEY UPDATE point_key=VALUES(point_key)",key);
+            var rows=jdbc.queryForList("SELECT task_id,building_id,state FROM biz_telemetry_change_task WHERE point_id=? AND event_ms=? FOR UPDATE",point,time);
+            if(!rows.isEmpty()&&!building.equals(rows.getFirst().get("building_id")))throw new IllegalStateException("Derived building changed");
+            if(rows.isEmpty()||"COMPLETE".equals(rows.getFirst().get("state"))) {
+                if(jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='PENDING_DERIVED' AND used_rows<?",capacity)!=1)
+                    throw new org.springframework.dao.DataAccessResourceFailureException("Pending derived capacity reached");
+            }
+            if(rows.isEmpty())jdbc.update("INSERT INTO biz_telemetry_change_task (task_id,point_id,building_id,event_ms,state) VALUES (?,?,?,?,'PENDING')",RawTelemetryLedger.id(),point,building,time);
+            else jdbc.update("UPDATE biz_telemetry_change_task SET request_revision=request_revision+1,state=CASE WHEN state='FAILED' THEN 'FAILED' ELSE 'PENDING' END,next_retry_ms=0 WHERE task_id=?",rows.getFirst().get("task_id"));
+        });
     }
 }

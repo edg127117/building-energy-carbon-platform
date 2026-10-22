@@ -66,10 +66,11 @@ public class TelemetryConflictRecovery {
             try {messages.materializeConflicts(id,ledger,codec);}
             catch(RuntimeException failure){messages.deferConflicts(id);failure("conflict_evidence",failure);}
         }
-        var tasks=jdbc.queryForList("SELECT task_id FROM biz_telemetry_change_task WHERE state='PENDING' AND next_retry_ms<=? ORDER BY next_retry_ms,task_id LIMIT 50",String.class,now);
-        for(String task:tasks) {
+        var tasks=jdbc.queryForList("SELECT task_id,request_revision FROM biz_telemetry_change_task WHERE state='PENDING' AND next_retry_ms<=? ORDER BY next_retry_ms,task_id LIMIT 50",now);
+        for(var claimed:tasks) {
+            String task=(String)claimed.get("task_id");
             try{apply(task);}catch(RuntimeException failure){
-                jdbc.update("UPDATE biz_telemetry_change_task SET state=CASE WHEN retry_count>=9 THEN 'FAILED' ELSE 'PENDING' END,last_error='DERIVED_RECOVERY_FAILED',retry_count=retry_count+1,next_retry_ms=? WHERE task_id=? AND state='PENDING'",now+60000,task);
+                jdbc.update("UPDATE biz_telemetry_change_task SET state=CASE WHEN retry_count>=9 THEN 'FAILED' ELSE 'PENDING' END,last_error='DERIVED_RECOVERY_FAILED',retry_count=retry_count+1,next_retry_ms=? WHERE task_id=? AND state='PENDING' AND request_revision=?",now+60000,task,claimed.get("request_revision"));
                 failure("derived",failure);
             }
         }
@@ -111,6 +112,7 @@ public class TelemetryConflictRecovery {
                     ((Timestamp)period.get("period_start")).toInstant(),((Timestamp)period.get("period_end")).toInstant(),"TELEMETRY_CORRECTION",LocalDateTime.now());
             jdbc.update("UPDATE biz_telemetry_change_task SET state=?,last_error=?,retry_count=0 WHERE task_id=?",
                     minuteUnavailable?"FAILED":"COMPLETE",minuteUnavailable?"MINUTE_CORRECTION_DISABLED":null,id);
+            if(!minuteUnavailable)jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-1 WHERE budget_key='PENDING_DERIVED'");
         });
     }
 
@@ -133,11 +135,11 @@ public class TelemetryConflictRecovery {
             for(String id:old)jdbc.update("DELETE FROM biz_telemetry_message_intent WHERE canonical_message_id=? AND state='COMPLETE' AND NOT EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=biz_telemetry_message_intent.canonical_message_id)",id);
             if(old.size()<500)break;
         }
-        var messageIds=jdbc.queryForList("SELECT i.canonical_message_id FROM biz_telemetry_message_intent i WHERE i.state='COMPLETE' AND EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=i.canonical_message_id AND c.last_seen_ms<?) ORDER BY i.created_ms LIMIT 100",String.class,cutoff);
+        var messageIds=jdbc.queryForList("SELECT i.canonical_message_id FROM biz_telemetry_message_intent i WHERE i.state='COMPLETE' AND EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=i.canonical_message_id AND c.last_seen_ms<? AND c.materialized IN (1,2)) ORDER BY i.created_ms LIMIT 100",String.class,cutoff);
         for(String id:messageIds)tx.executeWithoutResult(status->{
             jdbc.queryForObject("SELECT canonical_message_id FROM biz_telemetry_message_intent WHERE canonical_message_id=? FOR UPDATE",String.class,id);
-            int removed=jdbc.update("DELETE FROM biz_telemetry_message_conflict WHERE canonical_message_id=? AND last_seen_ms<?",id,cutoff);
-            if(removed>0)jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-? WHERE budget_key='EVIDENCE'",removed);
+            int removed=jdbc.update("DELETE FROM biz_telemetry_message_conflict WHERE canonical_message_id=? AND last_seen_ms<? AND materialized IN (1,2)",id,cutoff);
+            if(removed>0)jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-? WHERE budget_key='MESSAGE_EVIDENCE'",removed);
         });
         var retired=jdbc.query("SELECT i.* FROM biz_telemetry_raw_intent i JOIN biz_telemetry_retention_boundary b ON i.point_key=b.point_key WHERE i.storage_state='PERSISTED' AND i.event_ms<b.before_ms AND i.first_conflict_ms<? AND NOT EXISTS(SELECT 1 FROM biz_telemetry_resolution r WHERE r.point_key=i.point_key AND r.event_ms=i.event_ms) ORDER BY i.first_conflict_ms LIMIT 100",RawTelemetryLedger::mapFact,cutoff);
         for(var fact:retired)tx.executeWithoutResult(status->{

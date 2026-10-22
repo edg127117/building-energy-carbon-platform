@@ -488,6 +488,92 @@ class InterpolationFillServiceTest {
                 List.of(right), FINALIZED_AT);
     }
 
+    @Test
+    void confirmedEndpointReplacesExistingInterpolationOnBothSides() {
+        var point=point("P1","ONLINE","ANALOG",1,BigDecimal.ZERO,new BigDecimal("1000"));
+        var changed=real(point,RIGHT_MINUTE,300);
+        when(pointConfigProvider.findAll()).thenReturn(List.of(point));
+        when(minuteRepository.findRange(any(),anyLong(),anyLong())).thenReturn(List.of(
+                real(point,RIGHT_MINUTE-120000,100),generated(point,RIGHT_MINUTE-60000,150,1,"OLD_LEFT"),changed,
+                generated(point,RIGHT_MINUTE+60000,350,1,"OLD_RIGHT"),real(point,RIGHT_MINUTE+120000,500)));
+        for(String id:List.of("OLD_LEFT","OLD_RIGHT")) {
+            var old=new BizDataQualityFillTask();old.setTaskId(id);old.setPointId("P1");old.setBuildingId("BLD001");old.setSourceType(FillSourceType.INTERPOLATION);
+            when(fillTaskRepository.findById(id)).thenReturn(java.util.Optional.of(old));
+        }
+        stubConfirmedTask("NEW");
+        when(minuteRepository.saveAllWithQualityPriority(anyList(),anyString())).thenAnswer(call->writeResults(call.getArgument(0)));
+        service.correctFromChangedEndpoint(changed,FINALIZED_AT);
+        @SuppressWarnings("unchecked") ArgumentCaptor<List<RawMinuteAggregate>> batch=ArgumentCaptor.forClass(List.class);
+        verify(minuteRepository,times(2)).saveAllWithQualityPriority(batch.capture(),anyString());
+        assertThat(batch.getAllValues().stream().flatMap(List::stream).toList())
+                .extracting(RawMinuteAggregate::averageValue).containsExactly(200d,400d);
+        var tasks=ArgumentCaptor.forClass(BizDataQualityFillTask.class);
+        verify(fillTaskRepository,times(2)).getOrCreateDurably(tasks.capture());
+        assertThat(tasks.getAllValues()).extracting(BizDataQualityFillTask::getIdempotencyKey).allMatch(key->key.startsWith("D01_Q1:")).doesNotHaveDuplicates();
+        assertThat(tasks.getAllValues().getFirst().getEvidenceJson()).contains("300");
+        verify(eventPublisher,times(2)).publishEvent(any(Object.class));
+    }
+
+    @Test
+    void confirmedInterpolationRetriesReadyForAlreadyWrittenTask() {
+        var point=point("P1","ONLINE","ANALOG",1,BigDecimal.ZERO,new BigDecimal("1000"));
+        var left=real(point,RIGHT_MINUTE-120000,100);var right=real(point,RIGHT_MINUTE,300);
+        var applied=new java.util.concurrent.atomic.AtomicReference<>(generated(point,RIGHT_MINUTE-60000,150,1,"OLD"));
+        when(pointConfigProvider.findAll()).thenReturn(List.of(point));
+        when(minuteRepository.findRange(any(),anyLong(),anyLong())).thenAnswer(call->List.of(left,applied.get(),right));
+        var old=new BizDataQualityFillTask();old.setPointId("P1");old.setBuildingId("BLD001");old.setSourceType(FillSourceType.INTERPOLATION);
+        when(fillTaskRepository.findById("OLD")).thenReturn(java.util.Optional.of(old));stubConfirmedTask("CONFIRMED");
+        when(minuteRepository.saveAllWithQualityPriority(anyList(),any())).thenAnswer(call->{
+            List<RawMinuteAggregate> batch=call.getArgument(0);var incoming=batch.getFirst();
+            var outcome=applied.get().qualityTaskId().equals("CONFIRMED")?MinuteQualityWriteResult.Outcome.IDEMPOTENT:MinuteQualityWriteResult.Outcome.UPGRADED;
+            applied.set(incoming);return List.of(result(incoming,outcome));
+        });
+        org.mockito.Mockito.doThrow(new IllegalStateException("READY unavailable")).doNothing().when(eventPublisher).publishEvent(any(Object.class));
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->service.correctFromChangedEndpoint(right,FINALIZED_AT)).isInstanceOf(IllegalStateException.class);
+        service.correctFromChangedEndpoint(right,FINALIZED_AT);
+        verify(eventPublisher,times(2)).publishEvent(any(Object.class));assertThat(applied.get().averageValue()).isEqualTo(200);
+    }
+
+    @Test
+    void confirmedInterpolationDoesNotClaimAnotherPointsTask() {
+        var point=point("P1","ONLINE","ANALOG",1,BigDecimal.ZERO,new BigDecimal("1000"));var changed=real(point,RIGHT_MINUTE,300);
+        when(pointConfigProvider.findAll()).thenReturn(List.of(point));
+        when(minuteRepository.findRange(any(),anyLong(),anyLong())).thenReturn(List.of(real(point,RIGHT_MINUTE-120000,100),generated(point,RIGHT_MINUTE-60000,150,1,"OTHER"),changed));
+        stubConfirmedTask("NEW");var other=new BizDataQualityFillTask();other.setPointId("P2");other.setBuildingId("BLD001");other.setSourceType(FillSourceType.INTERPOLATION);
+        when(fillTaskRepository.findById("OTHER")).thenReturn(java.util.Optional.of(other));
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->service.correctFromChangedEndpoint(changed,FINALIZED_AT)).isInstanceOf(IllegalStateException.class);
+        verify(minuteRepository,never()).saveAllWithQualityPriority(anyList(),any());
+    }
+
+    @Test
+    void returningToAnOldValueUsesANewEndpointRevisionRatherThanAReplacedTask() {
+        var point=point("P1","ONLINE","ANALOG",1,BigDecimal.ZERO,new BigDecimal("1000"));
+        var left=real(point,RIGHT_MINUTE-120000,100);var original=real(point,RIGHT_MINUTE,300);
+        var later=new RawMinuteAggregate(original.pointId(),original.pointCode(),original.buildingId(),original.systemGroupId(),original.equipId(),original.equipCode(),original.familyCode(),original.componentCode(),original.suffixCode(),original.isForCalc(),original.minuteStart(),original.averageValue(),original.minimumValue(),original.maximumValue(),original.sampleCount(),0,original.firstReceivedTime(),original.lastReceivedTime(),original.finalizedAt()+1,null);
+        when(pointConfigProvider.findAll()).thenReturn(List.of(point));
+        when(minuteRepository.findRange(any(),anyLong(),anyLong())).thenReturn(List.of(left,original),List.of(left,later));
+        stubConfirmedTask("TASK");when(minuteRepository.saveAllWithQualityPriority(anyList(),isNull())).thenAnswer(call->writeResults(call.getArgument(0)));
+        service.correctFromChangedEndpoint(original,FINALIZED_AT);service.correctFromChangedEndpoint(later,FINALIZED_AT+1);
+        var tasks=ArgumentCaptor.forClass(BizDataQualityFillTask.class);verify(fillTaskRepository,times(2)).getOrCreateDurably(tasks.capture());
+        assertThat(tasks.getAllValues()).extracting(BizDataQualityFillTask::getIdempotencyKey).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void confirmedRetryCannotResurrectAVoidedInterpolationTask() {
+        var point=point("P1","ONLINE","ANALOG",1,BigDecimal.ZERO,new BigDecimal("1000"));var right=real(point,RIGHT_MINUTE,300);
+        when(pointConfigProvider.findAll()).thenReturn(List.of(point));
+        when(minuteRepository.findRange(any(),anyLong(),anyLong())).thenReturn(List.of(real(point,RIGHT_MINUTE-120000,100),right));
+        when(fillTaskRepository.getOrCreateDurably(any())).thenAnswer(call->{var task=(BizDataQualityFillTask)call.getArgument(0);task.setTaskId("VOIDED");task.setApplyStatus(FillApplyStatus.VOIDED);return task;});
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->service.correctFromChangedEndpoint(right,FINALIZED_AT)).isInstanceOf(IllegalStateException.class);
+        verify(minuteRepository,never()).saveAllWithQualityPriority(anyList(),any());
+    }
+
+    private void stubConfirmedTask(String taskId) {
+        when(fillTaskRepository.getOrCreateDurably(any())).thenAnswer(invocation -> {
+            BizDataQualityFillTask task = invocation.getArgument(0);
+            task.setTaskId(taskId);task.setApplyStatus(FillApplyStatus.WAITING);return task;
+        });
+    }
     private void stubTask(String taskId) {
         when(fillTaskRepository.getOrCreate(any())).thenAnswer(invocation -> {
             BizDataQualityFillTask task = invocation.getArgument(0);

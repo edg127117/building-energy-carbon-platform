@@ -29,6 +29,8 @@ public class RawTelemetryLedger {
     private final long maxEvidence;
     @Value("${telemetry-conflicts.max-pending-intents:50000}")
     private int maxPending=50000;
+    @Value("${telemetry-conflicts.max-pending-derived-tasks:50000}")
+    private int maxDerived=50000;
 
     public RawTelemetryLedger(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc, RawTelemetryCodec codec,
             @Value("${telemetry-conflicts.max-variants-per-fact:16}") int maxVariants,
@@ -149,7 +151,7 @@ public class RawTelemetryLedger {
 
     /** 在 storeFrozen 的同一 MySQL 事务内登记恢复通知，避免原接收时非迟到的事件漏掉历史重聚合。 */
     public void queueRecovered(RawTelemetryEvent event) {
-        TelemetryConflictService.enqueue(jdbc,event.pointId(),event.buildingId(),event.eventTime(),"raw-recovery");
+        TelemetryConflictService.enqueue(jdbc,event.pointId(),event.buildingId(),event.eventTime(),"raw-recovery",maxDerived);
     }
 
     public List<RawTelemetryEvent> pending(int limit, long now) {

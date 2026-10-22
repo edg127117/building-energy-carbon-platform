@@ -216,7 +216,8 @@ public class LateRealMinuteCorrectionService {
         long finalizedAt = nextFinalizedAt(current, event.receivedAt());
         RawMinuteAggregate aggregate = pointMinuteAggregator.aggregate(
                 point, event.minuteStart(), realEvents, finalizedAt);
-        if (current.filter(row -> sameRealEvidence(row, aggregate)).isPresent()) {
+        if (current.filter(row -> sameRealEvidence(row, aggregate)
+                &&(!confirmed||sameConfirmedValues(row,aggregate))).isPresent()) {
             // 上次可能已写 Q0 后在通知/插值阶段中断；明确更正重试仍需幂等补齐下游。
             if (confirmed) return Optional.of(new Q0Correction(point,event,aggregate,finalizedAt,null));
             meterRegistry.counter(
@@ -263,9 +264,8 @@ public class LateRealMinuteCorrectionService {
 
         // READY 默认同步返回，确保本分钟公式先修正，再把新 Q0 作为右端点回溯 Q1。
         try {
-            interpolationFillService.fillFromRightEndpoints(
-                    List.of(correction.aggregate()),
-                    correction.finalizedAt());
+            if(confirmed)interpolationFillService.correctFromChangedEndpoint(correction.aggregate(),correction.finalizedAt());
+            else interpolationFillService.fillFromRightEndpoints(List.of(correction.aggregate()),correction.finalizedAt());
         } catch (RuntimeException exception) {
             // 当前 Q0 和公式 READY 已经成功，历史插值失败单独计量，后续由
             // DataQualityRecoveryService 的迟到 Q0 扫描再次触发短缺口修复。
@@ -361,6 +361,17 @@ public class LateRealMinuteCorrectionService {
         return Double.isFinite(current)
                 && Double.isFinite(rebuilt)
                 && Math.abs(current - rebuilt) <= STORED_VALUE_TOLERANCE;
+    }
+
+    private boolean sameConfirmedValues(RawMinuteAggregate current,RawMinuteAggregate rebuilt) {
+        // 明确更正不能被普通迟到路径的 1e-9 容差吞掉；按现有分钟仓储的十二位格式比较。
+        return Double.compare(current.averageValue(),minuteStoredValue(rebuilt.averageValue()))==0
+                &&Double.compare(current.minimumValue(),minuteStoredValue(rebuilt.minimumValue()))==0
+                &&Double.compare(current.maximumValue(),minuteStoredValue(rebuilt.maximumValue()))==0;
+    }
+
+    private double minuteStoredValue(double value) {
+        return Double.parseDouble(String.format(java.util.Locale.ROOT,"%.12f",value));
     }
 
     private MinuteQualityWriteResult requireSingleResult(

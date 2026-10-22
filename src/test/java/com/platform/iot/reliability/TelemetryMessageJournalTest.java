@@ -39,7 +39,8 @@ class TelemetryMessageJournalTest {
         assertThat(f.ledger.evidence(f.ledger.find("P1",e.eventTime()))).hasSize(1);
         assertThat(f.ledger.evidence(f.ledger.find("P1",e.eventTime())).getFirst().snapshotJson()).contains("120.0");
         assertThat(journal.conflictMessages()).isEmpty();
-        assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='EVIDENCE'",Long.class)).isEqualTo(2);
+        assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='EVIDENCE'",Long.class)).isEqualTo(1);
+        assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='MESSAGE_EVIDENCE'",Long.class)).isEqualTo(1);
         recovery().expire(System.currentTimeMillis()+Duration.ofDays(181).toMillis());
         assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='EVIDENCE'",Long.class)).isZero();
         assertThat(f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_telemetry_message_conflict",Long.class)).isZero();
@@ -54,11 +55,62 @@ class TelemetryMessageJournalTest {
         assertThat(f.ledger.pending(50,Long.MAX_VALUE)).containsExactly(event);
         assertThat(f.ledger.retireBefore("P1",event.eventTime()+1)).isEqualTo(event.eventTime());
     }
-    @Test void configuredSharedCapacityAppliesToMessageEvidenceAndKnownRetransmissions(){
+    @Test void configuredMessageCapacityAppliesToEvidenceAndKnownRetransmissions(){
         journal=new TelemetryMessageJournal(f.jdbc,new ObjectMapper().findAndRegisterModules(),1,1);journal.freeze("first",snapshot("M1"));
         journal.conflict("M1","second",message("M1",120));
         assertThatThrownBy(()->journal.conflict("M1","third",message("M1",130))).hasMessageContaining("capacity");
         journal.conflict("M1","second",message("M1",120));
         assertThat(f.jdbc.queryForObject("SELECT attempt_count FROM biz_telemetry_message_conflict",Long.class)).isEqualTo(2);
+    }
+
+    @Test void smallestEvidenceBudgetsStillAllowMessageToBecomeASelectableCandidate(){
+        journal=new TelemetryMessageJournal(f.jdbc,new ObjectMapper().findAndRegisterModules(),16,1);
+        f.ledger=new RawTelemetryLedger(f.jdbc,f.codec,16,1);
+        var e=f.event(100);f.ledger.reserve(e,()->null);f.ledger.storeFrozen(e,()->null);
+        journal.freeze("first",snapshot("M1"));complete("M1");journal.conflict("M1","second",message("M1",120));
+        journal.materializeConflicts("M1",f.ledger,f.codec);
+        assertThat(f.ledger.evidence(f.ledger.find("P1",e.eventTime()))).hasSize(1);
+        assertThat(journal.conflictMessages()).isEmpty();
+        assertThat(f.jdbc.queryForList("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key IN ('EVIDENCE','MESSAGE_EVIDENCE')",Long.class)).containsExactlyInAnyOrder(1L,1L);
+        recovery().expire(System.currentTimeMillis()+Duration.ofDays(181).toMillis());
+        assertThat(f.jdbc.queryForList("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key IN ('EVIDENCE','MESSAGE_EVIDENCE')",Long.class)).containsOnly(0L);
+    }
+
+    @Test void blockedMaterializationFailsAfterTenAttemptsAndOnlyAuthorizedRetryResumesIt(){
+        journal=new TelemetryMessageJournal(f.jdbc,new ObjectMapper().findAndRegisterModules(),16,1);
+        f.ledger=new RawTelemetryLedger(f.jdbc,f.codec,16,1);
+        var e=f.event(100);f.ledger.reserve(e,()->null);f.ledger.storeFrozen(e,()->null);
+        f.ledger.reserve(f.event(130),()->null);
+        journal.freeze("first",snapshot("M1"));complete("M1");journal.conflict("M1","second",message("M1",120));
+        for(int i=0;i<10;i++)journal.materializeConflicts("M1",f.ledger,f.codec);
+        journal.conflict("M1","second",message("M1",120));
+        assertThat(journal.conflictMessages()).isEmpty();
+        f.jdbc.update("UPDATE biz_telemetry_message_conflict SET last_seen_ms=?",System.currentTimeMillis()-Duration.ofDays(181).toMillis());
+        recovery().expire(System.currentTimeMillis());
+        assertThat(f.jdbc.queryForObject("SELECT COUNT(*) FROM biz_telemetry_message_conflict",Integer.class)).isEqualTo(1);
+        assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='MESSAGE_EVIDENCE'",Long.class)).isEqualTo(1);
+        assertThat(f.jdbc.queryForObject("SELECT materialized FROM biz_telemetry_message_conflict",Integer.class)).isEqualTo(-1);
+        assertThat(f.conflicts.failed(7,List.of("BUILDING_OWNER"),"B1")).extracting(TelemetryConflictService.RecoveryView::kind).containsExactly("MESSAGE_CONFLICT");
+        var retry=new TelemetryConflictService.RetryRequest("MESSAGE_CONFLICT","M1");
+        assertThatThrownBy(()->f.transaction(()->{f.conflicts.retry(8,List.of("BUILDING_OWNER"),retry);return null;})).isInstanceOf(com.platform.framework.exception.BusinessException.class);
+        doThrow(new IllegalStateException("audit unavailable")).when(f.audit).append(any());
+        assertThatThrownBy(()->f.transaction(()->{f.conflicts.retry(7,List.of("BUILDING_OWNER"),retry);return null;})).hasMessageContaining("audit unavailable");
+        assertThat(f.jdbc.queryForObject("SELECT materialized FROM biz_telemetry_message_conflict",Integer.class)).isEqualTo(-1);
+        reset(f.audit);
+        f.jdbc.update("UPDATE biz_telemetry_conflict_evidence SET last_seen_ms=?",System.currentTimeMillis()-Duration.ofDays(181).toMillis());
+        recovery().expire(System.currentTimeMillis());
+        f.transaction(()->{f.conflicts.retry(7,List.of("BUILDING_OWNER"),retry);return null;});
+        journal.materializeConflicts("M1",f.ledger,f.codec);
+        assertThat(f.ledger.evidence(f.ledger.find("P1",e.eventTime()))).hasSize(1);
+        recovery().expire(System.currentTimeMillis());
+        assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='MESSAGE_EVIDENCE'",Long.class)).isZero();
+    }
+
+    @Test void pendingMaterializationIsNotDiscardedByPayloadRetention(){
+        journal.freeze("first",snapshot("M1"));complete("M1");journal.conflict("M1","second",message("M1",120));
+        f.jdbc.update("UPDATE biz_telemetry_message_conflict SET last_seen_ms=?",System.currentTimeMillis()-Duration.ofDays(181).toMillis());
+        recovery().expire(System.currentTimeMillis());
+        assertThat(f.jdbc.queryForObject("SELECT materialized FROM biz_telemetry_message_conflict",Integer.class)).isZero();
+        assertThat(f.jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='MESSAGE_EVIDENCE'",Long.class)).isEqualTo(1);
     }
 }

@@ -64,7 +64,7 @@ CREATE TABLE biz_telemetry_conflict_budget (
     budget_key VARCHAR(20) NOT NULL PRIMARY KEY,
     used_rows BIGINT NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-INSERT INTO biz_telemetry_conflict_budget VALUES ('EVIDENCE',0),('PENDING_RAW',0),('PENDING_MESSAGE',0);
+INSERT INTO biz_telemetry_conflict_budget VALUES ('EVIDENCE',0),('MESSAGE_EVIDENCE',0),('PENDING_RAW',0),('PENDING_MESSAGE',0),('PENDING_DERIVED',0);
 
 -- 冻结规范化批次和原接收元数据；进程退出不依赖 Broker 再次投递才能补齐回执。
 CREATE TABLE biz_telemetry_message_intent (
@@ -87,6 +87,8 @@ CREATE TABLE biz_telemetry_message_conflict (
     snapshot_json LONGTEXT NOT NULL,
     materialized INT NOT NULL DEFAULT 0,
     next_retry_ms BIGINT NOT NULL DEFAULT 0,
+    retry_count INT NOT NULL DEFAULT 0,
+    last_error VARCHAR(64) NULL,
     first_seen_ms BIGINT NOT NULL,
     last_seen_ms BIGINT NOT NULL,
     attempt_count BIGINT NOT NULL DEFAULT 1,
@@ -100,10 +102,12 @@ CREATE TABLE biz_telemetry_change_task (
     building_id VARCHAR(32) NOT NULL,
     event_ms BIGINT NOT NULL,
     state VARCHAR(20) NOT NULL,
+    request_revision BIGINT NOT NULL DEFAULT 1,
     next_retry_ms BIGINT NOT NULL DEFAULT 0,
     retry_count INT NOT NULL DEFAULT 0,
     last_error VARCHAR(64) NULL,
-    KEY idx_telemetry_change_claim(state,next_retry_ms)
+    KEY idx_telemetry_change_claim(state,next_retry_ms),
+    UNIQUE KEY uk_telemetry_change_fact(point_id,event_ms)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 只复用现有只读角色开放入口；实际处置仍须建筑范围、指定负责人和既有能源职责。

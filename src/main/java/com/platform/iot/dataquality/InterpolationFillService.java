@@ -117,6 +117,89 @@ public class InterpolationFillService {
         }
     }
 
+    /** 已确认端点更正同时影响左右缺口；以新端点证据建任务，显式替代旧 Q1，不改写 Q0。 */
+    public void correctFromChangedEndpoint(RawMinuteAggregate changed,long finalizedAt) {
+        if(changed.dataQuality()!=0)throw new IllegalArgumentException("Confirmed endpoint must be Q0");
+        PointRuntimeConfig point=pointConfigProvider.findAll().stream()
+                .filter(p->p.pointId().equals(changed.pointId())&&p.buildingId().equals(changed.buildingId()))
+                .filter(this::isEligiblePoint).findFirst().orElse(null);
+        if(point==null)return;
+        int gap=properties.getInterpolation().getMaxGapMinutes();
+        long radius=(gap+1L)*MINUTE_MILLIS;
+        List<RawMinuteAggregate> range=minuteRepository.findRange(Set.of(point.pointId()),
+                changed.minuteStart()-radius,changed.minuteStart()+radius+MINUTE_MILLIS);
+        RawMinuteAggregate confirmed=range.stream().filter(r->r.pointId().equals(point.pointId())
+                &&r.buildingId().equals(point.buildingId())&&r.minuteStart()==changed.minuteStart()&&r.dataQuality()==0)
+                .findFirst().orElseThrow(()->new IllegalStateException("Confirmed endpoint unavailable"));
+        var rows=new ArrayList<>(range.stream().filter(r->r.pointId().equals(point.pointId())
+                &&r.buildingId().equals(point.buildingId())&&r.minuteStart()!=changed.minuteStart()).toList());
+        rows.add(confirmed);
+        RawMinuteAggregate left=rows.stream().filter(r->r.dataQuality()==0&&r.minuteStart()<changed.minuteStart())
+                .max(Comparator.comparingLong(RawMinuteAggregate::minuteStart)).orElse(null);
+        RawMinuteAggregate right=rows.stream().filter(r->r.dataQuality()==0&&r.minuteStart()>changed.minuteStart())
+                .min(Comparator.comparingLong(RawMinuteAggregate::minuteStart)).orElse(null);
+        if(left!=null)correctGap(point,left,confirmed,rows,finalizedAt,gap);
+        if(right!=null)correctGap(point,confirmed,right,rows,finalizedAt,gap);
+    }
+
+    private void correctGap(PointRuntimeConfig point,RawMinuteAggregate left,RawMinuteAggregate right,
+            List<RawMinuteAggregate> rows,long finalizedAt,int maximumGap) {
+        var interpolation=interpolator.interpolate(left.minuteStart(),left.averageValue(),
+                right.minuteStart(),right.averageValue(),maximumGap);
+        if(interpolation.isEmpty())return;
+        if(interpolation.stream().anyMatch(m->!isWithinRange(point,m.value())))
+            throw new IllegalStateException("Confirmed interpolation outside point range");
+        Map<Long,RawMinuteAggregate> existing=rows.stream().collect(Collectors.toMap(
+                RawMinuteAggregate::minuteStart,r->r,(first,ignored)->first));
+        var candidate=newTask(point,left,right,interpolation.size(),finalizedAt);
+        // 幂等键包含端点值；不能复用原自动任务中已冻结的旧端点证据。
+        String content=point.pointId()+":"+left.minuteStart()+":"+Double.toString(left.averageValue())+":"+left.finalizedAt()
+                +":"+right.minuteStart()+":"+Double.toString(right.averageValue())+":"+right.finalizedAt()+":"+ALGORITHM_VERSION;
+        try {
+            candidate.setIdempotencyKey("D01_Q1:"+java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        } catch(java.security.NoSuchAlgorithmException failure) {throw new IllegalStateException(failure);}
+        var task=fillTaskRepository.getOrCreateDurably(candidate);
+        if(task.getApplyStatus()==FillApplyStatus.VOIDED||task.getApplyStatus()==FillApplyStatus.REPLACED)
+            throw new IllegalStateException("Confirmed interpolation task is terminal");
+        String taskId=requireText(task.getTaskId(),"taskId");
+        Map<String,List<RawMinuteAggregate>> replacements=new LinkedHashMap<>();
+        for(var minute:interpolation) {
+            var old=existing.get(minute.minuteStart());
+            if(old!=null&&old.dataQuality()==0)continue;
+            String prior=null;
+            if(old!=null&&old.dataQuality()==1&&!taskId.equals(old.qualityTaskId())) {
+                prior=requireText(old.qualityTaskId(),"previousTaskId");
+                var evidence=fillTaskRepository.findById(prior)
+                        .orElseThrow(()->new IllegalStateException("Previous interpolation evidence unavailable"));
+                if(evidence.getSourceType()!=FillSourceType.INTERPOLATION
+                        ||!point.pointId().equals(evidence.getPointId())||!point.buildingId().equals(evidence.getBuildingId()))
+                    throw new IllegalStateException("Previous interpolation ownership mismatch");
+            }
+            replacements.computeIfAbsent(prior,ignored->new ArrayList<>())
+                    .add(generatedMinute(point,minute,finalizedAt,taskId));
+        }
+        var all=new ArrayList<MinuteQualityWriteResult>();
+        for(var replacement:replacements.entrySet()) {
+            var generated=replacement.getValue();
+            try {
+                var results=minuteRepository.saveAllWithQualityPriority(generated,replacement.getKey());
+                validateWriteResults(generated,results);
+                for(int i=0;i<results.size();i++) {
+                    var outcome=results.get(i).outcome();
+                    if(!isActualWrite(outcome)&&outcome!=MinuteQualityWriteResult.Outcome.IDEMPOTENT)
+                        throw new IllegalStateException("Confirmed interpolation changed concurrently");
+                    // 上次可能落盘后在 READY 中断，幂等重试也必须补齐公式通知。
+                    publishReady(generated.get(i),finalizedAt);
+                }
+                all.addAll(results);
+            } catch(RuntimeException failure) {recordFailures(taskId,generated,failure);throw failure;}
+        }
+        markFirstAppliedBestEffort(taskId,all);
+        recordReplacedTasksBestEffort(all);
+        reconcile(taskId,interpolation.size(),all,finalizedAt);
+    }
+
     private Map<Long, LinkedHashMap<String, RawMinuteAggregate>>
             groupEligibleRightEndpoints(
                     Collection<RawMinuteAggregate> rightEndpoints,
