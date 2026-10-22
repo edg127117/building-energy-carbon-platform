@@ -1,5 +1,6 @@
 """Offline privilege-boundary tests; no live systemd, Docker or database calls."""
 import hashlib
+import base64
 import contextlib
 import importlib.util
 import io
@@ -24,10 +25,175 @@ def load(name, filename):
 
 bridge = load("d01_maintenance", "d01_maintenance.py")
 installer = load("d01_auth_installer", "Install-D01TemporaryAuthorization.py")
+credential_source = load("d01_credentials", "d01_credentials.py")
+
+
+class CredentialReuseTest(unittest.TestCase):
+    metadata = "META\t12345678-1234-1234-1234-123456789abc\tOFF\t0\t0\tcm9vdEBsb2NhbGhvc3Q=\n"
+    migration_metadata = metadata.replace("cm9vdEBsb2NhbGhvc3Q=", base64.b64encode(b"platform_migrator@%").decode())
+    complete = metadata + "GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost'\n"
+
+    def test_backup_requires_both_databases_and_global_dump_privileges(self):
+        grants = ("GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON `iot_platform`.* TO 'backup'@'localhost'\n"
+                  "GRANT PROCESS, SHOW_ROUTINE ON *.* TO 'backup'@'localhost'\n")
+        with self.assertRaisesRegex(RuntimeError, "BACKUP_PRIVILEGES_MISSING"):
+            credential_source.mysql_rights(self.metadata + grants, "backup")
+        grants += "GRANT SELECT, SHOW VIEW, TRIGGER, EVENT ON `iot_platform_archive`.* TO 'backup'@'localhost'\n"
+        self.assertEqual(credential_source.mysql_rights(self.metadata + grants, "backup"),
+                         "12345678-1234-1234-1234-123456789abc")
+
+    def test_schema_ddl_is_required_and_read_only_source_is_rejected(self):
+        dml = "GRANT SELECT, INSERT, UPDATE, DELETE ON `iot_platform`.* TO 'app'@'%'\n"
+        with self.assertRaisesRegex(RuntimeError, "MIGRATION_PRIVILEGES_MISSING"):
+            credential_source.mysql_rights(self.migration_metadata + dml, "migration")
+        with self.assertRaisesRegex(RuntimeError, "TARGET_READ_ONLY"):
+            credential_source.mysql_rights(self.migration_metadata.replace("OFF\t0\t0", "OFF\t1\t1"), "migration")
+
+    def test_sufficient_privileges_from_wrong_authenticated_account_are_rejected(self):
+        with self.assertRaisesRegex(RuntimeError, "AUTHENTICATED_ACCOUNT_MISMATCH"):
+            credential_source.mysql_rights(self.complete, "migration")
+
+    def test_partial_revokes_and_unresolved_roles_never_become_global_permission(self):
+        with self.assertRaisesRegex(RuntimeError, "PARTIAL_REVOKE"):
+            credential_source.mysql_rights(self.complete + "REVOKE SELECT ON `iot_platform_archive`.* FROM 'root'@'localhost'", "backup")
+        with self.assertRaisesRegex(RuntimeError, "MIGRATION_PRIVILEGES_MISSING"):
+            credential_source.mysql_rights(self.migration_metadata + "GRANT 'admin_role'@'%' TO 'app'@'%'", "migration")
+
+    def test_gtid_backup_needs_reload_or_flush_tables(self):
+        output = self.metadata.replace("OFF", "ON") + "GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, PROCESS ON *.* TO 'backup'@'localhost'\n"
+        with self.assertRaisesRegex(RuntimeError, "GTID_PRIVILEGES_MISSING"):
+            credential_source.mysql_rights(output, "backup")
+        credential_source.mysql_rights(output + "GRANT FLUSH_TABLES ON *.* TO 'backup'@'localhost'", "backup")
+
+    def test_fixed_mysql_backup_probe_never_places_password_in_argv_or_environment(self):
+        secret = 'fixture-quoted"password\\only'
+        with patch.object(credential_source, "command", return_value=self.complete) as command:
+            credential_source.backup_mysql_probe(secret, "a" * 64)
+        args, kwargs = command.call_args
+        self.assertNotIn(secret, repr(args))
+        self.assertNotIn("env", kwargs)
+        self.assertEqual(args[0][:4], ["/usr/bin/docker", "exec", "-i", "a" * 64])
+        self.assertIn(b'fixture-quoted\\"password\\\\only', kwargs["input_data"])
+
+    def test_runtime_requires_fixed_test_endpoint_and_separate_migration_identity(self):
+        values = {**credential_source.EXPECTED, "MYSQL_USER": "platform_app", "TDENGINE_USER": "platform_app"}
+        for change, error in (({"MYSQL_PORT": "3306"}, "TARGET_MISMATCH"),
+                              ({"AUDIT_ENVIRONMENT_MODE": "PROD"}, "TARGET_MISMATCH"),
+                              ({"MYSQL_USER": "platform_migrator"}, "SEPARATE_MIGRATION"),
+                              ({"TDENGINE_USER": "root"}, "NONROOT_TDENGINE"),
+                              ({"MYSQL_MIGRATION_PASSWORD": "private"}, "ADMIN_CREDENTIAL_IN_RUNTIME")):
+            raw = b"\0".join((key + "=" + value).encode() for key, value in {**values, **change}.items())
+            with patch.object(credential_source, "command", return_value="123"), patch.object(Path, "read_bytes", return_value=raw):
+                with self.assertRaisesRegex(RuntimeError, error):
+                    credential_source.runtime_target()
+
+    def test_container_binding_and_volume_identity_fail_before_database_probe(self):
+        item = {"Name": "/building-energy-carbon-test-mysql", "State": {"Running": True},
+                "Mounts": [{"Destination": "/var/lib/mysql", "Type": "volume", "Name": "unrelated-volume"}],
+                "NetworkSettings": {"Ports": {"3306/tcp": [{"HostIp": "127.0.0.1", "HostPort": "13316"}]}}}
+        with patch.object(credential_source, "command", return_value=json.dumps([item])):
+            with self.assertRaisesRegex(RuntimeError, "CONTAINER_IDENTITY_MISMATCH"):
+                credential_source.check_containers()
+
+    def test_td_probe_disables_proxies_and_redirects(self):
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"code":0,"column_meta":[],"data":[]}'
+        with patch.object(credential_source.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = response
+            credential_source.td_query("private", "SHOW USERS")
+        self.assertEqual(opener.call_args.args[0].proxies, {})
+        self.assertIsInstance(opener.call_args.args[1], credential_source.NoRedirect)
+        self.assertIsNone(opener.call_args.args[1].redirect_request(None, None, 302, None, None, "https://elsewhere"))
+        request = opener.return_value.open.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:16041/rest/sql")
+
+    def test_failed_process_output_and_timeout_never_expose_secret(self):
+        for result in (Mock(returncode=1, stdout=b"password=private", stderr=b"private"),):
+            with patch.object(credential_source.subprocess, "run", return_value=result):
+                with self.assertRaisesRegex(RuntimeError, "^D01_CREDENTIAL_PROBE_COMMAND_FAILED$"):
+                    credential_source.command(["fixture"])
+
+    def test_td_requires_enabled_admin_and_source_database(self):
+        for rows in ([{"name": "root", "super": 0, "enable": 1}], [{"name": "root", "super": 1, "enable": 0}]):
+            with patch.object(credential_source, "td_query", return_value=rows):
+                with self.assertRaisesRegex(RuntimeError, "BACKUP_PRIVILEGES_MISSING"):
+                    credential_source.backup_td_probe("private")
+        with patch.object(credential_source, "td_query", side_effect=[
+            [{"name": "root", "super": 1, "enable": 1}], [{"name": "unrelated"}]]):
+            with self.assertRaisesRegex(RuntimeError, "SOURCE_DATABASE_MISSING"):
+                credential_source.backup_td_probe("private")
+
+    def test_discovery_collects_missing_categories_without_prompt_or_secret_output(self):
+        output = io.StringIO()
+        with patch.object(credential_source, "runtime_target"), patch.object(credential_source, "check_containers"), \
+                patch.object(credential_source, "administrator_values", return_value={"unrelated": "hidden-secret"}), \
+                patch("builtins.input", side_effect=AssertionError("must not prompt")), contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError, "EXISTING_CREDENTIALS_NOT_READY"):
+                credential_source.discover(b"jar")
+        self.assertNotIn("hidden-secret", output.getvalue())
+        for role in ("MYSQL_MIGRATION", "MYSQL_BACKUP", "TDENGINE_BACKUP"):
+            self.assertIn(role + "_CREDENTIAL_MISSING", output.getvalue())
+
+    def test_discovery_binds_same_mysql_source_and_detects_concurrent_service_change(self):
+        values = {"mysql_migration_password": "migrate" * 4, "mysql_root_password": "mysql" * 4, "td_root_password": "td" * 8}
+        with contextlib.ExitStack() as stack:
+            runtime = stack.enter_context(patch.object(credential_source, "runtime_target", return_value=("123", {})))
+            containers = stack.enter_context(patch.object(credential_source, "check_containers", return_value={"MYSQL": "a" * 64}))
+            stack.enter_context(patch.object(credential_source, "administrator_values", return_value=values))
+            stack.enter_context(patch.object(credential_source, "migration_probe", return_value="same-server"))
+            backup = stack.enter_context(patch.object(credential_source, "backup_mysql_probe", return_value="other-server"))
+            stack.enter_context(patch.object(credential_source, "backup_td_probe"))
+            with self.assertRaisesRegex(RuntimeError, "SOURCE_IDENTITY_MISMATCH"):
+                credential_source.discover(b"jar")
+            backup.return_value = "same-server"
+            runtime.side_effect = [("123", {}), ("456", {})]
+            with self.assertRaisesRegex(RuntimeError, "SERVICE_CHANGED"):
+                credential_source.discover(b"jar")
+            runtime.side_effect = None
+            containers.side_effect = [{"MYSQL": "a" * 64}, {"MYSQL": "b" * 64}]
+            with self.assertRaisesRegex(RuntimeError, "CONTAINERS_CHANGED"):
+                credential_source.discover(b"jar")
+            containers.side_effect = None
+            schema, backup, report = credential_source.discover(b"jar")
+            self.assertEqual(schema["user"], "platform_migrator")
+            self.assertEqual(backup["tdengine"]["password"], "td" * 8)
+            self.assertFalse(report["backup_and_restore_verified"])
+            self.assertNotIn("password", json.dumps(report))
+
+    @unittest.skipUnless(sys.platform == "linux", "POSIX root configuration boundary")
+    def test_credential_source_rejects_symlinks_and_open_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "admin.json"
+            config.write_text('{}')
+            config.chmod(0o644)
+            # A /tmp ancestor is intentionally untrusted, even for a private leaf.
+            with patch.object(credential_source, "ADMIN", config):
+                with self.assertRaisesRegex(RuntimeError, "NOT_PROTECTED|NOT_PRIVATE"):
+                    credential_source.administrator_values()
+            link = root / "link.json"
+            link.symlink_to(config)
+            with patch.object(credential_source, "ADMIN", link):
+                with self.assertRaisesRegex(RuntimeError, "NOT_PROTECTED"):
+                    credential_source.administrator_values()
 
 
 @unittest.skipUnless(sys.platform == "linux", "POSIX permissions and uid checks")
 class PrivilegeBoundaryTest(unittest.TestCase):
+    def test_revocation_config_does_not_depend_on_damaged_migration_modules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {"user": "user1", "format": "D01_TEMP_AUTH_V1",
+                      "code_sha256": {name: "a" * 64 for name in bridge.CODE_FILES}}
+            (root / "config.json").write_text(json.dumps(config))
+            with patch.object(bridge, "INSTALL", root), patch.object(bridge, "protected"), \
+                    patch.object(bridge, "digest", return_value="b" * 64):
+                with self.assertRaisesRegex(RuntimeError, "INSTALLED_CODE_CHANGED"):
+                    bridge.load_config()
+                self.assertEqual(bridge.load_config(verify_code=False), config)
+
     def test_arbitrary_program_paths_and_extra_arguments_are_rejected_before_configuration(self):
         for args in (("entry", "/bin/sh"), ("entry", "backup", "--docker-bin", "/tmp/evil"),
                      ("entry", "migrate", "--state", "/tmp/forged"), ("entry",),
@@ -258,7 +424,8 @@ class InstallerTest(unittest.TestCase):
             stack.enter_context(patch.object(installer.os, "geteuid", return_value=0))
             stack.enter_context(patch.object(installer.sys.stdin, "isatty", return_value=True))
             stack.enter_context(patch.object(installer.pwd, "getpwnam", return_value=Mock(pw_uid=1000)))
-            stack.enter_context(patch.object(installer, "credentials", return_value=({"password": "private-schema"}, {"password": "private-backup"})))
+            credentials = stack.enter_context(patch.object(installer, "credentials", return_value=(
+                {"password": "private-schema"}, {"password": "private-backup"}, {"backup_and_restore_verified": False})))
             stack.enter_context(patch.object(installer, "package_manifest", return_value=({"commit": "a" * 40,
                 "backendJarSha256": "b" * 64, "webIndexSha256": "c" * 64}, b"pinned jar")))
             stack.enter_context(patch.dict(os.environ))
@@ -271,6 +438,14 @@ class InstallerTest(unittest.TestCase):
             stack.enter_context(patch.object(installer, "run", side_effect=command))
             bundle = root / "bundle.tar.gz"
             bundle.write_bytes(self.tar(installer.FILES))
+            credentials.side_effect = RuntimeError("D01_EXISTING_CREDENTIALS_NOT_READY")
+            with self.assertRaisesRegex(RuntimeError, "EXISTING_CREDENTIALS_NOT_READY"):
+                installer.install(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest())
+            self.assertFalse(installer.SUDOERS.exists())
+            self.assertFalse(installer.INSTALL.exists())
+            self.assertEqual(installer.CREATED, [])
+            self.assertFalse(any("enable" in args for args in calls))
+            credentials.side_effect = None
             installer.install(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest())
             rule = installer.SUDOERS.read_text()
             command_line = next(line for line in rule.splitlines() if line.startswith("user1 "))

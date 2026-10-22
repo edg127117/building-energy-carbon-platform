@@ -2,7 +2,6 @@
 """Administrator-only installer for one hash-pinned D01 maintenance operation."""
 import argparse
 import datetime
-import getpass
 import hashlib
 import io
 import json
@@ -15,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import types
 
 INSTALL = Path("/opt/building-energy-d01-maintenance")
 DATA = Path("/var/lib/building-energy-d01-maintenance")
@@ -23,7 +23,8 @@ LAUNCHER = Path("/usr/local/sbin/building-energy-d01-maintenance")
 SUDOERS = Path("/etc/sudoers.d/building-energy-d01-maintenance")
 TIMER = "building-energy-d01-authorization"
 UNITS = Path("/etc/systemd/system")
-FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py", "release.tar.gz")
+FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py",
+         "d01_credentials.py", "release.tar.gz")
 ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore",
            "freeze", "backup", "export-backup", "record-restore", "migrate", "cutover", "revoke")
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
@@ -124,34 +125,13 @@ def package_manifest(raw):
         return manifest, jar
 
 
-def credentials():
-    print("数据库凭据只在本管理员终端输入，不会回显或发送到聊天。")
-    print("可输入现有 root 保护的 JSON 文件路径；留空则隐藏输入既有密码。不要猜测密码或填写占位值。")
-    values = []
-    for label in ("schema", "backup"):
-        path = input(label + " 凭据 JSON 路径（留空进入密码输入）: ").strip()
-        if path:
-            source = Path(path)
-            trusted_parent(source)
-            require(source.is_file() and source.stat().st_mode & 0o077 == 0, "D01_CREDENTIAL_SOURCE_NOT_PRIVATE")
-            value = json.loads(source.read_text())
-        elif label == "schema":
-            user = input("现有 MySQL 迁移账号 [platform_migrator]: ").strip() or "platform_migrator"
-            value = {"url": "jdbc:mysql://127.0.0.1:13316/iot_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC",
-                     "user": user, "password": getpass.getpass("现有迁移账号密码: ")}
-        else:
-            value = {}
-            for engine in ("mysql", "tdengine"):
-                user = input("现有 " + engine + " 备份账号 [root]: ").strip() or "root"
-                value[engine] = {"user": user, "password": getpass.getpass("现有 " + engine + " 备份密码: ")}
-        require(isinstance(value, dict), "D01_CREDENTIAL_OBJECT_REQUIRED")
-        values.append(value)
-    require(set(values[0]) == {"url", "user", "password"}
-            and set(values[1]) == {"mysql", "tdengine"}, "D01_CREDENTIAL_FIELDS_INVALID")
-    require(all(isinstance(values[0][k], str) and values[0][k] for k in values[0])
-            and all(set(v) == {"user", "password"} and all(isinstance(s, str) and s for s in v.values())
-                    for v in values[1].values()), "D01_CREDENTIAL_VALUES_REQUIRED")
-    return values
+def credentials(jar, source):
+    print("复用服务器既有受保护管理员配置，执行只读登录及权限核查；无需输入数据库密码。")
+    # The module is compiled from the already hashed bundle bytes, never
+    # imported from the administrator's cwd or a user-writable upload path.
+    module = types.ModuleType("d01_credentials")
+    exec(compile(source, "verified-d01-credentials", "exec"), module.__dict__)
+    return module.discover(jar)
 
 
 def install(bundle, expected_sha):
@@ -177,7 +157,7 @@ def install(bundle, expected_sha):
             "D01_EXPECTED_SERVICE_USER_REQUIRED")
     previous = str((BASE / "current").resolve())
     require(Path(previous).is_relative_to(BASE / "releases"), "D01_CURRENT_OUTSIDE_TEST_RELEASES")
-    schema, backup = credentials()
+    schema, backup, credential_report = credentials(jar, files["d01_credentials.py"])
     expires = int(time.time()) + 24 * 3600
     release = "d01-" + manifest["commit"][:12]
     sudoers = "# One installed D01 operation; no wildcard arguments or SETENV.\n"
@@ -202,6 +182,7 @@ def install(bundle, expected_sha):
     create(INSTALL / "config.json", json_bytes(config), 0o644)
     create(private / "schema.json", json_bytes(schema), 0o600)
     create(private / "backup.json", json_bytes(backup), 0o600)
+    create(private / "credential-check.json", json_bytes(credential_report), 0o600)
     create(private / "operation.json", json_bytes({"phase": "AUTHORIZED", "authorized_at": int(time.time()),
                                                  "events": []}), 0o600)
     create(LAUNCHER, launcher.encode(), 0o755)
@@ -230,7 +211,8 @@ def install(bundle, expected_sha):
     print("D01_TEMP_AUTH_INSTALLED")
     print("Expires (UTC): " + calendar)
     print("Revoke: sudo " + str(LAUNCHER) + " revoke")
-    print("Application services have not been stopped or restarted. Credential validity is checked before freeze.")
+    print("Existing credentials and direct privileges verified. Application services have not been stopped or restarted.")
+    print("Actual backup and isolated restore verification are still required before freeze.")
 
 
 if __name__ == "__main__":

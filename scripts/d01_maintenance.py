@@ -26,7 +26,7 @@ TIMER = "building-energy-d01-authorization"
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
 ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore",
            "freeze", "backup", "export-backup", "record-restore", "migrate", "cutover", "revoke")
-CODE_FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py")
+CODE_FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py", "d01_credentials.py")
 
 
 def require(ok, code):
@@ -73,14 +73,15 @@ def call(args, timeout=60):
     return result.stdout.decode().strip()
 
 
-def load_config():
+def load_config(*, verify_code=True):
     protected(INSTALL, directory=True)
     protected(INSTALL / "config.json")
     config = json.loads((INSTALL / "config.json").read_text())
     require(config["user"] == "user1" and config["format"] == "D01_TEMP_AUTH_V1", "D01_AUTH_CONFIG_INVALID")
-    for name in CODE_FILES:
-        protected(INSTALL / name)
-        require(digest(INSTALL / name) == config["code_sha256"][name], "D01_INSTALLED_CODE_CHANGED")
+    if verify_code:
+        for name in CODE_FILES:
+            protected(INSTALL / name)
+            require(digest(INSTALL / name) == config["code_sha256"][name], "D01_INSTALLED_CODE_CHANGED")
     return config
 
 
@@ -319,7 +320,9 @@ def main():
     require(len(sys.argv) == 2, "D01_EXACT_ACTION_REQUIRED")
     action = sys.argv[1]
     require(action in ACTIONS, "D01_UNKNOWN_ACTION")
-    config = load_config()
+    # Cleanup must still work if an unused backup/migration module is damaged;
+    # revoke imports none of them and checks its own fixed grant before removal.
+    config = load_config(verify_code=action != "revoke")
     require(os.geteuid() == 0, "D01_ROOT_REQUIRED")
     os.environ.clear()
     os.environ.update(SAFE_ENV)
