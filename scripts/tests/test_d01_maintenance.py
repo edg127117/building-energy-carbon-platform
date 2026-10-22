@@ -390,7 +390,10 @@ class InstallerTest(unittest.TestCase):
             self.assertIn("PUBLIC_READ_PRIVATE_DENIED", result.stdout)
 
     def test_reinstall_archives_only_revoked_failed_prepare_and_preserves_evidence(self):
-        for scenario in ("success", "active_grant", "frozen", "changed_code", "credentials_present", "late_prepare", "rename_failure"):
+        for scenario in ("success", "active_grant", "frozen", "changed_code", "credentials_present", "late_prepare", "rename_failure",
+                         "online_success", "online_frozen_field", "online_missing_field", "online_started", "online_missing_backup",
+                         "online_old_artifact_changed", "online_new_collision", "online_same_release", "online_baseline_changed",
+                         "online_rename_failure", "online_future_event"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
                 root = Path(directory)
                 base = root / "test"
@@ -428,6 +431,50 @@ class InstallerTest(unittest.TestCase):
                 if scenario == "late_prepare":
                     (base / "incoming").mkdir()
                     (base / "incoming/d01-012345abcdef-authorized.tar.gz").write_text('published before later failure')
+                online = scenario.startswith('online_')
+                kwargs = {}
+                if online:
+                    kwargs = {'online_backup': True, 'next_release': 'd01-abcdef012345'}
+                    old_release = base / 'releases/d01-012345abcdef'
+                    (old_release / 'web').mkdir(parents=True)
+                    (base / 'incoming').mkdir()
+                    artifact = base / 'incoming/d01-012345abcdef-authorized.tar.gz'
+                    artifact.write_bytes(b'old package')
+                    (old_release / 'building-energy-carbon-platform.jar').write_bytes(b'candidate')
+                    (old_release / 'web/index.html').write_bytes(b'web')
+                    (previous / 'building-energy-carbon-platform.jar').write_bytes(b'baseline')
+                    setting = root / 'runtime.env'; setting.write_bytes(b'unchanged')
+                    config = json.loads((installer.INSTALL / 'config.json').read_text())
+                    config.update(archive_sha256=hashlib.sha256(b'old package').hexdigest(),
+                                  jar_sha256=hashlib.sha256(b'candidate').hexdigest(), web_sha256=hashlib.sha256(b'web').hexdigest())
+                    (installer.INSTALL / 'config.json').write_text(json.dumps(config))
+                    (private / 'operation.json').write_text(json.dumps({'phase':'FAILED','failed_action':'online-backup','authorized_at':999,
+                        'events':[{'phase':'PREPARED','at_utc_epoch':1000},{'phase':'FAILED','at_utc_epoch':1001}]}))
+                    if scenario == 'online_future_event':
+                        op = json.loads((private / 'operation.json').read_text())
+                        op['events'][1]['at_utc_epoch'] = int(installer.time.time()) + 3600
+                        (private / 'operation.json').write_text(json.dumps(op))
+                    (private / 'online-backup').mkdir()
+                    partial = private / 'online-backup/mysql.sql'; partial.write_bytes(b'partial mysql backup')
+                    state = dict.fromkeys(('other_release','other_link','other_pid','other_reload','runtime_controls','backup_targets',
+                                           'backend_service','web_service'), 'fixture')
+                    state.update(format='D01_PREPARED_V1',phase='PREPARED',release=str(old_release),previous_release=str(previous),
+                        previous_jar_sha256=hashlib.sha256(b'baseline').hexdigest(),candidate_started=False,
+                        jar_sha256=config['jar_sha256'],web_sha256=config['web_sha256'],
+                        config_hashes={str(setting):hashlib.sha256(b'unchanged').hexdigest()})
+                    if scenario == 'online_frozen_field': state['writers_fenced'] = True
+                    if scenario == 'online_missing_field': del state['other_pid']
+                    if scenario == 'online_started': state['candidate_started'] = True
+                    if scenario == 'online_missing_backup': partial.unlink()
+                    if scenario == 'online_old_artifact_changed': artifact.write_bytes(b'tampered')
+                    if scenario == 'online_new_collision': (base / 'releases/d01-abcdef012345').mkdir()
+                    if scenario == 'online_same_release': kwargs['next_release']='d01-012345abcdef'
+                    (private / 'd01-d01-012345abcdef.json').write_text(json.dumps(state))
+                    stack.enter_context(patch.object(installer.pwd, 'getpwnam', return_value=Mock(pw_uid=os.getuid())))
+                    stack.enter_context(patch.object(installer, 'retry_baseline',
+                        side_effect=RuntimeError('D01_OLD_BASELINE_PROCESS_CHANGED') if scenario == 'online_baseline_changed' else None))
+                    stack.enter_context(patch.object(installer, 'retry_configuration',
+                        return_value={str(setting):hashlib.sha256(b'unchanged').hexdigest()}))
                 stack.enter_context(patch.object(installer, "trusted_parent"))
                 def state(*args):
                     if "UnitFileState" in args:
@@ -436,30 +483,71 @@ class InstallerTest(unittest.TestCase):
                         return "active"
                     return "inactive" if "ActiveState" in args else ""
                 commands = stack.enter_context(patch.object(installer, "run", side_effect=state))
-                if scenario == "rename_failure":
+                if scenario in ("rename_failure", "online_rename_failure"):
                     original = Path.rename
                     def rename(path, target):
                         if path == installer.LAUNCHER:
                             raise OSError('fixture move failure')
                         return original(path, target)
                     stack.enter_context(patch.object(Path, "rename", rename))
-                if scenario in ("success", "rename_failure"):
-                    if scenario == "success":
-                        installer.retire_failed_prepare()
+                if scenario in ("success", "rename_failure", "online_success", "online_rename_failure"):
+                    if scenario in ("success", "online_success"):
+                        installer.retire_failed_prepare(**kwargs)
                     else:
                         with self.assertRaisesRegex(RuntimeError, "ARCHIVE_INCOMPLETE"):
-                            installer.retire_failed_prepare()
+                            installer.retire_failed_prepare(**kwargs)
                     archived = list(installer.HISTORY.iterdir())
                     self.assertEqual(len(archived), 1)
                     self.assertEqual((archived[0] / "data/private/audit-evidence.json").read_text(), 'preserved')
                     self.assertEqual((base / "current").resolve(), previous)
+                    if online:
+                        self.assertEqual((archived[0] / 'data/private/online-backup/mysql.sql').read_bytes(), b'partial mysql backup')
+                        self.assertEqual(artifact.read_bytes(), b'old package')
+                        self.assertEqual((old_release / 'building-energy-carbon-platform.jar').read_bytes(), b'candidate')
                     self.assertTrue(all(not any(verb in args for verb in ("stop", "start", "restart"))
                                         for args, _ in commands.call_args_list))
                 else:
                     with self.assertRaises(RuntimeError):
-                        installer.retire_failed_prepare()
+                        installer.retire_failed_prepare(**kwargs)
                     self.assertTrue(installer.INSTALL.exists())
                     self.assertFalse(installer.HISTORY.exists())
+
+    def test_online_retry_baseline_rejects_restarts_and_runtime_or_other_site_changes(self):
+        runtime = dict.fromkeys(installer.RUNTIME_REQUIRED, 'fixture')
+        runtime.update(AUDIT_ENVIRONMENT_MODE='TEST',SERVER_PORT='18081',MYSQL_FLYWAY_ENABLED='false',TDENGINE_INITIALIZATION_ENABLED='false')
+        state = {'runtime_controls': runtime, 'other_release':'/old',
+                 'other_link':'/old','other_pid':'77','other_reload':'unchanged'}
+        for scenario in ('valid','backend_restart','web_restart','runtime','other_pid','other_reload','missing_runtime_key'):
+            state['runtime_controls'] = dict(runtime)
+            if scenario == 'missing_runtime_key': del state['runtime_controls']['SERVER_PORT']
+            def run(*args):
+                if 'ActiveState' in args: return 'active'
+                if 'ExecMainStartTimestampMonotonic' in args:
+                    changed = (scenario == 'backend_restart' and 'building-energy-carbon-test-platform.service' in args
+                               or scenario == 'web_restart' and 'building-energy-carbon-test-nginx.service' in args)
+                    return '99000000' if changed else '10000000'
+                if 'ExecReload' in args: return 'changed' if scenario == 'other_reload' else 'unchanged'
+                return '88' if scenario == 'other_pid' and 'nginx.service' in args else '77'
+            with self.subTest(scenario=scenario), patch.object(installer,'run',side_effect=run), \
+                    patch.object(installer.time,'time',return_value=1000), patch.object(installer.time,'monotonic',return_value=100), \
+                    patch.object(Path,'read_bytes',return_value='\0'.join(k+'='+('PROD' if scenario=='runtime' and k=='AUDIT_ENVIRONMENT_MODE' else v) for k,v in runtime.items()).encode()), \
+                    patch.object(Path,'resolve',return_value=Path('/old')), patch.object(installer.os,'readlink',return_value='/old'):
+                if scenario == 'valid': installer.retry_baseline(state,950)
+                else:
+                    with self.assertRaises(RuntimeError): installer.retry_baseline(state,950)
+
+    def test_retry_configuration_includes_current_environment_units_and_added_dropins(self):
+        control = '/etc/building-energy-carbon-test/daikin-control-disabled.env'
+        def run(*args):
+            if 'EnvironmentFiles' in args: return control + ' (ignore_errors=no) /etc/runtime.env (ignore_errors=no)'
+            if 'FragmentPath' in args: return '/etc/' + args[2]
+            if 'DropInPaths' in args: return '/etc/new-dropin.conf'
+            raise AssertionError(args)
+        with patch.object(installer, 'run', side_effect=run), patch.object(Path, 'read_bytes', return_value=b'fixture'):
+            result = installer.retry_configuration()
+        self.assertEqual(set(result), {control, '/etc/runtime.env', '/etc/new-dropin.conf',
+            '/etc/building-energy-carbon-test-platform.service', '/etc/building-energy-carbon-test-nginx.service',
+            str(installer.BASE / 'shared/nginx-user.conf')})
 
     def tar(self, names):
         stream = io.BytesIO()

@@ -91,6 +91,8 @@ def create_container(image, port, network, volume, suffix, extra=()):
 
 def main():
     os.environ["DOCKER_HOST"] = "npipe:////./pipe/dockerDesktopLinuxEngine"
+    d01_backup.TD_CLIENT = ROOT / 'target/d01-taosdump-client/taosdump-d01'
+    assert d01_backup.TD_CLIENT.is_file(), 'Build scripts/d01-taosdump before the rehearsal'
     try:
         assert probe.docker("info", "--format", "{{.OSType}}") == "linux"
         network = "d01-upgrade-" + probe.NONCE

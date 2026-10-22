@@ -26,12 +26,19 @@ TIMER = "building-energy-d01-authorization"
 UNITS = Path("/etc/systemd/system")
 HISTORY = Path("/var/lib/building-energy-d01-maintenance-history")
 FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py",
-         "d01_credentials.py", "release.tar.gz")
+         "d01_credentials.py", "taosdump-d01", "taosdump-LICENSE", "release.tar.gz")
 ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore",
            "freeze", "backup", "export-backup", "record-restore", "migrate", "cutover", "revoke")
 ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
 CREATED = []
 TIMER_ATTEMPTED = False
+RUNTIME_REQUIRED = {
+    'AUDIT_ENVIRONMENT_MODE', 'SERVER_PORT', 'MYSQL_HOST', 'MYSQL_PORT', 'MYSQL_USER', 'MYSQL_FLYWAY_ENABLED',
+    'TDENGINE_INITIALIZATION_ENABLED', 'MQTT_ENABLED', 'MQTT_CLIENT_ID', 'MYSQL_CONTAINER_NAME', 'MYSQL_VOLUME_NAME',
+    'TDENGINE_CONTAINER_NAME', 'TDENGINE_VOLUME_NAME', 'TDENGINE_DATABASE', 'DAIKIN_CONTROL_ENABLED',
+    'DAIKIN_CONTROL_WIRE_CONFIRMED', 'DAIKIN_CONTROL_TEST_ACCESS_ENABLED', 'DAIKIN_CONTROL_TEST_OPEN_CONTROLS',
+    'DAIKIN_CONTROL_TEST_EQUIPMENT_IDS', 'DAIKIN_CONTROL_TEST_WINDOW_EXPIRES_AT', 'DAIKIN_CONTROL_FAST_READBACK_TIMEOUT_MILLIS',
+}
 
 
 def require(ok, code):
@@ -101,7 +108,47 @@ def mkdir(path, mode):
     path.chmod(mode)
 
 
-def retire_failed_prepare():
+def retry_configuration():
+    """Rebuild the prepare fingerprint set; checking only saved keys misses added drop-ins."""
+    backend = 'building-energy-carbon-test-platform.service'
+    def prop(service, name):
+        return run('/usr/bin/systemctl', 'show', service, '-p', name, '--value')
+    paths = re.findall(r'(/\S+) \(ignore_errors=(?:yes|no)\)', prop(backend, 'EnvironmentFiles'))
+    require('/etc/building-energy-carbon-test/daikin-control-disabled.env' in paths,
+            'D01_OLD_CONFIGURATION_CHANGED')
+    paths.append(str(BASE / 'shared/nginx-user.conf'))
+    for service in (backend, 'building-energy-carbon-test-nginx.service'):
+        paths.append(prop(service, 'FragmentPath'))
+        paths.extend(prop(service, 'DropInPaths').split())
+    return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in sorted(set(paths))}
+
+
+def retry_baseline(state, prepared):
+    runtime = state["runtime_controls"]
+    require(isinstance(runtime, dict) and set(runtime) == RUNTIME_REQUIRED
+            and runtime.get('AUDIT_ENVIRONMENT_MODE') == 'TEST' and runtime.get('SERVER_PORT') == '18081'
+            and runtime.get('MYSQL_FLYWAY_ENABLED') == 'false' and runtime.get('TDENGINE_INITIALIZATION_ENABLED') == 'false',
+            'D01_OLD_RUNTIME_CONTRACT_INVALID')
+    for service in ("building-energy-carbon-test-platform.service", "building-energy-carbon-test-nginx.service"):
+        require(run("/usr/bin/systemctl", "show", service, "-p", "ActiveState", "--value") == "active",
+                "D01_REINSTALL_REQUIRES_RUNNING_BASELINE")
+        started = int(run("/usr/bin/systemctl", "show", service, "-p", "ExecMainStartTimestampMonotonic", "--value")) / 1_000_000
+        require(started > 0 and time.time() - time.monotonic() + started <= prepared + 1,
+                "D01_OLD_BASELINE_PROCESS_CHANGED")
+    pid = run("/usr/bin/systemctl", "show", "building-energy-carbon-test-platform.service", "-p", "MainPID", "--value")
+    require(pid.isdecimal() and int(pid) > 1, "D01_OLD_BASELINE_PROCESS_CHANGED")
+    entries = (Path('/proc') / pid / 'environ').read_bytes().decode().split('\0')
+    actual = {key: value for entry in entries if '=' in entry
+              for key, value in [entry.split('=', 1)] if key in runtime}
+    require(actual == runtime and runtime.get('AUDIT_ENVIRONMENT_MODE') == 'TEST', "D01_OLD_RUNTIME_CHANGED")
+    other = Path('/var/www/iot-platform/current')
+    require(str(other.resolve()) == state['other_release'] and os.readlink(other) == state['other_link']
+            and run('/usr/bin/systemctl', 'show', 'nginx.service', '-p', 'MainPID', '--value') == state['other_pid']
+            and run('/usr/bin/systemctl', 'show', 'nginx.service', '-p', 'ExecReload', '--value') == state['other_reload'],
+            'D01_OTHER_SITE_CHANGED')
+
+
+def retire_failed_prepare(*, online_backup=False, next_release=None):
     """Archive only an explicitly requested, revoked pre-freeze attempt."""
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
@@ -110,19 +157,60 @@ def retire_failed_prepare():
         trusted_parent(path)
     operation = json.loads((private / "operation.json").read_text())
     config = json.loads((INSTALL / "config.json").read_text())
-    require(operation.get("phase") == "FAILED" and operation.get("failed_action") == "prepare"
-            and all(event.get("phase") == "FAILED" for event in operation.get("events", []))
+    expected_events = ["PREPARED", "FAILED"] if online_backup else ["FAILED"]
+    require(operation.get("phase") == "FAILED"
+            and operation.get("failed_action") == ("online-backup" if online_backup else "prepare")
+            and [event.get("phase") for event in operation.get("events", [])] == expected_events
             and not any(key in operation for key in ("stop_requested_at", "stopped_at", "services_restored_at")),
-            "D01_OLD_OPERATION_NOT_FAILED_PREPARE")
+            "D01_OLD_OPERATION_NOT_FAILED_ONLINE_BACKUP" if online_backup else "D01_OLD_OPERATION_NOT_FAILED_PREPARE")
     require(config.get("format") == "D01_TEMP_AUTH_V1" and config.get("user") == "user1"
             and str((BASE / "current").resolve()) == config.get("previous_release"), "D01_OLD_BASELINE_CHANGED")
     release = config.get("release", "")
     require(re.fullmatch(r"d01-[a-f0-9]{12}", release)
             and config.get("archive_name") == release + "-authorized.tar.gz", "D01_OLD_RELEASE_ID_INVALID")
-    # This recovery is only for failure before publication. Do not remove or
-    # reuse user-owned partial releases from a later prepare failure.
-    for artifact in (BASE / "incoming" / config["archive_name"], BASE / "releases" / release):
-        require(not artifact.exists() and not artifact.is_symlink(), "D01_OLD_PREPARE_ARTIFACTS_REQUIRE_REVIEW")
+    if online_backup:
+        require(next_release and next_release != release, "D01_REAUTHORIZE_NEW_RELEASE_REQUIRED")
+        for artifact in (BASE / "incoming" / (next_release + "-authorized.tar.gz"), BASE / "releases" / next_release):
+            require(not artifact.exists() and not artifact.is_symlink(), "D01_NEW_RELEASE_ALREADY_EXISTS")
+        state_path = private / ("d01-" + release + ".json")
+        trusted_parent(state_path)
+        state = json.loads(state_path.read_text())
+        expected_keys = {'format', 'phase', 'release', 'previous_release', 'previous_jar_sha256', 'other_release',
+                         'other_link', 'other_pid', 'other_reload', 'config_hashes', 'runtime_controls', 'backup_targets',
+                         'backend_service', 'web_service', 'candidate_started', 'jar_sha256', 'web_sha256'}
+        require(set(state) == expected_keys, "D01_OLD_PREPARED_FIELDS_INVALID")
+        require(state.get("phase") == "PREPARED" and state.get("format") == "D01_PREPARED_V1"
+                and state.get("previous_release") == config["previous_release"]
+                and state.get("release") == str(BASE / "releases" / release)
+                and state.get("candidate_started") is False
+                and not any(key in state for key in ("freeze_id", "frozen_at", "migration_completed_at", "candidate_started_at")),
+                "D01_OLD_BACKUP_NOT_PREFREEZE")
+        # Old user-owned artifacts stay untouched. A new commit gets distinct
+        # paths; no FAILED state reset or partial backup reuse is permitted.
+        prepared = operation["events"][0].get("at_utc_epoch", 0)
+        failed = operation['events'][1].get('at_utc_epoch')
+        authorized = operation.get('authorized_at')
+        require(all(type(value) is int for value in (authorized, prepared, failed))
+                and 0 < authorized <= prepared <= failed <= time.time(), 'D01_OLD_EVENT_TIMES_INVALID')
+        retry_baseline(state, prepared)
+        require(hashlib.sha256((Path(config["previous_release"]) / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
+                == state.get("previous_jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
+        hashes = state.get("config_hashes")
+        require(isinstance(hashes, dict) and hashes and hashes == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
+        uid = pwd.getpwnam('user1').pw_uid
+        for artifact, sha in ((BASE / 'incoming' / config['archive_name'], config['archive_sha256']),
+                              (BASE / 'releases' / release / 'building-energy-carbon-platform.jar', config['jar_sha256']),
+                              (BASE / 'releases' / release / 'web/index.html', config['web_sha256'])):
+            require(artifact.is_file() and artifact.stat().st_uid == uid
+                    and not any(part.is_symlink() for part in (artifact, *artifact.parents))
+                    and hashlib.sha256(artifact.read_bytes()).hexdigest() == sha, 'D01_OLD_RELEASE_ARTIFACT_CHANGED')
+        partial = private / 'online-backup/mysql.sql'
+        require(partial.is_file() and not partial.is_symlink(), 'D01_OLD_PARTIAL_BACKUP_MISSING')
+        trusted_parent(partial)
+        require(partial.is_file() and partial.stat().st_size > 0, 'D01_OLD_PARTIAL_BACKUP_MISSING')
+    else:
+        for artifact in (BASE / "incoming" / config["archive_name"], BASE / "releases" / release):
+            require(not artifact.exists() and not artifact.is_symlink(), "D01_OLD_PREPARE_ARTIFACTS_REQUIRE_REVIEW")
     for name in ("schema.json", "backup.json"):
         require(not (private / name).exists() and not (private / name).is_symlink(), "D01_OLD_CREDENTIALS_NOT_REVOKED")
     require(run("/usr/bin/systemctl", "show", TIMER + ".timer", "-p", "ActiveState", "--value") == "inactive"
@@ -130,8 +218,12 @@ def retire_failed_prepare():
             "D01_OLD_TIMER_NOT_REVOKED")
     require(run("/usr/bin/systemctl", "show", "building-energy-carbon-test-platform.service", "-p", "ActiveState", "--value") == "active",
             "D01_REINSTALL_REQUIRES_RUNNING_BASELINE")
-    for name in FILES:
-        if name.endswith(".py"):
+    hashes = config.get("code_sha256", {})
+    require(set(hashes) in ({name for name in FILES if name.endswith('.py')},
+                            {name for name in FILES if name.endswith('.py')} | {"taosdump-d01"}),
+            "D01_OLD_CODE_MANIFEST_INVALID")
+    for name in hashes:
+        if name.endswith(".py") or name == "taosdump-d01":
             trusted_parent(INSTALL / name)
             require(hashlib.sha256((INSTALL / name).read_bytes()).hexdigest() == config.get("code_sha256", {}).get(name),
                     "D01_OLD_INSTALLED_CODE_CHANGED")
@@ -143,7 +235,7 @@ def retire_failed_prepare():
         HISTORY.chmod(0o700)
     trusted_parent(HISTORY)
     require(HISTORY.is_dir() and HISTORY.stat().st_mode & 0o077 == 0, "D01_HISTORY_NOT_PRIVATE")
-    archive = HISTORY / ("failed-prepare-" + uuid.uuid4().hex)
+    archive = HISTORY / (("failed-online-backup-" if online_backup else "failed-prepare-") + uuid.uuid4().hex)
     archive.mkdir(mode=0o700)
     archive.chmod(0o700)
     # History is intentionally outside CREATED: a later installation failure
@@ -154,7 +246,7 @@ def retire_failed_prepare():
         run("/usr/bin/systemctl", "daemon-reload")
     except Exception:
         raise RuntimeError("D01_REVOKED_ARCHIVE_INCOMPLETE_ADMIN_REQUIRED") from None
-    print("D01_REVOKED_PREPARE_ARCHIVED=" + str(archive))
+    print("D01_REVOKED_ATTEMPT_ARCHIVED=" + str(archive))
 
 
 def json_bytes(value):
@@ -195,7 +287,7 @@ def credentials(jar, source):
     return module.discover(jar)
 
 
-def install(bundle, expected_sha, *, replace_revoked_prepare=False):
+def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revoked_online_backup=False):
     global TIMER_ATTEMPTED
     require(os.geteuid() == 0, "D01_ADMIN_REQUIRED")
     require(sys.stdin.isatty(), "D01_ADMIN_TERMINAL_REQUIRED")
@@ -209,8 +301,9 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False):
     require(hashlib.sha256(raw).hexdigest() == expected_sha, "D01_BUNDLE_HASH_MISMATCH")
     files = bundle_files(raw)
     manifest, jar = package_manifest(files["release.tar.gz"])
-    if replace_revoked_prepare and (INSTALL.exists() or INSTALL.is_symlink()):
-        retire_failed_prepare()
+    require(not (replace_revoked_prepare and replace_revoked_online_backup), "D01_ONE_REPLACEMENT_MODE_REQUIRED")
+    if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
+        retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release="d01-" + manifest["commit"][:12])
     for destination in (INSTALL, DATA, LAUNCHER, SUDOERS,
                         UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer")):
         trusted_parent(destination.parent)
@@ -232,7 +325,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False):
               "archive_sha256": hashlib.sha256(files["release.tar.gz"]).hexdigest(),
               "jar_sha256": manifest["backendJarSha256"], "web_sha256": manifest["webIndexSha256"],
               "commit": manifest["commit"],
-              "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py")},
+              "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
               "authorization_reference": "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
     mkdir(INSTALL, 0o755)
@@ -240,7 +333,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False):
     private = DATA / "private"
     mkdir(private, 0o700)
     for name, content in files.items():
-        create(INSTALL / name, content, 0o644)
+        create(INSTALL / name, content, 0o755 if name == "taosdump-d01" else 0o644)
     create(INSTALL / "building-energy-carbon-platform.jar", jar, 0o644)
     create(INSTALL / "config.json", json_bytes(config), 0o644)
     create(private / "schema.json", json_bytes(schema), 0o600)
@@ -284,11 +377,14 @@ if __name__ == "__main__":
     parser.add_argument("--sha256", required=True)
     parser.add_argument("--replace-revoked-prepare", action="store_true",
                         help="archive only a revoked attempt that failed before freeze; preserve all evidence")
+    parser.add_argument("--replace-revoked-online-backup", action="store_true",
+                        help="archive a revoked failed online backup; keep partial backups and old release artifacts")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGHUP, interrupted)
     try:
-        install(args.bundle, args.sha256, replace_revoked_prepare=args.replace_revoked_prepare)
+        install(args.bundle, args.sha256, replace_revoked_prepare=args.replace_revoked_prepare,
+                replace_revoked_online_backup=args.replace_revoked_online_backup)
     except BaseException as error:
         try:
             cleanup_failed_install()

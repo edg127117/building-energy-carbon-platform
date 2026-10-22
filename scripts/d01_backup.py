@@ -37,10 +37,17 @@ DOCKER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 TD_DATABASE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 TD_USER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+TD_CLIENT = Path(__file__).resolve().with_name("taosdump-d01")
+TD_LIBRARY = "/usr/local/taos/driver/libtaos.so.3.2.3.0"
+TD_LIBRARY_SHA256 = "4fd407d18c1c70576b0fb0e511043080f7cef863b73759d4cd95eee686fa1b91"
 
 
 class BackupError(RuntimeError):
     """Stable failure code only; never include command output or a secret."""
+
+    def __init__(self, code, diagnostic=None):
+        super().__init__(code)
+        self.diagnostic = diagnostic or {"category": "unclassified"}
 
 
 # Credentials cross the Docker boundary only through standard input, never in a
@@ -53,14 +60,13 @@ cat > "$config"
 mysqldump --defaults-extra-file="$config" --single-transaction --routines --events --triggers --databases iot_platform iot_platform_archive
 """
 
-# -p makes taosdump consume the supplied stdin password. Failure never falls
-# back to TDengine's default password or a plaintext CLI password.
+# The pinned D01 client reads a complete bounded password line; the bundled
+# 3.2.3.0 client silently truncates stdin passwords to 20 bytes. No CLI secret.
 TAOS_DUMP_SCRIPT = """set -eu
 umask 077
-mkdir -- "$1"
 IFS= read -r td_user
 IFS= read -r td_password
-printf '%s\\n' "$td_password" | taosdump -u "$td_user" -p -D "$2" -o "$1"
+printf '%s\\n' "$td_password" | "$1/client" -u "$td_user" -p -D "$2" -o "$1/payload" -r /dev/null -T 1
 unset td_password
 """
 
@@ -186,8 +192,23 @@ def _run(command: Sequence[str], code: str, *, runner: Any = None, input_data: O
     except (OSError, subprocess.SubprocessError) as error:
         raise _fail(code) from error
     if result.returncode != 0:
-        # stderr may include connection or authentication details.
-        raise _fail(code)
+        # Only fixed categories survive. Redacting arbitrary external text is
+        # insufficient: it may contain passwords, DSNs, SQL or telemetry values.
+        diagnostic = {"category": "unclassified", "returncode": result.returncode}
+        if code == "TDENGINE_DUMP_FAILED":
+            raw = b" ".join(value for value in (result.stdout, result.stderr) if isinstance(value, bytes)).lower()
+            for category, patterns in (
+                ("password_input_invalid", (b"d01_td_password_input_invalid",)),
+                ("authentication_failed", (b"authentication failure", b"authentication failed")),
+                ("connection_failed", (b"unable to establish connection", b"connection refused")),
+                ("permission_denied", (b"permission denied", b"insufficient privilege")),
+                ("disk_full", (b"no space left on device",)),
+                ("client_missing", (b"not found",)),
+            ):
+                if any(pattern in raw for pattern in patterns):
+                    diagnostic["category"] = category
+                    break
+        raise BackupError(code, diagnostic)
     return result
 
 
@@ -369,26 +390,50 @@ def _dump_tdengine(output: Path, credentials: dict[str, str], docker: str, conta
     stdin = (credentials["tdengine_user"] + "\n" + credentials["tdengine_password"] + "\n").encode("utf-8")
     operation_error: Optional[Exception] = None
     try:
+        if not TD_CLIENT.is_file() or TD_CLIENT.is_symlink():
+            raise _fail("TDENGINE_PINNED_CLIENT_MISSING")
+        # This native client is validated against this exact runtime library.
+        # A different server image requires a new isolated export/restore drill.
+        actual_library = _output([docker, "exec", container, "sha256sum", TD_LIBRARY],
+                                 "TDENGINE_CLIENT_ABI_CHECK_FAILED", runner)
+        if actual_library != TD_LIBRARY_SHA256 + "  " + TD_LIBRARY:
+            raise _fail("TDENGINE_CLIENT_ABI_MISMATCH")
+        _run([docker, "exec", container, "sh", "-ceu", 'umask 077; mkdir -- "$1"; mkdir -- "$1/payload"',
+              "d01-taos-prepare", temporary], "TDENGINE_TEMP_CREATE_FAILED", runner=runner)
+        _run([docker, "cp", str(TD_CLIENT), container + ":" + temporary + "/client"],
+             "TDENGINE_CLIENT_COPY_FAILED", runner=runner)
+        _run([docker, "exec", container, "chmod", "700", temporary + "/client"],
+             "TDENGINE_CLIENT_MODE_FAILED", runner=runner)
         _run([docker, "exec", "-i", container, "sh", "-ceu", TAOS_DUMP_SCRIPT,
               "d01-taosdump", temporary, database], "TDENGINE_DUMP_FAILED", runner=runner, input_data=stdin,
              timeout_seconds=DUMP_TIMEOUT_SECONDS, timeout_code="TDENGINE_DUMP_TIMEOUT")
         output.mkdir(mode=0o700)
         _private(output, 0o700)
-        _run([docker, "cp", container + ":" + temporary + "/.", str(output)], "TDENGINE_COPY_FAILED",
+        _run([docker, "cp", container + ":" + temporary + "/payload/.", str(output)], "TDENGINE_COPY_FAILED",
              runner=runner, timeout_seconds=DUMP_TIMEOUT_SECONDS, timeout_code="TDENGINE_COPY_TIMEOUT")
     except OSError:
         operation_error = _fail("TDENGINE_COPY_FAILED")
-    except Exception as error:
+    except BackupError as error:
         operation_error = error
+    except Exception:
+        # Unexpected library exceptions are not a safe diagnostic contract.
+        operation_error = _fail("TDENGINE_EXPORT_UNEXPECTED_FAILURE")
     finally:
         try:
             _run([docker, "exec", container, "sh", "-ceu", TD_CLEANUP_SCRIPT,
                   "d01-taos-cleanup", temporary], "TDENGINE_TEMP_CLEANUP_FAILED", runner=runner)
         except BackupError as cleanup_error:
             if operation_error is not None:
-                raise _fail("TDENGINE_OPERATION_AND_TEMP_CLEANUP_FAILED") from cleanup_error
-            raise
+                operation_error = BackupError("TDENGINE_OPERATION_AND_TEMP_CLEANUP_FAILED",
+                    {**getattr(operation_error, "diagnostic", {"category": "unclassified"}),
+                     "cleanup_failed": True})
+            else:
+                operation_error = cleanup_error
     if operation_error is not None:
+        _write_json(output.parent / "tdengine-diagnostic.json", {
+            "format": "D01_TDENGINE_DIAGNOSTIC_V1", "stage": str(operation_error),
+            **getattr(operation_error, "diagnostic", {"category": "unclassified"}),
+        }, "TDENGINE_DIAGNOSTIC_WRITE_FAILED")
         raise operation_error
 
 

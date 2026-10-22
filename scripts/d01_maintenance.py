@@ -26,7 +26,7 @@ TIMER = "building-energy-d01-authorization"
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
 ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore",
            "freeze", "backup", "export-backup", "record-restore", "migrate", "cutover", "revoke")
-CODE_FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py", "d01_credentials.py")
+CODE_FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py", "d01_credentials.py", "taosdump-d01")
 
 
 def require(ok, code):
@@ -348,7 +348,10 @@ def main():
                 getattr(maintenance, action.replace("-", "_"))()
         except Exception as error:
             if action not in ("status", "export-online", "export-backup"):
-                maintenance.record("FAILED", failed_action=action, failure_code=failure_code(error))
+                details = {}
+                if isinstance(error, maintenance.backup_tool.BackupError):
+                    details["diagnostic"] = error.diagnostic
+                maintenance.record("FAILED", failed_action=action, failure_code=failure_code(error), **details)
             raise
 
 

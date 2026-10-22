@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "d01_backup.py"
@@ -74,6 +75,8 @@ class FakeRunner:
                 raise subprocess.TimeoutExpired(args, kwargs["timeout"])
             return self.result(args)
         if args[1] == "cp":
+            if args[-1].endswith('/client'):
+                return self.result(args)
             if self.timeout_stage == "copy":
                 raise subprocess.TimeoutExpired(args, kwargs["timeout"])
             if self.copy_fails:
@@ -81,18 +84,44 @@ class FakeRunner:
             (Path(args[-1]) / "metadata.avro").write_bytes(b"tdengine export")
             return self.result(args)
         if args[1:3] == ["exec", "td-db"]:
-            if self.cleanup_fails:
+            if args[3] == 'sha256sum':
+                return self.result(args, (backup_tool.TD_LIBRARY_SHA256 + '  ' + backup_tool.TD_LIBRARY).encode())
+            if self.cleanup_fails and 'd01-taos-cleanup' in args:
                 return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"cleanup failed")
             return self.result(args)
         raise AssertionError("unexpected Docker call: " + repr(args))
 
 
 class TestD01Backup(unittest.TestCase):
+    def test_unexpected_export_error_never_persists_arbitrary_exception_text(self):
+        runner = FakeRunner()
+        def unexpected(args, **kwargs):
+            if 'sha256sum' in args:
+                raise RuntimeError('sensitive-unexpected-output')
+            return runner(args, **kwargs)
+        with self.assertRaisesRegex(backup_tool.BackupError, '^TDENGINE_EXPORT_UNEXPECTED_FAILURE$'):
+            backup_tool._dump_tdengine(self.root / 'tdengine', {'tdengine_user': 'root',
+                'tdengine_password': 'private-fixture'}, 'fake-docker', 'td-db', 'iot_telemetry', unexpected)
+        self.assertNotIn('sensitive-unexpected-output', (self.root / 'tdengine-diagnostic.json').read_text())
+
+    def test_native_library_mismatch_rejects_before_copying_client_or_sending_credentials(self):
+        runner = FakeRunner()
+        with patch.object(backup_tool, '_output', return_value='different library'):
+            with self.assertRaisesRegex(backup_tool.BackupError, 'TDENGINE_CLIENT_ABI_MISMATCH'):
+                backup_tool._dump_tdengine(self.root / 'tdengine', {'tdengine_user': 'root',
+                    'tdengine_password': 'private-fixture'}, 'fake-docker', 'td-db', 'iot_telemetry', runner)
+        self.assertFalse(any(args[1] == 'cp' or payload for args, payload in runner.calls))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "backups"
         self.root.mkdir()
+        client = Path(self.temp.name) / 'taosdump-d01'
+        client.write_bytes(b'isolated fixture client')
+        patched = patch.object(backup_tool, 'TD_CLIENT', client)
+        patched.start()
+        self.addCleanup(patched.stop)
         self.freeze = Path(self.temp.name) / "freeze.json"
         self.credentials = Path(self.temp.name) / "credentials.json"
         self.freeze_id = "123e4567-e89b-12d3-a456-426614174000"
@@ -175,10 +204,41 @@ class TestD01Backup(unittest.TestCase):
         td_command = next(args for args, _ in runner.calls if args[1:4] == ["exec", "-i", "td-db"])
         self.assertIn(b"mysql-secret", mysql_stdin)
         self.assertEqual(b"tdbackup\ntd-secret\n", td_stdin)
-        self.assertIn("taosdump -u \"$td_user\" -p", td_command[6])
+        self.assertIn('"$1/client" -u "$td_user" -p', td_command[6])
+        self.assertIn('-r /dev/null -T 1', td_command[6])
         calls_before_validate = len(runner.calls)
         backup_tool.validate(backup)
         self.assertEqual(calls_before_validate, len(runner.calls))
+
+    def test_td_failure_diagnostic_contains_only_allowlisted_categories(self):
+        for phrase, category in ((b'Authentication failure', 'authentication_failed'),
+                                 (b'Unable to establish connection', 'connection_failed'),
+                                 (b'No space left on device', 'disk_full'),
+                                 (b'unrecognized private value', 'unclassified')):
+            with self.subTest(category=category):
+                def runner(args, **kwargs):
+                    return subprocess.CompletedProcess(args, 1, stdout=phrase + b' password=secret-value SQL: private-row',
+                                                       stderr=b'td-secret mysql-secret')
+                with self.assertRaises(backup_tool.BackupError) as raised:
+                    backup_tool._run(['fixture'], 'TDENGINE_DUMP_FAILED', runner=runner)
+                self.assertEqual(raised.exception.diagnostic, {'category': category, 'returncode': 1})
+                self.assertEqual(str(raised.exception), 'TDENGINE_DUMP_FAILED')
+
+    def test_td_failure_keeps_private_diagnostic_and_still_cleans_temporary_client(self):
+        base = FakeRunner()
+        def runner(args, **kwargs):
+            if list(args)[1:4] == ['exec', '-i', 'td-db']:
+                return subprocess.CompletedProcess(args, 1, stdout=b'Authentication failure td-secret', stderr=b'private data')
+            return base(args, **kwargs)
+        with self.assertRaisesRegex(backup_tool.BackupError, 'TDENGINE_DUMP_FAILED'):
+            self.create(runner)
+        partial = next(self.root.glob('*.partial'))
+        diagnostic = partial / 'tdengine-diagnostic.json'
+        self.assertEqual(json.loads(diagnostic.read_text())['category'], 'authentication_failed')
+        self.assertNotIn('td-secret', diagnostic.read_text())
+        if os.name == 'posix':
+            self.assertEqual(diagnostic.stat().st_mode & 0o777, 0o600)
+        self.assertTrue(any('d01-taos-cleanup' in args for args, _ in base.calls))
 
     def test_nonfrozen_state_is_rejected_before_any_external_command_or_partial_directory(self):
         state = json.loads(self.freeze.read_text(encoding="utf-8"))
@@ -237,12 +297,12 @@ class TestD01Backup(unittest.TestCase):
         runner = FakeRunner()
         self.create(runner)
         for args, timeout in runner.timeouts:
-            is_dump_or_copy = args[1] == "cp" or args[1:3] == ["exec", "-i"]
+            is_dump_or_copy = (args[1] == "cp" and not args[-1].endswith('/client')) or args[1:3] == ["exec", "-i"]
             self.assertEqual(backup_tool.DUMP_TIMEOUT_SECONDS if is_dump_or_copy
                              else backup_tool.METADATA_TIMEOUT_SECONDS, timeout)
         mysql_timeout = next(timeout for args, timeout in runner.timeouts if args[1:4] == ["exec", "-i", "mysql-db"])
         td_timeout = next(timeout for args, timeout in runner.timeouts if args[1:4] == ["exec", "-i", "td-db"])
-        copy_timeout = next(timeout for args, timeout in runner.timeouts if args[1] == "cp")
+        copy_timeout = next(timeout for args, timeout in runner.timeouts if args[1] == "cp" and not args[-1].endswith('/client'))
         cleanup_timeout = next(timeout for args, timeout in runner.timeouts if args[1:3] == ["exec", "td-db"])
         self.assertEqual(backup_tool.DUMP_TIMEOUT_SECONDS, mysql_timeout)
         self.assertEqual(backup_tool.DUMP_TIMEOUT_SECONDS, td_timeout)
