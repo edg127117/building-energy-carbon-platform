@@ -1,3 +1,4 @@
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, ref } from 'vue'
 import { collectRelationPages, RelationCatalogueLimitError, relationGovernanceApi } from '../api/relation-governance'
 import type {
@@ -286,5 +287,5 @@ function requestState(reason: unknown): RequestState {
 }
 
 function nextKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `relation-governance-${Date.now()}`
+  return createIdempotencyKey()
 }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, onMounted, ref } from 'vue'
 import { useSession } from '@/modules/auth/public'
 import { t } from '@/locales'
@@ -44,9 +45,9 @@ async function save() {
   if (editing.value && await state.save(editing.value, selectedSpace.value || null, selectedSystem.value || null)) editing.value = null
 }
 function openAction(next: RelationAction) {
-  action.value = next; reason.value = ''; actionKey = crypto.randomUUID()
+  action.value = next; reason.value = ''; actionKey = createIdempotencyKey()
 }
-function updateActionKey() { actionKey = crypto.randomUUID() }
+function updateActionKey() { actionKey = createIdempotencyKey() }
 async function confirmAction() {
   if (action.value && await state.act(action.value, reason.value, actionKey)) action.value = null
 }

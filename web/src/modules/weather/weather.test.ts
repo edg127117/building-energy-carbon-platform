@@ -14,7 +14,7 @@ function harness<T>(setup: () => T): T {
   wrappers.push(mount(defineComponent({ setup() { result = setup(); return () => null } })))
   return result
 }
-afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers() })
+afterEach(() => { wrappers.splice(0).forEach(w => w.unmount()); vi.useRealTimers(); vi.unstubAllGlobals() })
 describe('weather date and missing-value contracts', () => {
   it('uses Shanghai day boundaries even when UTC is still yesterday', () => {
     expect(chinaDay(new Date('2026-09-28T16:00:00Z'))).toBe('2026-09-29')
@@ -75,5 +75,19 @@ describe('weather command idempotency', () => {
     await command.run('a', {}, send)
     expect(send).toHaveBeenCalledTimes(1)
     finish(); await first
+  })
+})
+
+describe('weather command HTTP compatibility', () => {
+  it('keeps the same key for an uncertain retry and consumes it only after success without randomUUID', async () => {
+    let sequence = 0
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array) => { bytes.fill(++sequence); return bytes } })
+    const command = useCommand(), keys: string[] = []
+    await command.run('http-fixture', { value: 1 }, async key => { keys.push(key); throw new Error('timeout') })
+    await command.run('http-fixture', { value: 1 }, async key => { keys.push(key); return true })
+    await command.run('http-fixture', { value: 1 }, async key => { keys.push(key); return true })
+    expect(keys[0]).toMatch(/^[0-9a-f-]{36}$/)
+    expect(keys[1]).toBe(keys[0])
+    expect(keys[2]).not.toBe(keys[1])
   })
 })
