@@ -28,6 +28,7 @@ public class RelationGovernanceRepository {
     @Qualifier("mysqlJdbcTemplate")
     private final JdbcTemplate jdbc;
     private final AuditGovernanceProperties auditProperties;
+    private final RelationStagingRepository staging;
 
     public boolean buildingExists(String buildingId) {
         Long count = jdbc.queryForObject(
@@ -271,11 +272,14 @@ public class RelationGovernanceRepository {
             String systemGroupId, String equipmentId, long expectedRevision) {
         int changed = bumpDraft(versionId, expectedRevision);
         if (changed == 1) {
+            boolean stagedEquipment=equipmentId!=null&&staging.exists(versionId,
+                    findVersion(versionId,false).orElseThrow().buildingId(),"EQUIPMENT",equipmentId);
             int itemChanged = jdbc.update("""
                     UPDATE biz_asset_assignment_version_item
-                    SET space_id=?,system_group_id=?,equipment_id=?,source_type='MANUAL'
+                    SET space_id=?,system_group_id=?,equipment_id=?,staged_equipment_id=?,source_type='MANUAL'
                     WHERE version_id=? AND object_type=? AND object_id=?
-                    """, spaceId, systemGroupId, equipmentId, versionId, objectType, objectId);
+                    """, spaceId, systemGroupId, stagedEquipment?null:equipmentId,stagedEquipment?equipmentId:null,versionId,objectType,objectId);
+            if(itemChanged==0)itemChanged=staging.updateAssignment(versionId,objectType,objectId,spaceId,systemGroupId,equipmentId);
             if (itemChanged != 1) {
                 throw RelationErrors.error(404, RelationErrors.NOT_FOUND, "资产不在当前关系快照中");
             }
@@ -626,7 +630,7 @@ public class RelationGovernanceRepository {
         return changed;
     }
 
-    private int bumpDraft(String versionId, long expectedRevision) {
+    public int bumpDraft(String versionId, long expectedRevision) {
         return jdbc.update("""
                 UPDATE biz_relation_version SET config_revision=config_revision+1,
                     update_time=CURRENT_TIMESTAMP
@@ -680,6 +684,25 @@ public class RelationGovernanceRepository {
                 .stream().findFirst();
     }
 
+    /** 未发布档案只在所属草稿解析；运行资产查询仍只返回正式档案。 */
+    public Optional<NodeRow> findNodeByCode(String versionId, String buildingId, String type, String code) {
+        var current=findNodeByCode(buildingId,type,code);
+        if(current.isPresent())return current;
+        return staging.list(versionId).stream().filter(r->r.status().equals("STAGED")
+                &&r.building().equals(buildingId)&&r.type().equals(type)&&r.code().equals(code))
+                .map(r->new NodeRow(r.node(),r.building(),r.type(),r.object(),"STAGED")).findFirst();
+    }
+    public String currentOrStagedCode(String version,String building,String type,String object) {
+        String table=type.equals("EQUIPMENT")?"biz_equipment":"biz_data_point";
+        String id=type.equals("EQUIPMENT")?"equip_id":"point_id";
+        String code=type.equals("EQUIPMENT")?"equip_code":"point_code";
+        var values=jdbc.queryForList("SELECT "+code+" FROM "+table+" WHERE "+id+"=? AND building_id=? AND del_flag=0",String.class,object,building);
+        if(!values.isEmpty())return values.getFirst();
+        return staging.list(version).stream().filter(r->r.status().equals("STAGED")&&r.building().equals(building)
+                &&r.type().equals(type)&&r.object().equals(object)).map(RelationStagingRepository.Row::code).findFirst()
+                .orElseThrow(()->RelationErrors.error(409,RelationErrors.REFERENCE_CONFLICT,"对象不在当前关系版本中"));
+    }
+
     public List<SpaceItem> listSpaceItems(String versionId) {
         return jdbc.query("""
                 SELECT i.space_id,i.parent_space_id,i.sort_order,s.space_name,s.space_type,s.building_id
@@ -691,12 +714,15 @@ public class RelationGovernanceRepository {
     }
 
     public List<AssignmentRow> listAssignments(String versionId) {
-        return jdbc.query("""
-                SELECT object_type,object_id,space_id,system_group_id,equipment_id,building_id,source_type
+        List<AssignmentRow> result=new ArrayList<>(jdbc.query("""
+                SELECT object_type,object_id,space_id,system_group_id,COALESCE(staged_equipment_id,equipment_id),building_id,source_type
                 FROM biz_asset_assignment_version_item WHERE version_id=?
                 ORDER BY object_type,object_id
                 """, (rs, row) -> new AssignmentRow(rs.getString(1), rs.getString(2), rs.getString(3),
-                rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), versionId);
+                rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7)), versionId));
+        result.addAll(staging.assignments(versionId));
+        result.sort(java.util.Comparator.comparing(AssignmentRow::objectType).thenComparing(AssignmentRow::objectId));
+        return List.copyOf(result);
     }
 
     /**
@@ -904,14 +930,16 @@ public class RelationGovernanceRepository {
     public List<MeterStructureRow> listMeterStructures(String versionId) {
         return jdbc.query("""
                 SELECT s.structure_item_id,s.metering_boundary_id,s.meter_point_node_id,
-                       p.point_code,s.meter_role,s.parent_meter_point_node_id,pp.point_code,
+                       COALESCE(p.point_code,sp.object_code),s.meter_role,s.parent_meter_point_node_id,COALESCE(pp.point_code,spp.object_code),
                        s.meter_direction,s.confirmation_status,s.reason_code,s.reason_text,
                        s.evidence_reference,s.description,s.source_type,s.building_id
                 FROM biz_meter_structure_version_item s
                 JOIN biz_relation_node n ON n.node_id=s.meter_point_node_id
-                JOIN biz_data_point p ON p.point_id=n.business_object_id
+                LEFT JOIN biz_data_point p ON p.point_id=n.business_object_id
+                LEFT JOIN biz_relation_staged_asset sp ON sp.node_id=n.node_id AND sp.version_id=s.version_id AND sp.status='STAGED'
                 LEFT JOIN biz_relation_node pn ON pn.node_id=s.parent_meter_point_node_id
                 LEFT JOIN biz_data_point pp ON pp.point_id=pn.business_object_id
+                LEFT JOIN biz_relation_staged_asset spp ON spp.node_id=pn.node_id AND spp.version_id=s.version_id AND spp.status='STAGED'
                 WHERE s.version_id=? ORDER BY p.point_code,s.structure_item_id
                 """, METER_STRUCTURE_MAPPER, versionId);
     }
@@ -932,14 +960,16 @@ public class RelationGovernanceRepository {
             String versionId, int limit, int offset) {
         return jdbc.query("""
                 SELECT s.structure_item_id,s.metering_boundary_id,s.meter_point_node_id,
-                       p.point_code,s.meter_role,s.parent_meter_point_node_id,pp.point_code,
+                       COALESCE(p.point_code,sp.object_code),s.meter_role,s.parent_meter_point_node_id,COALESCE(pp.point_code,spp.object_code),
                        s.meter_direction,s.confirmation_status,s.reason_code,s.reason_text,
                        s.evidence_reference,s.description,s.source_type,s.building_id
                 FROM biz_meter_structure_version_item s
                 JOIN biz_relation_node n ON n.node_id=s.meter_point_node_id
-                JOIN biz_data_point p ON p.point_id=n.business_object_id
+                LEFT JOIN biz_data_point p ON p.point_id=n.business_object_id
+                LEFT JOIN biz_relation_staged_asset sp ON sp.node_id=n.node_id AND sp.version_id=s.version_id AND sp.status='STAGED'
                 LEFT JOIN biz_relation_node pn ON pn.node_id=s.parent_meter_point_node_id
                 LEFT JOIN biz_data_point pp ON pp.point_id=pn.business_object_id
+                LEFT JOIN biz_relation_staged_asset spp ON spp.node_id=pn.node_id AND spp.version_id=s.version_id AND spp.status='STAGED'
                 WHERE s.version_id=? ORDER BY p.point_code,s.structure_item_id LIMIT ? OFFSET ?
                 """, METER_STRUCTURE_MAPPER, versionId, limit, offset);
     }
@@ -1009,6 +1039,17 @@ public class RelationGovernanceRepository {
         if (sql == null) return false;
         Long count = jdbc.queryForObject(sql, Long.class, objectId, buildingId);
         return count != null && count > 0;
+    }
+
+    /** 暂存对象只对其所属版本有效，绝不进入无版本的当前资产查询。 */
+    public boolean objectExistsInVersion(String versionId,String nodeType,String objectId,String buildingId) {
+        return objectExistsInBuilding(nodeType,objectId,buildingId)||staging.exists(versionId,buildingId,nodeType,objectId);
+    }
+
+    public boolean usableNode(VersionRow version,NodeRow node) {
+        if(!version.buildingId().equals(node.buildingId()))return false;
+        return "ACTIVE".equals(node.status())&&objectExistsInBuilding(node.nodeType(),node.businessObjectId(),version.buildingId())
+                ||"STAGED".equals(node.status())&&staging.exists(version.versionId(),version.buildingId(),node.nodeType(),node.businessObjectId());
     }
 
     public void clearIssues(String versionId) {
@@ -1289,26 +1330,27 @@ public class RelationGovernanceRepository {
         Long value=jdbc.queryForObject("SELECT COUNT(*) FROM biz_metering_boundary WHERE building_id=? AND status='ACTIVE'",Long.class,buildingId);
         return value==null?0:value;
     }
-    public long countNodeCatalogue(String buildingId,String type) {
-        Long value=jdbc.queryForObject("SELECT COUNT(*) FROM biz_relation_node WHERE building_id=? AND (? IS NULL OR node_type=?)",Long.class,buildingId,type,type);
+    public long countNodeCatalogue(String versionId,String buildingId,String type) {
+        Long value=jdbc.queryForObject("SELECT COUNT(*) FROM biz_relation_node n WHERE building_id=? AND (? IS NULL OR node_type=?) AND (n.status<>'STAGED' OR EXISTS (SELECT 1 FROM biz_relation_staged_asset sa WHERE sa.node_id=n.node_id AND sa.version_id=? AND sa.status='STAGED'))",Long.class,buildingId,type,type,versionId);
         return value==null?0:value;
     }
     /** 名称取当前档案，仅作配置选择；不能把这些标签当作历史版本中的名称快照。 */
-    public List<com.platform.relation.api.RelationContracts.NodeCatalogueItem> nodeCatalogue(String buildingId,String type,int size,int offset) {
+    public List<com.platform.relation.api.RelationContracts.NodeCatalogueItem> nodeCatalogue(String versionId,String buildingId,String type,int size,int offset) {
         return jdbc.query("""
                 SELECT n.node_id,n.node_type,n.business_object_id,
-                       COALESCE(p.point_code,e.equip_code,s.space_code,g.system_group_code,b.boundary_code,n.business_object_id) AS object_code,
-                       COALESCE(p.point_name,e.equip_name,s.space_name,g.system_group_name,b.boundary_name,n.business_object_id) AS object_name,
-                       CASE WHEN COALESCE(p.point_id,e.equip_id,s.space_id,g.system_group_id,b.boundary_id) IS NULL THEN 'UNAVAILABLE' ELSE n.status END AS object_status
+                       COALESCE(p.point_code,e.equip_code,s.space_code,g.system_group_code,b.boundary_code,sa.object_code,n.business_object_id) AS object_code,
+                       COALESCE(p.point_name,e.equip_name,s.space_name,g.system_group_name,b.boundary_name,sa.object_name,n.business_object_id) AS object_name,
+                       CASE WHEN COALESCE(p.point_id,e.equip_id,s.space_id,g.system_group_id,b.boundary_id,sa.object_id) IS NULL THEN 'UNAVAILABLE' ELSE n.status END AS object_status
                 FROM biz_relation_node n
                 LEFT JOIN biz_data_point p ON n.node_type='POINT' AND p.point_id=n.business_object_id AND p.building_id=n.building_id AND p.del_flag=0
                 LEFT JOIN biz_equipment e ON n.node_type='EQUIPMENT' AND e.equip_id=n.business_object_id AND e.building_id=n.building_id AND e.del_flag=0
                 LEFT JOIN biz_space s ON n.node_type='SPACE' AND s.space_id=n.business_object_id AND s.building_id=n.building_id AND s.del_flag=0
                 LEFT JOIN biz_system_group g ON n.node_type='SYSTEM' AND g.system_group_id=n.business_object_id AND g.building_id=n.building_id AND g.del_flag=0
                 LEFT JOIN biz_metering_boundary b ON n.node_type='METERING_BOUNDARY' AND b.boundary_id=n.business_object_id AND b.building_id=n.building_id
-                WHERE n.building_id=? AND (? IS NULL OR n.node_type=?)
+                LEFT JOIN biz_relation_staged_asset sa ON sa.node_id=n.node_id AND sa.version_id=? AND sa.status='STAGED'
+                WHERE n.building_id=? AND (? IS NULL OR n.node_type=?) AND (n.status<>'STAGED' OR sa.staged_id IS NOT NULL)
                 ORDER BY n.node_type,object_code,n.node_id LIMIT ? OFFSET ?
-                """,(r,n)->new com.platform.relation.api.RelationContracts.NodeCatalogueItem(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6)),buildingId,type,type,size,offset);
+                """,(r,n)->new com.platform.relation.api.RelationContracts.NodeCatalogueItem(r.getString(1),r.getString(2),r.getString(3),r.getString(4),r.getString(5),r.getString(6)),versionId,buildingId,type,type,size,offset);
     }
 
     private static String id() {

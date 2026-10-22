@@ -255,8 +255,10 @@ export function useEnergyClassification() {
     const batch = importedBatch.value
     if (!targetBuildingId || !batch || commandLoading.value) return null
     return runCommand(async () => {
+      const detail = await classificationApi.getReadingBatch(targetBuildingId, batch.batchId)
+      if (detail.status !== 'PENDING_REVIEW') return null
       const result = await classificationApi.approveReadingBatch(targetBuildingId, batch.batchId, {
-        expectedRevision: 0,
+        expectedRevision: detail.revision,
         reason: reason.trim(),
         effectiveFrom: null,
       })

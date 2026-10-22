@@ -127,7 +127,7 @@ public class EnergyPeriodResultRepository implements EnergyPeriodSnapshotReader 
                 SELECT s.* FROM biz_energy_period_result_snapshot s
                 LEFT JOIN biz_energy_recalculation_batch b ON b.batch_id=s.source_batch_id
                 WHERE s.projection_id=?
-                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_NATIVE_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
                   AND (s.source_batch_id IS NULL OR b.status='COMPLETED')
                 ORDER BY s.snapshot_version DESC LIMIT 1
                 """, this::snapshot, projectionId);
@@ -140,7 +140,7 @@ public class EnergyPeriodResultRepository implements EnergyPeriodSnapshotReader 
                 LEFT JOIN biz_energy_recalculation_batch b ON b.batch_id=s.source_batch_id
                 WHERE s.building_id=? AND s.point_id=? AND s.period_type='MONTH'
                   AND s.period_start>=? AND s.period_end<=?
-                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_NATIVE_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
                   AND (s.source_batch_id IS NULL OR b.status='COMPLETED')
                   AND NOT EXISTS (
                     SELECT 1 FROM biz_energy_period_result_snapshot newer
@@ -149,7 +149,7 @@ public class EnergyPeriodResultRepository implements EnergyPeriodSnapshotReader 
                     WHERE newer.projection_id=s.projection_id
                       AND newer.snapshot_version>s.snapshot_version
                       AND newer.status IN
-                        ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                        ('LOCKED_COMPLETE','LOCKED_NATIVE_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
                       AND (newer.source_batch_id IS NULL OR newer_batch.status='COMPLETED'))
                 ORDER BY s.period_start
                 """, this::snapshot, buildingId, pointId, timestamp(yearStart), timestamp(yearEnd));
@@ -164,7 +164,7 @@ public class EnergyPeriodResultRepository implements EnergyPeriodSnapshotReader 
                 LEFT JOIN biz_energy_recalculation_batch b ON b.batch_id=s.source_batch_id
                 WHERE s.building_id=? AND s.period_type=?
                   AND s.period_start>=? AND s.period_end<=?
-                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                  AND s.status IN ('LOCKED_COMPLETE','LOCKED_NATIVE_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
                   AND (s.source_batch_id IS NULL OR b.status='COMPLETED')
                   AND NOT EXISTS (
                     SELECT 1 FROM biz_energy_period_result_snapshot newer
@@ -173,7 +173,7 @@ public class EnergyPeriodResultRepository implements EnergyPeriodSnapshotReader 
                     WHERE newer.projection_id=s.projection_id
                       AND newer.snapshot_version>s.snapshot_version
                       AND newer.status IN
-                        ('LOCKED_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
+                        ('LOCKED_COMPLETE','LOCKED_NATIVE_COMPLETE','LOCKED_WITH_EXCEPTIONS','LOCKED_PARTIAL')
                       AND (newer.source_batch_id IS NULL OR newer_batch.status='COMPLETED'))
                 ORDER BY s.period_start,s.point_id
                 LIMIT ?

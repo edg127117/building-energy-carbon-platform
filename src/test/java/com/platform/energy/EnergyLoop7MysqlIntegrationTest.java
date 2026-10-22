@@ -63,12 +63,20 @@ class EnergyLoop7MysqlIntegrationTest {
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
                 """, String.class)).isEqualTo("75");
         var historyBeforeAccess = jdbc.queryForList("SELECT version,checksum,success FROM flyway_schema_history ORDER BY installed_rank");
-        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
-        assertThat(flyway.migrate().migrationsExecuted).as("V75到V76只登记运维职责目录").isEqualTo(1);
+        Flyway access = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init")
+                .target("76").load();
+        assertThat(access.migrate().migrationsExecuted).as("V75到V76只登记运维职责目录").isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
         assertThat(jdbc.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version<>'76' ORDER BY installed_rank"))
                 .isEqualTo(historyBeforeAccess);
+        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
+        assertThat(flyway.migrate().migrationsExecuted).as("V76到V83执行本轮配置迁移").isEqualTo(7);
+        assertThat(jdbc.queryForObject("""
+                SELECT version FROM flyway_schema_history
+                WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
+                """, String.class)).isEqualTo("83");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
         flyway.validate();

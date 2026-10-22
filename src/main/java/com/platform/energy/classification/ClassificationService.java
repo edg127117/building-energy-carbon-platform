@@ -164,6 +164,16 @@ public class ClassificationService {
         if(repository.approveBatch(building,batchId,request.expectedRevision(),user)!=1) throw error(409,"批次状态或版本冲突");
         log(user,building,"APPROVE_ENERGY_READINGS",batchId,request.reason());return new ImportView(batchId,"APPROVED",0,List.of());
     }
+    public ReadingBatchView readingBatch(long user, Collection<String> roles,
+                                         String building, String batchId) {
+        read(user, roles, building);
+        text(batchId, 32);
+        var batch = repository.batch(building, batchId, false);
+        if (batch == null) throw error(404, "导入批次不存在");
+        return new ReadingBatchView(batch.id(), batch.buildingId(), batch.status(),
+                batch.revision(), batch.author(), repository.batchReadingCount(building, batchId));
+    }
+
     public List<ReadingView> readings(long user,Collection<String> roles,String building,Instant from,Instant to) {
         read(user,roles,building);window(from,to);
         List<ClassificationRepository.StoredReading> values=repository.readings(building,from,to,false);limit(values.size());
@@ -201,7 +211,10 @@ public class ClassificationService {
             grouped.computeIfAbsent(snapshot.pointId(),k->new ArrayList<>()).add(new Piece(snapshot.startInclusive(),snapshot.endExclusive(),snapshot.nativeQuantity(),snapshot.snapshotId(),snapshot.resultNature(),!"LOCKED_PARTIAL".equals(snapshot.status())));
         }
         var manual=repository.readings(building,request.startInclusive(),request.endExclusive(),true);limit(manual.size());
+        Set<String> sealedManualFacts=new HashSet<>();
+        for(var snapshot:periods)sealedManualFacts.addAll(com.platform.energy.period.ManualPeriodInputService.sealedFactIds(json,snapshot.evidenceJson()));
         for(var value:manual) {
+            if(sealedManualFacts.contains(value.id()))continue;
             Reading r=decode(value.json(),Reading.class);
             if(!request.energyItemCode().equals(r.energyItemCode())||!request.unit().equals(r.unit())||value.quantity()==null) continue;
             if(!"CONFIRMED".equals(r.status())||("CUMULATIVE".equals(r.semantics())&&!"EXACT".equals(r.timePrecision()))) continue;
@@ -242,6 +255,54 @@ public class ClassificationService {
         }
         String totalKind=rules.stream().anyMatch(r->"SUBMETER_SUM".equals(r.mode()))?"MEASURED_SUBTOTAL":"BOUNDARY_TOTAL";
         return new QueryView(building,version.id(),config.relationVersionId(),request.unit(),request.startInclusive(),request.endExclusive(),result.total(),result.assigned(),result.unallocated(),result.residual(),result.status(),result.nature(),totalKind,result.additive(),result.nodes(),result.balances(),result.issues(),sourceEvidence.stream().distinct().toList());
+    }
+
+    public record SealedProjection(String classificationVersionId,String relationVersionId,
+                                   BigDecimal total,List<ClassificationCore.SourceSlice> slices,
+                                   Configuration configuration) {}
+
+    /** 仅消费调用方固定的封账快照，不读取人工分类来源；权威总量仍由能源汇总端校验。 */
+    public SealedProjection projectSealed(long user,Collection<String> roles,String building,String versionId,
+                                         Instant from,Instant to,String energy,String unit,List<PeriodSnapshot> periods) {
+        read(user,roles,building);window(from,to);
+        var version=requireVersion(building,versionId);
+        if(!"APPROVED".equals(version.status())||version.from()==null||version.from()>from.toEpochMilli()
+                ||(version.to()!=null&&version.to()<to.toEpochMilli())) throw error(409,"分类版本未覆盖封账期间");
+        Configuration original=decode(version.json(),Configuration.class);
+        if(blank(original.relationVersionId())||original.schemes().isEmpty()) throw error(409,"缺少正式计量关系或分类方案");
+        var rules=original.boundaryRules().stream().filter(r->energy.equals(r.energyItemCode())&&unit.equals(r.unit())).toList();
+        if(rules.isEmpty()||rules.stream().anyMatch(r->"SUBMETER_SUM".equals(r.mode()))) throw error(409,"碳核算要求已确认建筑边界总量，不能使用部分分表小计");
+        Configuration config=new Configuration(original.relationVersionId(),original.schemes(),original.nodes(),original.bindings(),rules);
+        RelationData relation=loadRelations(user,roles,building,config.relationVersionId());
+        if(relation.metadata().effectiveAt()==null||relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(from)
+                ||(relation.nextEffectiveAt()!=null&&to.isAfter(relation.nextEffectiveAt()))) throw error(409,"计量关系未覆盖完整封账期间");
+        limit(periods.size());List<Fact> facts=new ArrayList<>();
+        for(PeriodSnapshot s:periods) {
+            if(!building.equals(s.buildingId())||!energy.equals(s.energyItemCode())||!unit.equals(s.nativeUnitCode())
+                    ||!from.equals(s.startInclusive())||!to.equals(s.endExclusive())
+                    ||!"FORMAL".equals(s.resultNature())||!Set.of("LOCKED_COMPLETE","LOCKED_NATIVE_COMPLETE").contains(s.status())
+                    ||!config.relationVersionId().equals(relationVersion(s.evidenceJson()))) throw error(409,"封账来源身份、期间或计量版本不一致");
+            facts.add(new Fact(s.pointId(),s.nativeQuantity(),s.snapshotId(),"FORMAL",true));
+        }
+        Set<String> boundaryIds=rules.stream().map(BoundaryRule::boundaryId).collect(java.util.stream.Collectors.toSet());
+        var meters=relation.meters().stream().filter(m->boundaryIds.contains(m.boundaryId())).toList();
+        Map<String,String> equipment=repository.pointEquipment(building,meters.stream().map(Meter::pointId).toList());
+        Map<String,Meter> index=new HashMap<>();meters.forEach(m->index.put(m.pointId(),m));
+        for(Meter a:meters)for(Meter b:meters)if(!a.pointId().equals(b.pointId())&&equipment.containsKey(a.pointId())
+                &&equipment.get(a.pointId()).equals(equipment.get(b.pointId()))&&!meterAncestor(a.pointId(),b.pointId(),index)
+                &&!meterAncestor(b.pointId(),a.pointId(),index)
+                &&rules.stream().filter(r->r.boundaryId().equals(a.boundaryId())||r.boundaryId().equals(b.boundaryId()))
+                .anyMatch(r->!r.independentChannelsConfirmed())) throw error(409,"同设备计量通道独立性待确认");
+        Map<String,Set<String>> ancestors=new HashMap<>();
+        if(config.bindings().stream().anyMatch(b->"SPACE".equals(b.objectType()))) {
+            var tree=relations.historicalSpaceTree(user,roles,building,config.relationVersionId());
+            for(var root:tree.roots())collectSpaces(root,Set.of(),ancestors);
+        }
+        var result=core.compute(config,config.schemes().getFirst().code(),List.of(),
+                new Input(meters,facts,resolve(config,relation.assignments(),ancestors)));
+        if(!"CALCULABLE".equals(result.status())||result.total()==null
+                ||result.sourceSlices().stream().anyMatch(s->s.quantity().signum()<0)) throw error(409,"计量分解不完整，不能用于正式碳核算");
+        return new SealedProjection(version.id(),config.relationVersionId(),result.total(),result.sourceSlices(),config);
     }
 
     private RelationData loadRelations(long user,Collection<String> roles,String building,String id) {

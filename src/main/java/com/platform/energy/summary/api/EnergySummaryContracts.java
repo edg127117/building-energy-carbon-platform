@@ -69,6 +69,15 @@ public final class EnergySummaryContracts {
             String resultCompleteness, List<String> relationVersionIds,
             List<String> conversionRuleVersionIds, List<String> summaryPolicyVersionIds,
             List<String> evidenceHashes, String resultNature) {
+        @com.fasterxml.jackson.annotation.JsonProperty
+        public String nativeQuantityStatus() {
+            return java.util.Set.of("COMPLETE","COMPLETE_NATIVE_ONLY").contains(resultCompleteness)?"COMPLETE":resultCompleteness;
+        }
+        @com.fasterxml.jackson.annotation.JsonProperty
+        public String tceStatus() {
+            return "COMPLETE_NATIVE_ONLY".equals(resultCompleteness)||tceByPerspective.isEmpty()?"NOT_CALCULATED"
+                    :"COMPLETE".equals(resultCompleteness)?"COMPLETE":"INCOMPLETE";
+        }
     }
 
     public record EnergySummaryApiError(

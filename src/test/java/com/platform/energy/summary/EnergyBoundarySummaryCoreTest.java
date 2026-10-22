@@ -21,6 +21,35 @@ class EnergyBoundarySummaryCoreTest {
     private final EnergyBoundarySummaryCore core = new EnergyBoundarySummaryCore();
 
     @Test
+    void completeNativeQuantityRequiresExplicitFormalPolicyToRemainFormal() {
+        var nativeInput=new SnapshotMeasure("SNAP_MAIN","BLD001","MAIN","MONTH",START,END,"Asia/Shanghai",
+                "LOCKED_NATIVE_COMPLETE","FORMAL","GRID_ELECTRICITY",new BigDecimal("1000"),"kWh",null,null,
+                BigDecimal.ONE,List.of("TCE_RULE_UNAVAILABLE"),"native-hash","REL_V1",7,"UNSPECIFIED",null,null);
+        for(String source:List.of("FORMAL","SIMULATION","UNKNOWN")) {
+            var result=core.summarize(List.of(nativeInput),List.of(assignment("MAIN","MAIN","SPACE","A")),List.of(policy("MAIN_METER_TOTAL",source))).getFirst();
+            assertThat(result.resultNature()).isEqualTo("FORMAL".equals(source)?"FORMAL":"DEVELOPMENT_SIMULATION");
+            assertThat(result.resultCompleteness()).isEqualTo("COMPLETE_NATIVE_ONLY");
+            assertThat(result.authorityTce()).isNull();
+        }
+    }
+
+    @Test
+    void nativeBoundaryDoesNotSplitOrDoubleCountWhenSomeMetersHaveNoTce() {
+        var nativeMain=new SnapshotMeasure("SNAP_MAIN","BLD001","MAIN","MONTH",START,END,"Asia/Shanghai",
+                "LOCKED_NATIVE_COMPLETE","FORMAL","GRID_ELECTRICITY",new BigDecimal("1000"),"kWh",null,null,
+                BigDecimal.ONE,List.of("TCE_RULE_UNAVAILABLE"),"native-hash","REL_V1",7,"PURCHASED_ELECTRICITY",null,null);
+        var aggregate=core.summarize(List.of(nativeMain,measure("SUB1","300","0.03684")),
+                List.of(assignment("MAIN","MAIN","SPACE","A"),assignment("SUB1","SUB","SPACE","B")),
+                List.of(policy("MAIN_WITH_SUBMETER_BREAKDOWN")));
+        assertThat(aggregate).hasSize(1);
+        assertThat(aggregate.getFirst().authorityQuantity()).isEqualByComparingTo("1000");
+        assertThat(aggregate.getFirst().residualQuantity()).isEqualByComparingTo("700");
+        assertThat(aggregate.getFirst().authorityTce()).isNull();
+        assertThat(aggregate.getFirst().resultCompleteness()).isEqualTo("COMPLETE_NATIVE_ONLY");
+        assertThat(core.project(aggregate,List.of(QueryDimension.BUILDING)).getFirst().tceByPerspective()).isEmpty();
+    }
+
+    @Test
     void keepsMainTotalAndReturnsSubmeterResidualAndUnallocatedBuckets() {
         List<SnapshotMeasure> measures = List.of(
                 measure("MAIN", "1000", "0.1228"),
@@ -128,8 +157,11 @@ class EnergyBoundarySummaryCoreTest {
     }
 
     private BoundaryPolicyVersion policy(String mode) {
+        return policy(mode,"SIMULATION");
+    }
+    private BoundaryPolicyVersion policy(String mode,String source) {
         return new BoundaryPolicyVersion("POLICY_A", "POLICY_V1", 1, "BLD001",
-                "BOUNDARY_A", "GRID_ELECTRICITY", mode, "APPROVED", "SIMULATION",
+                "BOUNDARY_A", "GRID_ELECTRICITY", mode, "APPROVED", source,
                 "研发模拟总分表口径", LocalDateTime.of(2026, 1, 1, 0, 0), null,
                 1, 101L, LocalDateTime.of(2026, 1, 1, 0, 0), 202L,
                 LocalDateTime.of(2026, 1, 2, 0, 0), "研发模拟审核");

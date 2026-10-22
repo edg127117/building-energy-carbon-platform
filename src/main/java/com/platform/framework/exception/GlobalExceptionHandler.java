@@ -190,7 +190,8 @@ public class GlobalExceptionHandler {
             response.put("errorCode", energyPeriodErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-boundary-summaries")) {
             response.put("errorCode", energySummaryErrorCode);
-        } else if (path.startsWith(request.getContextPath() + "/v1/carbon-management")) {
+        } else if (path.startsWith(request.getContextPath() + "/v1/carbon-management")
+                || path.startsWith(request.getContextPath() + "/v1/carbon-projects")) {
             response.put("errorCode", carbonErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/backoffice")) {
             response.put("errorCode", "BACKOFFICE_REQUEST_CONFLICT");

@@ -59,6 +59,21 @@ public class EnergyPeriodLifecycleService {
     private final ObjectMapper objectMapper;
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties auditProperties;
+    private final ManualPeriodInputService manualInputs;
+
+    @Transactional(rollbackFor=Exception.class)
+    public ProjectionView refreshManual(long userId, Collection<String> roles, String buildingId,
+                                        ManualPeriodInputService.Request request) {
+        authorization.requireCalculation(userId,roles);
+        ProjectionCalculation calculation=manualInputs.prepare(userId,roles,buildingId,request);
+        var old=repository.findCurrent(buildingId,request.pointId(),"MONTH",calculation.window().startInclusive(),calculation.window().endExclusive());
+        long revision=old==null?0:old.revision();
+        if(request.expectedProjectionRevision()==null||request.expectedProjectionRevision()!=revision)versionConflict();
+        var value=publishCurrent(calculation,Instant.now(),old);
+        audit(userId,buildingId,"PREPARE_MANUAL_ENERGY_MONTH","ENERGY_PERIOD_CURRENT",value.projectionId(),null,
+                "revision="+value.revision()+";manualFacts="+request.factIds().size()+";pendingIndependentLockApproval=true");
+        return view(value);
+    }
 
     @Transactional(rollbackFor = Exception.class)
     public ProjectionView refresh(
@@ -103,6 +118,7 @@ public class EnergyPeriodLifecycleService {
         CurrentProjection current = requireCurrent(request.projectionId());
         authorization.checkBuilding(userId, roles, current.buildingId());
         if (current.revision() != request.expectedRevision()) versionConflict();
+        verifyManual(userId,roles,current);
         PolicyResolution resolution = resolveLock(current,
                 text(request.evidenceReference(), 500, "封账证据引用无效"), Instant.now());
         LockRequest value = new LockRequest(id(), current.projectionId(), current.revision(),
@@ -130,10 +146,12 @@ public class EnergyPeriodLifecycleService {
         if (current.revision() != lock.projectionRevision()) {
             throw error(409, VERSION_CONFLICT, "当前投影已变化，请重新提交封账申请");
         }
+        verifyManual(userId,roles,current);
         PolicyResolution resolution = resolveLock(current, lock.evidenceReference(), Instant.now());
         if (!csv(resolution.policyVersionIds()).equals(lock.issuePolicyVersions())) {
             throw error(409, VERSION_CONFLICT, "封账例外策略已变化，请重新提交申请");
         }
+        PeriodSnapshot previousSnapshot=repository.findVisibleSnapshot(current.projectionId());
         int snapshotVersion = repository.nextSnapshotVersion(current.projectionId());
         String snapshotId = id();
         String evidenceJson = lockEvidence(current, lock, resolution);
@@ -143,18 +161,24 @@ public class EnergyPeriodLifecycleService {
         LocalDateTime now = LocalDateTime.now();
         PeriodSnapshot snapshot = snapshot(current, snapshotId, resultKey, snapshotVersion,
                 resolution.status().name(), csv(resolution.policyVersionIds()), evidenceJson,
-                evidenceHash, null, null, userId, now);
+                evidenceHash, previousSnapshot==null?null:previousSnapshot.snapshotId(), null, userId, now);
         valueStore.write(numeric(snapshot, snapshotVersion));
         repository.insertSnapshot(snapshot);
         if (repository.approveLockRequest(lock.requestId(), userId, now,
                 text(request.reviewComment(), 500, "审核意见无效")) != 1) {
             versionConflict();
         }
+        if(previousSnapshot!=null)snapshotChangePublisher.published(previousSnapshot,snapshot);
         audit(userId, current.buildingId(), "APPROVE_ENERGY_PERIOD_LOCK",
                 "ENERGY_PERIOD_SNAPSHOT", snapshot.snapshotId(), null,
                 "version=" + snapshot.snapshotVersion() + ";status=" + snapshot.status()
                         + ";nature=" + snapshot.resultNature());
         return view(snapshot);
+    }
+
+    private void verifyManual(long user,Collection<String> roles,CurrentProjection current) {
+        if(current.evidenceJson()!=null&&current.evidenceJson().contains("\"REVIEWED_MANUAL_MONTH\""))
+            manualInputs.verifyStored(user,roles,current);
     }
 
     public SnapshotView snapshot(
@@ -310,6 +334,13 @@ public class EnergyPeriodLifecycleService {
         CurrentProjection previous = repository.findCurrent(calculation.buildingId(),
                 calculation.pointId(), window.type().name(), window.startInclusive(),
                 window.endExclusive());
+        return publishCurrent(calculation,calculationAsOf,previous);
+    }
+
+    /** 人工候选保留第一次读取的修订；发布时不能把并发新修订重新当作可覆盖基线。 */
+    private CurrentProjection publishCurrent(ProjectionCalculation calculation, Instant calculationAsOf,
+                                              CurrentProjection previous) {
+        PeriodWindow window=calculation.window();
         long revision = previous == null ? 1 : previous.revision() + 1;
         String projectionId = previous == null
                 ? digest("PROJECTION|" + calculation.buildingId() + "|" + calculation.pointId()
@@ -389,6 +420,12 @@ public class EnergyPeriodLifecycleService {
             throw error(409, LOCK_BLOCKED, "月度周期尚未结束迟到窗口");
         }
         List<String> issues = split(current.issueCodes());
+        // 正式人工来源已经完整复验，缺折标不降低原生月量完整性；其他缺口仍走原有例外门槛。
+        if("FORMAL".equals(current.resultNature())&&"FORMAL".equals(policy.sourceType())
+                &&current.evidenceJson()!=null&&current.evidenceJson().contains("\"REVIEWED_MANUAL_MONTH\"")
+                &&current.coverageRatio().compareTo(BigDecimal.ONE)==0&&current.tce()==null
+                &&issues.size()==1&&issues.contains(TCE_RULE_UNAVAILABLE))
+            return new PolicyResolution(List.of(),SnapshotStatus.LOCKED_NATIVE_COMPLETE);
         if (issues.isEmpty()) return new PolicyResolution(List.of(), SnapshotStatus.LOCKED_COMPLETE);
         LocalDateTime at = LocalDateTime.ofInstant(current.endExclusive().minusNanos(1),
                 ZoneId.of(current.timezoneId()));
@@ -449,6 +486,9 @@ public class EnergyPeriodLifecycleService {
             long userId, Collection<String> roles, RecalculationBatch batch,
             RecalculationItem item, RecalculationMode mode) {
         PeriodSnapshot source = requireSnapshot(item.sourceSnapshotId());
+        if("FORMAL".equals(source.resultNature())&&source.evidenceJson()!=null
+                &&source.evidenceJson().contains("\"REVIEWED_MANUAL_MONTH\""))
+            throw error(409,HISTORICAL_RULE_CONFLICT,"正式人工来源须先审核修订读数，再重新生成候选月量并独立封账；不能改用研发采集链重算");
         if (PeriodType.YEAR.name().equals(source.periodType())) {
             throw error(409, STATUS_CONFLICT, "年度结果由月度封账汇总刷新，不进入本批次");
         }

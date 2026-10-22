@@ -27,6 +27,11 @@ class CarbonCalculationRepository {
                 CarbonCalculationRepository::batch, batchId);
     }
 
+    List<CalculationBatch> listBatches(String buildingId) {
+        return jdbc.query("SELECT * FROM biz_carbon_calculation_batch WHERE building_id=? ORDER BY created_at DESC LIMIT 100",
+                CarbonCalculationRepository::batch,buildingId);
+    }
+
     CalculationBatch findByIdempotency(String buildingId, String idempotencyKey) {
         return one("""
                 SELECT * FROM biz_carbon_calculation_batch
@@ -255,6 +260,18 @@ class CarbonCalculationRepository {
                 JOIN biz_carbon_calculation_batch b ON b.calculation_batch_id=i.calculation_batch_id
                 WHERE i.calculation_batch_id=? AND i.calculation_item_id=?
                 """, (rs, row) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3)}, batchId, itemId);
+    }
+
+    String sharedEvidence(String batchId) {
+        return jdbc.queryForObject("SELECT shared_evidence_json FROM biz_carbon_calculation_batch WHERE calculation_batch_id=?",String.class,batchId);
+    }
+
+    record StoredEvidence(String itemId, String json, String hash) { }
+    List<StoredEvidence> listEvidence(String batchId) {
+        return jdbc.query("""
+                SELECT calculation_item_id,evidence_json,evidence_hash FROM biz_carbon_calculation_item
+                WHERE calculation_batch_id=? ORDER BY calculation_item_id LIMIT 5001
+                """, (r, n) -> new StoredEvidence(r.getString(1), r.getString(2), r.getString(3)), batchId);
     }
 
     List<SummaryMetric> listSummaries(String batchId) {

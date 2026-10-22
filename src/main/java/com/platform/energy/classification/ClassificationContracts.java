@@ -77,6 +77,8 @@ public final class ClassificationContracts {
     @Schema(name="EnergyClassificationImportView")
     public record ImportView(String batchId, String status, int accepted,
                              List<Issue> issues) {}
+    public record ReadingBatchView(String batchId, String buildingId, String status,
+                                   long revision, long createdBy, int count) {}
     @Schema(name="EnergyClassificationReadingView")
     public record ReadingView(String factId, String batchId, Reading reading,
                               @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal normalizedQuantity, long createdBy, String batchStatus) {}

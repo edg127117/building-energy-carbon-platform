@@ -22,6 +22,7 @@ import com.platform.energy.summary.api.EnergySummaryContracts.SummaryGroupView;
 import com.platform.energy.summary.api.EnergySummaryContracts.SummaryQueryRequest;
 import com.platform.energy.summary.api.EnergySummaryContracts.SummaryQueryView;
 import com.platform.relation.RelationGovernanceService;
+import com.platform.relation.RelationGovernanceProperties;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentView;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentsView;
 import lombok.RequiredArgsConstructor;
@@ -48,7 +49,7 @@ import static com.platform.energy.summary.EnergySummaryModels.AggregationMode;
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
-/** 治理研发汇总口径，并基于封账快照和固定关系版本提供安全多维查询。 */
+/** 治理明确来源的汇总口径，并基于封账快照和固定关系版本提供安全多维查询。 */
 public class EnergyBoundarySummaryService {
     private static final int PAGE_SIZE = 500;
     private static final int MAX_SNAPSHOTS = 500;
@@ -59,11 +60,24 @@ public class EnergyBoundarySummaryService {
     private final EnergyBoundarySummaryRepository repository;
     private final EnergyPeriodSnapshotReader snapshotReader;
     private final RelationGovernanceService relationService;
+    private final RelationGovernanceProperties relationProperties;
     private final EnergyCatalogLookup catalogLookup;
     private final EnergyBoundarySummaryCore core;
     private final ObjectMapper objectMapper;
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties auditProperties;
+
+    public List<BoundaryPolicyView> listPolicies(
+            long userId, Collection<String> roles, String requestedBuildingId) {
+        authorization.requireReader(roles);
+        String buildingId = text(requestedBuildingId, 32, "建筑编码无效");
+        authorization.checkBuilding(userId, roles, buildingId);
+        List<BoundaryPolicyVersion> values = repository.listPolicies(buildingId, PAGE_SIZE + 1);
+        if (values.size() > PAGE_SIZE) {
+            throw error(409, RESULT_LIMIT_EXCEEDED, "汇总口径版本超过查询上限，请缩小查询范围");
+        }
+        return values.stream().map(EnergyBoundarySummaryService::view).toList();
+    }
 
     @Transactional(rollbackFor = Exception.class)
     public BoundaryPolicyView createPolicy(
@@ -74,8 +88,9 @@ public class EnergyBoundarySummaryService {
         String boundaryId = text(request.meteringBoundaryId(), 32, "计量边界标识无效");
         String itemCode = code(request.energyItemCode(), "能源品种编码无效");
         aggregationMode(request.aggregationMode());
-        if (!"SIMULATION".equals(normalize(request.sourceType()))) {
-            validation("研发汇总口径来源必须标记为SIMULATION");
+        String sourceType = normalize(request.sourceType());
+        if (!Set.of("SIMULATION", "FORMAL").contains(Objects.toString(sourceType, ""))) {
+            validation("汇总口径须明确标记为SIMULATION或FORMAL");
         }
         if (catalogLookup.findApprovedItem(itemCode, request.effectiveFrom()).isEmpty()) {
             throw error(409, POLICY_REQUIRED, "能源品种尚无已审核版本");
@@ -96,7 +111,7 @@ public class EnergyBoundarySummaryService {
         }
         BoundaryPolicyVersion value = new BoundaryPolicyVersion(policyId, id(),
                 repository.nextVersion(policyId), buildingId, boundaryId, itemCode,
-                normalize(request.aggregationMode()), "PENDING_EXPERT", "SIMULATION",
+                normalize(request.aggregationMode()), "PENDING_EXPERT", sourceType,
                 text(request.evidenceReference(), 500, "证据引用无效"), range.from(), range.to(),
                 0, userId, now, null, null, null);
         repository.insertVersion(value);
@@ -175,7 +190,7 @@ public class EnergyBoundarySummaryService {
             MeteringAssignmentsView first = null;
             while (true) {
                 MeteringAssignmentsView current = relationService.historicalMeteringAssignments(
-                        userId, roles, buildingId, versionId, page, PAGE_SIZE);
+                        userId, roles, buildingId, versionId, page, relationPageSize());
                 if (first == null) first = current;
                 long revision = current.metadata().modelRevision();
                 current.items().stream().map(value -> assignment(versionId, revision, value))
@@ -248,7 +263,7 @@ public class EnergyBoundarySummaryService {
         int page = 1;
         while (true) {
             var current = relationService.effectiveBoundaries(
-                    userId, roles, buildingId, page, PAGE_SIZE);
+                    userId, roles, buildingId, page, relationPageSize());
             if (current.items().stream().anyMatch(value -> boundaryId.equals(value.boundaryId())
                     && "ACTIVE".equals(value.status())
                     && "CONFIRMED".equals(value.confirmationStatus()))) {
@@ -257,6 +272,11 @@ public class EnergyBoundarySummaryService {
             if (page * (long) current.size() >= current.total()) return false;
             page++;
         }
+    }
+
+    /** 内部跨模块查询同样遵守关系服务的部署分页上限，不扩大单次关系读取权限。 */
+    private int relationPageSize() {
+        return Math.min(PAGE_SIZE, relationProperties.getMaxPageSize());
     }
 
     private static List<QueryDimension> dimensions(List<String> values) {

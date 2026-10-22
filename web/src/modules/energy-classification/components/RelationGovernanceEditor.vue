@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
+import RelationStagingPanel from './RelationStagingPanel.vue'
 import {
   ElAlert, ElButton, ElCard, ElDescriptions, ElDescriptionsItem, ElEmpty, ElForm, ElFormItem,
   ElInput, ElOption, ElSelect, ElSkeleton, ElSpace, ElTable, ElTableColumn, ElTag,
@@ -44,6 +45,9 @@ interface AssignmentForm {
 }
 
 const props = defineProps<{ buildingId: string }>()
+const emit = defineEmits<{ 'dirty-change': [value: boolean] }>()
+const stagingDirty = ref(false), stagingBusy = ref(false)
+watch([stagingDirty, stagingBusy], () => emit('dirty-change', stagingDirty.value || stagingBusy.value))
 const workspace = useRelationGovernanceWorkspace()
 const actionReason = ref('')
 const copySourceId = ref<string | null>(null)
@@ -77,6 +81,7 @@ const relationError = computed(() => {
 watch(() => props.buildingId, buildingId => { void workspace.loadBuilding(buildingId) }, { immediate: true })
 
 function selectVersion(versionId: string | null | undefined) {
+  if (stagingDirty.value || stagingBusy.value) { localError.value = t('energyClassification.validation.unsaved'); return }
   localError.value = ''
   void workspace.selectVersion(versionId)
 }
@@ -97,6 +102,7 @@ async function validateVersion() {
 }
 
 async function submitVersion() {
+  if (stagingDirty.value || stagingBusy.value) { localError.value = t('energyClassification.validation.unsaved'); return }
   if (!requireReason()) return
   if (await workspace.submitSelected(actionReason.value)) actionReason.value = ''
 }
@@ -309,15 +315,22 @@ function emptyAssignmentForm(): AssignmentForm {
 
 <template>
   <ElCard shadow="never" class="relation-governance-card">
-    <template #header><div class="card-heading"><div><h2>{{ t('energyClassification.relation.governanceTitle') }}</h2><p>{{ t('energyClassification.relation.governanceDescription') }}</p></div><ElButton :disabled="!props.buildingId || workspace.loading.value || workspace.busy.value" @click="workspace.loadBuilding(props.buildingId)">{{ t('energyClassification.actions.refresh') }}</ElButton></div></template>
+    <template #header><div class="card-heading"><div><h2>{{ t('energyClassification.relation.governanceTitle') }}</h2><p>{{ t('energyClassification.relation.governanceDescription') }}</p></div><ElButton :disabled="!props.buildingId || workspace.loading.value || workspace.busy.value || stagingDirty || stagingBusy" @click="workspace.loadBuilding(props.buildingId)">{{ t('energyClassification.actions.refresh') }}</ElButton></div></template>
     <ElAlert :title="t('energyClassification.relation.nodeLabelNature')" type="info" :closable="false" show-icon />
     <ElAlert v-if="localError" :title="localError" type="error" :closable="false" show-icon />
     <ElAlert v-if="relationError" :title="relationError" type="error" :closable="false" show-icon />
     <ElSkeleton v-if="workspace.loading.value" animated :rows="4" />
     <template v-else>
+      <RelationStagingPanel
+        v-if="workspace.selectedVersion.value" :building-id="props.buildingId"
+        :version-id="workspace.selectedVersion.value.versionId" :revision="workspace.selectedVersion.value.revision"
+        :editable="workspace.editable.value && !workspace.busy.value" :nodes="workspace.nodes.value"
+        @dirty="stagingDirty = $event" @busy="stagingBusy = $event"
+        @saved="workspace.selectVersion(workspace.selectedVersionId.value)"
+      />
       <ElForm label-position="top" class="relation-form">
         <div class="form-grid">
-          <ElFormItem :label="t('energyClassification.relation.editingVersion')"><ElSelect :model-value="workspace.selectedVersionId.value ?? undefined" clearable filterable :disabled="workspace.busy.value" :loading="workspace.detailLoading.value" :placeholder="t('energyClassification.placeholders.select')" @update:model-value="selectVersion"><ElOption v-for="item in versionOptions" :key="item.value" :value="item.value" :label="item.label" /></ElSelect></ElFormItem>
+          <ElFormItem :label="t('energyClassification.relation.editingVersion')"><ElSelect :model-value="workspace.selectedVersionId.value ?? undefined" clearable filterable :disabled="workspace.busy.value || stagingDirty || stagingBusy" :loading="workspace.detailLoading.value" :placeholder="t('energyClassification.placeholders.select')" @update:model-value="selectVersion"><ElOption v-for="item in versionOptions" :key="item.value" :value="item.value" :label="item.label" /></ElSelect></ElFormItem>
           <ElFormItem :label="t('energyClassification.fields.reason')"><ElInput v-model="actionReason" :disabled="workspace.busy.value" :placeholder="t('energyClassification.fields.reasonPlaceholder')" clearable /></ElFormItem>
           <ElFormItem :label="t('energyClassification.relation.copySource')"><ElSelect v-model="copySourceId" clearable filterable :disabled="workspace.busy.value || !canCreateDraft" :placeholder="t('energyClassification.relation.copyDefault')"><ElOption v-for="item in copyOptions" :key="item.versionId" :value="item.versionId" :label="`${t('energyClassification.version.number')} ${item.versionNo}`" /></ElSelect></ElFormItem>
         </div>

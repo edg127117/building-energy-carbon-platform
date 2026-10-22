@@ -137,8 +137,15 @@ public class EnergyBoundarySummaryCore {
             throw error(409, POLICY_REQUIRED, "计量边界汇总口径无效");
         }
         List<MeterDatum> selected = selected(mode, values);
+        if(values.stream().map(v->v.measure().pointId()).distinct().count()!=values.size())
+            relation("同一原生边界存在重复测点期间，不能因折标视角不同重复计入");
         BigDecimal authority = sum(selected, datum -> datum.measure().nativeQuantity());
-        BigDecimal authorityTce = completeSum(selected, datum -> datum.measure().tce());
+        // 原生边界独立于折标是否可用；不同折标单位或视角不能混加，也不能拆开后重复计入原生总量。
+        String tceUnit=common(selected,v->v.measure().tceUnitCode(),null);
+        String perspective=common(selected,v->v.measure().conversionPerspective(),null);
+        boolean tceCompatible=tceUnit!=null&&perspective!=null&&selected.stream().allMatch(v->
+                tceUnit.equals(v.measure().tceUnitCode())&&perspective.equals(v.measure().conversionPerspective()));
+        BigDecimal authorityTce = tceCompatible?completeSum(selected, datum -> datum.measure().tce()):null;
         List<MeterDatum> breakdown = mode == AggregationMode.MAIN_WITH_SUBMETER_BREAKDOWN
                 ? role(values, "SUB") : selected;
         BigDecimal breakdownQuantity = sum(breakdown,
@@ -155,10 +162,12 @@ public class EnergyBoundarySummaryCore {
                     target == null ? null : target.targetObjectId(),
                     target == null ? null : target.targetObjectCode(),
                     target == null ? null : target.targetObjectName(), allocation,
-                    datum.measure().nativeQuantity(), datum.measure().tce(), false));
+                    datum.measure().nativeQuantity(),tceCompatible&&tceUnit.equals(datum.measure().tceUnitCode())
+                            &&perspective.equals(datum.measure().conversionPerspective())?datum.measure().tce():null, false));
         }
         if (residual.signum() > 0) {
-            BigDecimal breakdownTce = completeSum(breakdown, datum -> datum.measure().tce());
+            BigDecimal breakdownTce = tceCompatible&&breakdown.stream().allMatch(v->tceUnit.equals(v.measure().tceUnitCode())
+                    &&perspective.equals(v.measure().conversionPerspective()))?completeSum(breakdown, datum -> datum.measure().tce()):null;
             BigDecimal residualTce = authorityTce == null || breakdownTce == null
                     ? null : authorityTce.subtract(breakdownTce, MC);
             contributions.add(new TargetContribution(null, null, null, null,
@@ -174,10 +183,11 @@ public class EnergyBoundarySummaryCore {
         int exceptions = selected.stream().mapToInt(value -> value.measure().issueCodes().size()).sum();
         String completeness = selected.stream().anyMatch(value ->
                 "LOCKED_PARTIAL".equals(value.measure().lockStatus())) ? "INCOMPLETE"
-                : exceptions > 0 ? "COMPLETE_WITH_ALLOWED_QUALITY" : "COMPLETE";
+                : authorityTce==null||selected.stream().anyMatch(value->"LOCKED_NATIVE_COMPLETE".equals(value.measure().lockStatus()))
+                ? "COMPLETE_NATIVE_ONLY" : exceptions > 0 ? "COMPLETE_WITH_ALLOWED_QUALITY" : "COMPLETE";
         String nature = selected.stream().allMatch(value ->
                 "FORMAL".equals(value.measure().resultNature()))
-                && !"SIMULATION".equals(policy.sourceType()) ? "FORMAL"
+                && "FORMAL".equals(policy.sourceType()) ? "FORMAL"
                 : "DEVELOPMENT_SIMULATION";
         String lock = common(selected, value -> value.measure().lockStatus(), "MIXED");
         String rule = common(selected, value -> value.measure().conversionRuleVersionId(), null);
@@ -186,9 +196,9 @@ public class EnergyBoundarySummaryCore {
                 values.getFirst().assignment().meteringBoundaryName(), key.energyItemCode(),
                 key.energySource(), key.flowDirection(), key.periodType(), key.startInclusive(),
                 key.endExclusive(), key.nativeUnitCode(), authority, assigned, unallocated,
-                residual, key.tceUnitCode(), authorityTce, coverage, exceptions, lock,
+                residual, authorityTce==null?null:tceUnit, authorityTce, coverage, exceptions, lock,
                 completeness, nature, key.relationVersionId(), key.relationModelRevision(),
-                key.conversionPerspective(), rule, policy.versionId(), mode.name(),
+                authorityTce==null?null:perspective, rule, policy.versionId(), mode.name(),
                 selected.stream().map(value -> value.measure().evidenceHash()).distinct().toList(),
                 contributions);
     }
@@ -279,6 +289,7 @@ public class EnergyBoundarySummaryCore {
                                 ? "UNSPECIFIED" : value.perspective(), LinkedHashMap::new,
                         Collectors.reducing(BigDecimal.ZERO, ProjectedValue::signedTce,
                                 (left, right) -> left.add(right, MC))));
+        if(values.stream().anyMatch(value->value.tce()==null))tce=Map.of();
         return new QueryGroup(key, original, inbound, outbound, net,
                 Map.copyOf(tce), sumBy(values, ProjectedValue::assigned),
                 sumBy(values, ProjectedValue::unallocated),
@@ -319,6 +330,7 @@ public class EnergyBoundarySummaryCore {
     private static String worst(List<String> values) {
         if (values.contains("BLOCKED")) return "BLOCKED";
         if (values.contains("INCOMPLETE")) return "INCOMPLETE";
+        if (values.contains("COMPLETE_NATIVE_ONLY")) return "COMPLETE_NATIVE_ONLY";
         if (values.contains("COMPLETE_WITH_ALLOWED_QUALITY")) return "COMPLETE_WITH_ALLOWED_QUALITY";
         return "COMPLETE";
     }
@@ -362,7 +374,7 @@ public class EnergyBoundarySummaryCore {
             String buildingId, String boundaryId, String energyItemCode,
             String energySource, String flowDirection, String periodType,
             java.time.Instant startInclusive, java.time.Instant endExclusive,
-            String nativeUnitCode, String tceUnitCode, String conversionPerspective,
+            String nativeUnitCode,
             String relationVersionId, long relationModelRevision) {
     }
 
@@ -373,7 +385,7 @@ public class EnergyBoundarySummaryCore {
             return new BoundaryKey(measure.buildingId(), assignment.meteringBoundaryId(),
                     measure.energyItemCode(), measure.energySource(), assignment.meterDirection(),
                     measure.periodType(), measure.startInclusive(), measure.endExclusive(),
-                    measure.nativeUnitCode(), measure.tceUnitCode(), measure.conversionPerspective(),
+                    measure.nativeUnitCode(),
                     measure.relationVersionId(), measure.relationModelRevision());
         }
     }

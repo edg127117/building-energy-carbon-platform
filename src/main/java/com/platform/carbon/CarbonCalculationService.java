@@ -89,11 +89,15 @@ public class CarbonCalculationService {
 
     CalculationDetail runCandidate(String buildingId, int accountingYear, ResultNature nature,
                                    String oldBatchId, String idempotencyKey) {
-        ZoneId zone = ZoneId.of(resolveTimezone(oldBatchId));
-        Instant start = LocalDate.of(accountingYear, 1, 1).atStartOfDay(zone).toInstant();
-        Instant end = LocalDate.of(accountingYear + 1, 1, 1).atStartOfDay(zone).toInstant();
-        return execute(0L, buildingId, PeriodType.YEAR,
-                new PeriodWindow(start, end, zone.getId()), nature,
+        CalculationBatch source = candidateSource(buildingId, accountingYear, nature, oldBatchId);
+        PeriodWindow window;
+        try {
+            window = period(source.periodType(), source.periodStart(), source.periodEnd(),
+                    source.timezoneId());
+        } catch (BusinessException exception) {
+            throw error(409, RECALCULATION_CONFLICT, "原报告周期证据无效，不能重算替代");
+        }
+        return execute(0L, buildingId, source.periodType(), window, nature,
                 idempotencyKey, oldBatchId, true);
     }
 
@@ -107,6 +111,11 @@ public class CarbonCalculationService {
             detail = repository.detail(batchId);
         }
         return detail;
+    }
+
+    public List<CalculationBatch> list(long userId,Collection<String> roles,String buildingId) {
+        authorization.requireReader(userId,roles,text(buildingId,32,"建筑编码无效"));
+        return repository.listBatches(buildingId);
     }
 
     CalculationBatch currentFormal(String buildingId, int year, String timezoneId) {
@@ -270,13 +279,16 @@ public class CarbonCalculationService {
                 || lockedReport.batch().resultNature() != ResultNature.FORMAL)) {
             throw error(409, FACTOR_CONFLICT, "原正式报告不存在或归属不一致，不能重建锁定因子");
         }
+        Set<String> electricityCodes=activities.stream().filter(CarbonCalculationService::electricityActivity)
+                .map(ActivitySegment::energyItemCode).collect(java.util.stream.Collectors.toSet());
         List<FactorVersion> lockedElectricity = lockedReport == null ? List.of()
-                : lockedReport.items().stream().filter(item -> "ELECTRICITY".equals(item.energyItemCode()))
+                : lockedReport.items().stream().filter(item -> electricityCodes.contains(item.energyItemCode()))
                 .map(StoredCalculationItem::factorVersionId).distinct()
                 .map(id -> read(deadline, () -> ruleRepository.findFactorVersion(id))).toList();
         List<CalculatedItem> items = new ArrayList<>();
         List<CalculationFailure> failures = new ArrayList<>();
         List<String> incomplete = new ArrayList<>();
+        List<com.fasterxml.jackson.databind.JsonNode> excludedActivities = new ArrayList<>();
         // 仅在本次计算内复用完全相同的规则查询，避免同周期多测点反复占用数据库连接。
         record RuleWindow(String code, LocalDateTime start, LocalDateTime end) { }
         Map<RuleWindow, List<FactorVersion>> candidates = new HashMap<>();
@@ -292,12 +304,22 @@ public class CarbonCalculationService {
                         "正式计算要求全部活动快照正式且完整");
             }
             if (incompleteActivity) incomplete.add(activity.snapshotId() + ":活动数据不完整");
+            if(activity.traceEvidence()!=null&&"EXCLUDED".equals(activity.traceEvidence().path("activityStatus").asText())) {
+                if(activity.quantity().signum()!=0)throw error(409,ACTIVITY_INCOMPLETE,"完全排除活动不得产生纳入用量");
+                if(!CarbonCalculationCore.sha256(CarbonEvidence.canonical(activity.traceEvidence())).equals(activity.evidenceHash()))
+                    throw error(409,ACTIVITY_INCOMPLETE,"完全排除活动的来源证据摘要不一致");
+                ObjectNode excluded=CarbonEvidence.object();
+                excluded.set("evidence",activity.traceEvidence());
+                excluded.put("evidenceHash",activity.evidenceHash());
+                excludedActivities.add(excluded);
+                continue;
+            }
             try {
                 LocalDateTime start = LocalDateTime.ofInstant(activity.startInclusive(),
                         ZoneId.of(activity.timezoneId()));
                 LocalDateTime end = LocalDateTime.ofInstant(activity.endExclusive(),
                         ZoneId.of(activity.timezoneId()));
-                boolean locked = lockedReport != null && "ELECTRICITY".equals(activity.energyItemCode());
+                boolean locked = lockedReport != null && electricityActivity(activity);
                 FactorMatch match = locked ? core.matchLockedElectricity(activity, lockedElectricity)
                         : core.match(activity, buildingRegion, batch.resultNature(),
                             candidates.computeIfAbsent(new RuleWindow(activity.energyItemCode(), start, end),
@@ -332,9 +354,17 @@ public class CarbonCalculationService {
         List<SummaryMetric> summaries = core.summarizeWithDenominatorSelections(
                 items, batch.periodType(), area, population);
         ObjectNode shared = CarbonEvidence.object();
+        shared.set("excludedActivities",CarbonEvidence.tree(excludedActivities));
         List<CalculatedItem> traced = captureEvidence(items, batch, area, population, deadline, shared);
         return new CalculationResult(traced, failures, summaries,
                 incomplete.isEmpty(), incomplete, CarbonEvidence.canonical(shared));
+    }
+
+    private static boolean electricityActivity(ActivitySegment activity) {
+        var trace=activity.traceEvidence();
+        return trace!=null&&trace.has("projectEnergyPathway")
+                ? "PURCHASED_ELECTRICITY".equals(trace.path("projectEnergyPathway").asText())
+                : "ELECTRICITY".equals(activity.energyItemCode());
     }
 
     /** 大结果写入在借连接前有界排队，避免并发整批写入占满连接池，阻塞查询和失败恢复。 */
@@ -614,12 +644,26 @@ public class CarbonCalculationService {
         }
     }
 
-    private String resolveTimezone(String oldBatchId) {
-        CalculationBatch old = repository.findBatch(oldBatchId);
-        if (old == null || old.periodType() != PeriodType.YEAR) {
-            throw error(409, RECALCULATION_CONFLICT, "重算缺少原年度结果或周期证据");
+    /** 候选只可替代同建筑、同结果性质且期间证据完整的原报告，不能按年度范围重新拼接。 */
+    private CalculationBatch candidateSource(String buildingId, int accountingYear,
+                                             ResultNature nature, String oldBatchId) {
+        CalculationBatch source = oldBatchId == null ? null : repository.findBatch(oldBatchId);
+        if (source == null || source.periodType() == null || source.periodStart() == null
+                || source.periodEnd() == null || source.timezoneId() == null
+                || !buildingId.equals(source.buildingId()) || source.resultNature() != nature) {
+            throw error(409, RECALCULATION_CONFLICT, "重算缺少同建筑的原报告周期证据");
         }
-        return old.timezoneId();
+        try {
+            if (source.periodStart().atZone(ZoneId.of(source.timezoneId())).getYear()
+                    != accountingYear) {
+                throw error(409, RECALCULATION_CONFLICT, "原报告核算年度与重算项不一致");
+            }
+        } catch (BusinessException exception) {
+            throw exception;
+        } catch (RuntimeException exception) {
+            throw error(409, RECALCULATION_CONFLICT, "原报告时区证据无效，不能重算替代");
+        }
+        return source;
     }
 
     private static PeriodWindow period(PeriodType type, Instant start, Instant end,

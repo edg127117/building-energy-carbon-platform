@@ -58,11 +58,11 @@ public class MeteringImportValidationService {
         for (ParsedRow row : workbook.rows()) {
             int before = errors(issues);
             validateRequiredEnums(row, issues);
-            NodeRow meter = resolveNode(buildingId, "POINT", row.meterPointCode(),
+            NodeRow meter = resolveNode(versionId, buildingId, "POINT", row.meterPointCode(),
                     row, "表计测点编码", issues);
-            NodeRow parent = resolveNode(buildingId, "POINT", row.parentMeterCode(),
+            NodeRow parent = resolveNode(versionId, buildingId, "POINT", row.parentMeterCode(),
                     row, "上级表计编码", issues);
-            NodeRow target = resolveTarget(buildingId, row, issues);
+            NodeRow target = resolveTarget(versionId, buildingId, row, issues);
             BoundaryRow boundary = validateBoundary(buildingId, row, issues);
             if (row.boundaryCode() != null) {
                 BoundaryFingerprint boundaryFingerprint = new BoundaryFingerprint(
@@ -187,7 +187,7 @@ public class MeteringImportValidationService {
     }
 
     private NodeRow resolveTarget(
-            String buildingId, ParsedRow row, List<MeteringImportIssue> issues) {
+            String versionId, String buildingId, ParsedRow row, List<MeteringImportIssue> issues) {
         if (row.targetType() == null && row.targetCode() == null) return null;
         if (row.targetType() == null
                 || !Set.of("SPACE", "SYSTEM", "EQUIPMENT").contains(row.targetType())) {
@@ -195,15 +195,15 @@ public class MeteringImportValidationService {
                     "覆盖对象类型必须是 SPACE、SYSTEM 或 EQUIPMENT"));
             return null;
         }
-        return resolveNode(buildingId, row.targetType(), row.targetCode(), row,
+        return resolveNode(versionId, buildingId, row.targetType(), row.targetCode(), row,
                 "覆盖对象编码", issues);
     }
 
     private NodeRow resolveNode(
-            String buildingId, String type, String code, ParsedRow row,
+            String versionId, String buildingId, String type, String code, ParsedRow row,
             String field, List<MeteringImportIssue> issues) {
         if (code == null) return null;
-        NodeRow node = repository.findNodeByCode(buildingId, type, code).orElse(null);
+        NodeRow node = repository.findNodeByCode(versionId, buildingId, type, code).orElse(null);
         if (node == null) {
             issues.add(error(row.rowNumber(), field, "IMPORT_OBJECT_NOT_FOUND",
                     "编码在当前建筑不存在或不是活动对象"));

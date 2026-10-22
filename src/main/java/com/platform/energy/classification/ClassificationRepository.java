@@ -24,6 +24,10 @@ public class ClassificationRepository {
         jdbc.queryForObject("SELECT revision FROM biz_energy_classification_scope WHERE building_id=? FOR UPDATE", Long.class, buildingId);
     }
     public boolean buildingExists(String id) { return count("SELECT COUNT(*) FROM building WHERE building_id=? AND del_flag=0", id)>0; }
+    public String pointIdForCode(String building,String code) {
+        return jdbc.queryForList("SELECT point_id FROM biz_data_point WHERE building_id=? AND point_code=? AND del_flag=0",String.class,building,code)
+                .stream().findFirst().orElse(null);
+    }
     public boolean objectExists(String building, String type, String id) {
         String sql = switch (type) {
             case "POINT" -> "SELECT COUNT(*) FROM biz_data_point WHERE building_id=? AND point_id=? AND del_flag=0";
@@ -72,6 +76,9 @@ public class ClassificationRepository {
     }
     public void insertBatch(String id,String building,String key,String hash,String reason,long user) {
         jdbc.update("INSERT INTO biz_energy_manual_batch(batch_id,building_id,idempotency_key,payload_hash,status,created_by,reason,created_at) VALUES (?,?,?,?,'PENDING_REVIEW',?,?,?)",id,building,key,hash,user,reason,Instant.now().toEpochMilli());
+    }
+    public int batchReadingCount(String building, String batchId) {
+        return Math.toIntExact(count("SELECT COUNT(*) FROM biz_energy_manual_reading WHERE building_id=? AND batch_id=?", building, batchId));
     }
     public void insertReading(String id,String batch,String building,ClassificationContracts.Reading reading,String json,BigDecimal quantity,long user) {
         jdbc.update("INSERT INTO biz_energy_manual_reading(fact_id,batch_id,building_id,point_id,start_inclusive,end_exclusive,reading_json,normalized_quantity,supersedes_fact_id,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",id,batch,building,reading.pointId(),reading.startInclusive().toEpochMilli(),reading.endExclusive().toEpochMilli(),json,quantity,reading.supersedesFactId(),user);

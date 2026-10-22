@@ -54,6 +54,39 @@ public class EnergyPointProfileService {
     private final BizCollectionConfigAuditLogMapper auditMapper;
     private final AuditGovernanceProperties auditProperties;
 
+    /** 同批参数只由维护者明确选定；先锁定并复核全部对象，再原子写入，失败不留下半批配置。 */
+    @Transactional(rollbackFor = Exception.class)
+    public com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchView batch(
+            Long userId, Collection<String> roles,
+            com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRequest request) {
+        authorization.requireMaintainer(roles);
+        authorization.checkBuilding(userId, roles, request.buildingId());
+        if(request.rows()==null||request.rows().isEmpty()||request.rows().size()>100||request.preview()==null)
+            validation("每批应包含1至100个测点并明确预检或写入");
+        validate(request.energyType(),request.energySubtype(),request.valueSemantics(),request.reportingPeriod(),
+                request.annualSummary(),request.confirmationStatus(),request.evidenceReference());
+        if(request.rows().stream().anyMatch(r->r==null||r.pointId()==null||r.pointId().isBlank())
+                ||request.rows().stream().map(r->r.pointId()).distinct().count()!=request.rows().size()) validation("批次测点为空或重复");
+        var rows=request.rows().stream().sorted(java.util.Comparator.comparing(r->r.pointId())).toList();
+        for(var row:rows) {
+            var point=pointMapper.selectByIdForUpdate(row.pointId());
+            if(point==null)throw EnergyMetadataErrors.error(404,EnergyMetadataErrors.POINT_NOT_FOUND,"标准测点不存在");
+            requireSameBuilding(request.buildingId(),point.getBuildingId());requireSupportedUnit(point.getUnit());
+            var previous=profileMapper.selectOne(new LambdaQueryWrapper<BizEnergyPointProfile>().eq(BizEnergyPointProfile::getPointId,row.pointId()));
+            if(previous==null) {
+                if(row.profileId()!=null||row.expectedRevision()!=null)validation("新增测点属性不能携带已有版本标识");
+            } else if(!Objects.equals(row.profileId(),previous.getProfileId())||!Objects.equals(row.expectedRevision(),previous.getConfigRevision()))
+                throw EnergyMetadataErrors.error(409,EnergyMetadataErrors.VERSION_CONFLICT,"批次中已有专业属性或修订已变化，请刷新预检");
+        }
+        if(request.preview())return new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchView(true,rows.size(),List.of());
+        java.util.List<ProfileView> values=new java.util.ArrayList<>();
+        for(var row:rows) {
+            if(row.profileId()==null)values.add(create(userId,roles,new CreateRequest(request.buildingId(),row.pointId(),request.energyType(),request.energySubtype(),request.valueSemantics(),request.reportingPeriod(),request.annualSummary(),request.confirmationStatus(),request.evidenceReference())));
+            else values.add(update(userId,roles,row.profileId(),new UpdateRequest(request.energyType(),request.energySubtype(),request.valueSemantics(),request.reportingPeriod(),request.annualSummary(),request.confirmationStatus(),request.evidenceReference(),row.expectedRevision())));
+        }
+        return new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchView(false,values.size(),List.copyOf(values));
+    }
+
     public PageResponse<ProfileView> list(Long userId, Collection<String> roles, String buildingId,
                                           String pointId, int page, int size) {
         authorization.requireReader(roles);

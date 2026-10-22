@@ -20,10 +20,14 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @Tag(name = "能源计量边界汇总")
 @SecurityRequirement(name = "bearerAuth")
@@ -41,9 +45,16 @@ import org.springframework.web.bind.annotation.RestController;
         @ApiResponse(responseCode = "409", description = "口径、关系或查询上限阻断",
                 content = @Content(schema = @Schema(implementation = EnergySummaryApiError.class)))
 })
-/** 暴露无界面的计量边界汇总口径治理和多维查询契约。 */
+/** 暴露计量边界汇总口径治理和多维查询契约。 */
 public class EnergyBoundarySummaryController {
     private final EnergyBoundarySummaryService service;
+
+    @GetMapping("/policies")
+    public Result<List<BoundaryPolicyView>> policies(
+            Authentication authentication, @RequestParam String buildingId) {
+        return Result.success(service.listPolicies(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId));
+    }
 
     @PostMapping("/policies")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")

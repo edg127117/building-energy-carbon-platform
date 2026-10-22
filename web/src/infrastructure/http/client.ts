@@ -93,3 +93,20 @@ export async function requestApi<T>(config: AxiosRequestConfig): Promise<T> {
     throw reason
   }
 }
+
+/** 文件下载复用认证桥接；JSON错误不能作为工作簿保存，迟到401也不能清除新会话。 */
+export async function requestFile(config: AxiosRequestConfig): Promise<Blob> {
+  const requestToken = authenticationBridge.getToken()
+  try {
+    const value = await platformClient.request<Blob>({ ...config, responseType: 'blob' })
+    if (!(value instanceof Blob)) throw new TransportError('request')
+    if (value.type.includes('json')) {
+      const result = JSON.parse(await value.text()) as Partial<ApiResult<unknown>>
+      throw classifyBusinessFailure(result.code ?? 500, result.errorCode)
+    }
+    return value
+  } catch (reason) {
+    if (reason instanceof TransportError && reason.kind === 'unauthorized' && requestToken === authenticationBridge.getToken()) authenticationBridge.onUnauthorized()
+    throw reason
+  }
+}

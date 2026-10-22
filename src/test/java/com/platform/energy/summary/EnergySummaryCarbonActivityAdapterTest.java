@@ -3,6 +3,11 @@ package com.platform.energy.summary;
 import com.platform.carbon.CarbonModels.PeriodType;
 import com.platform.carbon.CarbonEvidence;
 import com.platform.carbon.CarbonCalculationCore;
+import com.platform.carbon.CarbonProjectService;
+import com.platform.carbon.CarbonProjectCore;
+import com.platform.carbon.CarbonProjectContracts;
+import com.platform.energy.classification.ClassificationService;
+import com.platform.energy.classification.ClassificationCore.SourceSlice;
 import com.platform.energy.period.EnergyPeriodModels.PeriodSnapshot;
 import com.platform.energy.period.EnergyPeriodSnapshotReader;
 import com.platform.energy.summary.api.EnergySummaryContracts.SummaryGroupView;
@@ -80,6 +85,33 @@ class EnergySummaryCarbonActivityAdapterTest {
                 .thenReturn(List.of(snapshot("still-visible")));
         assertThatThrownBy(() -> adapter.read("BLD001", PeriodType.YEAR, START, END, 500))
                 .hasMessageContaining("版本不一致");
+    }
+
+    @Test void projectExclusionUsesAllSealedCompositionAndEmitsActualAtoms() {
+        String hash="e".repeat(64);
+        var old=summary(Map.of("KWH",new BigDecimal("1000")),hash);
+        when(summaryService.query(org.mockito.ArgumentMatchers.eq(0L),any(),any())).thenReturn(
+                new SummaryQueryView("BLD001","MONTH",START,END,List.of("ENERGY_ITEM","PERIOD"),3,old.groups()));
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,END,501))
+                .thenReturn(List.of(snapshot(hash),snapshot("child1"),snapshot("child2")));
+        var projects=mock(CarbonProjectService.class);
+        var a=new SourceSlice("A",new BigDecimal("100"),java.util.Set.of("A"),true,List.of("s1"),Map.of());
+        var b=new SourceSlice("B",new BigDecimal("600"),java.util.Set.of("A","B"),false,List.of("s2"),Map.of());
+        var c=new SourceSlice("C",new BigDecimal("300"),java.util.Set.of("A","C"),false,List.of("s3"),Map.of());
+        var config=new CarbonProjectContracts.Configuration("CLASS",List.of(new CarbonProjectContracts.Energy("ELECTRICITY","WATER","RESERVED"),new CarbonProjectContracts.Energy("ELECTRICITY","PURCHASED_ELECTRICITY","ENABLED")),List.of());
+        var version=new CarbonProjectContracts.Version("PROJECT","BLD001",1,3,"ACTIVE",START,null,1,2L,config);
+        var source=new ClassificationService.SealedProjection("CLASS","REL-V1",new BigDecimal("1000"),List.of(a,b,c),null);
+        when(projects.project(any(),any(),any(),any(),any(),any())).thenAnswer(call->{
+            assertThat((List<?>)call.getArgument(5)).hasSize(3);
+            return new CarbonProjectService.Projection(version,source,new CarbonProjectCore.Applied(new BigDecimal("400"),new BigDecimal("600"),List.of(a,c),List.of(b)));
+        });
+        var values=new EnergySummaryCarbonActivityAdapter(summaryService,snapshotReader,projects).read("BLD001",PeriodType.YEAR,START,END,500);
+        assertThat(values).hasSize(2);
+        assertThat(values.stream().map(v->v.quantity()).reduce(BigDecimal.ZERO,BigDecimal::add)).isEqualByComparingTo("400");
+        assertThat(values.getFirst().traceEvidence().path("excludedQuantity").asText()).isEqualTo("600");
+        assertThat(values.getFirst().traceEvidence().path("compositionSnapshots")).hasSize(3);
+        assertThat(values.getFirst().traceEvidence().path("sourceSlice").path("pointId").asText()).isEqualTo("A");
+        assertThat(values.getFirst().traceEvidence().path("projectEnergyPathway").asText()).isEqualTo("PURCHASED_ELECTRICITY");
     }
 
     private static SummaryQueryView summary(Map<String, BigDecimal> quantities, String... evidence) {

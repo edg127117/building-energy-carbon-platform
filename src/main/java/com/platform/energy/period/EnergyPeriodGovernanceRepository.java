@@ -59,6 +59,11 @@ public class EnergyPeriodGovernanceRepository {
         return one(periodPolicySelect() + " WHERE v.version_id=?", this::periodPolicy, versionId);
     }
 
+    public List<PeriodPolicyVersion> manualPolicies(String buildingId) {
+        return jdbc.query(periodPolicySelect()+" WHERE p.building_id=? AND v.source_type='FORMAL' ORDER BY v.version_no DESC LIMIT 100",
+                this::periodPolicy,buildingId);
+    }
+
     public PeriodPolicyVersion findEffectivePeriodPolicy(
             String buildingId, LocalDateTime effectiveAt) {
         return one(periodPolicySelect() + """

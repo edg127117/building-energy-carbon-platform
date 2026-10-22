@@ -92,7 +92,7 @@ class EnergyLoop7SyntheticAcceptanceTest {
         when(inputAssembler.load(eq(OPERATOR), eq(ROLES), any(AggregationQuery.class)))
                 .thenAnswer(invocation -> aggregationInput(invocation.getArgument(2)));
         when(relationService.historicalMeteringAssignments(
-                OPERATOR, ROLES, BUILDING, RELATION_VERSION, 1, 500))
+                OPERATOR, ROLES, BUILDING, RELATION_VERSION, 1, 100))
                 .thenReturn(assignments());
     }
 
@@ -238,7 +238,7 @@ class EnergyLoop7SyntheticAcceptanceTest {
                 "合成总表", "MAIN", "INBOUND", "CONFIRMED",
                 "NODE_SPACE_ACCEPTANCE", "SPACE", "SPACE_ACCEPTANCE", "S-ACC",
                 "合成空间");
-        return new MeteringAssignmentsView(metadata, 1, 500, 1, List.of(assignment));
+        return new MeteringAssignmentsView(metadata, 1, 100, 1, List.of(assignment));
     }
 
     private void grantBuilding(long userId) {

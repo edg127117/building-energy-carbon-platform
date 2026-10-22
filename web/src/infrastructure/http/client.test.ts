@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AxiosError, AxiosHeaders } from 'axios'
-import { configureHttpAuthentication, createHttpClient, requestApi, TransportError } from './client'
+import { configureHttpAuthentication, createHttpClient, requestApi, requestFile, TransportError } from './client'
 describe('transport boundary', () => {
+  it('下载走当前认证并拒绝把JSON业务错误保存成文件', async () => {
+    const onUnauthorized = vi.fn()
+    configureHttpAuthentication({ getToken: () => 'download-token', onUnauthorized })
+    const blob = Object.assign(new Blob([], { type: 'application/json' }), { text: async () => '{"code":403,"errorCode":"RELATION_FORBIDDEN"}' })
+    await expect(requestFile({ url: '/test-download', adapter: async config => {
+      expect(config.headers.get('Authorization')).toBe('Bearer download-token')
+      expect(config.responseType).toBe('blob')
+      return { data: blob, status: 200, statusText: 'OK', headers: new AxiosHeaders(), config }
+    } })).rejects.toMatchObject({ kind: 'forbidden', errorCode: 'RELATION_FORBIDDEN' })
+    expect(onUnauthorized).not.toHaveBeenCalled()
+  })
   it('登录态服务故障时保留会话并返回可识别的服务错误', async () => {
     const onUnauthorized = vi.fn()
     configureHttpAuthentication({ getToken: () => 'current', onUnauthorized })

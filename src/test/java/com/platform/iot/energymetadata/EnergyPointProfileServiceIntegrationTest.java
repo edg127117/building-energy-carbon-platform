@@ -65,6 +65,23 @@ class EnergyPointProfileServiceIntegrationTest {
     }
 
     @Test
+    void batchPreviewDoesNotWriteAndStaleMixedBatchDoesNotPartiallyUpdate() {
+        var rows=java.util.List.of(new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRow("ENERGY_ELECTRIC",null,null),
+                new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRow("ENERGY_GAS",null,null));
+        var preview=service.batch(ENERGY_USER,ENERGY,new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRequest("BLD001",rows,"ELECTRICITY",null,"CUMULATIVE","MONTH",true,"PENDING_EXPERT","同批待确认",true));
+        assertThat(preview.count()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_energy_point_profile",Integer.class)).isZero();
+        var written=service.batch(ENERGY_USER,ENERGY,new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRequest("BLD001",rows,"ELECTRICITY",null,"CUMULATIVE","MONTH",true,"PENDING_EXPERT","同批待确认",false));
+        assertThat(written.profiles()).hasSize(2).allMatch(p->p.confirmationStatus().equals("PENDING_EXPERT"));
+        var first=written.profiles().getFirst();
+        var stale=java.util.List.of(new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRow(first.pointId(),first.profileId(),first.configRevision()),
+                new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRow(written.profiles().getLast().pointId(),written.profiles().getLast().profileId(),99));
+        assertThatThrownBy(()->service.batch(ENERGY_USER,ENERGY,new com.platform.iot.energymetadata.api.EnergyPointProfileContracts.BatchRequest("BLD001",stale,"ELECTRICITY","GRID_PURCHASED","CUMULATIVE","MONTH",true,"CONFIRMED","明确依据",false)))
+                .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo(EnergyMetadataErrors.VERSION_CONFLICT));
+        assertThat(service.detail(ENERGY_USER,ENERGY,first.profileId()).configRevision()).isEqualTo(first.configRevision());
+    }
+
+    @Test
     void rejectsInvalidSubtypeMissingPointDuplicateBuildingMismatchAndUnsupportedUnit() {
         assertCode(() -> service.create(ENERGY_USER, ENERGY,
                         create("BLD001", "ENERGY_GAS", "NATURAL_GAS", "GRID_PURCHASED", "CONFIRMED")),

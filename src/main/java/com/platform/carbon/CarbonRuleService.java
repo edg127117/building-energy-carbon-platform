@@ -36,6 +36,19 @@ public class CarbonRuleService {
     private final AuditEvidenceWriter auditWriter;
     private final AuditGovernanceProperties auditProperties;
 
+    public record FormulaOption(String versionId, String code, int versionNo, String algorithmCode,
+                                String resultBasis, String usageNature, LocalDateTime effectiveFrom,
+                                LocalDateTime effectiveTo) { }
+    public record RoundingOption(String versionId, String code, int versionNo, int totalScale,
+                                 int intensityScale, int shareScale, String roundingMode) { }
+    public record RuleOptions(List<FormulaOption> formulas, List<RoundingOption> roundingPolicies) { }
+
+    /** 只开放后端已注册的有效规则供选择，客户端不能用任意公式或精度替代核算核心。 */
+    public RuleOptions options(long user, Collection<String> roles) {
+        requireCarbonRole(roles);
+        return new RuleOptions(repository.formulaOptions(), repository.roundingOptions());
+    }
+
     @Transactional(rollbackFor = Exception.class)
     public FactorSourceVersion createSource(long userId, Collection<String> roles,
                                             CreateFactorSourceRequest request) {

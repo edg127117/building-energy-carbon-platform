@@ -97,9 +97,9 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 | `com.platform.energy.activity` | 多能源原始活动数据的有界读取和质量门禁 |
 | `com.platform.energy.catalog`、`conversion` | 能源品种、单位量纲、折标公式和参数版本；研发模拟结果不得冒充正式结算 |
 | `com.platform.energy.aggregation`、`period`、`summary` | 活动量聚合、计量事件与修正、周期投影与封账、历史关系和计量边界汇总 |
-| `com.platform.energy.classification` | 版本化分类树、设备及测点归属、计量树分解与原生分类统计、独立审核的人工来源；不写入碳核算 |
+| `com.platform.energy.classification` | 版本化分类树、对象归属、计量树分解与原生分类统计、标准Excel预检；向碳模块提供正式封账组成，人工来源须经正式月量候选与独立封账，不能直接进入碳核算 |
 | `com.platform.energy.efficiency` | 电驱动水冷冷站原生周期、年度 EERp 和研发评价 |
-| `com.platform.carbon` | 因子与分母版本、范围一/二计算、追溯、重算和批次审批 |
+| `com.platform.carbon` | 因子与分母版本、范围一固定源/范围二计算、项目能源版本与碳排除、依赖指纹工作单、冻结分类报表、追溯、月季年重算替代审批；水与绿色能源仅预留，移动源未纳入 |
 | `com.platform.relation` | 建筑关系版本、表计层级和方向、计量边界、分层查询及 Excel 草稿导入 |
 | `com.platform.cache`、`config` | Redis 缓存和基础设施装配 |
 | `telemetry-adapter` | 厂商 Topic 到内部 V2 契约的 MQTT 适配与代理 ACK；不等于边缘持久化网关 |
@@ -296,6 +296,10 @@ V58 将旧 HVAC 设备、19 测点、别名、指标、采集与质量治理策�
 → API/WebSocket
 → 看板、趋势、下钻、能流和碳排展示
 ```
+
+正式碳输入要求原生封账快照和独立审核的边界汇总口径同时标记为 `FORMAL`；`SIMULATION` 汇总口径保持研发性质。原生量与折标完整性分别判断，`LOCKED_NATIVE_COMPLETE` 可提供完整原生量，折标未计算继续保留空值。周期当前值及快照的数值副本写入 TDengine 成功后才提交 MySQL 可见索引；跨库失败不发布成功，确定性结果键支持重试。
+
+“分项与能碳配置”页面提供人工批次独立审核、汇总口径独立审核、正式计算、固定批次及证据读取、重算候选独立审批入口。人工批次详情返回服务端真实修订号；`GET /v1/energy-boundary-summaries/policies?buildingId=...` 与 `GET /v1/carbon-management/recalculations?buildingId=...` 分别提供有界版本和重算队列查询。后者只返回调用人有权读取全部成员建筑的批次；两者均不以菜单可见性代替后端职责、建筑范围或独立审核校验，超限明确拒绝而非静默截断。
 
 V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器发布确认、平台消费确认和应用 ACK 发布确认语义不同；成功回执默认只作为热证据，聚合、质量、公式和页面处理不属于该回执语义。
 

@@ -14,6 +14,16 @@ public final class EnergyPointProfileContracts {
     private EnergyPointProfileContracts() {
     }
 
+    public record BatchRow(@NotBlank String pointId, String profileId, @Min(0) Integer expectedRevision) { }
+    public record BatchRequest(@NotBlank String buildingId,
+                               @NotNull @Size(min=1,max=100) List<@NotNull @jakarta.validation.Valid BatchRow> rows,
+                               @NotBlank String energyType, String energySubtype,
+                               @NotBlank String valueSemantics, @NotBlank String reportingPeriod,
+                               @NotNull Boolean annualSummary, @NotBlank String confirmationStatus,
+                               @NotBlank @Size(max=500) String evidenceReference,
+                               @NotNull Boolean preview) { }
+    public record BatchView(boolean preview, int count, List<ProfileView> profiles) { }
+
     public record CreateRequest(
             @NotBlank String buildingId,
             @NotBlank String pointId,

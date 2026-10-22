@@ -4,6 +4,7 @@ import com.platform.carbon.CarbonActivityInputPort;
 import com.platform.carbon.CarbonEvidence;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.platform.carbon.CarbonCalculationCore;
+import com.platform.carbon.CarbonProjectService;
 import com.platform.carbon.CarbonModels.ActivitySegment;
 import com.platform.carbon.CarbonModels.PeriodType;
 import com.platform.carbon.CarbonModels.ResultNature;
@@ -11,7 +12,7 @@ import com.platform.energy.period.EnergyPeriodModels.PeriodSnapshot;
 import com.platform.energy.period.EnergyPeriodSnapshotReader;
 import com.platform.energy.summary.api.EnergySummaryContracts.SummaryGroupView;
 import com.platform.energy.summary.api.EnergySummaryContracts.SummaryQueryRequest;
-import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -26,14 +27,25 @@ import static com.platform.carbon.CarbonErrors.LIMIT_EXCEEDED;
 import static com.platform.carbon.CarbonErrors.error;
 
 @Component
-@RequiredArgsConstructor
 /** 将第七闭环的受控汇总查询适配为碳模块可固定版本的活动段。 */
 public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPort {
     private static final long SYSTEM_ACTOR_ID = 0L;
     private static final List<String> SYSTEM_ROLES = List.of("PLATFORM_ADMIN");
+    private static final long MAX_PROJECT_EVIDENCE_BYTES = 16L * 1024 * 1024;
 
     private final EnergyBoundarySummaryService summaryService;
     private final EnergyPeriodSnapshotReader snapshotReader;
+    private final CarbonProjectService projects;
+
+    @Autowired
+    public EnergySummaryCarbonActivityAdapter(EnergyBoundarySummaryService summaryService,
+                                              EnergyPeriodSnapshotReader snapshotReader,
+                                              CarbonProjectService projects) {
+        this.summaryService=summaryService;this.snapshotReader=snapshotReader;this.projects=projects;
+    }
+    EnergySummaryCarbonActivityAdapter(EnergyBoundarySummaryService summaryService,EnergyPeriodSnapshotReader snapshotReader) {
+        this(summaryService,snapshotReader,null);
+    }
 
     @Override
     public List<ActivitySegment> read(String buildingId, PeriodType periodType,
@@ -53,6 +65,7 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
                     "计量边界汇总与封账快照版本不一致，请重新发起计算");
         }
         List<ActivitySegment> result = new ArrayList<>();
+        long projectEvidenceBytes = 0;
         for (SummaryGroupView group : summary.groups()) {
             String itemCode = group.groupKey().get("ENERGY_ITEM");
             Instant[] period = period(group.groupKey().get("PERIOD"));
@@ -70,8 +83,6 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
             String timezone = common(matched.stream().map(PeriodSnapshot::timezoneId).toList(),
                     "封账快照时区不一致");
             ObjectNode trace = trace(group, matched);
-            String hash = CarbonCalculationCore.sha256(CarbonEvidence.canonical(trace));
-            String aggregateSnapshotId = hash.substring(0, 32);
             if (group.grossInboundQuantities().size() != 1) {
                 throw error(409, DEPENDENCY_UNAVAILABLE,
                         "同一能源品种和周期必须只有一个权威活动量单位");
@@ -80,17 +91,54 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
                 if (quantity.getValue().signum() < 0) {
                     throw error(409, DEPENDENCY_UNAVAILABLE, "权威活动量不得为负数");
                 }
-                result.add(new ActivitySegment(aggregateSnapshotId, buildingId, PeriodType.MONTH,
-                        period[0], period[1], timezone, itemCode, quantity.getValue(),
-                        quantity.getKey(), group.lockStatus(), group.resultCompleteness(),
-                        "FORMAL".equals(group.resultNature()) ? ResultNature.FORMAL
-                                : ResultNature.DEVELOPMENT_SIMULATION, hash, trace));
+                // 权威汇总的证据可能只列总表；分解必须固定同期间所有组成快照，不能遗漏分表。
+                var composition=snapshots.stream().filter(s->itemCode.equals(s.energyItemCode())
+                        &&quantity.getKey().equals(s.nativeUnitCode())&&period[0].equals(s.startInclusive())
+                        &&period[1].equals(s.endExclusive())).toList();
+                var projection=projects==null?null:projects.project(buildingId,period[0],period[1],itemCode,quantity.getKey(),composition);
+                if(projection==null) add(result,trace,buildingId,period,timezone,itemCode,quantity.getValue(),quantity.getKey(),group);
+                else {
+                    if(projection.source().total().compareTo(quantity.getValue())!=0)throw error(409,DEPENDENCY_UNAVAILABLE,"分类计量组成与权威入量不一致，不能替换碳活动量");
+                    trace.set("projectVersion",CarbonEvidence.tree(projection.version()));
+                    trace.set("compositionSnapshots",trace(group,composition).get("sources"));
+                    trace.set("classificationConfiguration",CarbonEvidence.tree(projection.source().configuration()));
+                    trace.set("excludedSources",CarbonEvidence.tree(projection.applied().excludedSlices()));
+                    trace.put("grossQuantity",quantity.getValue().toPlainString());
+                    trace.put("excludedQuantity",projection.applied().excluded().toPlainString());
+                    trace.put("projectEnergyPathway",projection.version().configuration().energies().stream().filter(e->"ENABLED".equals(e.capability())&&e.energyItemCode().equals(itemCode)).findFirst().orElseThrow().pathway());
+                    // 每个活动段独立固定证据，展开前限制总字节，避免大分类表乘以组成数耗尽内存。
+                    long traceBytes=CarbonEvidence.canonical(trace).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+                    long copies=Math.max(1,projection.applied().includedSlices().size());
+                    if(traceBytes>(MAX_PROJECT_EVIDENCE_BYTES-projectEvidenceBytes)/copies)
+                        throw error(409,LIMIT_EXCEEDED,"本次项目组成证据超过16MiB上限，请缩小计算范围或分类配置");
+                    long sliceBytes=projection.applied().includedSlices().stream()
+                            .mapToLong(s->CarbonEvidence.canonical(CarbonEvidence.tree(s)).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum();
+                    if(sliceBytes>MAX_PROJECT_EVIDENCE_BYTES-projectEvidenceBytes-traceBytes*copies)
+                        throw error(409,LIMIT_EXCEEDED,"本次项目组成证据超过16MiB上限，请缩小计算范围或分类配置");
+                    projectEvidenceBytes+=traceBytes*copies+sliceBytes;
+                    for(var slice:projection.applied().includedSlices()) {
+                        ObjectNode sourceTrace=trace.deepCopy();sourceTrace.set("sourceSlice",CarbonEvidence.tree(slice));
+                        add(result,sourceTrace,buildingId,period,timezone,itemCode,slice.quantity(),quantity.getKey(),group);
+                    }
+                    if(projection.applied().includedSlices().isEmpty()) {
+                        trace.put("activityStatus","EXCLUDED");
+                        add(result,trace,buildingId,period,timezone,itemCode,java.math.BigDecimal.ZERO,quantity.getKey(),group);
+                    }
+                }
             }
         }
         if (result.size() > limit) {
             throw error(409, LIMIT_EXCEEDED, "碳活动数据明细超过单次计算上限");
         }
         return List.copyOf(result);
+    }
+
+    private static void add(List<ActivitySegment> values,ObjectNode trace,String building,Instant[] period,
+                            String timezone,String energy,java.math.BigDecimal quantity,String unit,SummaryGroupView group) {
+        String hash=CarbonCalculationCore.sha256(CarbonEvidence.canonical(trace));
+        values.add(new ActivitySegment(hash.substring(0,32),building,PeriodType.MONTH,period[0],period[1],timezone,
+                energy,quantity,unit,group.lockStatus(),group.resultCompleteness(),
+                "FORMAL".equals(group.resultNature())?ResultNature.FORMAL:ResultNature.DEVELOPMENT_SIMULATION,hash,trace));
     }
 
     /** 同时固定权威汇总与组成快照；历史重算后不再依赖当前可见版本反查旧结果。 */

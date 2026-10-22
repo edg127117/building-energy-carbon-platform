@@ -96,7 +96,14 @@ class FlywayMigrationConfigurationTest {
                 "V73__mysql_account_security_version.sql",
                 "V74__mysql_auth_cleanup_outbox.sql",
                 "V75__mysql_energy_classification.sql",
-                "V76__mysql_operations_observer_duty.sql");
+                "V76__mysql_operations_observer_duty.sql",
+                "V77__mysql_project_energy_configuration.sql",
+                "V78__mysql_relation_staged_assets.sql",
+                "V79__mysql_formal_manual_period_policy.sql",
+                "V80__mysql_carbon_configuration_work_order.sql",
+                "V81__mysql_native_quantity_complete_snapshot.sql",
+                "V82__mysql_energy_configuration_menus.sql",
+                "V83__mysql_formal_boundary_summary_policy.sql");
 
         Set<String> versions = migrations.stream()
                 .map(VERSIONED_NAME::matcher)

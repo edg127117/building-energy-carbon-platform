@@ -39,6 +39,12 @@ public class ClassificationController {
     public Result<ImportView> preview(Authentication a,@PathVariable String buildingId,@Valid @RequestBody ImportRequest r){return Result.success(service.preview(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,r));}
     @PostMapping("/readings/import")
     public Result<ImportView> importReadings(Authentication a,@PathVariable String buildingId,@Valid @RequestBody ImportRequest r){return Result.success(service.importReadings(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,r));}
+    @GetMapping("/readings/batches/{id}")
+    public Result<ReadingBatchView> readingBatch(Authentication a, @PathVariable String buildingId,
+                                                 @PathVariable String id) {
+        return Result.success(service.readingBatch(SecurityUser.userId(a),
+                SecurityUser.roles(a), buildingId, id));
+    }
     @PostMapping("/readings/batches/{id}/approve")
     public Result<ImportView> approveReadings(Authentication a,@PathVariable String buildingId,@PathVariable String id,@Valid @RequestBody TransitionRequest r){return Result.success(service.approveReadings(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,id,r));}
     @GetMapping("/readings")

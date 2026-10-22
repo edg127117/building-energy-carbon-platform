@@ -53,8 +53,8 @@ public class EnergyPeriodGovernanceService {
         if (!"REVIEW_REQUIRED".equals(normalize(request.lockMode()))) {
             validation("首版封账模式必须是REVIEW_REQUIRED");
         }
-        if (!"SIMULATION".equals(normalize(request.sourceType()))) {
-            validation("研发周期口径来源必须标记为SIMULATION");
+        if (!java.util.Set.of("SIMULATION","FORMAL").contains(normalize(request.sourceType()))) {
+            validation("周期口径来源必须明确为SIMULATION或FORMAL");
         }
         TimeRange range = range(request.effectiveFrom(), request.effectiveTo());
         LocalDateTime now = LocalDateTime.now();
@@ -69,7 +69,7 @@ public class EnergyPeriodGovernanceService {
         }
         PeriodPolicyVersion value = new PeriodPolicyVersion(policyId, id(),
                 repository.nextPeriodPolicyVersion(policyId), buildingId, timezoneId,
-                request.closingDelayHours(), "REVIEW_REQUIRED", "PENDING_REVIEW", "SIMULATION",
+                request.closingDelayHours(), "REVIEW_REQUIRED", "PENDING_REVIEW", normalize(request.sourceType()),
                 text(request.evidenceReference(), 500, "证据引用无效"), range.from(), range.to(),
                 0, userId, now, null, null);
         repository.insertPeriodPolicyVersion(value);
