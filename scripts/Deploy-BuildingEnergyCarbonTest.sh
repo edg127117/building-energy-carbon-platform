@@ -31,8 +31,6 @@ fi
 name=$1
 archive=$2
 expected_archive=$3
-preserve_control=${BEC_TEST_PRESERVE_CONTROL_CONFIG:-false}
-[[ "$preserve_control" == true || "$preserve_control" == false ]] || { echo INVALID_CONTROL_PRESERVATION_MODE >&2; exit 2; }
 [[ "$name" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo INVALID_RELEASE_NAME >&2; exit 2; }
 [[ "$archive" == "$base/incoming/"* && "$archive" != *'/../'* ]] || { echo INVALID_ARCHIVE_PATH >&2; exit 2; }
 [[ "$(readlink -f "$archive")" == "$base/incoming/"* ]] || { echo ARCHIVE_OUTSIDE_INCOMING >&2; exit 2; }
@@ -95,13 +93,10 @@ find "$stage" -type f -exec chmod 0644 {} +
 service_user=$(systemctl show "$service" --property=User --value)
 [[ -n "$service_user" && "$service_user" != root ]] || { echo INVALID_SERVICE_USER >&2; exit 1; }
 runuser -u "$service_user" -- bash -c 'cd "$1" && test -r building-energy-carbon-platform.jar && test -r web/index.html' _ "$stage"
-# 保留模式只备份并核对既有控制边界；默认模式继续沿用原测试发布契约。
 [[ -f "$control_config_tool" ]] || { echo TEST_CONFIG_TOOL_MISSING >&2; exit 1; }
 control_backup_dir=$(mktemp -d "$base/backups/control-$name-XXXXXX")
 control_backup="$control_backup_dir/control-before.env"
-control_action=prepare
-if [[ "$preserve_control" == true ]]; then control_action=preserve; fi
-python3 "$control_config_tool" "$control_action" "$control_backup"
+python3 "$control_config_tool" prepare "$control_backup"
 mv "$stage" "$release"
 ln -s "$release" "$base/.next-$name-$$"
 mv -Tf "$base/.next-$name-$$" "$base/current"
@@ -118,11 +113,7 @@ done
 [[ "$(curl -fsS --max-time 5 http://127.0.0.1:18080/ | sha256sum | cut -d' ' -f1)" == "$web_hash" ]]
 [[ "$(readlink "$port80_link" 2>/dev/null || true)" == "$previous_port80" ]]
 assert_test_route
-if [[ "$preserve_control" == true ]]; then
-  python3 "$control_config_tool" verify-preserved "$control_backup"
-else
-  python3 "$control_config_tool" verify
-fi
+python3 "$control_config_tool" verify
 
 trap - ERR
 echo "BUILDING_ENERGY_CARBON_TEST_DEPLOY_OK commit=$commit"
