@@ -18,7 +18,7 @@ TEST_SETTINGS = {
 }
 
 
-def runtime_settings(service):
+def runtime_settings(service, extra_keys=()):
     pid = subprocess.check_output(
         ["systemctl", "show", service, "-p", "MainPID", "--value"], text=True
     ).strip()
@@ -26,7 +26,7 @@ def runtime_settings(service):
         raise SystemExit("TEST_SERVICE_NOT_RUNNING")
     entries = Path("/proc", pid, "environ").read_bytes().decode().split("\0")
     # 仅返回环境标记和控制参数，避免诊断输出包含同进程的厂家凭据。
-    keys = set(TEST_SETTINGS) | {"AUDIT_ENVIRONMENT_MODE"}
+    keys = set(TEST_SETTINGS) | {"AUDIT_ENVIRONMENT_MODE"} | set(extra_keys)
     return {
         key: value
         for entry in entries if "=" in entry

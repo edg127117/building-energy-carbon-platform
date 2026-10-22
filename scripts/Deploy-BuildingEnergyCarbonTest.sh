@@ -100,6 +100,20 @@ web_hash=$(sed -n 's/^webIndexSha256=//p' <<< "$manifest")
 [[ "$commit" =~ ^[0-9a-f]{40}$ && "$jar_hash" =~ ^[0-9a-f]{64}$ && "$web_hash" =~ ^[0-9a-f]{64}$ ]]
 [[ "$(sha256sum "$stage/building-energy-carbon-platform.jar" | cut -d' ' -f1)" == "$jar_hash" ]]
 [[ "$(sha256sum "$stage/web/index.html" | cut -d' ' -f1)" == "$web_hash" ]]
+# D01 必须经过停写、双库备份和独立迁移；旧的单步发布入口不能承载这次升级。
+python3 - "$stage/building-energy-carbon-platform.jar" "$stage/MANIFEST.txt" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+manifest = dict(line.split('=', 1) for line in pathlib.Path(sys.argv[2]).read_text().splitlines() if '=' in line)
+requires_d01 = manifest.get('expectedMigration', '').isdigit() and int(manifest['expectedMigration']) >= 84
+if zipfile.is_zipfile(sys.argv[1]):
+    with zipfile.ZipFile(sys.argv[1]) as jar:
+        requires_d01 = requires_d01 or any('/V84__mysql_telemetry_immutable_conflicts.sql' in name for name in jar.namelist())
+if requires_d01:
+    raise SystemExit('D01_STAGED_RELEASE_REQUIRED: use d01_release.py')
+PY
 # mktemp creates a root-only directory; normalize artifact access before switching the running service.
 # Packages contain only public application artifacts, never server credentials or shared configuration.
 find "$stage" -type d -exec chmod 0755 {} +
