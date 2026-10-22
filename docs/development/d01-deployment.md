@@ -26,6 +26,23 @@
 
 凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83`、`upgrade84`、`validate84`；不提供 baseline、repair、clean 或降级操作。
 
+### 一次维护的临时授权
+
+需要由维护执行者自动完成阶段操作时，使用 `Install-D01TemporaryAuthorization.py` 安装一次性入口。管理员须核对安装器和完整工具包的 SHA256；执行安装器时先读取文件内容、校验这些字节，再执行已校验的内容，不能把“先 sha256sum、再按可写路径执行”当作防替换保证。工具包只包含四个固定 Python 文件和一个固定发布包；包内候选提交、JAR、前端摘要均锁定，不允许后续上传新程序替换它们。
+
+- 安装目录 `/opt/building-energy-d01-maintenance` 及祖先必须由 root 持有且不可被普通用户写入；状态、凭据、锁、备份和恢复报告保存在 `/var/lib/building-energy-d01-maintenance/private`，权限为 0700/0600。
+- 精确 sudo 白名单只允许 `/usr/local/sbin/building-energy-d01-maintenance` 的固定动作；不放行 Python、shell、Docker、systemctl、通配参数或 `SETENV`。执行环境清空后重建，Python 使用 `-I`，模块仅从已校验的安装目录导入。
+- 维护包发布到用户目录、解包及 `current` 切换由降权后的 `user1` 子进程执行；内部子进程仅接受 root 父进程创建的 socketpair 通道，通过内核对端 UID/PID 验证，绑定阶段和期限，不提供可直接调用的发布/切换动作。特权迁移只执行管理员保护的 JAR 副本，不执行用户可替换的发布目录 JAR。
+- 安装时可提供现有 root 保护的凭据 JSON，也可在管理员终端隐藏输入既有数据库密码。不会新建账号或重置密码；安装成功不证明数据库登录有效，prepare 和在线备份实际检查失败时保持业务在线。
+- 授权有效期为安装后 24 小时；入口自身检查期限，专用 systemd timer 到期移除本次 sudo 白名单和复制的凭据。结束时必须主动执行 `sudo /usr/local/sbin/building-energy-d01-maintenance revoke`，保留备份和审计证据。撤销不启停业务服务；到期或失败时仍处于停机状态，须报告管理员处理，不能为了恢复访问而续期或放宽权限。
+- 失效 timer 只管理本次授权。安装仅新增这组维护文件和 timer，不停止、重启测试服务，也不改应用控制开关。已有同名授权拒绝覆盖；安装失败或中断会停止、禁用本次 timer 并按创建记录清理本轮文件和目录，保留预存文件；清理失败明确报告，由管理员核查对应路径，禁止递归清理测试部署目录。授权规则发布后仍须等待安装完成标志才可执行维护动作。
+
+固定动作顺序：`prepare` → `online-backup` → `export-online` → 隔离实际恢复 → `record-online-restore` → `freeze` → `backup` → `export-backup` → 隔离实际恢复 → `record-restore` → `migrate` → `cutover` → 业务验收 → `revoke`。`status` 只输出阶段、时间和服务状态。导出是备份二进制流，应直接写入受保护文件，不能输出到聊天或普通日志。
+
+`online-backup` 是业务仍在运行时分别导出各引擎的恢复能力检查，不保证跨库同一时刻一致，不能替代停写后的本轮备份。`freeze` 还要求 120 秒内的维护人员核查记录：`checked_at`（UTC 秒）、`no_other_deployment=true`、`external_writers_fenced=true` 和非敏感 `reference`，从 stdin 读取；这是已有维护者的现场确认，不是软件自动证明所有外部写入者不存在。
+
+两类 `record-*-restore` 从 stdin 接收 `{"report": <恢复报告>, "evidence": <实际恢复证据对象>}`。报告采用下文 `D01_RESTORE_VERIFIED_V1` 字段，入口为证据生成固定文件名和哈希，校验具体备份及新实例身份。它是可信维护人员的结果记录，必须在实际恢复与数据核验完成后提交，不能用构造 JSON 代替恢复。任何状态变更动作失败都停止自动推进并保留现场，不提供通用命令、任意 SQL 或自动回退入口。
+
 ## 3. 维护阶段
 
 以下是操作模板，不是本次交付已经执行的命令。先填写经核验的包、凭据、容器、卷和备份目录；不使用自动探测结果替代目标确认。

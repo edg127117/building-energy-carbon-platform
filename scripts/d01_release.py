@@ -119,6 +119,33 @@ def check_unchanged(state):
     require(sha(Path(state["previous_release"]) / JAR) == state["previous_jar_sha256"], "D01_BASELINE_JAR_CHANGED")
 
 
+def state_directory():
+    return BASE / "backups"
+
+
+def stage_package(archive, target):
+    # The temporary privilege bridge runs this filesystem work as the runtime
+    # user; root must not extract through a user-writable deployment ancestor.
+    target.mkdir(mode=0o755)
+    with tarfile.open(archive, "r:gz") as package:
+        members = package.getmembers()
+        require(len(members) <= 10000 and sum(m.size for m in members) <= 1024**3, "D01_PACKAGE_TOO_LARGE")
+        names = [m.name for m in members]
+        require(len(names) == len(set(names)), "D01_DUPLICATE_ARCHIVE_MEMBER")
+        for member in members:
+            require(not Path(member.name).is_absolute() and ".." not in Path(member.name).parts
+                    and (member.isfile() or member.isdir()), "D01_UNSAFE_ARCHIVE_MEMBER")
+        package.extractall(target, members=members)
+    for path in [target, *target.rglob("*")]:
+        path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def switch_current(state):
+    next_link = BASE / (".d01-next-" + uuid.uuid4().hex)
+    next_link.symlink_to(state["release"])
+    os.replace(next_link, BASE / "current")
+
+
 def prepare(name, archive, expected_sha, credentials):
     require(re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name), "D01_INVALID_RELEASE_NAME")
     require(archive.resolve().is_relative_to((BASE / "incoming").resolve()), "D01_ARCHIVE_OUTSIDE_INCOMING")
@@ -151,17 +178,8 @@ def prepare(name, archive, expected_sha, credentials):
              "backend_service": BACKEND, "web_service": WEB, "candidate_started": False}
     target = Path(state["release"])
     require(not target.exists(), "D01_RELEASE_EXISTS")
-    target.mkdir(mode=0o755)
     try:
-        with tarfile.open(archive, "r:gz") as package:
-            members = package.getmembers()
-            require(len(members) <= 10000 and sum(m.size for m in members) <= 1024**3, "D01_PACKAGE_TOO_LARGE")
-            names = [m.name for m in members]
-            require(len(names) == len(set(names)), "D01_DUPLICATE_ARCHIVE_MEMBER")
-            for member in members:
-                require(not Path(member.name).is_absolute() and ".." not in Path(member.name).parts
-                        and (member.isfile() or member.isdir()), "D01_UNSAFE_ARCHIVE_MEMBER")
-            package.extractall(target, members=members)
+        stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         require(manifest.get("expectedMigration") == "84", "D01_V84_PACKAGE_REQUIRED")
         require(re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "D01_COMMIT_REQUIRED")
@@ -170,12 +188,10 @@ def prepare(name, archive, expected_sha, credentials):
         with zipfile.ZipFile(target / JAR) as jar:
             jar.read(V84)
             jar.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
-        for path in [target, *target.rglob("*")]:
-            path.chmod(0o755 if path.is_dir() else 0o644)
         state["jar_sha256"] = sha(target / JAR)
         state["web_sha256"] = sha(target / "web/index.html")
         schema("validate83", state, credentials)
-        state_path = BASE / "backups" / ("d01-" + name + ".json")
+        state_path = state_directory() / ("d01-" + name + ".json")
         write_state(state_path, state, new=True)
         return state_path
     except Exception:
@@ -283,9 +299,7 @@ def cutover(state_path, backup_dir, credentials, restore_report=None):
     state.update(phase="STARTING", candidate_started=True)
     write_state(state_path, state)
     try:
-        next_link = BASE / (".d01-next-" + uuid.uuid4().hex)
-        next_link.symlink_to(state["release"])
-        os.replace(next_link, BASE / "current")
+        switch_current(state)
         command("systemctl", "start", BACKEND)
         command("systemctl", "start", WEB)
         deadline = time.monotonic() + 180
