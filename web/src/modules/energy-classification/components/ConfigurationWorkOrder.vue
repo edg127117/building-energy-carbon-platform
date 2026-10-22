@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElCard, ElFormItem, ElInput, ElOption, ElSelect, ElSpace, ElTag } from '@/shared/ui'
 import { requestErrorMessage } from '@/shared/utils/request-error'
@@ -43,7 +44,7 @@ async function execute() {
   let from: string | null = null
   try { from = effective.value ? localDateTimeToUtc(effective.value) : null } catch { error.value = copy.required; return }
   const owner = generation, building = props.buildingId, version = props.versionId
-  const command: WorkOrderCommand = { fingerprint: order.value.fingerprint, domain: chosen.value.domain, action: action.value, reason: reason.value.trim(), effectiveFrom: from, idempotencyKey: crypto.randomUUID() }
+  const command: WorkOrderCommand = { fingerprint: order.value.fingerprint, domain: chosen.value.domain, action: action.value, reason: reason.value.trim(), effectiveFrom: from, idempotencyKey: createIdempotencyKey() }
   busy.value = true; error.value = ''; notice.value = ''
   try {
     await configurationWorkOrderApi.execute(building, version, command)

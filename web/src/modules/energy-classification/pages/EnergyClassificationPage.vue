@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
@@ -478,7 +479,7 @@ function csvErrorMessage(reason: unknown): string {
 }
 
 function nextImportKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `reading-import-${Date.now()}`
+  return createIdempotencyKey()
 }
 
 function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuantity' | 'residual') {

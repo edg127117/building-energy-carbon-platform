@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElCard, ElDialog, ElEmpty, ElFormItem, ElInput, ElOption, ElRadio, ElRadioGroup, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag } from '@/shared/ui'
 import { t } from '@/locales'
@@ -130,7 +131,7 @@ watch(dirty, value => emit('dirty-change', value), { immediate: true })
 watch(() => props.buildingId, value => { void loadBuilding(value) }, { immediate: true })
 
 function nextIdempotencyKey(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `carbon-calculation-${Date.now()}`
+  return createIdempotencyKey()
 }
 
 function emptyCalculationDraft(): CalculationDraft {

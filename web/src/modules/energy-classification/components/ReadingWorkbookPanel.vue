@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, ref, watch } from 'vue'
 import { ElAlert, ElButton, ElCard, ElFormItem, ElInput, ElSpace } from '@/shared/ui'
 import { requestErrorMessage, requestErrorStatus } from '@/shared/utils/request-error'
@@ -8,7 +9,7 @@ import type { ReadingImportView } from '../models/classification'
 import { workbookCopy as copy } from '../locales/reading-workbook.zh-CN'
 const props = defineProps<{ buildingId: string }>()
 const emit = defineEmits<{ dirtyChange: [value: boolean]; imported: [batch: ReadingImportView] }>()
-const file = ref<File | null>(null), fileInput = ref<HTMLInputElement | null>(null), fileRevision = ref(0), reason = ref(''), key = ref(crypto.randomUUID())
+const file = ref<File | null>(null), fileInput = ref<HTMLInputElement | null>(null), fileRevision = ref(0), reason = ref(''), key = ref(createIdempotencyKey())
 const result = ref<WorkbookPreview | null>(null), busy = ref(false), error = ref(''), notice = ref('')
 let generation = 0, savedSignature = ''
 const signature = computed(() => `${props.buildingId}/${file.value?.name}/${file.value?.size}/${file.value?.lastModified}/${fileRevision.value}/${reason.value}/${key.value}`)
@@ -18,7 +19,7 @@ watch(dirty, value => emit('dirtyChange', value))
 // 文件、原因或建筑一变，旧预检不能再导入；同步释放旧命令的 busy，避免其 finally 因代际失效而遗留遮罩。
 watch(signature, () => { generation++; result.value = null; savedSignature = ''; busy.value = false })
 watch(() => props.buildingId, clear)
-function clear() { generation++; file.value = null; reason.value = ''; result.value = null; savedSignature = ''; key.value = crypto.randomUUID(); error.value = ''; notice.value = ''; busy.value = false; if (fileInput.value) fileInput.value.value = '' }
+function clear() { generation++; file.value = null; reason.value = ''; result.value = null; savedSignature = ''; key.value = createIdempotencyKey(); error.value = ''; notice.value = ''; busy.value = false; if (fileInput.value) fileInput.value.value = '' }
 function select(event: Event) { file.value = (event.target as HTMLInputElement).files?.[0] ?? null; fileRevision.value++ }
 async function template() {
   if (!props.buildingId || busy.value) return

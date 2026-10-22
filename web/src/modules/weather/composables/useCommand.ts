@@ -1,3 +1,4 @@
+import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { ref } from 'vue'
 import { errorCode } from '../api/weather'
 import w from '../locales/zh-CN'
@@ -11,7 +12,7 @@ export function useCommand() {
   async function run<T>(identity: string, payload: unknown, send: (key: string) => Promise<T>, success = w.submitted): Promise<T | undefined> {
     if (pending.value) return
     const signature = JSON.stringify([identity, payload])
-    const key = keys.get(signature) ?? crypto.randomUUID()
+    const key = keys.get(signature) ?? createIdempotencyKey()
     keys.set(signature, key)
     pending.value = true; message.value = ''; failed.value = false
     try { const result = await send(key); keys.delete(signature); message.value = success; return result }

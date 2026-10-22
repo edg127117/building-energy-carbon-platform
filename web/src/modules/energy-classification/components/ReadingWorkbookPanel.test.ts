@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { TransportError } from '@/infrastructure/http/public'
 import ReadingWorkbookPanel from './ReadingWorkbookPanel.vue'
@@ -45,12 +45,29 @@ async function preparePreview(wrapper: ReturnType<typeof mount>, file: File, rea
   await flushPromises()
 }
 
+afterEach(() => vi.unstubAllGlobals())
+
 describe('Excel 人工来源预检面板', () => {
   beforeEach(() => {
     vi.resetAllMocks()
     vi.stubGlobal('crypto', { randomUUID: vi.fn(() => 'CLIENT-KEY') })
     vi.mocked(readingWorkbookApi.preview).mockResolvedValue(validPreview() as never)
     vi.mocked(classificationApi.importReadings).mockResolvedValue({ batchId: 'BATCH-1', status: 'PENDING_REVIEW', accepted: 1, issues: [] } as never)
+  })
+
+  it('HTTP 环境没有 randomUUID 时可初始化和切换建筑，新预检使用不同键', async () => {
+    let sequence = 0
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array) => { bytes.fill(++sequence); return bytes } })
+    const wrapper = mountPanel('B-1')
+    await preparePreview(wrapper, new File(['fixture'], 'readings.xlsx'))
+    const firstKey = vi.mocked(readingWorkbookApi.preview).mock.calls[0][2]
+    expect(firstKey).toMatch(/^[0-9a-f-]{36}$/)
+    await wrapper.setProps({ buildingId: 'B-2' })
+    await preparePreview(wrapper, new File(['fixture'], 'readings.xlsx'))
+    const secondKey = vi.mocked(readingWorkbookApi.preview).mock.calls[1][2]
+    expect(secondKey).not.toBe(firstKey)
+    expect(classificationApi.importReadings).not.toHaveBeenCalled()
+    wrapper.unmount()
   })
 
   it('预检后修改原因或重新选择同元数据文件都会作废导入资格', async () => {
