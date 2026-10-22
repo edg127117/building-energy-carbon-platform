@@ -362,6 +362,105 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "linux", "installer requires POSIX uid and filesystem semantics")
 class InstallerTest(unittest.TestCase):
+    @unittest.skipUnless(getattr(os, "geteuid", lambda: -1)() == 0, "real root/user permission regression")
+    def test_secret_umask_does_not_block_unprivileged_tool_read(self):
+        with tempfile.TemporaryDirectory(dir="/run", prefix="d01-permissions-") as directory:
+            root = Path(directory)
+            root.chmod(0o755)
+            previous = os.umask(0o077)
+            try:
+                with patch.object(installer, "CREATED", []):
+                    installer.mkdir(root / "tools", 0o755)
+                    installer.mkdir(root / "private", 0o700)
+                    installer.create(root / "tools/config.json", b'{"fixture":true}', 0o644)
+                    installer.create(root / "private/schema.json", b'private-fixture', 0o600)
+            finally:
+                os.umask(previous)
+            self.assertEqual((root / "tools").stat().st_mode & 0o777, 0o755)
+            self.assertEqual((root / "private").stat().st_mode & 0o777, 0o700)
+            code = ("from pathlib import Path; import sys; p=Path(sys.argv[1]); "
+                    "assert p.joinpath('tools/config.json').read_text() == '{\"fixture\":true}';\n"
+                    "try: p.joinpath('private/schema.json').read_bytes()\n"
+                    "except PermissionError: print('PUBLIC_READ_PRIVATE_DENIED')\n"
+                    "else: raise AssertionError('private credential readable')")
+            result = bridge.subprocess.run([sys.executable, "-I", "-c", code, str(root)],
+                user=65534, group=65534, extra_groups=[], env=bridge.SAFE_ENV,
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("PUBLIC_READ_PRIVATE_DENIED", result.stdout)
+
+    def test_reinstall_archives_only_revoked_failed_prepare_and_preserves_evidence(self):
+        for scenario in ("success", "active_grant", "frozen", "changed_code", "credentials_present", "late_prepare", "rename_failure"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+                root = Path(directory)
+                base = root / "test"
+                previous = base / "releases/previous"
+                previous.mkdir(parents=True)
+                (base / "current").symlink_to(previous)
+                units = root / "units"
+                units.mkdir()
+                for name, path in (("INSTALL", root / "tools"), ("DATA", root / "data"),
+                                   ("LAUNCHER", root / "entry"), ("SUDOERS", root / "grant"),
+                                   ("UNITS", units), ("BASE", base), ("HISTORY", root / "history")):
+                    stack.enter_context(patch.object(installer, name, path))
+                installer.INSTALL.mkdir()
+                private = installer.DATA / "private"
+                private.mkdir(parents=True)
+                (private / "operation.json").write_text(json.dumps({"phase": "FROZEN" if scenario == "frozen" else "FAILED",
+                    "failed_action": "prepare", "events": [{"phase": "FAILED"}]}))
+                (private / "revoked.json").write_text('{"revoked_at":123}')
+                (private / "audit-evidence.json").write_text('preserved')
+                names = [name for name in installer.FILES if name.endswith('.py')]
+                for name in names:
+                    (installer.INSTALL / name).write_bytes(b"old verified code")
+                (installer.INSTALL / "config.json").write_text(json.dumps({"format": "D01_TEMP_AUTH_V1", "user": "user1",
+                    "release": "d01-012345abcdef", "archive_name": "d01-012345abcdef-authorized.tar.gz",
+                    "previous_release": str(previous), "code_sha256": {name: hashlib.sha256(b"old verified code").hexdigest() for name in names}}))
+                installer.LAUNCHER.write_text('fixed old launcher')
+                for suffix in ("service", "timer"):
+                    (units / (installer.TIMER + "." + suffix)).write_text('old unit')
+                if scenario == "active_grant":
+                    installer.SUDOERS.write_text('active')
+                if scenario == "changed_code":
+                    (installer.INSTALL / names[0]).write_text('changed')
+                if scenario == "credentials_present":
+                    (private / "schema.json").write_text('still present')
+                if scenario == "late_prepare":
+                    (base / "incoming").mkdir()
+                    (base / "incoming/d01-012345abcdef-authorized.tar.gz").write_text('published before later failure')
+                stack.enter_context(patch.object(installer, "trusted_parent"))
+                def state(*args):
+                    if "UnitFileState" in args:
+                        return "disabled"
+                    if "building-energy-carbon-test-platform.service" in args:
+                        return "active"
+                    return "inactive" if "ActiveState" in args else ""
+                commands = stack.enter_context(patch.object(installer, "run", side_effect=state))
+                if scenario == "rename_failure":
+                    original = Path.rename
+                    def rename(path, target):
+                        if path == installer.LAUNCHER:
+                            raise OSError('fixture move failure')
+                        return original(path, target)
+                    stack.enter_context(patch.object(Path, "rename", rename))
+                if scenario in ("success", "rename_failure"):
+                    if scenario == "success":
+                        installer.retire_failed_prepare()
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "ARCHIVE_INCOMPLETE"):
+                            installer.retire_failed_prepare()
+                    archived = list(installer.HISTORY.iterdir())
+                    self.assertEqual(len(archived), 1)
+                    self.assertEqual((archived[0] / "data/private/audit-evidence.json").read_text(), 'preserved')
+                    self.assertEqual((base / "current").resolve(), previous)
+                    self.assertTrue(all(not any(verb in args for verb in ("stop", "start", "restart"))
+                                        for args, _ in commands.call_args_list))
+                else:
+                    with self.assertRaises(RuntimeError):
+                        installer.retire_failed_prepare()
+                    self.assertTrue(installer.INSTALL.exists())
+                    self.assertFalse(installer.HISTORY.exists())
+
     def tar(self, names):
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w:gz") as archive:
@@ -456,6 +555,9 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual(command_line.split("NOPASSWD: ", 1)[1].split(", "),
                              [str(installer.LAUNCHER) + " " + action for action in installer.ACTIONS])
             self.assertTrue((units / (installer.TIMER + ".timer")).exists())
+            self.assertEqual(installer.INSTALL.stat().st_mode & 0o777, 0o755)
+            self.assertEqual(installer.DATA.stat().st_mode & 0o777, 0o755)
+            self.assertEqual((installer.DATA / "private").stat().st_mode & 0o777, 0o700)
             self.assertEqual((installer.DATA / "private/schema.json").stat().st_mode & 0o777, 0o600)
             config = json.loads((installer.INSTALL / "config.json").read_text())
             self.assertNotIn("password", json.dumps(config))

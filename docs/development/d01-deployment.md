@@ -31,6 +31,7 @@
 需要由维护执行者自动完成阶段操作时，使用 `Install-D01TemporaryAuthorization.py` 安装一次性入口。管理员须核对安装器和完整工具包的 SHA256；执行安装器时先读取文件内容、校验这些字节，再执行已校验的内容，不能把“先 sha256sum、再按可写路径执行”当作防替换保证。工具包只包含五个固定 Python 文件和一个固定发布包；包内候选提交、JAR、前端摘要均锁定，不允许后续上传新程序替换它们。
 
 - 安装目录 `/opt/building-energy-d01-maintenance` 及祖先必须由 root 持有且不可被普通用户写入；状态、凭据、锁、备份和恢复报告保存在 `/var/lib/building-energy-d01-maintenance/private`，权限为 0700/0600。
+- 安装器采用 `umask 077` 后，必须显式设置工具目录和数据父目录为 0755，确保降权文件准备进程能遍历、读取公开工具；私有目录仍为 0700，凭据仍为 0600。仅给 `mkdir` 传入 0755 会被 umask 收窄，不能代替实际权限验证。
 - 精确 sudo 白名单只允许 `/usr/local/sbin/building-energy-d01-maintenance` 的固定动作；不放行 Python、shell、Docker、systemctl、通配参数或 `SETENV`。执行环境清空后重建，Python 使用 `-I`，模块仅从已校验的安装目录导入。
 - 维护包发布到用户目录、解包及 `current` 切换由降权后的 `user1` 子进程执行；内部子进程仅接受 root 父进程创建的 socketpair 通道，通过内核对端 UID/PID 验证，绑定阶段和期限，不提供可直接调用的发布/切换动作。特权迁移只执行管理员保护的 JAR 副本，不执行用户可替换的发布目录 JAR。
 - 安装时不再询问数据库密码或凭据路径。只复用既有 S02 维护入口 `/etc/building-energy-carbon-test/s02-admin.json`，要求文件及祖先由 root 持有、不可由普通用户修改、无软链接，文件权限不宽于 0600。从 `mysql_migration_password`、`mysql_root_password`、`td_root_password` 读取已有账号凭据，分别用于 `platform_migrator`、MySQL `root` 和 TDengine `root`；不扫描其他目录、不执行配置文件、不从容器初始化变量推断当前密码，也不创建、改密或重新授权数据库账号。
@@ -39,6 +40,7 @@
 - 授权有效期为安装后 24 小时；入口自身检查期限，专用 systemd timer 到期移除本次 sudo 白名单和复制的凭据。结束时必须主动执行 `sudo /usr/local/sbin/building-energy-d01-maintenance revoke`，保留备份和审计证据。撤销不启停业务服务；到期或失败时仍处于停机状态，须报告管理员处理，不能为了恢复访问而续期或放宽权限。
 - 撤销不加载或检查备份、迁移模块，避免这些模块损坏阻断清理；仍校验 root 保护配置和本次授权规则。若 launcher、撤销程序或配置本身损坏，或者管理员改过 sudoers，自动清理不能保证完成，必须由管理员核对后撤销本次规则及复制凭据。不可捕获的强杀可能留下未完成安装文件；完成标记缺失时维护动作拒绝，已启用的到期 timer 仍可撤销，不把这种情况描述为安装成功。
 - 失效 timer 只管理本次授权。安装仅新增这组维护文件和 timer，不停止、重启测试服务，也不改应用控制开关。已有同名授权拒绝覆盖；安装失败或中断会停止、禁用本次 timer 并按创建记录清理本轮文件和目录，保留预存文件；清理失败明确报告，由管理员核查对应路径，禁止递归清理测试部署目录。授权规则发布后仍须等待安装完成标志才可执行维护动作。
+- 仅在旧尝试已撤销且失败于 `prepare`、无停写记录、尚未生成 incoming 包或候选目录、旧凭据已删除、timer 已停用、旧程序哈希未变且原服务仍运行时，管理员可显式使用 `--replace-revoked-prepare`。安装器先将固定维护文件及完整记录移入 root 私有的 `/var/lib/building-energy-d01-maintenance-history`，再安装新授权；不删除历史、不改测试发布目录、不允许替换已停写或已迁移的尝试。已生成部分产物或归档路径跨文件系统时提前拒绝；归档中途失败会停止并报告，由管理员核查，不能自动删除或恢复旧授权。
 
 固定动作顺序：`prepare` → `online-backup` → `export-online` → 隔离实际恢复 → `record-online-restore` → `freeze` → `backup` → `export-backup` → 隔离实际恢复 → `record-restore` → `migrate` → `cutover` → 业务验收 → `revoke`。`status` 只输出阶段、时间和服务状态。导出是备份二进制流，应直接写入受保护文件，不能输出到聊天或普通日志。
 

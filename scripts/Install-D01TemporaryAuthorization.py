@@ -15,6 +15,7 @@ import sys
 import tarfile
 import time
 import types
+import uuid
 
 INSTALL = Path("/opt/building-energy-d01-maintenance")
 DATA = Path("/var/lib/building-energy-d01-maintenance")
@@ -23,6 +24,7 @@ LAUNCHER = Path("/usr/local/sbin/building-energy-d01-maintenance")
 SUDOERS = Path("/etc/sudoers.d/building-energy-d01-maintenance")
 TIMER = "building-energy-d01-authorization"
 UNITS = Path("/etc/systemd/system")
+HISTORY = Path("/var/lib/building-energy-d01-maintenance-history")
 FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py",
          "d01_credentials.py", "release.tar.gz")
 ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore",
@@ -94,6 +96,65 @@ def cleanup_failed_install():
 def mkdir(path, mode):
     path.mkdir(mode=mode)
     CREATED.append(path)
+    # The installer deliberately uses umask 077 for secrets. Public immutable
+    # tools must still be traversable by the authenticated user1 worker.
+    path.chmod(mode)
+
+
+def retire_failed_prepare():
+    """Archive only an explicitly requested, revoked pre-freeze attempt."""
+    require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
+    private = DATA / "private"
+    paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
+    for path in (*paths, private / "revoked.json", private / "operation.json", INSTALL / "config.json"):
+        trusted_parent(path)
+    operation = json.loads((private / "operation.json").read_text())
+    config = json.loads((INSTALL / "config.json").read_text())
+    require(operation.get("phase") == "FAILED" and operation.get("failed_action") == "prepare"
+            and all(event.get("phase") == "FAILED" for event in operation.get("events", []))
+            and not any(key in operation for key in ("stop_requested_at", "stopped_at", "services_restored_at")),
+            "D01_OLD_OPERATION_NOT_FAILED_PREPARE")
+    require(config.get("format") == "D01_TEMP_AUTH_V1" and config.get("user") == "user1"
+            and str((BASE / "current").resolve()) == config.get("previous_release"), "D01_OLD_BASELINE_CHANGED")
+    release = config.get("release", "")
+    require(re.fullmatch(r"d01-[a-f0-9]{12}", release)
+            and config.get("archive_name") == release + "-authorized.tar.gz", "D01_OLD_RELEASE_ID_INVALID")
+    # This recovery is only for failure before publication. Do not remove or
+    # reuse user-owned partial releases from a later prepare failure.
+    for artifact in (BASE / "incoming" / config["archive_name"], BASE / "releases" / release):
+        require(not artifact.exists() and not artifact.is_symlink(), "D01_OLD_PREPARE_ARTIFACTS_REQUIRE_REVIEW")
+    for name in ("schema.json", "backup.json"):
+        require(not (private / name).exists() and not (private / name).is_symlink(), "D01_OLD_CREDENTIALS_NOT_REVOKED")
+    require(run("/usr/bin/systemctl", "show", TIMER + ".timer", "-p", "ActiveState", "--value") == "inactive"
+            and run("/usr/bin/systemctl", "show", TIMER + ".timer", "-p", "UnitFileState", "--value") == "disabled",
+            "D01_OLD_TIMER_NOT_REVOKED")
+    require(run("/usr/bin/systemctl", "show", "building-energy-carbon-test-platform.service", "-p", "ActiveState", "--value") == "active",
+            "D01_REINSTALL_REQUIRES_RUNNING_BASELINE")
+    for name in FILES:
+        if name.endswith(".py"):
+            trusted_parent(INSTALL / name)
+            require(hashlib.sha256((INSTALL / name).read_bytes()).hexdigest() == config.get("code_sha256", {}).get(name),
+                    "D01_OLD_INSTALLED_CODE_CHANGED")
+    trusted_parent(HISTORY.parent)
+    require(all(path.stat().st_dev == HISTORY.parent.stat().st_dev for path in paths),
+            "D01_REVOKED_ARCHIVE_FILESYSTEM_MISMATCH")
+    if not HISTORY.exists():
+        HISTORY.mkdir(mode=0o700)
+        HISTORY.chmod(0o700)
+    trusted_parent(HISTORY)
+    require(HISTORY.is_dir() and HISTORY.stat().st_mode & 0o077 == 0, "D01_HISTORY_NOT_PRIVATE")
+    archive = HISTORY / ("failed-prepare-" + uuid.uuid4().hex)
+    archive.mkdir(mode=0o700)
+    archive.chmod(0o700)
+    # History is intentionally outside CREATED: a later installation failure
+    # must never erase the previous attempt's audit/recovery evidence.
+    try:
+        for source, name in zip(paths, ("tools", "data", "launcher", "authorization.service", "authorization.timer")):
+            source.rename(archive / name)
+        run("/usr/bin/systemctl", "daemon-reload")
+    except Exception:
+        raise RuntimeError("D01_REVOKED_ARCHIVE_INCOMPLETE_ADMIN_REQUIRED") from None
+    print("D01_REVOKED_PREPARE_ARCHIVED=" + str(archive))
 
 
 def json_bytes(value):
@@ -134,7 +195,7 @@ def credentials(jar, source):
     return module.discover(jar)
 
 
-def install(bundle, expected_sha):
+def install(bundle, expected_sha, *, replace_revoked_prepare=False):
     global TIMER_ATTEMPTED
     require(os.geteuid() == 0, "D01_ADMIN_REQUIRED")
     require(sys.stdin.isatty(), "D01_ADMIN_TERMINAL_REQUIRED")
@@ -148,6 +209,8 @@ def install(bundle, expected_sha):
     require(hashlib.sha256(raw).hexdigest() == expected_sha, "D01_BUNDLE_HASH_MISMATCH")
     files = bundle_files(raw)
     manifest, jar = package_manifest(files["release.tar.gz"])
+    if replace_revoked_prepare and (INSTALL.exists() or INSTALL.is_symlink()):
+        retire_failed_prepare()
     for destination in (INSTALL, DATA, LAUNCHER, SUDOERS,
                         UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer")):
         trusted_parent(destination.parent)
@@ -219,11 +282,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--sha256", required=True)
+    parser.add_argument("--replace-revoked-prepare", action="store_true",
+                        help="archive only a revoked attempt that failed before freeze; preserve all evidence")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGHUP, interrupted)
     try:
-        install(args.bundle, args.sha256)
+        install(args.bundle, args.sha256, replace_revoked_prepare=args.replace_revoked_prepare)
     except BaseException as error:
         try:
             cleanup_failed_install()
