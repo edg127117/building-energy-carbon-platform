@@ -198,7 +198,7 @@ def _run(command: Sequence[str], code: str, *, runner: Any = None, input_data: O
         if code == "TDENGINE_DUMP_FAILED":
             raw = b" ".join(value for value in (result.stdout, result.stderr) if isinstance(value, bytes)).lower()
             for category, patterns in (
-                ("password_input_invalid", (b"d01_td_password_input_invalid",)),
+                ("password_input_invalid", (b"d01_td_password_input_invalid", b"invalid password")),
                 ("authentication_failed", (b"authentication failure", b"authentication failed")),
                 ("connection_failed", (b"unable to establish connection", b"connection refused")),
                 ("permission_denied", (b"permission denied", b"insufficient privilege")),

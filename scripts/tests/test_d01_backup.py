@@ -212,6 +212,8 @@ class TestD01Backup(unittest.TestCase):
 
     def test_td_failure_diagnostic_contains_only_allowlisted_categories(self):
         for phrase, category in ((b'Authentication failure', 'authentication_failed'),
+                                 (b'Invalid password!', 'password_input_invalid'),
+                                 (b'D01_TD_PASSWORD_INPUT_INVALID', 'password_input_invalid'),
                                  (b'Unable to establish connection', 'connection_failed'),
                                  (b'No space left on device', 'disk_full'),
                                  (b'unrecognized private value', 'unclassified')):

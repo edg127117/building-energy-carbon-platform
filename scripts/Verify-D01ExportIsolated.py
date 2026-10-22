@@ -75,6 +75,16 @@ def main():
             diagnostic = (bad_dir / 'tdengine-diagnostic.json').read_text()
             assert password not in diagnostic and 'authentication_failed' in diagnostic
             print('WRONG_PASSWORD_REJECTED_WITH_SANITIZED_DIAGNOSTIC', flush=True)
+            oversized = work / 'native-limit'; oversized.mkdir()
+            try:
+                d01_backup._dump_tdengine(oversized / 'tdengine', {'tdengine_user': 'root', 'tdengine_password': password + 'x'},
+                                         probe.DOCKER, source, 'iot_telemetry', subprocess.run)
+            except d01_backup.BackupError as error:
+                assert error.diagnostic['category'] == 'password_input_invalid'
+            else:
+                raise AssertionError('Native password limit not enforced')
+            assert password not in (oversized / 'tdengine-diagnostic.json').read_text()
+            print('NATIVE_PASSWORD_LIMIT_REJECTED_WITH_SANITIZED_DIAGNOSTIC', flush=True)
             restored, _ = instance('restored')
             probe.docker('cp', str(output), restored + ':/tmp/d01-restore')
             probe.docker('cp', str(client), restored + ':/tmp/taosdump-d01')
