@@ -182,9 +182,46 @@ export interface CarbonFactorLifecycleRequest {
   expectedRevision: number
 }
 
+export interface CreateCarbonDenominatorRequest {
+  buildingId: string
+  denominatorType: 'BUILDING_AREA' | 'RESIDENT_POPULATION'
+  value: string
+  unitCode: 'M2' | 'PERSON'
+  sourceReference: string
+  evidenceReference: string
+  usageNature: CarbonFactorUsageNature
+  effectiveFrom: string
+  effectiveTo: string | null
+}
+
+export interface CarbonDenominatorVersion {
+  denominatorId: string
+  denominatorVersionId: string
+  versionNo: number
+  buildingId: string
+  denominatorType: 'BUILDING_AREA' | 'RESIDENT_POPULATION'
+  value: string
+  unitCode: string
+  sourceReference: string
+  evidenceReference: string
+  usageNature: CarbonFactorUsageNature
+  status: CarbonFactorStatus
+  effectiveFrom: string
+  effectiveTo: string | null
+  configRevision: number
+  createdBy: number
+  createdAt: string
+  reviewedBy: number | null
+  reviewedAt: string | null
+  reviewComment: string | null
+  activatedBy: number | null
+  activatedAt: string | null
+}
+
 const basePath = '/v1/carbon-management'
 const encoded = (value: string) => encodeURIComponent(value)
 const factorPath = (versionId: string) => `${basePath}/factors/${encoded(versionId)}`
+const denominatorPath = (versionId: string) => `${basePath}/denominators/${encoded(versionId)}`
 
 /** 只映射已公开的碳规则、能源目录和单位目录契约；不在前端补造公式或舍入配置。 */
 export const carbonFactorsApi = {
@@ -211,6 +248,18 @@ export const carbonFactorsApi = {
   },
   disableFactor(versionId: string, data: CarbonFactorLifecycleRequest) {
     return requestApi<CarbonFactorVersion>({ method: 'post', url: `${factorPath(versionId)}/disable`, data })
+  },
+  listDenominators(buildingId: string, signal?: AbortSignal) {
+    return requestApi<CarbonDenominatorVersion[]>({ method: 'get', url: `${basePath}/denominators`, params: { buildingId }, signal })
+  },
+  createDenominator(data: CreateCarbonDenominatorRequest) {
+    return requestApi<CarbonDenominatorVersion>({ method: 'post', url: `${basePath}/denominators`, data })
+  },
+  reviewDenominator(versionId: string, data: CarbonFactorReviewRequest) {
+    return requestApi<CarbonDenominatorVersion>({ method: 'post', url: `${denominatorPath(versionId)}/review`, data })
+  },
+  activateDenominator(versionId: string, data: CarbonFactorLifecycleRequest) {
+    return requestApi<CarbonDenominatorVersion>({ method: 'post', url: `${denominatorPath(versionId)}/activate`, data })
   },
   listEnergyItems(signal?: AbortSignal) {
     return requestApi<CarbonEnergyItemOption[]>({ method: 'get', url: '/v1/energy-catalog/items', signal })

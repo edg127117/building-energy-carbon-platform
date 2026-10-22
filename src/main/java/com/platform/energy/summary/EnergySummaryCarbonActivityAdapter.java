@@ -36,12 +36,17 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
     private final EnergyBoundarySummaryService summaryService;
     private final EnergyPeriodSnapshotReader snapshotReader;
     private final CarbonProjectService projects;
+    private final com.platform.energy.reporting.ReportingCarbonInput reporting;
 
     @Autowired
     public EnergySummaryCarbonActivityAdapter(EnergyBoundarySummaryService summaryService,
                                               EnergyPeriodSnapshotReader snapshotReader,
-                                              CarbonProjectService projects) {
-        this.summaryService=summaryService;this.snapshotReader=snapshotReader;this.projects=projects;
+                                              CarbonProjectService projects,
+                                              com.platform.energy.reporting.ReportingCarbonInput reporting) {
+        this.summaryService=summaryService;this.snapshotReader=snapshotReader;this.projects=projects;this.reporting=reporting;
+    }
+    EnergySummaryCarbonActivityAdapter(EnergyBoundarySummaryService summaryService, EnergyPeriodSnapshotReader reader, CarbonProjectService projects) {
+        this(summaryService,reader,projects,null);
     }
     EnergySummaryCarbonActivityAdapter(EnergyBoundarySummaryService summaryService,EnergyPeriodSnapshotReader snapshotReader) {
         this(summaryService,snapshotReader,null);
@@ -52,19 +57,36 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
                                       Instant startInclusive, Instant endExclusive, int limit) {
         // 当前能源公共服务只发布月度封账；季年核算保留真实月段，不读取未封账的年度投影。
         String upstreamPeriodType = "MONTH";
-        var summary = summaryService.query(SYSTEM_ACTOR_ID, SYSTEM_ROLES,
-                new SummaryQueryRequest(buildingId, upstreamPeriodType, startInclusive,
-                        endExclusive, List.of("ENERGY_ITEM", "PERIOD")));
+        var bills = reporting == null ? null : reporting.read(buildingId,startInclusive,endExclusive,limit);
+        Set<String> replaced = bills == null ? Set.of() : bills.authority().keySet();
+        var query = new SummaryQueryRequest(buildingId, upstreamPeriodType, startInclusive,
+                endExclusive, List.of("ENERGY_ITEM", "PERIOD"));
+        var summary = replaced.isEmpty() ? summaryService.query(SYSTEM_ACTOR_ID,SYSTEM_ROLES,query)
+                : summaryService.queryExcludingReportingSources(SYSTEM_ACTOR_ID,SYSTEM_ROLES,query,replaced);
         List<PeriodSnapshot> snapshots = snapshotReader.listVisibleSnapshots(buildingId,
                 upstreamPeriodType, startInclusive, endExclusive, limit + 1);
         if (snapshots.size() > limit) {
             throw error(409, LIMIT_EXCEEDED, "碳活动数据快照超过单次计算上限");
+        }
+        if (bills != null) {
+            for (var snapshot : snapshots) {
+                String key=com.platform.energy.reporting.ReportingCarbonInput.key(snapshot.energyItemCode(),snapshot.startInclusive());
+                for(var bill:bills.activities())if(bill.energyItemCode().equals(snapshot.energyItemCode())
+                        &&bill.startInclusive().isBefore(snapshot.endExclusive())&&snapshot.startInclusive().isBefore(bill.endExclusive())
+                        &&(!bill.startInclusive().equals(snapshot.startInclusive())||!bill.endExclusive().equals(snapshot.endExclusive())))
+                    throw error(409,DEPENDENCY_UNAVAILABLE,"账单与表计期间不一致，覆盖关系须先确认");
+                if ("NO_METER".equals(bills.authority().get(key))) throw error(409,DEPENDENCY_UNAVAILABLE,
+                        "账单声明无表计，但存在同能源同月封账表计，须先确认主来源");
+            }
+            snapshots=snapshots.stream().filter(s->!replaced.contains(
+                    com.platform.energy.reporting.ReportingCarbonInput.key(s.energyItemCode(),s.startInclusive()))).toList();
         }
         if (summary.sourceSnapshotCount() != snapshots.size()) {
             throw error(409, DEPENDENCY_UNAVAILABLE,
                     "计量边界汇总与封账快照版本不一致，请重新发起计算");
         }
         List<ActivitySegment> result = new ArrayList<>();
+        if(bills!=null)result.addAll(bills.activities());
         long projectEvidenceBytes = 0;
         for (SummaryGroupView group : summary.groups()) {
             String itemCode = group.groupKey().get("ENERGY_ITEM");
@@ -127,10 +149,28 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
                 }
             }
         }
+        if(bills!=null&&!bills.activities().isEmpty())requireBillPeriodCoverage(result,bills.activities(),startInclusive,endExclusive);
         if (result.size() > limit) {
             throw error(409, LIMIT_EXCEEDED, "碳活动数据明细超过单次计算上限");
         }
         return List.copyOf(result);
+    }
+
+    /** 账单起止有效月不能让季度/全年静默缩成已有月份；其余月份必须有同能源的账单或表计段。 */
+    private static void requireBillPeriodCoverage(List<ActivitySegment> all,List<ActivitySegment> bills,Instant start,Instant end) {
+        for(String code:bills.stream().map(ActivitySegment::energyItemCode).distinct().toList()) {
+            var sample=bills.stream().filter(b->code.equals(b.energyItemCode())).findFirst().orElseThrow();
+            var zone=java.time.ZoneId.of(sample.timezoneId());
+            var month=java.time.LocalDateTime.ofInstant(start,zone).toLocalDate().withDayOfMonth(1);int checked=0;
+            while(month.atStartOfDay(zone).toInstant().isBefore(end)) {
+                if(++checked>13)throw error(409,LIMIT_EXCEEDED,"单次账单核算最多13个月段");
+                var from=month.atStartOfDay(zone).toInstant();var to=month.plusMonths(1).atStartOfDay(zone).toInstant();
+                if(from.isBefore(start)||to.isAfter(end)||all.stream().noneMatch(a->code.equals(a.energyItemCode())
+                        &&from.equals(a.startInclusive())&&to.equals(a.endExclusive())))
+                    throw error(409,DEPENDENCY_UNAVAILABLE,"账单所在能源的核算区间有未覆盖月份，不能形成完整季度或年度结果");
+                month=month.plusMonths(1);
+            }
+        }
     }
 
     private static void add(List<ActivitySegment> values,ObjectNode trace,String building,Instant[] period,

@@ -83,6 +83,10 @@ public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
             body.put("errorCode", "RELATION_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-point-profiles")) {
             body.put("errorCode", "ENERGY_METADATA_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-reporting")) {
+            body.put("errorCode", "REPORTING_UNAUTHORIZED");
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-parameter-packages")) {
+            body.put("errorCode", "ENERGY_PARAMETER_PACKAGE_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-catalog")) {
             body.put("errorCode", "ENERGY_CATALOG_UNAUTHORIZED");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-conversion")) {

@@ -151,6 +151,12 @@ public class EnergyBoundarySummaryService {
 
     public SummaryQueryView query(
             long userId, Collection<String> roles, SummaryQueryRequest request) {
+        return queryExcludingReportingSources(userId, roles, request, Set.of());
+    }
+
+    /** 仅碳适配器使用已审核账单的替代键，避免被替代表计再参与组成与分类核算。 */
+    public SummaryQueryView queryExcludingReportingSources(long userId, Collection<String> roles,
+            SummaryQueryRequest request, Set<String> replacedSourceKeys) {
         authorization.requireReader(roles);
         String buildingId = text(request.buildingId(), 32, "建筑编码无效");
         authorization.checkBuilding(userId, roles, buildingId);
@@ -166,6 +172,8 @@ public class EnergyBoundarySummaryService {
         if (snapshots.size() > MAX_SNAPSHOTS) {
             throw error(409, RESULT_LIMIT_EXCEEDED, "查询封账快照超过500条，请缩小周期范围");
         }
+        snapshots = snapshots.stream().filter(s -> !replacedSourceKeys.contains(
+                com.platform.energy.reporting.ReportingCarbonInput.key(s.energyItemCode(), s.startInclusive()))).toList();
         Map<String, RelationSnapshot> relations = relations(userId, roles, buildingId, snapshots);
         List<SnapshotMeasure> measures = snapshots.stream().map(value -> measure(value,
                 relations.get(relationVersion(value)))).toList();

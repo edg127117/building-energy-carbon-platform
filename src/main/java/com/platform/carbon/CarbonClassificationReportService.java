@@ -51,7 +51,11 @@ public class CarbonClassificationReportService {
             if(!CarbonCalculationCore.sha256(CarbonEvidence.canonical(activity)).equals(stored.path("evidenceHash").asText()))
                 throw error(409,DEPENDENCY_UNAVAILABLE,"排除来源证据摘要不一致");
             var record=CarbonEvidence.object();record.put("status","EXCLUDED");record.set("projectVersion",activity.path("projectVersion"));
-            record.set("sources",activity.path("excludedSources"));record.set("grossQuantity",activity.path("grossQuantity"));excluded.add(record);
+            record.set("sources",activity.path("excludedSources"));record.set("grossQuantity",activity.path("grossQuantity"));
+            if("ENERGY_BILL_CARBON_V1".equals(activity.path("contractVersion").asText())) {
+                record.set("source",activity.path("billSource"));record.set("excludedQuantity",activity.path("excludedQuantity"));
+            }
+            excluded.add(record);
         }
         return new Report(result.buildingId(),result.batchId(),result.status(),result.unit(),result.totalKgCo2e(),result.classificationComplete(),result.nodes(),result.periods(),List.copyOf(excluded),result.warnings(),result.flows());
     }
@@ -74,13 +78,29 @@ public class CarbonClassificationReportService {
             var evidence=entry.evidence();var upstream=evidence.path("upstream");var slice=upstream.path("sourceSlice");
             var period=new PeriodKey(evidence.path("activity").path("startInclusive").asText(),item.scopeType().name());
             periods.merge(period,amount,BigDecimal::add);
+            if("ENERGY_BILL_CARBON_V1".equals(upstream.path("contractVersion").asText())
+                    &&new BigDecimal(upstream.path("excludedQuantity").asText("0")).signum()>0) {
+                var record=CarbonEvidence.object();record.put("energyItemCode",item.energyItemCode());
+                record.put("startInclusive",period.start());record.set("source",upstream.path("billSource"));
+                record.set("grossQuantity",upstream.path("grossQuantity"));record.set("excludedQuantity",upstream.path("excludedQuantity"));
+                excluded.putIfAbsent("BILL/"+upstream.path("sourceId").asText()+"/"+period.start(),record);
+            }
             for(JsonNode source:upstream.path("excludedSources")) {
                 String key=upstream.path("projectVersion").path("versionId").asText()+"/"+item.energyItemCode()+"/"+period.start()+"/"+source.path("pointId").asText();
                 var record=CarbonEvidence.object();record.put("energyItemCode",item.energyItemCode());record.put("startInclusive",period.start());record.set("source",source);
                 record.set("exclusionRules",upstream.path("projectVersion").path("configuration").path("exclusions"));excluded.putIfAbsent(key,record);
             }
             if("EXCLUDED".equals(upstream.path("activityStatus").asText()))continue;
-            if(slice.isMissingNode()) {complete=false;warnings.add("历史批次缺少冻结分类证据，不能按当前绑定补算");continue;}
+            if(slice.isMissingNode()) {
+                complete=false;
+                if("ENERGY_BILL_CARBON_V1".equals(upstream.path("contractVersion").asText())) {
+                    // 独立账单没有分类树；明确保留未分配总量，不伪造楼层、用途或分摊比例。
+                    accumulate(nodes,new Key("REPORTING_TOTAL","","UNALLOCATED",item.energyItemCode(),item.activityUnitCode()),
+                            "未分配（全楼账单）",true,item,amount);
+                    warnings.add("账单仅提供总量，分项尚未覆盖，不按比例分摊");
+                } else warnings.add("历史批次缺少冻结分类证据，不能按当前绑定补算");
+                continue;
+            }
             var configuration=upstream.path("classificationConfiguration");
             String classificationVersionId=upstream.path("projectVersion").path("configuration").path("classificationVersionId").asText("");
             for(JsonNode scheme:configuration.path("schemes")) {

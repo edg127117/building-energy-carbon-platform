@@ -48,8 +48,8 @@ const recalculation = {
   items: [{ recalculationItemId: 'ITEM-1', buildingId: 'B-1', accountingYear: 2026, oldCalculationBatchId: 'OLD-1', candidateCalculationBatchId: 'NEW-1', status: 'SUCCEEDED', approvalEligible: true, retryCount: 0, nextAttemptAt: null, safeErrorCode: null, safeErrorMessage: null }],
 }
 
-function mountPanel() {
-  return mount(CarbonResultsPanel, { props: { buildingId: 'B-1' } })
+function mountPanel(props: Record<string, string> = {}) {
+  return mount(CarbonResultsPanel, { props: { buildingId: 'B-1', ...props } })
 }
 
 async function settleLists() {
@@ -129,6 +129,29 @@ describe('碳核算结果与重算面板', () => {
     await settleLists()
 
     expect(wrapper.text()).toContain('超过 100 条查询上限')
+    wrapper.unmount()
+  })
+
+  it('月度填报上下文只提示目标月份，仍要求核算人员明确期间和时区', async () => {
+    const wrapper = mount(CarbonResultsPanel, { props: { buildingId: 'B-1', reportingMonth: '2026-10-01' } })
+    await settleLists()
+
+    expect(wrapper.text()).toContain('已从月度填报带入月份 2026-10-01')
+    expect(wrapper.find('[data-test="calculation-submit"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('携带月份时自动选择同月的后端固定批次读取报告，不在页面汇总结果', async () => {
+    vi.mocked(carbonResultsApi.listBatches).mockResolvedValue([{
+      batchId: 'CALC-1', buildingId: 'B-1', status: 'COMPLETED_COMPLETE', periodType: 'MONTH',
+      periodStart: '2026-10-01T00:00:00+08:00', periodEnd: '2026-11-01T00:00:00+08:00', timezoneId: 'Asia/Shanghai',
+      publicationStatus: 'DIRECT', resultNature: 'FORMAL', idempotencyKey: 'CALC-KEY-1', completedAt: null,
+      safeErrorCode: null, safeErrorMessage: null, createdAt: null,
+    }] as never)
+    const wrapper = mountPanel({ reportingMonth: '2026-10-01' })
+    await settleLists()
+    await vi.waitFor(() => expect(carbonResultsApi.getCalculation).toHaveBeenCalledWith('CALC-1'))
+    expect(carbonResultsApi.getClassificationReport).toHaveBeenCalledWith('CALC-1')
     wrapper.unmount()
   })
 })

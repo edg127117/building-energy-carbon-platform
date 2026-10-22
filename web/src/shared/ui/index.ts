@@ -8,10 +8,10 @@ export {
   ElMenuItem, ElMessage, ElMessageBox, ElOption, ElPagination, ElPopconfirm,
   ElProgress, ElRadio, ElRadioButton, ElRadioGroup, ElResult, ElSelect, ElSkeleton, ElSpace,
   ElSubMenu, ElSwitch, ElTabPane, ElTable, ElTableColumn, ElTabs, ElTag, ElTooltip,
-  ElTree, ElPopover,
+  ElTree, ElPopover, ElUpload,
 
 } from 'element-plus'
-export type { FormInstance, FormRules, TableColumnCtx, TreeInstance } from 'element-plus'
+export type { FormInstance, FormRules, TableColumnCtx, TreeInstance, UploadFile } from 'element-plus'
 export { default as zhCn } from 'element-plus/es/locale/lang/zh-cn'
 export {
   Sun, CloudSun, CloudDrizzle, CloudRain, CloudRainWind, CloudSnow, CloudLightning, CloudFog, Snowflake, Wind, CircleHelp,

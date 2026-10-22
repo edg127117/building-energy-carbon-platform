@@ -72,7 +72,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest(properties = {
         "spring.flyway.enabled=true",
         "spring.flyway.locations=classpath:db/migration/mysql",
-        "spring.flyway.target=83",
+        "spring.flyway.target=85",
         "spring.sql.init.mode=never",
         "database.charset-fix.enabled=false",
         "mybatis-plus.configuration.log-impl=org.apache.ibatis.logging.nologging.NoLoggingImpl",
@@ -119,6 +119,7 @@ class ConfigurationDualStoreAcceptanceTest {
     @Autowired private CarbonClassificationReportService reports;
     @Autowired private CarbonRecalculationService recalculations;
     @Autowired private PlatformTransactionManager transactionManager;
+    @Autowired private com.platform.energy.reporting.ReportingService reporting;
 
     @DynamicPropertySource
     static void isolatedProperties(DynamicPropertyRegistry registry) {
@@ -140,7 +141,7 @@ class ConfigurationDualStoreAcceptanceTest {
     void accepts_real_formal_native_month_and_preserves_dual_store_failure_boundaries()
             throws InterruptedException {
         ConfigurationDualStoreFixture fixture = new ConfigurationDualStoreFixture(mysql, taos, tdengine);
-        fixture.assertMigratedTo83();
+        fixture.assertMigratedTo85();
         fixture.initializeTdEnergyStore();
         fixture.seedSyntheticBase();
 
@@ -284,6 +285,45 @@ class ConfigurationDualStoreAcceptanceTest {
         assertThat(reports.report(OPERATOR, ROLES, baseline.batch().batchId())).isEqualTo(frozenReport);
         assertThat(reports.report(OPERATOR, ROLES, candidate.batch().batchId()).totalKgCo2e())
                 .isEqualByComparingTo("212861.8901234567");
+        assertBillReplacementAndAnotherBuildingType(candidate, frozenReport, baseline.batch().batchId());
+    }
+
+    private void assertBillReplacementAndAnotherBuildingType(CarbonModels.CalculationDetail previous,
+            CarbonClassificationReportService.Report frozenReport,String originalBatchId) {
+        // 合成夹具单独确认该单位，迁移中的研发目录身份不作为现场专业输入。
+        mysql.update("UPDATE biz_measurement_unit_version SET status='APPROVED',approved_by=?,approved_at=CURRENT_TIMESTAMP WHERE version_id='EUV_KWH_1'",REVIEWER);
+        var bill=sealedBill(BUILDING,"REPLACES_METER_TOTAL","1200","200");
+        var result=carbon.runCandidate(BUILDING,2025,CarbonModels.ResultNature.FORMAL,
+                previous.batch().batchId(),"dual-bill-candidate");
+        assertThat(result.batch().status()).isEqualTo("COMPLETED_COMPLETE");
+        assertThat(result.items()).hasSize(3); // 一条账单替代同能源全部总/分表，其他气、热仍走真实TDengine表计链。
+        assertThat(activityTotal(result)).isEqualByComparingTo("1000");
+        var report=reports.report(OPERATOR,ROLES,result.batch().batchId());
+        assertThat(report.totalKgCo2e()).isEqualByComparingTo("213111.8901234567");
+        assertThat(report.classificationComplete()).isFalse();
+        assertThat(report.warnings()).anyMatch(w->w.contains("账单仅提供总量"));
+        assertThat(report.excludedSources()).hasSize(1);
+        assertThat(reports.report(OPERATOR,ROLES,originalBatchId)).isEqualTo(frozenReport);
+        assertThat(bill.snapshot().tceStatus()).isEqualTo("NOT_CALCULATED");
+
+        mysql.update("UPDATE building SET building_type='教育' WHERE building_id=?",OTHER_BUILDING);
+        sealedBill(OTHER_BUILDING,"NO_METER","1000",null);
+        var educational=carbon.run(OPERATOR,ROLES,new com.platform.carbon.api.CarbonContracts.RunCalculationRequest(
+                OTHER_BUILDING,"MONTH",START,END,ZONE.getId(),"FORMAL","dual-education-bill"));
+        assertThat(educational.batch().status()).isEqualTo("COMPLETED_COMPLETE");
+        assertThat(activityTotal(educational)).isEqualByComparingTo("1000");
+        assertThat(reports.report(OPERATOR,ROLES,educational.batch().batchId()).totalKgCo2e()).isEqualByComparingTo("500");
+    }
+    private com.platform.energy.reporting.ReportingContracts.Batch sealedBill(String building,String overlap,String quantity,String exclusion) {
+        var c=new com.platform.energy.reporting.ReportingContracts.SourceConfig("独立账单合成来源",ITEM,UNIT,"BILL","PURCHASED_ELECTRICITY","PRIMARY","WHOLE_BUILDING",overlap,ZONE.getId(),MONTH,MONTH.plusMonths(1),"仅隔离验收已确认覆盖","建立合成来源",null,null,null,null);
+        var source=reporting.createSource(OPERATOR,ROLES,building,new com.platform.energy.reporting.ReportingContracts.CreateSource(c,"dual-bill-source"));
+        reporting.sourceCommand(OPERATOR,ROLES,building,source.sourceId(),"submit",new com.platform.energy.reporting.ReportingContracts.Command(0L,"提交",null));
+        source=reporting.sourceCommand(REVIEWER,ROLES,building,source.sourceId(),"approve",new com.platform.energy.reporting.ReportingContracts.Command(1L,"独立审核",null));
+        var batch=reporting.createBatch(OPERATOR,ROLES,building,new com.platform.energy.reporting.ReportingContracts.CreateBatch(MONTH,"独立验收账单","dual-bill-batch",null));
+        var row=new com.platform.energy.reporting.ReportingContracts.Row(source.sourceId(),source.revision(),new BigDecimal(quantity),"CONFIRMED",MONTH,MONTH.plusMonths(1),"独立账单凭证","",exclusion==null?null:new BigDecimal(exclusion),exclusion==null?null:"独立量化排除",exclusion==null?null:"仅隔离验收计量凭证","NATIVE_QUANTITY");
+        batch=reporting.saveBatch(OPERATOR,ROLES,building,batch.batchId(),new com.platform.energy.reporting.ReportingContracts.SaveBatch(0L,List.of(row),"保存"));
+        for(String action:List.of("submit","approve","seal"))batch=reporting.batchCommand("submit".equals(action)?OPERATOR:REVIEWER,ROLES,building,batch.batchId(),action,new com.platform.energy.reporting.ReportingContracts.Command(batch.revision(),"独立验收"+action,"dual-bill-"+action));
+        return batch;
     }
 
     private String approveFormalPeriodPolicy() {

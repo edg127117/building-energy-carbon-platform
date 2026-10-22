@@ -44,6 +44,9 @@ public class EnergyCatalogLookup {
                 || !source.canonicalUnitCode().equals(target.canonicalUnitCode())) {
             return Optional.empty();
         }
+        // 同为标准体积也不能跨状态条件换算；两个未确认条件仅保留既有研发模拟，正式入口另行拒绝。
+        if("NORMAL_VOLUME".equals(source.dimensionCode())
+                &&!java.util.Objects.equals(source.standardConditionCode(),target.standardConditionCode()))return Optional.empty();
         BigDecimal canonical = quantity.multiply(source.scaleFactor(), MathContext.DECIMAL128);
         BigDecimal converted = canonical.divide(target.scaleFactor(), MathContext.DECIMAL128);
         return Optional.of(new UnitConversion(quantity, source, converted, target));

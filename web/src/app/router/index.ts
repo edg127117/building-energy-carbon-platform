@@ -14,11 +14,12 @@ import { routes as dashboardRoutes, useHvacControlAccess } from '@/modules/dashb
 import { routes as trendRoutes } from '@/modules/trend-analysis/public'
 import { routes as weatherRoutes } from '@/modules/weather/public'
 import { routes as energyClassificationRoutes } from '@/modules/energy-classification/public'
+import { routes as energyReportingRoutes } from '@/modules/energy-reporting/public'
 import { screens } from '@/modules/large-screen/public'
 import { t } from '@/locales'
 
 // 页面能力按职责落位；既有资产权限保持不变，菜单迁移不授予额外业务角色。
-const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes, ...weatherRoutes, ...energyClassificationRoutes]
+const migratedRoutes = [...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes, ...weatherRoutes, ...energyClassificationRoutes, ...energyReportingRoutes]
 function businessRoute(page: (typeof pages)[number]) {
   if (page.path === '/operations/realtime/hvac') return dashboardRoutes[0]
   if (page.path === '/operations/energy/trend') return trendRoutes[0]

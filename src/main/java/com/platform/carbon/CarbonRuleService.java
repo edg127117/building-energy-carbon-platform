@@ -412,9 +412,12 @@ public class CarbonRuleService {
                 && "GAS_MASS".equals(normalize(resultBasis))
                 && "CO2".equals(normalize(gasCode))
                 && "CO2_ONLY_ELECTRICITY".equals(normalize(gasCoverage));
+        boolean heatCo2 = category == FactorCategory.PURCHASED_HEAT
+                && "GAS_MASS".equals(normalize(resultBasis))
+                && "CO2".equals(normalize(gasCode)) && "CO2_ONLY_HEAT".equals(normalize(gasCoverage));
         if (!stationary && (scope != ScopeType.SCOPE_2
-                || (!"CO2E_DIRECT".equals(normalize(resultBasis)) && !electricityCo2))) {
-            validation("范围二要求CO2e直接因子，或明确CO2覆盖的位置法电力平均质量因子");
+                || (!"CO2E_DIRECT".equals(normalize(resultBasis)) && !electricityCo2 && !heatCo2))) {
+            validation("范围二须使用CO2e直接因子，或保留明确电力/热力CO2覆盖的质量因子");
         }
     }
 

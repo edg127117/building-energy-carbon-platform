@@ -1,0 +1,584 @@
+{
+  "recordedOn": "2026-10-22",
+  "status": "SOFTWARE_CANDIDATE_NOT_DEPLOYED",
+  "baseCommit": "e3944a0ab9548cbc648809e09b6a7402e43420d3",
+  "backend": {
+    "command": ".\\mvnw.cmd -q test",
+    "reportFiles": 358,
+    "tests": 1835,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 111,
+    "relevantSuites": [
+      {
+        "suite": "com.platform.carbon.CarbonCalculationCoreTest",
+        "tests": 10,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.carbon.CarbonClassificationReportServiceTest",
+        "tests": 4,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.config.FlywayMigrationConfigurationTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.conversion.EnergyConversionServiceIntegrationTest",
+        "tests": 6,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.parameters.EnergyParameterPackageApiContractTest",
+        "tests": 2,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.reporting.ReportingApiContractTest",
+        "tests": 3,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.reporting.ReportingMysqlMigrationTest",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 1
+      },
+      {
+        "suite": "com.platform.energy.reporting.ReportingMysqlWorkflowTest",
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 16
+      },
+      {
+        "suite": "com.platform.energy.reporting.ReportingUploadErrorsTest",
+        "tests": 1,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.reporting.ReportingWorkbookTest",
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.reporting.ReportingWorkflowTest",
+        "tests": 16,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      {
+        "suite": "com.platform.energy.summary.EnergySummaryCarbonActivityAdapterTest",
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    ],
+    "commentLayoutFollowup": {
+      "scope": "Only class Javadoc position changed in two controllers during PR preparation; behavior unchanged.",
+      "command": ".\\mvnw.cmd -q -Dtest=ReportingApiContractTest,ReportingUploadErrorsTest,ReportingWorkbookTest test",
+      "suites": [
+        {
+          "suite": "com.platform.energy.reporting.ReportingApiContractTest",
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "suite": "com.platform.energy.reporting.ReportingUploadErrorsTest",
+          "tests": 1,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        {
+          "suite": "com.platform.energy.reporting.ReportingWorkbookTest",
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      ]
+    }
+  },
+  "frontend": {
+    "files": 117,
+    "tests": 613,
+    "passed": 613,
+    "failed": 0,
+    "skipped": 0,
+    "gates": [
+      {
+        "name": "vitest",
+        "exitCode": 0
+      },
+      {
+        "name": "lint",
+        "exitCode": 0
+      },
+      {
+        "name": "check",
+        "exitCode": 0
+      },
+      {
+        "name": "build",
+        "exitCode": 0
+      },
+      {
+        "name": "http",
+        "exitCode": 0
+      }
+    ]
+  },
+  "integration": {
+    "resourceScope": "Dedicated local MySQL/TDengine/Redis; synthetic building and account data only.",
+    "mysqlWorkflowCases": 16,
+    "mysqlTdengineMixedScenarioPassed": true,
+    "migration": "V83 -> V85, preserved previous checksums/assets and repeat migration",
+    "backupRestore": {
+      "tables": 216,
+      "frozenPayloadHashesEqual": true,
+      "migrationHistoryEqual": true
+    },
+    "runtime": {
+      "requests": 416,
+      "workers": 8,
+      "elapsedSeconds": 182.78,
+      "p95Ms": 78.0,
+      "maxMs": 312.0,
+      "failures": 0,
+      "carbonQuantity": 900,
+      "emissionKgCo2e": 513.27,
+      "mysql": true,
+      "redis": "7.2",
+      "fieldAcceptance": false
+    },
+    "httpFixture": {
+      "pages": [
+        "/operations/energy/energyItems",
+        "/operations/energy/energyItems?mode=parameters",
+        "/operations/energy/energyZones",
+        "/configuration/space/equipmentSpaces"
+      ],
+      "insecureContextWithoutRandomUuid": true,
+      "externalRequests": 0,
+      "writes": 0
+    },
+    "realHttpWorkflow": {
+      "ownerSubmitted": true,
+      "independentReviewerSealed": true,
+      "ownerParametersReadOnly": true,
+      "adminParametersEditable": true,
+      "revisionReferencesSealedBatch": true,
+      "originalFrozenBatchUnchanged": true,
+      "errors": []
+    },
+    "realRedisAuthorization": {
+      "mysql": true,
+      "realRedis": "7.2",
+      "ownerImportForbidden": true,
+      "crossBuildingForbidden": true,
+      "revokedTokenRejected": true
+    },
+    "workbook": {
+      "standardTemplateReadOnlyPreview": true,
+      "providedWorkbookExplicitCellMapping": true,
+      "actualYearPrecisionUnitAndEstimateFlagPreserved": true,
+      "previewDoesNotWrite": true
+    },
+    "cleanup": {
+      "dedicatedAppStopped": true,
+      "dedicatedMysqlStopped": true,
+      "dedicatedContainersStopped": 3
+    }
+  },
+  "sourceManifest": {
+    "normalization": "UTF-8 text with CRLF normalized to LF",
+    "files": [
+      {
+        "path": "src/env/init/V84__mysql_energy_reporting.sql",
+        "sha256": "d69ff7aa8007745423d2cc3374fb80b87bcbef5af38e8c254b73bf46cdc4c00c"
+      },
+      {
+        "path": "src/env/init/V85__mysql_heat_co2_factor_formula.sql",
+        "sha256": "ce047eed15dd728aefd9ffc2ed1e5366925a6711348ec3a9f5e966bea10d233b"
+      },
+      {
+        "path": "src/main/java/com/platform/carbon/CarbonCalculationCore.java",
+        "sha256": "93262db49e5f13f7706a7b57d53606c5937e444789ec52c3f68d7446329d75cb"
+      },
+      {
+        "path": "src/main/java/com/platform/carbon/CarbonClassificationReportService.java",
+        "sha256": "6fec684f13da798d2186aa302f51c9ba8a75c1ae72ffeb47974ab1013cc7c51b"
+      },
+      {
+        "path": "src/main/java/com/platform/carbon/CarbonRuleRepository.java",
+        "sha256": "b7ca02a91119df2762e7005ef55cd58b88675222b0799548048feecd99315822"
+      },
+      {
+        "path": "src/main/java/com/platform/carbon/CarbonRuleService.java",
+        "sha256": "0c1696d11302aaa4566371b3265ee0468f6dd6c4247a082f3c6b54de09508050"
+      },
+      {
+        "path": "src/main/java/com/platform/carbon/ReportingSnapshotChanges.java",
+        "sha256": "6704e11af43612d5c468cb0b2918b0d0a35c6d41dbc4cbb18483bf99f8a90258"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/catalog/EnergyCatalogLookup.java",
+        "sha256": "ebe1c872d00b8995a549c50ba8c390a7c4e29c0890fb78775a5bacb240813714"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/conversion/EnergyConversionRepository.java",
+        "sha256": "daf4503d9094cbeb8e5886a6db30088941972fe23e5b54100fb8940e130f09dc"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/conversion/EnergyConversionService.java",
+        "sha256": "c5414435aba71c26b0ef6249461de083da4f2547709c6919661474356129da90"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/parameters/EnergyParameterPackageContracts.java",
+        "sha256": "975f58cdeac3b3313776a4505cb391f41ee1bfe3cfb0a481e62c03328a4f4e3d"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/parameters/EnergyParameterPackageController.java",
+        "sha256": "ed80fa60178770ae0a27cdb4aa1632fe7e929ed5783c309d0cd7a2a524e96ab0"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/parameters/EnergyParameterPackageErrors.java",
+        "sha256": "e26ee0afd5e1ad3879a2f56948bc2b491e8a3383567702ad0997f64e051dc9f8"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/parameters/EnergyParameterPackageImportRepository.java",
+        "sha256": "16e09521cc576ec17453cbe6785fe3252e7dd2c9c3b830c9a570703897bd3d80"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/parameters/EnergyParameterPackageService.java",
+        "sha256": "746a5df9d5ddf6671d20fea94d096dddf7ef1d0f370e674625526b9270288c84"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingCarbonInput.java",
+        "sha256": "f80d224d40ece0afd4bfbd7f46e4b7b76edde1373792f0be489e7b28a4d9b9bf"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingContracts.java",
+        "sha256": "9bf1f0d57639a4cab5ac29c77d51670d7368705f8591fd0d0028fad2881ee1da"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingController.java",
+        "sha256": "11bb1420bf26686ee675f3db689aa634e09953eed9c6f7a20b150d3f2fa56b6c"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingRepository.java",
+        "sha256": "33d1fed6fa60ce5a616b1fedaa1600acafba8ed8644dd69259d422424a172081"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingService.java",
+        "sha256": "d8fefbfa3448c21f5d99018dc498b3cf1511fd98bba597a2b04f7ef2914933fb"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingWorkbookController.java",
+        "sha256": "5f0ba2be9458cc74b9a5232ae796d07719f766b33cb1d2666aba9d83d55017f9"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/reporting/ReportingWorkbookService.java",
+        "sha256": "a02a107dd59a50791a971483eea0bb314853ddade911b68d306211d80509f3f8"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/summary/EnergyBoundarySummaryService.java",
+        "sha256": "6832c22b66f87cf43d432f4c93540a0436306188ba2a79195fc6d7896da4fe09"
+      },
+      {
+        "path": "src/main/java/com/platform/energy/summary/EnergySummaryCarbonActivityAdapter.java",
+        "sha256": "a6a53ae3660fed5587dc3381ea94d2afeba6c92f6c966b0ec61daf26e518e295"
+      },
+      {
+        "path": "src/main/java/com/platform/framework/exception/GlobalExceptionHandler.java",
+        "sha256": "3692971665daa8b95674641f26a6511a3666506560e211d06ff46c24b14682e8"
+      },
+      {
+        "path": "src/main/java/com/platform/security/RestAccessDeniedHandler.java",
+        "sha256": "9749bb31a2bbf407c94606e22f1c153a1032c0d78394aefecd3112da6583a6dc"
+      },
+      {
+        "path": "src/main/java/com/platform/security/RestAuthenticationEntryPoint.java",
+        "sha256": "ce0188dd9803212fff053557c335b8578a968d9922895877daf299a0b8aaad0c"
+      },
+      {
+        "path": "src/test/java/com/platform/carbon/CarbonCalculationCoreTest.java",
+        "sha256": "7ddc53c350ccfd38c7c311fdf2ae172d951f8cf2e1304206bf9762efa7db2603"
+      },
+      {
+        "path": "src/test/java/com/platform/carbon/CarbonClassificationReportServiceTest.java",
+        "sha256": "b4a87f81cbaa7285d691d8e7e5d1ed5c76e7de3bd1bd83c32eccb98c954a867e"
+      },
+      {
+        "path": "src/test/java/com/platform/carbon/ConfigurationDualStoreAcceptanceTest.java",
+        "sha256": "5c105de4649a8a6f883562af44f06fcacb6df1b23043ed54dadb13edd7813bdb"
+      },
+      {
+        "path": "src/test/java/com/platform/carbon/ConfigurationDualStoreFixture.java",
+        "sha256": "9c12dc05740d202d4f0df222fe009436f5e25d9cefcec7e1a899e3ecc39567d8"
+      },
+      {
+        "path": "src/test/java/com/platform/config/FlywayMigrationConfigurationTest.java",
+        "sha256": "bb0422589e9ec5cc8f2c42b3c199099af0aadab078ab73f22c108723fb340a16"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/conversion/EnergyConversionServiceIntegrationTest.java",
+        "sha256": "dda2b3e1044bd57dee43fded98d666dc3a3da1b7fb47cfc58d15d81cd5614d32"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/parameters/EnergyParameterPackageApiContractTest.java",
+        "sha256": "60f88d06ea966e10f2a7d5b890aaa95c26ce991b5015f64102b68493d5aeb4cd"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/reporting/ReportingApiContractTest.java",
+        "sha256": "fb40db764ba82d8ea176aa10719b82a19b560286a073a4f17cb1714ca9cb5f7b"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/reporting/ReportingMysqlMigrationTest.java",
+        "sha256": "f5558b4af9aab952c53a962750e5557a06db12fa0953598c922990917f341b33"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/reporting/ReportingMysqlWorkflowTest.java",
+        "sha256": "6eb7faccc85097b52e5a09962cdd565d48e4bc0860d529f7ee7ff08adb428565"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/reporting/ReportingUploadErrorsTest.java",
+        "sha256": "993bea222919042c5acd32ea78be97419564b982531e7dbeec8a78bc8764e473"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/reporting/ReportingWorkbookTest.java",
+        "sha256": "36733ee63e23b01a171698fce5e48b7293b807e11b340721396e1f24452a60cc"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/reporting/ReportingWorkflowTest.java",
+        "sha256": "638c3eaa85caa97b09a994ab4a57e8d932e717b16f111efbfd7308d3093a8063"
+      },
+      {
+        "path": "src/test/java/com/platform/energy/summary/EnergySummaryCarbonActivityAdapterTest.java",
+        "sha256": "cbd47dcd0da365fa15ada7a3ca6410088f273047eeb3837073203779a4304a74"
+      },
+      {
+        "path": "src/test/resources/application-test.yml",
+        "sha256": "087b4d06c29f75a9e5cefe1b8e62ccd2b6cc4877736908a39f8476d797504543"
+      },
+      {
+        "path": "src/test/resources/carbon-rule-options-test.sql",
+        "sha256": "bf3c19d67a815aadd9cc3d50613d5a4194ebc7042981205bc1065581e3d6bb8b"
+      },
+      {
+        "path": "src/test/resources/energy-reporting-carbon-schema-test.sql",
+        "sha256": "34ab6ce4c0787a2664bff52450eed72a430d94fb3b14f436e96f37b7a5e6d0c0"
+      },
+      {
+        "path": "src/test/resources/energy-reporting-schema-test.sql",
+        "sha256": "a461ab0454fea50c4bdec9b87483a675a55065f48c72d7027b26a0d42203317d"
+      },
+      {
+        "path": "web/scripts/verify-http-idempotency.mjs",
+        "sha256": "dbcee8b87a6ac7b440b4c2d367560123b6988fad3138815a7c965dba9d977700"
+      },
+      {
+        "path": "web/src/app/router/index.ts",
+        "sha256": "58de3a1d419d2279d8d7112e3094879926c0ecb464a62eb09d3fdf52ac148ea3"
+      },
+      {
+        "path": "web/src/locales/index.ts",
+        "sha256": "8358f68ef3e44594b25bd72420fe3593b32bdde4cff89e1ae1e0a58192e1c530"
+      },
+      {
+        "path": "web/src/locales/zh-CN/workspaces.ts",
+        "sha256": "249c7971b08c93178dec5f9ea5e0a96e1d47c0268c951220b8b7ec0c34f0bf9c"
+      },
+      {
+        "path": "web/src/modules/energy-classification/api/carbon-factors.test.ts",
+        "sha256": "f23aa535a4f43c5c4cc719265359e26d051a9987c034d87180db9ea808c408f5"
+      },
+      {
+        "path": "web/src/modules/energy-classification/api/carbon-factors.ts",
+        "sha256": "1ecf916e977e764d362cff13c0825b8d2db4c5ab8f73655533b79ca11e011de3"
+      },
+      {
+        "path": "web/src/modules/energy-classification/components/CarbonResultsPanel.test.ts",
+        "sha256": "9ab5b7462e7c73595ddd253b507e0bab79ce6cd2225a026279c8a3abb35fd64d"
+      },
+      {
+        "path": "web/src/modules/energy-classification/components/CarbonResultsPanel.vue",
+        "sha256": "b3bba25c59b9b3a49806e98584dd9971b78f9b27355d51cb57934c28b21868cf"
+      },
+      {
+        "path": "web/src/modules/energy-classification/locales/carbon-results.zh-CN.ts",
+        "sha256": "d97ad4814cb09aae0f84606c0e4072e1814e45b91247b7aee231de795ac6e713"
+      },
+      {
+        "path": "web/src/modules/energy-classification/locales/zh-CN.ts",
+        "sha256": "7a6274c6e5a4f496574e81a7d4eba83fb6771ab73d6d38fae733ca92b1c04769"
+      },
+      {
+        "path": "web/src/modules/energy-classification/pages/EnergyClassificationPage.vue",
+        "sha256": "0d7553b67e8ef79ec30e9d080b91c9179bdaa3ffd69692763a146e43aa112d0f"
+      },
+      {
+        "path": "web/src/modules/energy-classification/public.ts",
+        "sha256": "8371b9cce8ec8b7669880c8ffaebea7846d639416f681c67cf084bbe8c206e8b"
+      },
+      {
+        "path": "web/src/modules/energy-classification/routes.ts",
+        "sha256": "cdfe2d9a140f03b7be0f856ef66565c77e4df6e1305553e439b9b957d0dd4ba4"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/api/buildings.ts",
+        "sha256": "7ab03979f4fad957c2a3c8f9686b54d9bcfed5a39e0938ae5260c635c3b52a72"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/api/energy-reporting.test.ts",
+        "sha256": "4b79e647341fac6faa3b917a63cf770e95b457ed4fecb2199cd9b660a4145dcc"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/api/energy-reporting.ts",
+        "sha256": "d334eafd8faeab14ef9b399e054c98bb27244fbb1bcf444b803f61811dd4312b"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/api/parameter-packages.test.ts",
+        "sha256": "2a1ed09ed87cc9303c07d939f0856f25c2b54aefa2ce845321bae3eff567b030"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/api/parameter-packages.ts",
+        "sha256": "c458ebbb9080341390791868d76cf6a29e15c372b94c7c3637154280e4f05f07"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/composables/use-energy-reporting.test.ts",
+        "sha256": "80877170b30ebe1e62efd18e833be956b3d09019b93ab1a0c5f49150327e0230"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/composables/use-energy-reporting.ts",
+        "sha256": "1d5a693f2d16b0e815a4e7ab51df1458002691a452b8cc8e5eb3f1685339174c"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/composables/use-parameter-packages.test.ts",
+        "sha256": "7c5189677197c10929cfff26c6a3522ae15f9b438f53a576e93f1825110b1209"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/composables/use-parameter-packages.ts",
+        "sha256": "411a892da998b654d2d87511a9450e80727fe21ce4aadd2ba0d11360c8c5de13"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/composables/use-reporting-buildings.ts",
+        "sha256": "e9f274ebd0161736bb1c38de79cf8d6371c22dbcaba62c103b3789daaacad121"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/locales/zh-CN.ts",
+        "sha256": "7def4d4ef793728f9e337def34d55372267904832967179d92c347b1e34d2e37"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/models/parameter-packages.ts",
+        "sha256": "2fedbcb9ec51a67ecb5dac348d4ddff933c462d6a1c1d428ae4ebeee0eb44683"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/models/reporting.ts",
+        "sha256": "4c34958fce54f88b0005b8fa97e1f701665b58f531ef169abeed41df59fbf8ed"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/pages/EnergyItemsEntryPage.vue",
+        "sha256": "f769e3311275c40b40172d5707d9ad91d408c4ee421748e4476b85d34a678fce"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/pages/EnergyParameterPackagesPage.test.ts",
+        "sha256": "2ccc6e23e02e9bef4a17ffe039bd3b22a163222016c178cc44f4fc4bcbdc1b86"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/pages/EnergyParameterPackagesPage.vue",
+        "sha256": "703d2f748a546574b7ad646b216f7a3b987d3a0d9a455709789281bb004bf511"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/pages/EnergyReportingPage.test.ts",
+        "sha256": "42bff350ccdacbf3251de878b4615844e4c0094ce90937c1447174041da8dc69"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/pages/EnergyReportingPage.vue",
+        "sha256": "069e45d0e568baacdbfa907c4d2bd706969a1bad2c7d2eb98bbe5e1feaa50d16"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/public.ts",
+        "sha256": "d536adfc12b555fa9eddc6143098a500682b630ab005049b3d345482bab9a0bf"
+      },
+      {
+        "path": "web/src/modules/energy-reporting/routes.ts",
+        "sha256": "985e0074c343ddf3a98bbceef06d0e33bd9620cbb9b19841a5527623658b9110"
+      },
+      {
+        "path": "web/src/shared/ui/index.ts",
+        "sha256": "171ce6d9ae9d41ffcb98649d4719a4eff73e882361b6cd04940827fe2e74199f"
+      }
+    ]
+  },
+  "localArtifactDigests": [
+    {
+      "name": ".tools-reporting-final-full.log",
+      "sha256": "930eaaea54d48f5fd26c8af62337a3d6444a06feb985f7097830917725fd9285"
+    },
+    {
+      "name": ".tools-reporting-dual-store-2.log",
+      "sha256": "085ac01442487aa4d0798b383e4d40772ca2edf0c28dc83409d1dfa699b6edc4"
+    },
+    {
+      "name": ".tools-reporting-final-targeted.log",
+      "sha256": "671885e329b7cd23bbc048b878895a28e28fb8fdb20d3952addba90b7a9878a2"
+    },
+    {
+      "name": ".tools-reporting-workbook-verification.log",
+      "sha256": "750f95d1b7cdafaf7bea8509d4915927b6e2b7613e2503a3ea767935f512e475"
+    },
+    {
+      "name": ".tools-reporting-backup-restore.log",
+      "sha256": "65c39362260ab1fdf936934b9f454fe56140bfb13826196bb7bab2255187b86e"
+    },
+    {
+      "name": ".tools-reporting-browser.log",
+      "sha256": "c3216ea481dbed764ecd2292cdd2e792a432f7009374945785b1ea07fa1bc828"
+    },
+    {
+      "name": ".tools-reporting-browser-final.log",
+      "sha256": "92f1553ae9701d826ed7594c73271c82d38c9f6a7d871b19e95385d0edfa54c3"
+    },
+    {
+      "name": ".tools-reporting-auth-verification.log",
+      "sha256": "eefb99f5781764e02c169f2c7ba9c0c661bb6d2194ee64472b1ec148c2cb1099"
+    }
+  ],
+  "excludedFromDelivery": [
+    "credentials and tokens",
+    "database files and SQL backups",
+    "raw logs and local network addresses",
+    "temporary runtime and browser scripts"
+  ],
+  "unverified": [
+    "Production/server release",
+    "Real building facts, metering coverage, standard volume condition and factor applicability",
+    "Field devices and long-duration capacity acceptance",
+    "The other environment-dependent tests skipped by the ordinary suite"
+  ]
+}
