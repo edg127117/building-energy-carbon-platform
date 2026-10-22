@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
-import { createEquipment, getEquipmentReadings, getEquipmentTrendHistory, listBuildings, updateEquipmentPoint } from './assets'
+import { createBuilding, createEquipment, getEquipmentReadings, getEquipmentTrendHistory, listBuildings, updateEquipmentPoint } from './assets'
 
 vi.mock('@/infrastructure/http/public', () => ({ requestApi: vi.fn() }))
 
@@ -17,6 +17,34 @@ describe('资产档案接口契约', () => {
       method: 'get',
       url: '/v1/assets/buildings',
       params: { page: 2, size: 20, keyword: '楼宇' },
+    })
+  })
+
+  it('通过正式接口提交建筑创建必填字段', async () => {
+    await createBuilding({
+      buildingName: '测试建筑',
+      buildingCode: null,
+      buildingType: '办公',
+      constructionYear: null,
+      totalGfa: 0,
+      climateZone: '夏热冬冷',
+      regionCode: '110000',
+      status: 'ACTIVE',
+    })
+
+    expect(requestApi).toHaveBeenCalledWith({
+      method: 'post',
+      url: '/v1/assets/buildings',
+      data: {
+        buildingName: '测试建筑',
+        buildingCode: null,
+        buildingType: '办公',
+        constructionYear: null,
+        totalGfa: 0,
+        climateZone: '夏热冬冷',
+        regionCode: '110000',
+        status: 'ACTIVE',
+      },
     })
   })
 

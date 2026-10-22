@@ -4,10 +4,12 @@ import { ElButton } from '@/shared/ui'
 import { telemetryConflictApi } from '../api/telemetry-conflicts'
 import type { ConflictView } from '../models/telemetry-conflicts'
 import TelemetryConflictPage from './TelemetryConflictPage.vue'
+import CorrectionReview from '../components/CorrectionReview.vue'
 
 const routeState = vi.hoisted(() => ({ query: { buildingId: 'B-01' } as Record<string, string> }))
 
 vi.mock('vue-router', () => ({ useRoute: () => routeState }))
+vi.mock('@/modules/auth/public', async importOriginal => ({ ...await importOriginal<typeof import('@/modules/auth/public')>(), useSession: () => ({ user: { id: 9, roles: ['ENERGY_MANAGER'] } }) }))
 vi.mock('../api/telemetry-conflicts', () => ({
   telemetryConflictApi: {
     list: vi.fn(),
@@ -15,6 +17,10 @@ vi.mock('../api/telemetry-conflicts', () => ({
     owner: vi.fn(),
     assignOwner: vi.fn(),
     resolve: vi.fn(),
+    recovery: vi.fn(),
+    retry: vi.fn(),
+    correctionVersions: vi.fn(),
+    approveCorrection: vi.fn(),
   },
 }))
 
@@ -51,11 +57,45 @@ beforeEach(() => {
   vi.mocked(telemetryConflictApi.list).mockResolvedValue({ page: 1, size: 20, total: 1, items: [expiredConflict] })
   vi.mocked(telemetryConflictApi.owner).mockResolvedValue({ buildingId: 'B-01', userId: 7, allowedActions: ['ASSIGN_OWNER'] })
   vi.mocked(telemetryConflictApi.detail).mockResolvedValue(expiredConflict)
+  vi.mocked(telemetryConflictApi.recovery).mockResolvedValue([])
+  vi.mocked(telemetryConflictApi.correctionVersions).mockResolvedValue([])
 })
 
 afterEach(() => vi.restoreAllMocks())
 
 describe('数据质量冲突处置页', () => {
+  it('审核成功后重新读取服务端详情和列表，不在浏览器推算有效值', async () => {
+    const pending: ConflictView = { ...expiredConflict, mode: 'ENERGY_REVIEW', state: 'PENDING_REVIEW', correctionVersionId: 'CV1' }
+    const resolved: ConflictView = { ...pending, state: 'RESOLVED', effectiveValue: 12, revision: 4 }
+    vi.mocked(telemetryConflictApi.detail).mockResolvedValueOnce(pending).mockResolvedValueOnce(resolved)
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await flushPromises()
+    wrapper.getComponent(CorrectionReview).vm.$emit('approved')
+    await flushPromises()
+    expect(telemetryConflictApi.detail).toHaveBeenCalledTimes(2)
+    expect(telemetryConflictApi.list).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('服务端已确认当前有效值')
+    expect(wrapper.text()).not.toContain('能源候选已提交既有审核')
+    wrapper.unmount()
+  })
+
+  it('切换建筑关闭旧详情并拒绝迟到的旧建筑结果', async () => {
+    let finish!: (value: ConflictView) => void
+    vi.mocked(telemetryConflictApi.detail).mockReturnValue(new Promise(resolve => { finish = resolve }))
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await wrapper.get('[data-testid="conflict-building-id"]').setValue('B-02')
+    finish(expiredConflict)
+    await flushPromises()
+    expect(wrapper.find('.detail-content').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('失败任务恢复')
+    expect(telemetryConflictApi.resolve).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('把过期冲突明确为待核实，不将其显示为已正确', async () => {
     const wrapper = render()
     await flushPromises()
@@ -77,7 +117,7 @@ describe('数据质量冲突处置页', () => {
       state: 'PENDING_REVIEW',
       revision: 4,
       selectionVersion: 1,
-      effectiveValue: 12,
+      effectiveValue: 10,
       allowedActions: [],
       correctionVersionId: 'CORRECTION-V1',
     }

@@ -6,12 +6,26 @@ import type {
   OwnerView,
   PageResponse,
   ResolveConflictRequest,
+  RecoveryTask,
+  CorrectionVersion,
 } from '../models/telemetry-conflicts'
 
 const root = '/v1/telemetry-conflicts'
 const conflictPath = (pointId: string, eventTime: number) => `${root}/${encodeURIComponent(pointId)}/${eventTime}`
 
 export const telemetryConflictApi = {
+  recovery(buildingId: string) {
+    return requestApi<RecoveryTask[]>({ method: 'GET', url: `${root}/recovery`, params: { buildingId } })
+  },
+  retry(request: Pick<RecoveryTask, 'kind' | 'id'>) {
+    return requestApi<void>({ method: 'POST', url: `${root}/recovery/retry`, data: request })
+  },
+  correctionVersions(buildingId: string, pointId: string) {
+    return requestApi<CorrectionVersion[]>({ method: 'GET', url: '/v1/energy-aggregation/correction-versions', params: { buildingId, pointId } })
+  },
+  approveCorrection(versionId: string, request: { expectedRevision: number; reviewComment: string }) {
+    return requestApi<CorrectionVersion>({ method: 'POST', url: `/v1/energy-aggregation/correction-versions/${encodeURIComponent(versionId)}/approve`, data: request })
+  },
   list(query: ConflictListQuery) {
     return requestApi<PageResponse<ConflictView>>({
       method: 'GET',

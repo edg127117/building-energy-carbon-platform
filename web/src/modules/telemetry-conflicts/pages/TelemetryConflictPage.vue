@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   CopyableValue,
@@ -34,6 +34,8 @@ import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import { requestErrorMessage } from '@/shared/utils/request-error'
 import { telemetryConflictApi } from '../api/telemetry-conflicts'
 import type { ConflictState, ConflictView, OwnerView, PageResponse } from '../models/telemetry-conflicts'
+import CorrectionReview from '../components/CorrectionReview.vue'
+import ConflictRecoveryPanel from '../components/ConflictRecoveryPanel.vue'
 
 type TagType = 'success' | 'warning' | 'info' | 'danger'
 type AlertType = 'success' | 'warning' | 'info' | 'error'
@@ -47,6 +49,7 @@ const conflictPage = ref<PageResponse<ConflictView>>(emptyPage())
 const pageLoading = ref(false)
 const pageError = ref<string | null>(null)
 const hasQueried = ref(false)
+const queriedBuildingId = ref('')
 const owner = ref<OwnerView | null>(null)
 const ownerLoading = ref(false)
 const ownerError = ref<string | null>(null)
@@ -142,6 +145,7 @@ async function loadConflicts(page = conflictPage.value.page) {
     telemetryConflictApi.owner(selectedBuilding),
   ])
   if (generation !== listGeneration || selectedBuilding !== buildingId.value.trim()) return
+  queriedBuildingId.value = selectedBuilding
   pageLoading.value = false
   ownerLoading.value = false
   if (listResult.status === 'fulfilled') conflictPage.value = listResult.value
@@ -168,6 +172,7 @@ function changePage(page: number) {
 }
 
 async function assignOwner() {
+  if (ownerSaving.value || queriedBuildingId.value !== buildingId.value.trim()) return
   const selectedBuilding = buildingId.value.trim()
   if (!selectedBuilding || !ownerIdValid.value || !canAssignOwner.value || ownerUserId.value == null) {
     ownerError.value = !selectedBuilding
@@ -176,16 +181,17 @@ async function assignOwner() {
     return
   }
   ownerSaving.value = true
+  const generation = listGeneration
   ownerError.value = null
   try {
     const result = await telemetryConflictApi.assignOwner({ buildingId: selectedBuilding, userId: ownerUserId.value })
-    if (selectedBuilding !== buildingId.value.trim()) return
+    if (generation !== listGeneration || selectedBuilding !== buildingId.value.trim()) return
     owner.value = result
     ownerUserId.value = result.userId ?? undefined
     applyOwner(result)
     ElMessage.success(t('telemetryConflicts.messages.ownerAssigned'))
   } catch (reason) {
-    ownerError.value = requestErrorMessage(reason)
+    if (generation === listGeneration) ownerError.value = requestErrorMessage(reason)
   } finally {
     ownerSaving.value = false
   }
@@ -200,6 +206,7 @@ function applyOwner(result: OwnerView) {
 }
 
 async function openDetail(conflict: ConflictView) {
+  if (conflict.buildingId !== buildingId.value.trim()) return
   const generation = ++detailGeneration
   detailOpen.value = true
   detailLoading.value = true
@@ -230,7 +237,8 @@ async function submitResolution() {
   const current = detail.value
   const reason = resolutionReason.value.trim()
   const reference = evidenceReference.value.trim()
-  if (!current || !canResolve.value) return
+  if (!current || !canResolve.value || resolutionLoading.value) return
+  const generation = detailGeneration
   if (!reason || !reference) {
     resolutionError.value = t('telemetryConflicts.messages.resolutionRequired')
     return
@@ -244,17 +252,41 @@ async function submitResolution() {
       reason,
       evidenceReference: reference,
     })
+    if (generation !== detailGeneration) return
     detail.value = result
     replaceConflict(result)
     resolutionOpen.value = false
     resolutionNotice.value = resolutionMessage(result)
     void loadConflicts(conflictPage.value.page)
   } catch (reason) {
-    resolutionError.value = requestErrorMessage(reason)
+    if (generation === detailGeneration) resolutionError.value = requestErrorMessage(reason)
   } finally {
-    resolutionLoading.value = false
+    if (generation === detailGeneration) resolutionLoading.value = false
   }
 }
+
+async function refreshAfterApproval() {
+  const current = detail.value
+  if (!current) return
+  ElMessage.success(t('telemetryConflicts.review.approved'))
+  await Promise.all([openDetail(current), loadConflicts(conflictPage.value.page)])
+}
+
+// 切换查询范围立即撤下旧建筑操作，迟到响应不能将旧详情重新挂回当前页面。
+watch(buildingId, () => {
+  listGeneration++
+  detailGeneration++
+  queriedBuildingId.value = ''
+  hasQueried.value = false
+  pageLoading.value = false
+  detailOpen.value = false
+  resolutionOpen.value = false
+  resolutionLoading.value = false
+  detail.value = null
+  owner.value = null
+  conflictPage.value = emptyPage()
+}, { flush: 'sync' })
+onBeforeUnmount(() => { listGeneration++; detailGeneration++ })
 
 function replaceConflict(result: ConflictView) {
   conflictPage.value = {
@@ -357,6 +389,8 @@ onMounted(() => {
 
     <ElEmpty v-else :description="t('telemetryConflicts.empty')" />
 
+    <ConflictRecoveryPanel v-if="queriedBuildingId" :key="queriedBuildingId" :building-id="queriedBuildingId" :owner-id="owner?.userId ?? null" />
+
     <ElDrawer :model-value="detailOpen" size="min(900px, 94vw)" :title="t('telemetryConflicts.detail.title')" @update:model-value="detailOpen = false">
       <ElSkeleton v-if="detailLoading" :rows="8" animated />
       <ElAlert v-else-if="detailError" :title="detailError" type="error" show-icon :closable="false" />
@@ -401,6 +435,7 @@ onMounted(() => {
             </ElTable>
           </section>
 
+          <CorrectionReview v-if="detailOpen && detail.mode === 'ENERGY_REVIEW' && detail.state === 'PENDING_REVIEW' && detail.correctionVersionId" :conflict="detail" @approved="refreshAfterApproval" />
           <div class="drawer-actions">
             <ElButton v-if="actionAllowed(detail, 'RESOLVE')" type="primary" @click="openResolution">{{ t('telemetryConflicts.actions.resolve') }}</ElButton>
             <ElAlert v-else :title="t('telemetryConflicts.detail.noAction')" type="info" show-icon :closable="false" />

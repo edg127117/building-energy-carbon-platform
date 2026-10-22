@@ -73,3 +73,26 @@ export type ResolveConflictRequest = {
   reason: string
   evidenceReference: string
 }
+
+export type RecoveryTask = {
+  kind: 'RAW' | 'MESSAGE' | 'DERIVED' | 'MESSAGE_CONFLICT'
+  id: string
+  pointId: string | null
+  eventTime: number | null
+  retryCount: number
+  errorCode: string | null
+}
+
+export type CorrectionVersion = {
+  correctionVersionId: string
+  buildingId: string
+  meterPointId: string
+  originalFactIdentity: string
+  originalValue: number
+  correctedValue: number
+  correctionReason: string
+  evidenceReference: string
+  status: string
+  configRevision: number
+  createdBy: number
+}

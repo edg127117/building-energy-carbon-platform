@@ -18,6 +18,8 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // 与浏览器构建使用同一 ESM 解析，避免 Node 将 async-validator 的 CJS 默认导出当成构造器。
+    server: { deps: { inline: ['element-plus'] } },
   },
   plugins: [vue()],
   resolve: {
