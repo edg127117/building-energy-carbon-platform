@@ -10,6 +10,7 @@ import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +28,7 @@ import java.util.List;
 public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> implements BizSpaceService {
 
     private final RelationGovernanceGuard relationGuard;
+    private final com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
 
     /** 从 MySQL 读取一个建筑的全部空间，并按楼层值倒序返回。 */
     @Override
@@ -51,7 +53,9 @@ public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> i
 
     /** 清除客户端内部 ID、校验父空间归属后新增 MySQL 空间档案。 */
     @Override
+    @Transactional
     public Result<BizSpace> add(BizSpace space) {
+        retirementService.requireNotRetired(space.getBuildingId());
         relationGuard.requireLegacyForStructuralCreate(space.getBuildingId());
         space.setSpaceId(null);
         validateParent(space);
@@ -61,11 +65,13 @@ public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> i
 
     /** 确认空间存在，保持原建筑 ID 并重新校验父空间后更新档案。 */
     @Override
+    @Transactional
     public Result<BizSpace> update(BizSpace space) {
         BizSpace existing = this.getById(space.getSpaceId());
         if (existing == null) {
             throw new com.platform.framework.exception.BusinessException(404, "空间不存在");
         }
+        retirementService.requireNotRetired(existing.getBuildingId());
         relationGuard.rejectChangedProjection(
                 existing.getBuildingId(), existing.getParentSpaceId(), space.getParentSpaceId());
         space.setBuildingId(existing.getBuildingId());
@@ -76,7 +82,10 @@ public class BizSpaceServiceImpl extends ServiceImpl<BizSpaceMapper, BizSpace> i
 
     /** 逻辑删除空间；不会自动删除子空间或解除设备关系。 */
     @Override
+    @Transactional
     public Result<Void> delete(String spaceId) {
+        BizSpace existing = this.getById(spaceId);
+        if (existing != null) retirementService.requireNotRetired(existing.getBuildingId());
         relationGuard.requireDeletable("SPACE", spaceId);
         this.removeById(spaceId);
         return Result.success();

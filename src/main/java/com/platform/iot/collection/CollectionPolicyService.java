@@ -75,6 +75,7 @@ public class CollectionPolicyService {
     private final BizCollectionReviewRequestMapper reviewMapper;
     private final BizCollectionConfigAuditLogMapper auditMapper;
     private final BuildingScopeService buildingScopeService;
+    private final com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
     private final CollectionRuntimeStateService runtimeStateService;
     private final BackendDutyService dutyService;
     private final AuditGovernanceProperties auditProperties;
@@ -109,6 +110,7 @@ public class CollectionPolicyService {
     public DataSourceView createSource(Long userId, Collection<String> roles, SourceCreateRequest request) {
         requireMaintainer(roles);
         buildingScopeService.checkAccess(userId, roles, request.buildingId());
+        retirementService.requireNotRetired(request.buildingId());
         String code = requireSourceCode(request.sourceCode());
         String transport = requireTransport(request.transportType());
         if (sourceMapper.selectCount(new LambdaQueryWrapper<BizDataSource>()
@@ -589,6 +591,9 @@ public class CollectionPolicyService {
         requirePending(request);
         dutyService.requireSeparation(request.getSubmittedBy(), reviewerId);
         requireText(comment, "审核意见不能为空");
+        if (ReviewTargetType.SOURCE_ACTIVATION.name().equals(request.getTargetType())) {
+            retirementService.requireNotRetired(request.getBuildingId());
+        }
         BizDataSource source = lockSourceForReview(request);
         if (!Objects.equals(source.getConfigRevision(), request.getTargetConfigRevision())) {
             throw versionConflict();

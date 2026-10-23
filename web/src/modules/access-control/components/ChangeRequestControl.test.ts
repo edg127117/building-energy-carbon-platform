@@ -13,6 +13,25 @@ vi.mock('@/modules/auth/public', async importOriginal => ({
 }))
 
 describe('审批环境提示', () => {
+  it('D01 归档申请展示目标建筑及冻结证据摘要供审核', async () => {
+    const hash = 'a'.repeat(64)
+    vi.mocked(getApprovalPolicy).mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: true })
+    vi.mocked(listChangeRequests).mockResolvedValue({ page: 1, size: 10, total: 2, items: [
+      { requestId: 'exclude', operationCode: 'EXCLUDE_D01_TEST_BUILDING', status: 'PENDING_REVIEW',
+        targetType: 'D01_TEST_BUILDING', targetId: 'D01', impactSummary: `buildingId=D01;buildingName=D01专用验收（合成数据）;evidenceSha256=${hash}`,
+        submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-10-23T10:00:00' },
+      { requestId: 'archive', operationCode: 'ARCHIVE_D01_TEST_BUILDING', status: 'PENDING_REVIEW',
+        targetType: 'D01_TEST_BUILDING', targetId: 'D01', impactSummary: `buildingId=D01;buildingName=D01专用验收（合成数据）;evidenceSha256=${hash}`,
+        submittedBy: 1, submitterName: 'admin', submittedAt: null, createTime: '2026-10-23T10:00:00' },
+    ] })
+    const wrapper = mount(ChangeRequestControl, { props: { inbox: true } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('排除 D01 合成建筑统计')
+    expect(wrapper.text()).toContain('归档 D01 合成建筑并保留审计关联')
+    expect(wrapper.text()).toContain('建筑名称：D01专用验收（合成数据）')
+    expect(wrapper.text()).toContain(`归档前证据摘要 SHA-256：${hash}`)
+    wrapper.unmount()
+  })
   it('温度规则和补齐申请使用中文操作名称与摘要', async () => {
     vi.mocked(getApprovalPolicy).mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: true })
     vi.mocked(listChangeRequests).mockResolvedValue({ page: 1, size: 10, total: 3, items: [

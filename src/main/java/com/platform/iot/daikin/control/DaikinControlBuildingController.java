@@ -36,11 +36,17 @@ public class DaikinControlBuildingController {
                     JOIN biz_pending_device p ON p.bound_identity_id=i.identity_id AND p.status='BOUND'
                     JOIN biz_daikin_directory d ON d.pending_id=p.pending_id AND d.device_kind='INDOOR' AND d.missing=0
                     JOIN biz_daikin_project_mapping m ON m.source_id=d.source_id AND m.site_id=d.site_id AND m.building_id=e.building_id
-                    WHERE b.del_flag=0 ORDER BY b.building_id
+                    WHERE b.del_flag=0 AND NOT EXISTS
+                      (SELECT 1 FROM biz_test_building_retirement t WHERE t.building_id=b.building_id)
+                    ORDER BY b.building_id
                     """, (r,n) -> new BuildingOption(r.getString(1),r.getString(2))));
         }
         var allowed = scope.getAccessibleBuildingIds(user, SecurityUser.roles(authentication));
-        return Result.success(jdbc.query("SELECT building_id,building_name FROM building WHERE del_flag=0 ORDER BY building_id",
+        return Result.success(jdbc.query("""
+                SELECT building_id,building_name FROM building b WHERE del_flag=0 AND NOT EXISTS
+                (SELECT 1 FROM biz_test_building_retirement t WHERE t.building_id=b.building_id)
+                ORDER BY building_id
+                """,
                 (r,n) -> new BuildingOption(r.getString(1),r.getString(2))).stream()
                 .filter(b -> allowed == null || allowed.contains(b.buildingId())).toList());
     }

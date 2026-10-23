@@ -132,3 +132,26 @@ sudo python3 d01_release.py cutover --state <状态.json> --backup-dir <本轮�
 另在断网 Linux 临时容器运行 `scripts/tests/test_d01_release.py`、`test_d01_backup.py` 和既有部署回归。它们验证阶段门禁及失败保护，不证明真实 Broker 的消息保留、现网备份可恢复、现场吞吐或实际维护切换已完成。
 
 凭据复用探针可在 Windows 本机运行 `python scripts/Verify-D01CredentialReuseIsolated.py`，需 Java 21、已打包 JAR、Docker Desktop 及 MySQL 8.0/TDengine 3.2.3.0 镜像。它只新建随机所有权标签、回环端口和独立卷，检查实际 JDBC/备份连接、非默认 TDengine 密码、错误密码和缺少 DDL 权限拒绝，结束按所有权清理。此结果不证明现场保存的密码当前有效；现场安装器及后续真实备份负责分别核验。
+
+## 6. D01 合成资产排除与归档候选
+
+V85 只新增 `biz_test_building_retirement`；迁移本身不排除任何建筑、不删除资产，也不改写两条失败恢复记录。
+这是 V84 现场验收之后的独立候选，当前 PR 不授权发布或现场执行；上文固定 V84 的维护脚本和验收结果不能替代 V85 的发布前核验。
+V85 发布前须另核验迁移账号的建表及父表引用权限、版本为 85 的独立迁移入口和部署包；不得为应用账号增加 DDL 权限或直接复用固定 V84 的切换参数。
+
+发布后使用正常鉴权的 `POST /api/v1/backoffice/change-requests`，先申请 `EXCLUDE_D01_TEST_BUILDING`。
+命令字段为 `buildingId`、`expectedBuildingName`（现场完整名称）及 `evidenceSha256`（已保存归档前快照的 SHA-256）；
+`idempotencyKey` 每次新申请使用新值。确认页面展示目标名称和摘要后，沿用该申请的 `/submit`、`/approve`（意见必填）、`/execute` 流程。
+摘要由执行人提供，系统冻结和比较该引用，不读取服务器快照文件，也不以摘要本身证明已保存或核验快照。
+核对常规建筑列表的总数减少一、其他建筑未变化，并确认明确 ID 的历史查询和审计仍可读取，
+再以相同命令字段申请并审核执行 `ARCHIVE_D01_TEST_BUILDING`。归档前再次复核来源和身份全部停用，
+存在能源周期当前结果或碳项目版本、目标名称变化、摘要不一致、未先排除均拒绝。
+
+归档不改变建筑/空间/系统/设备/测点/别名/身份的主键和删除标记；原始值、更正审核、查询证据、隔离计算结果及 `FAILED` 任务继续留存。
+验收需检查建筑详情为 `ARCHIVED`、按 ID 历史读取成功、全量设备/系统目录排除该建筑、旧资产修改/删除和来源/身份重新启用被阻断。
+没有提供反向恢复或物理清理入口，后续确需恢复须另行设计并审核；不得直接删除排除记录或数据库删除标记绕过本流程。
+
+隔离迁移回归使用 Java 21，先执行 `mvnw.cmd test-compile dependency:build-classpath -DincludeScope=test -Dmdep.outputFile=target/d01-classpath.txt`，
+再执行 `python scripts/Verify-D01ArchiveIsolated.py`。脚本只接受本机 Docker Linux 引擎，以随机所有权标记创建独立 MySQL 容器与卷，
+初始化完整非空 V84 库，特意令库默认排序规则与建筑父列不同；V85 后逐表核对原表内容、旧 Flyway 历史、两条失败证据和外键约束，
+结束只清理本轮自建资源。结果写入 `target/d01-archive-isolated-result.json`；这是合成目标引擎回归，仍不等同于现场发布或归档验收。

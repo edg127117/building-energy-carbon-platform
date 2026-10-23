@@ -225,6 +225,8 @@ function operationLabel(operation?: string) {
     CONFIGURE_TEMPERATURE_RULE: 'configureTemperatureRule',
     ACTIVATE_DEVICE_IDENTITY: 'activateDeviceIdentity',
     DEACTIVATE_DEVICE_IDENTITY: 'deactivateDeviceIdentity',
+    EXCLUDE_D01_TEST_BUILDING: 'excludeD01TestBuilding',
+    ARCHIVE_D01_TEST_BUILDING: 'archiveD01TestBuilding',
     PUBLISH_PROTOCOL_CONFIGURATION: 'publishProtocolConfiguration',
     GRANT_BACKEND_DUTY: 'grantBackendDuty',
     REVOKE_BACKEND_DUTY: 'revokeBackendDuty',
@@ -239,7 +241,7 @@ function operationLabel(operation?: string) {
 function impactLabel(summary?: string | null) {
   if (!summary) return ''
   if (!summary.includes('=')) return summary
-  const fields = new Set(['buildingId', 'bindingType', 'pointCount', 'pointMode', 'productId', 'equipmentName', 'action', 'adapter',
+  const fields = new Set(['buildingId', 'buildingName', 'evidenceSha256', 'bindingType', 'pointCount', 'pointMode', 'productId', 'equipmentName', 'action', 'adapter',
     'userId', 'roleId', 'roleCount', 'buildingCount', 'menuCount', 'menuId', 'menuName', 'menuType', 'status'])
   const values = new Set(['TYPED_STATE', 'AUTO', 'MANUAL', 'ENABLE', 'DISABLE', 'ACTIVATE', 'DEACTIVATE', 'ACTIVE', 'INACTIVE', 'M', 'C', 'F', 'CONFIGURE', 'DAIKIN_INDOOR_V2'])
   const parts = summary.split(';').map(part => {

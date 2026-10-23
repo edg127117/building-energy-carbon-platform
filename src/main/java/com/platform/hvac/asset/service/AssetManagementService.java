@@ -81,6 +81,7 @@ public class AssetManagementService {
     private static final long MAX_TREND_BUCKETS = 1_000;
 
     private final BuildingService buildingService;
+    private final D01TestBuildingRetirementService retirementService;
     private final BizSpaceService spaceService;
     private final BizSystemGroupService systemGroupService;
     private final BizEquipmentService equipmentService;
@@ -172,6 +173,7 @@ public class AssetManagementService {
     public SpaceView createSpace(SpaceCreateRequest request, Collection<String> roles) {
         requireAdmin(roles);
         requireBuilding(request.buildingId());
+        retirementService.requireNotRetired(request.buildingId());
         requireActiveStatus(request.status());
         BizSpace space = new BizSpace();
         space.setBuildingId(request.buildingId());
@@ -186,6 +188,7 @@ public class AssetManagementService {
             String spaceId, SpaceUpdateRequest request, Collection<String> roles) {
         requireAdmin(roles);
         BizSpace existing = requireSpace(spaceId);
+        retirementService.requireNotRetired(existing.getBuildingId());
         requireActiveStatus(request.status());
         validateSpaceAncestry(spaceId, request.parentSpaceId(), existing.getBuildingId());
         BizSpace space = new BizSpace();
@@ -199,7 +202,7 @@ public class AssetManagementService {
     @Transactional
     public void deleteSpace(String spaceId, Collection<String> roles) {
         requireAdmin(roles);
-        requireSpace(spaceId);
+        retirementService.requireNotRetired(requireSpace(spaceId).getBuildingId());
         long children = spaceService.count(new LambdaQueryWrapper<BizSpace>()
                 .eq(BizSpace::getParentSpaceId, spaceId));
         long equipment = equipmentService.count(new LambdaQueryWrapper<BizEquipment>()
@@ -227,6 +230,7 @@ public class AssetManagementService {
             SystemGroupCreateRequest request, Collection<String> roles) {
         requireAdmin(roles);
         requireBuilding(request.buildingId());
+        retirementService.requireNotRetired(request.buildingId());
         requireActiveStatus(request.status());
         BizSystemGroup group = new BizSystemGroup();
         group.setBuildingId(request.buildingId());
@@ -240,7 +244,7 @@ public class AssetManagementService {
     public SystemGroupView updateSystemGroup(
             String systemGroupId, SystemGroupUpdateRequest request, Collection<String> roles) {
         requireAdmin(roles);
-        requireSystemGroup(systemGroupId);
+        retirementService.requireNotRetired(requireSystemGroup(systemGroupId).getBuildingId());
         requireActiveStatus(request.status());
         BizSystemGroup group = new BizSystemGroup();
         group.setSystemGroupId(systemGroupId);
@@ -253,7 +257,7 @@ public class AssetManagementService {
     @Transactional
     public void deleteSystemGroup(String systemGroupId, Collection<String> roles) {
         requireAdmin(roles);
-        requireSystemGroup(systemGroupId);
+        retirementService.requireNotRetired(requireSystemGroup(systemGroupId).getBuildingId());
         References references = systemGroupReferences(systemGroupId);
         if (references.equipment() + references.points() > 0) {
             throw AssetErrors.error(409, AssetErrors.REFERENCE_CONFLICT,
@@ -278,6 +282,8 @@ public class AssetManagementService {
         requireAdmin(roles);
         validatePage(page, size);
         LambdaQueryWrapper<BizEquipment> wrapper = new LambdaQueryWrapper<>();
+        if (!StringUtils.hasText(buildingId)) wrapper.notInSql(BizEquipment::getBuildingId,
+                "SELECT building_id FROM biz_test_building_retirement");
         wrapper.eq(StringUtils.hasText(buildingId), BizEquipment::getBuildingId, buildingId)
                 .eq(StringUtils.hasText(spaceId), BizEquipment::getSpaceId, spaceId)
                 .eq(StringUtils.hasText(systemGroupId), BizEquipment::getSystemGroupId, systemGroupId)
@@ -429,6 +435,7 @@ public class AssetManagementService {
     public EquipmentListItemView createEquipment(
             EquipmentCreateRequest request, Collection<String> roles) {
         requireAdmin(roles);
+        retirementService.requireNotRetired(request.buildingId());
         requireActiveStatus(request.status());
         BizEquipment equipment = new BizEquipment();
         equipment.setBuildingId(request.buildingId());
@@ -447,6 +454,7 @@ public class AssetManagementService {
             String equipmentId, EquipmentUpdateRequest request, Collection<String> roles) {
         requireAdmin(roles);
         BizEquipment existing = requireEquipment(equipmentId);
+        retirementService.requireNotRetired(existing.getBuildingId());
         LegacyProjection currentParameters = parameterCompatibilityService.read(existing);
         requireActiveStatus(request.status());
         if (!existing.getBuildingId().equals(request.buildingId())) {
@@ -468,7 +476,7 @@ public class AssetManagementService {
     @Transactional
     public void deleteEquipment(String equipmentId, Collection<String> roles) {
         requireAdmin(roles);
-        requireEquipment(equipmentId);
+        retirementService.requireNotRetired(requireEquipment(equipmentId).getBuildingId());
         References references = equipmentReferences(equipmentId);
         if (references.points() + references.identities() > 0) {
             throw AssetErrors.error(409, AssetErrors.REFERENCE_CONFLICT,
@@ -492,6 +500,7 @@ public class AssetManagementService {
             Collection<String> roles) {
         requireAdmin(roles);
         BizEquipment equipment = requireEquipment(equipmentId);
+        retirementService.requireNotRetired(equipment.getBuildingId());
         BizDataPoint existing = requirePointForEquipment(pointId, equipmentId);
         BizDataPoint point = new BizDataPoint();
         point.setPointId(pointId);
@@ -510,7 +519,7 @@ public class AssetManagementService {
     public void deletePoint(
             String equipmentId, String pointId, Collection<String> roles) {
         requireAdmin(roles);
-        requireEquipment(equipmentId);
+        retirementService.requireNotRetired(requireEquipment(equipmentId).getBuildingId());
         requirePointForEquipment(pointId, equipmentId);
         long aliases = aliasMapper.selectCount(new LambdaQueryWrapper<BizPointAlias>()
                 .eq(BizPointAlias::getPointId, pointId));
@@ -523,11 +532,12 @@ public class AssetManagementService {
 
     private BuildingView buildingView(Building building) {
         References references = buildingReferences(building.getBuildingId());
+        String status = retirementService.status(building.getBuildingId());
         return new BuildingView(building.getBuildingId(), building.getBuildingName(),
                 building.getBuildingCode(), building.getBuildingType(), building.getConstructionYear(),
-                building.getTotalGfa(), building.getClimateZone(), building.getRegionCode(), "ACTIVE", references,
-                parentActions(references.spaces() + references.systemGroups() + references.equipment()
-                        + references.points() + references.authorizations() == 0),
+                building.getTotalGfa(), building.getClimateZone(), building.getRegionCode(), status, references,
+                "ACTIVE".equals(status) ? parentActions(references.spaces() + references.systemGroups() + references.equipment()
+                        + references.points() + references.authorizations() == 0) : List.of(),
                 millis(building.getUpdateTime(), building.getCreateTime()));
     }
 

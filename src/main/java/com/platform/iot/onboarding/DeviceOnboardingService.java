@@ -76,6 +76,7 @@ public class DeviceOnboardingService {
     private final BizDeviceProductMapper productMapper;
     private final BizProductPointTemplateMapper templateMapper;
     private final BuildingMapper buildingMapper;
+    private final com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
     private final BizSpaceMapper spaceMapper;
     private final BizSystemGroupMapper groupMapper;
     private final BizEquipmentMapper equipmentMapper;
@@ -535,6 +536,7 @@ public class DeviceOnboardingService {
     }
 
     private String validateOwnership(DeviceOnboardingContracts.BindRequest request) {
+        retirementService.requireNotRetired(request.buildingId());
         BizSpace space = spaceMapper.selectById(request.spaceId());
         if (space == null) {
             throw error(404, NOT_FOUND, "目标空间不存在");
@@ -858,6 +860,11 @@ public class DeviceOnboardingService {
     }
 
     private IdentityChange changeIdentityStatus(String identityId, int next, Long operatorId) {
+        if (next == 1) {
+            BizDeviceIdentity target = identityMapper.selectById(identityId);
+            if (target == null) throw error(404, NOT_FOUND, "设备身份不存在");
+            retirementService.requireNotRetired(target.getBuildingId());
+        }
         BizDeviceIdentity identity = identityMapper.selectByIdForUpdate(identityId);
         if (identity == null) {
             throw error(404, NOT_FOUND, "设备身份不存在");

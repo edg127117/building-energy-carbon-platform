@@ -7,12 +7,14 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.platform.framework.common.Result;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
+import com.platform.hvac.asset.service.D01TestBuildingRetirementService;
 import com.platform.hvac.model.entity.Building;
 import com.platform.hvac.service.BuildingService;
 import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import java.util.Set;
 
@@ -29,6 +31,7 @@ import java.util.Set;
 public class BuildingServiceImpl extends ServiceImpl<BuildingMapper, Building> implements BuildingService {
 
     private final RelationGovernanceGuard relationGuard;
+    private final D01TestBuildingRetirementService retirementService;
 
     /**
      * 通过建筑主表行锁保护后续“检查重叠任务并创建任务”的事务区间。
@@ -51,6 +54,8 @@ public class BuildingServiceImpl extends ServiceImpl<BuildingMapper, Building> i
         Page<Building> pageParam = new Page<>(page, size);
         if (accessibleBuildingIds != null && accessibleBuildingIds.isEmpty()) return Result.success(pageParam);
         LambdaQueryWrapper<Building> wrapper = new LambdaQueryWrapper<>();
+        // 常规建筑选择及其总数不含已审核排除的合成建筑；按 ID 历史取证仍可读取原记录。
+        wrapper.notInSql(Building::getBuildingId, "SELECT building_id FROM biz_test_building_retirement");
         if (accessibleBuildingIds != null) wrapper.in(Building::getBuildingId, accessibleBuildingIds);
         if (StringUtils.hasText(keyword)) {
             wrapper.and(w -> w.like(Building::getBuildingName, keyword)
@@ -70,14 +75,18 @@ public class BuildingServiceImpl extends ServiceImpl<BuildingMapper, Building> i
 
     /** 按主键更新 MySQL 建筑档案；权限和请求字段校验由上游入口负责。 */
     @Override
+    @Transactional
     public Result<Building> update(Building building) {
+        retirementService.requireNotRetired(building.getBuildingId());
         this.updateById(building);
         return Result.success(building);
     }
 
     /** 通过实体的 {@code @TableLogic} 标记建筑已删除，不物理清除关联记录。 */
     @Override
+    @Transactional
     public Result<Void> delete(String buildingId) {
+        retirementService.requireNotRetired(buildingId);
         relationGuard.requireBuildingDeletable(buildingId);
         // @TableLogic 自动将 del_flag 从 0 置为 1，不走物理删除
         this.removeById(buildingId);

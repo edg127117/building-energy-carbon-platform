@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
-/** 本机一次性容器专用：完整 V83 非空库升级、存量摘要和部分 DDL 故障注入。 */
+/** 本机一次性容器专用：D01 非空库升级、存量摘要和部分 DDL 故障注入。 */
 public final class D01UpgradeProcess {
     private D01UpgradeProcess() { }
 
@@ -80,6 +80,16 @@ public final class D01UpgradeProcess {
                 System.out.println("D01_SNAPSHOT=" + new ObjectMapper().writeValueAsString(snapshot));
             }
             case "menuMax" -> System.out.println("D01_MENU_MAX=" + jdbc.queryForObject("SELECT MAX(id) FROM sys_menu", Long.class));
+            case "upgrade85" -> {
+                var flyway = Flyway.configure().dataSource(source).locations("classpath:db/migration/mysql")
+                        .target("85").baselineOnMigrate(false).cleanDisabled(true).load();
+                if (!"84".equals(flyway.info().current().getVersion().getVersion())
+                        || flyway.migrate().migrationsExecuted != 1) {
+                    throw new IllegalStateException("D01_V85_EXACTLY_ONE_MIGRATION_REQUIRED");
+                }
+                flyway.validate();
+                System.out.println("D01_V85_ISOLATED_UPGRADE_VALIDATED");
+            }
             case "partial" -> {
                 // 在后半段故障，验证前序 DDL 已提交而旧业务行未变化，不能靠事务或重复迁移恢复。
                 jdbc.execute("CREATE TABLE biz_telemetry_message_intent(blocker INT)");

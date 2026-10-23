@@ -12,6 +12,7 @@ import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import java.util.Set;
 
@@ -28,6 +29,7 @@ import java.util.Set;
 public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper, BizSystemGroup> implements BizSystemGroupService {
 
     private final RelationGovernanceGuard relationGuard;
+    private final com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
 
     /**
      * 在调用方传入的建筑范围内查询 MySQL 系统分组，并支持建筑和名称/编码筛选。
@@ -38,6 +40,8 @@ public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper,
         Page<BizSystemGroup> pageParam = new Page<>(page, size);
         if (accessibleBuildingIds != null && accessibleBuildingIds.isEmpty()) return Result.success(pageParam);
         LambdaQueryWrapper<BizSystemGroup> wrapper = new LambdaQueryWrapper<>();
+        if (!StringUtils.hasText(buildingId)) wrapper.notInSql(BizSystemGroup::getBuildingId,
+                "SELECT building_id FROM biz_test_building_retirement");
         if (accessibleBuildingIds != null) wrapper.in(BizSystemGroup::getBuildingId, accessibleBuildingIds);
         if (StringUtils.hasText(buildingId)) {
             wrapper.eq(BizSystemGroup::getBuildingId, buildingId);
@@ -53,7 +57,9 @@ public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper,
 
     /** 清除客户端指定的内部 ID 后保存系统分组，使主键由后端生成。 */
     @Override
+    @Transactional
     public Result<BizSystemGroup> add(BizSystemGroup group) {
+        retirementService.requireNotRetired(group.getBuildingId());
         group.setSystemGroupId(null);
         this.save(group);
         return Result.success(group);
@@ -66,11 +72,13 @@ public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper,
      * 把已有设备、测点关系迁移到另一建筑。</p>
      */
     @Override
+    @Transactional
     public Result<BizSystemGroup> update(BizSystemGroup group) {
         BizSystemGroup existing = this.getById(group.getSystemGroupId());
         if (existing == null) {
             throw new com.platform.framework.exception.BusinessException(404, "系统分组不存在");
         }
+        retirementService.requireNotRetired(existing.getBuildingId());
         group.setSystemGroupCode(existing.getSystemGroupCode());
         group.setBuildingId(existing.getBuildingId());
         this.updateById(group);
@@ -79,7 +87,10 @@ public class BizSystemGroupServiceImpl extends ServiceImpl<BizSystemGroupMapper,
 
     /** 逻辑删除系统分组；现有设备和测点不会由此方法级联处理。 */
     @Override
+    @Transactional
     public Result<Void> delete(String systemGroupId) {
+        BizSystemGroup existing = this.getById(systemGroupId);
+        if (existing != null) retirementService.requireNotRetired(existing.getBuildingId());
         relationGuard.requireDeletable("SYSTEM", systemGroupId);
         this.removeById(systemGroupId);
         return Result.success();
