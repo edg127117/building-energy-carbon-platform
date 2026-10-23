@@ -138,6 +138,7 @@ sudo python3 d01_release.py cutover --state <状态.json> --backup-dir <本轮�
 V85 只新增 `biz_test_building_retirement`；迁移本身不排除任何建筑、不删除资产，也不改写两条失败恢复记录。
 这是 V84 现场验收之后的独立候选，当前 PR 不授权发布或现场执行；上文固定 V84 的维护脚本和验收结果不能替代 V85 的发布前核验。
 V85 发布前须另核验迁移账号的建表及父表引用权限、版本为 85 的独立迁移入口和部署包；不得为应用账号增加 DDL 权限或直接复用固定 V84 的切换参数。
+旧包不识别排除元数据，排除后直接退回旧包会重新计入常规目录；继续保留 D01 的旧包兼容性核验和禁止直接回退约束，不能把保留资产记录视为可无影响降级。
 
 发布后使用正常鉴权的 `POST /api/v1/backoffice/change-requests`，先申请 `EXCLUDE_D01_TEST_BUILDING`。
 命令字段为 `buildingId`、`expectedBuildingName`（现场完整名称）及 `evidenceSha256`（已保存归档前快照的 SHA-256）；
