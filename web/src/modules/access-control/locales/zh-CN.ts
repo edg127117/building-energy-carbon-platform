@@ -50,6 +50,11 @@ export default {
     empty: '暂无账号数据',
     profileSaved: '基础资料已保存。',
     requestSubmitted: '变更申请已提交，等待审核。',
+    d01GrantTitle: '授予 D01 能源职责',
+    d01GrantConfirm: '仅为当前测试环境的 admin 长期授予 D01 所需三项能源职责；每项均走现有自审并记录审计。',
+    d01GrantReviewComment: 'D01 测试环境能源职责授权',
+    d01GrantSuccess: 'D01 能源职责已逐项审核并授予 admin',
+    d01GrantProgress: 'D01 能源职责授权进度',
     openAccountNote: '审批执行后会生成一次性凭据，请通过安全渠道交付给使用人。',
   },
   role: {

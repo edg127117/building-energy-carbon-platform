@@ -21,13 +21,18 @@ import {
   ElDialog,
 } from '@/shared/ui'
 import { t } from '@/locales'
+import { useSession } from '@/modules/auth/public'
+import { requestErrorMessage } from '@/shared/utils/request-error'
 import type { FormalRoleKey, UserView } from '../models/access-control'
+import { getApprovalPolicy, newIdempotencyKey } from '../api/access-control'
 import BuildingScopeDialog from '../components/BuildingScopeDialog.vue'
 import ChangeRequestControl from '../components/ChangeRequestControl.vue'
 import UserAccountDialog from '../components/UserAccountDialog.vue'
 import { useUserManagement } from '../composables/use-user-management'
+import { D01_ADMIN_DUTIES, GrantD01TerminalError, grantD01AdminDuties } from '../composables/grant-d01-admin-duties'
 
 const management = useUserManagement()
+const session = useSession()
 const query = management.query
 const page = management.page
 const buildings = management.buildings
@@ -39,6 +44,12 @@ const changeBusy = computed(() => changes.pending.value.size > 0)
 const keyword = ref('')
 const selectedStatus = ref<0 | 1 | undefined>()
 const includeDeleted = ref(false)
+const d01GrantAvailable = ref(false)
+const d01GrantBusy = ref(false)
+const d01GrantCompleted = ref(0)
+const d01GrantOperationKey = ref(newIdempotencyKey())
+const d01GrantProgressText = computed(() => `${t('accessControl.user.d01GrantProgress')} ${d01GrantCompleted.value}/${D01_ADMIN_DUTIES.length}`)
+const d01GrantError = ref<string | null>(null)
 const selectedUser = ref<UserView | null>(null)
 const accountDialog = ref(false)
 const accountMode = ref<'open' | 'edit'>('open')
@@ -161,6 +172,25 @@ async function requestDelete(user: UserView) {
   }
 }
 
+async function grantD01Duties(user: UserView) {
+  if (!d01GrantAvailable.value || d01GrantBusy.value || user.id !== session.user?.id
+    || user.username !== 'admin') return
+  d01GrantBusy.value = true
+  d01GrantCompleted.value = 0
+  d01GrantError.value = null
+  try {
+    await grantD01AdminDuties(user.id, d01GrantOperationKey.value,
+      completed => { d01GrantCompleted.value = completed })
+    d01GrantOperationKey.value = newIdempotencyKey()
+    ElMessage.success(t('accessControl.user.d01GrantSuccess'))
+  } catch (reason) {
+    if (reason instanceof GrantD01TerminalError) d01GrantOperationKey.value = newIdempotencyKey()
+    d01GrantError.value = requestErrorMessage(reason)
+  } finally {
+    d01GrantBusy.value = false
+  }
+}
+
 async function requestRestore(user: UserView) {
   try {
     await management.restore(user.id)
@@ -182,6 +212,9 @@ async function afterExecute(requestId: string) {
 onMounted(() => {
   void management.load().catch(() => undefined)
   void management.loadBuildings().catch(() => undefined)
+  void getApprovalPolicy().then(policy => {
+    d01GrantAvailable.value = policy.environmentMode === 'TEST' && policy.selfApprovalAllowed
+  }).catch(() => { d01GrantAvailable.value = false })
 })
 </script>
 
@@ -193,6 +226,8 @@ onMounted(() => {
     </header>
 
     <ElAlert v-if="error" :title="error" type="error" show-icon :closable="false" />
+    <ElAlert v-if="d01GrantError" :title="d01GrantError" type="error" show-icon :closable="false" />
+    <p v-if="d01GrantBusy">{{ d01GrantProgressText }}</p>
     <ElForm class="filters" inline @submit.prevent="applyFilters">
       <ElFormItem><ElInput v-model="keyword" clearable :placeholder="t('accessControl.user.keywordPlaceholder')" @keyup.enter="applyFilters" /></ElFormItem>
       <ElFormItem><ElSelect v-model="selectedStatus" clearable :placeholder="t('accessControl.user.statusPlaceholder')"><ElOption v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" /></ElSelect></ElFormItem>
@@ -218,6 +253,13 @@ onMounted(() => {
             <ElButton text @click="openRoles(row as UserView)">{{ t('accessControl.action.assignRoles') }}</ElButton>
             <ElButton text @click="openScope(row as UserView)">{{ t('accessControl.action.assignBuildings') }}</ElButton>
             <ElButton text @click="requestPasswordReset(row as UserView)">{{ t('accessControl.action.resetPassword') }}</ElButton>
+            <ElPopconfirm
+              v-if="d01GrantAvailable && row.username === 'admin' && row.id === session.user?.id"
+              :title="t('accessControl.user.d01GrantConfirm')"
+              @confirm="grantD01Duties(row as UserView)"
+            >
+              <template #reference><ElButton text :loading="d01GrantBusy" :disabled="d01GrantBusy">{{ t('accessControl.user.d01GrantTitle') }}</ElButton></template>
+            </ElPopconfirm>
             <ElButton text @click="requestStatus(row as UserView)">{{ row.status ? t('accessControl.action.disable') : t('accessControl.action.enable') }}</ElButton>
             <ElPopconfirm :title="t('accessControl.action.delete')" @confirm="requestDelete(row as UserView)"><template #reference><ElButton text type="danger">{{ t('accessControl.action.delete') }}</ElButton></template></ElPopconfirm>
           </ElSpace>
