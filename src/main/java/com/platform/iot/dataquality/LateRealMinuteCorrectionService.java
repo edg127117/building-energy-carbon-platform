@@ -117,7 +117,12 @@ public class LateRealMinuteCorrectionService {
      * 的幂等锁和证据校验，不创建额外补全任务。</p>
      */
     public void recoverStoredEvent(HvacLateRealEventStoredEvent event) {
-        correct(event);
+        correct(event, false);
+    }
+
+    /** 已授权更正通过持久任务调用，不受设备迟到自动窗口限制。 */
+    public void applyConfirmedCorrection(HvacLateRealEventStoredEvent event) {
+        correct(event, true);
     }
 
     /**
@@ -127,7 +132,7 @@ public class LateRealMinuteCorrectionService {
      * 同一测点分钟通过共享锁串行处理，实时异步入口与低频证据重放因此具有相同的
      * 幂等边界。</p>
      */
-    private void correct(HvacLateRealEventStoredEvent event) {
+    private void correct(HvacLateRealEventStoredEvent event, boolean confirmed) {
         Objects.requireNonNull(event, "event 不能为空");
         requireText(event.pointId(), "pointId");
         requireText(event.buildingId(), "buildingId");
@@ -137,7 +142,7 @@ public class LateRealMinuteCorrectionService {
         long maxAge = Math.multiplyExact(
                 properties.getLateRealCorrectionHours(), HOUR_MILLIS);
         long age = event.receivedAt() - event.minuteStart();
-        if (age < 0L || age > maxAge) {
+        if (!confirmed && (age < 0L || age > maxAge)) {
             meterRegistry.counter(
                     "iot.hvac.late_real.skipped",
                     "reason", "outside_window").increment();
@@ -154,9 +159,11 @@ public class LateRealMinuteCorrectionService {
                     "reason", "point_not_found").increment();
             log.warn("迟到真实事件对应测点已不存在，保留原始证据: pointId={}, minute={}",
                     event.pointId(), event.minuteStart());
+            if (confirmed) throw new IllegalStateException("Confirmed correction point unavailable");
             return;
         }
         if (!event.buildingId().equals(point.orElseThrow().buildingId())) {
+            if (confirmed) throw new IllegalStateException("Confirmed correction building changed");
             // 测点档案可能在事件排队期间被修正；正式分钟使用当前 MySQL 配置，
             // 事件中的旧建筑值只用于诊断，不能覆盖当前测点归属。
             log.warn("迟到事件建筑与当前测点配置不一致，按当前配置修正: pointId={}, eventBuilding={}, currentBuilding={}",
@@ -169,10 +176,10 @@ public class LateRealMinuteCorrectionService {
                         event.pointId(), event.minuteStart());
         Optional<Q0Correction> correction = lockRegistry.withLocks(
                 List.of(key),
-                () -> correctQ0Locked(event, point.orElseThrow()));
+                () -> correctQ0Locked(event, point.orElseThrow(), confirmed));
         // READY 与插值可能再次申请一组分钟锁，必须在单分钟锁释放后执行，
         // 否则不同迟到线程各持一个条带再交叉申请批量条带会循环等待。
-        correction.ifPresent(this::completeDownstream);
+        correction.ifPresent(value -> completeDownstream(value, confirmed));
     }
 
     /**
@@ -182,7 +189,7 @@ public class LateRealMinuteCorrectionService {
      */
     private Optional<Q0Correction> correctQ0Locked(
             HvacLateRealEventStoredEvent event,
-            PointRuntimeConfig point) {
+            PointRuntimeConfig point, boolean confirmed) {
         Optional<RawMinuteAggregate> current =
                 minuteRepository.findPointMinute(
                         event.pointId(), event.minuteStart());
@@ -196,6 +203,8 @@ public class LateRealMinuteCorrectionService {
                 .filter(raw -> event.pointId().equals(raw.pointId()))
                 .toList();
         if (realEvents.isEmpty()) {
+            // 显式更正的任务不能因原始证据缺失而静默完成；调用前由恢复任务核验。
+
             meterRegistry.counter(
                     "iot.hvac.late_real.skipped",
                     "reason", "evidence_missing").increment();
@@ -207,7 +216,10 @@ public class LateRealMinuteCorrectionService {
         long finalizedAt = nextFinalizedAt(current, event.receivedAt());
         RawMinuteAggregate aggregate = pointMinuteAggregator.aggregate(
                 point, event.minuteStart(), realEvents, finalizedAt);
-        if (current.filter(row -> sameRealEvidence(row, aggregate)).isPresent()) {
+        if (current.filter(row -> sameRealEvidence(row, aggregate)
+                &&(!confirmed||sameConfirmedValues(row,aggregate))).isPresent()) {
+            // 上次可能已写 Q0 后在通知/插值阶段中断；明确更正重试仍需幂等补齐下游。
+            if (confirmed) return Optional.of(new Q0Correction(point,event,aggregate,finalizedAt,null));
             meterRegistry.counter(
                     "iot.hvac.late_real.skipped",
                     "reason", "already_real").increment();
@@ -235,7 +247,7 @@ public class LateRealMinuteCorrectionService {
     /**
      * Q0 已经持久化且单分钟锁已释放；后续允许申请其他分钟锁并由水位与幂等补偿。
      */
-    private void completeDownstream(Q0Correction correction) {
+    private void completeDownstream(Q0Correction correction, boolean confirmed) {
         if (correction.replacedTaskId() != null) {
             incrementReplacementBestEffort(correction.replacedTaskId());
         }
@@ -252,12 +264,12 @@ public class LateRealMinuteCorrectionService {
 
         // READY 默认同步返回，确保本分钟公式先修正，再把新 Q0 作为右端点回溯 Q1。
         try {
-            interpolationFillService.fillFromRightEndpoints(
-                    List.of(correction.aggregate()),
-                    correction.finalizedAt());
+            if(confirmed)interpolationFillService.correctFromChangedEndpoint(correction.aggregate(),correction.finalizedAt());
+            else interpolationFillService.fillFromRightEndpoints(List.of(correction.aggregate()),correction.finalizedAt());
         } catch (RuntimeException exception) {
             // 当前 Q0 和公式 READY 已经成功，历史插值失败单独计量，后续由
             // DataQualityRecoveryService 的迟到 Q0 扫描再次触发短缺口修复。
+            if (confirmed) throw exception;
             meterRegistry.counter(
                     "iot.hvac.late_real.interpolation_failed").increment();
             log.error("迟到 Q0 已完成公式修正，但历史质量1回溯失败: pointId={}, minute={}",
@@ -349,6 +361,17 @@ public class LateRealMinuteCorrectionService {
         return Double.isFinite(current)
                 && Double.isFinite(rebuilt)
                 && Math.abs(current - rebuilt) <= STORED_VALUE_TOLERANCE;
+    }
+
+    private boolean sameConfirmedValues(RawMinuteAggregate current,RawMinuteAggregate rebuilt) {
+        // 明确更正不能被普通迟到路径的 1e-9 容差吞掉；按现有分钟仓储的十二位格式比较。
+        return Double.compare(current.averageValue(),minuteStoredValue(rebuilt.averageValue()))==0
+                &&Double.compare(current.minimumValue(),minuteStoredValue(rebuilt.minimumValue()))==0
+                &&Double.compare(current.maximumValue(),minuteStoredValue(rebuilt.maximumValue()))==0;
+    }
+
+    private double minuteStoredValue(double value) {
+        return Double.parseDouble(String.format(java.util.Locale.ROOT,"%.12f",value));
     }
 
     private MinuteQualityWriteResult requireSingleResult(

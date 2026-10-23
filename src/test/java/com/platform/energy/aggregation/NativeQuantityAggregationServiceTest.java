@@ -22,6 +22,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -117,7 +118,7 @@ class NativeQuantityAggregationServiceTest {
                 "审核校正依据", 101, 202L, true);
         when(governance.approvedEvents("BLD001", "POINT001", START, END, 1_001))
                 .thenReturn(List.of(event));
-        when(governance.approvedCorrections("BLD001", "POINT001", 1_001)).thenReturn(List.of(correction));
+        when(governance.approvedCorrections(eq("BLD001"), eq("POINT001"), any(Instant.class))).thenReturn(List.of(correction));
 
         GovernedEvidence evidence = service.governedEvidence(7L, List.of("ENERGY_MANAGER"), "BLD001",
                 "POINT001", START, END);
@@ -125,7 +126,7 @@ class NativeQuantityAggregationServiceTest {
         verify(authorization).requireRunner(7L, List.of("ENERGY_MANAGER"));
         verify(authorization).checkBuilding(7L, List.of("ENERGY_MANAGER"), "BLD001");
         verify(governance).approvedEvents("BLD001", "POINT001", START, END, 1_001);
-        verify(governance).approvedCorrections("BLD001", "POINT001", 1_001);
+        verify(governance).approvedCorrections(eq("BLD001"), eq("POINT001"), any(Instant.class));
         assertThat(evidence.meterEvents()).containsExactly(event);
         assertThat(evidence.corrections()).containsExactly(correction);
     }
@@ -135,7 +136,7 @@ class NativeQuantityAggregationServiceTest {
         when(governance.approvedEvents("BLD001", "POINT001", START, END, 1_001))
                 .thenReturn(Collections.nCopies(1_001,
                         event(MeterEventType.RESET, START.plusSeconds(1_800), "110", "0", null)));
-        when(governance.approvedCorrections("BLD001", "POINT001", 1_001)).thenReturn(List.of());
+        when(governance.approvedCorrections(eq("BLD001"), eq("POINT001"), any(Instant.class))).thenReturn(List.of());
 
         assertCode(() -> service.governedEvidence(7L, List.of("ENERGY_MANAGER"), "BLD001",
                 "POINT001", START, END), EnergyAggregationErrors.INPUT_INCOMPLETE);

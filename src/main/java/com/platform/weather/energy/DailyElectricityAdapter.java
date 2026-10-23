@@ -201,7 +201,7 @@ public class DailyElectricityAdapter {
                 Instant fromInstant = Instant.ofEpochMilli(left.time());
                 Instant toInstant = Instant.ofEpochMilli(right.time());
                 NativeQuantityAggregationService.GovernedEvidence evidence = aggregation.governedEvidence(
-                        userId, roles, buildingId, pointId, fromInstant, toInstant);
+                        userId, roles, buildingId, pointId, fromInstant, toInstant, Instant.ofEpochMilli(calculationAsOf));
                 evidenceReferences = governedEvidenceReferences(evidence.meterEvents(), evidence.corrections());
                 long watermark = facts.stream().mapToLong(fact -> fact.receivedTime().toEpochMilli()).max()
                         .orElse(right.time());
@@ -400,7 +400,7 @@ public class DailyElectricityAdapter {
         List<RawTelemetryEvent> all = new ArrayList<>();
         Long after = null;
         while (true) {
-            List<RawTelemetryEvent> page = rawEvents.findPointHistory(
+            List<RawTelemetryEvent> page = rawEvents.findOriginalPointHistory(
                     buildingId, equipmentId, pointId, from, toExclusive, after, HISTORY_PAGE_SIZE);
             if (page == null || page.isEmpty()) break;
             all.addAll(page);

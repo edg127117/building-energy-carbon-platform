@@ -83,8 +83,8 @@ describe('资产档案异步状态', () => {
     vi.mocked(createBuilding).mockResolvedValue({} as never)
     const management = useAssetManagement()
     const form = {
-      buildingName: '楼宇', buildingCode: null, buildingType: null, constructionYear: null,
-      totalGfa: null, climateZone: null, status: 'ACTIVE' as const,
+      buildingName: '楼宇', buildingCode: null, buildingType: '办公', constructionYear: null,
+      totalGfa: 0, climateZone: '夏热冬冷', regionCode: '110000', status: 'ACTIVE' as const,
     }
 
     await Promise.all([management.saveBuilding(null, form), management.saveBuilding(null, form)])
@@ -99,8 +99,8 @@ describe('资产档案异步状态', () => {
     const management = useAssetManagement()
 
     await expect(management.saveBuilding(null, {
-      buildingName: '楼宇', buildingCode: null, buildingType: null, constructionYear: null,
-      totalGfa: null, climateZone: null, status: 'ACTIVE',
+      buildingName: '楼宇', buildingCode: null, buildingType: '办公', constructionYear: null,
+      totalGfa: 0, climateZone: '夏热冬冷', regionCode: '110000', status: 'ACTIVE',
     })).rejects.toThrow('transport')
 
     expect(management.operationError.value).toEqual({ message: '请求失败' })

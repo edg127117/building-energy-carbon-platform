@@ -85,9 +85,9 @@ Repository Guardrails 还会检查全部 `docs/superpowers/specs` 和 `plans`：
 
 局域网 `building-energy-carbon-test` 的正式测试页面入口是 `18080`，API 经该入口转发到 `18081`。后续测试发布使用仓库内的 [`Deploy-BuildingEnergyCarbonTest.sh`](../../scripts/Deploy-BuildingEnergyCarbonTest.sh)；脚本只切换测试发布目录的 `current`，并在发布前后核验路由及 80 端口站点软链接未变化。`/var/www/iot-platform/current` 与 80 端口不属于本测试发布目标。发布前在测试服务器上运行该脚本的 `--check-route` 做只读检查。此约束不改变 80 端口现状。
 
-发布包为 `tar.gz`，放在测试目录的 `incoming` 下，根目录需包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`。清单分别填写 `commit=<40位提交号>`、`backendJarSha256=<64位哈希>`、`webIndexSha256=<64位哈希>`。把仓库脚本放到测试服务器的 `incoming` 后，执行 `sudo bash /home/user1/deployments/building-energy-carbon-test/incoming/Deploy-BuildingEnergyCarbonTest.sh <发布名> <发布包绝对路径> <发布包SHA256>`。脚本核对包与内容哈希、测试服务和实际 HTTP 响应；失败时恢复原测试控制配置，并回退已切换的测试目录 `current`，不自动回滚数据库。
+发布包为 `tar.gz`，放在测试目录的 `incoming` 下，根目录需包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`。清单分别填写 `commit=<40位提交号>`、`backendJarSha256=<64位哈希>`、`webIndexSha256=<64位哈希>`。把仓库脚本放到测试服务器的 `incoming` 后，执行 `sudo bash /home/user1/deployments/building-energy-carbon-test/incoming/Deploy-BuildingEnergyCarbonTest.sh <发布名> <发布包绝对路径> <发布包SHA256>`。脚本核对包与内容哈希、测试服务和实际 HTTP 响应；切换候选后失败须停止服务、保留当前候选及迁移数据，不自动切回或启动旧包，也不回滚数据库。停止或配置恢复失败单独报错。切换前失败不停止正在使用的服务。
 
-将 `daikin_test_deployment_config.py` 放在发布脚本同目录。每次测试发布自动备份原控制配置，明确校验 TEST 环境后启用持续开放配置；重启后核验进程实际参数，失败时恢复原配置及原应用版本。非 TEST 环境拒绝开放和切换版本。应用发布脚本不承担数据库迁移；升级须使用独立迁移凭据、事先备份和升级验证，不能为发布重新授予应用账号DDL权限。
+将 `daikin_test_deployment_config.py` 放在通用发布脚本同目录。通用测试发布自动备份原控制配置，明确校验 TEST 环境后启用持续开放配置；重启后核验进程实际参数，失败时恢复已更改的控制配置。非 TEST 环境拒绝开放和切换版本。D01 使用独立的[分阶段升级与恢复流程](d01-deployment.md)：通用入口拒绝 V84 包，`d01_release.py` 保留当前控制配置，先冻结写入、使用 `d01_backup.py` 备份主库/归档库/TDengine，再由独立 Flyway 进程迁移，最后切换并显式启动测试后端及其 Nginx。D01 的原始证据约束替代自动恢复原应用版本的旧回退行为：候选开始启动后按可能已有写入处理，禁止自动返回旧包。失败保留现场，停止失败单独报错；不能为发布重新授予应用账号 DDL 权限。旧包兼容性、跨库恢复、消息保留和业务验收均不能由 HTTP 健康检查替代。
 
 ## 6. 合并后安全清理
 

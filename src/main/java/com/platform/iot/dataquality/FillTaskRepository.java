@@ -22,6 +22,11 @@ public interface FillTaskRepository {
 
     BizDataQualityFillTask getOrCreate(BizDataQualityFillTask candidate);
 
+    /** 明确更正先独立提交端点证据，外层派生事务回滚也不能遗失 TDengine 行的任务归属。 */
+    default BizDataQualityFillTask getOrCreateDurably(BizDataQualityFillTask candidate) {
+        throw new UnsupportedOperationException("Durable interpolation evidence unavailable");
+    }
+
     Optional<BizDataQualityFillTask> findById(String taskId);
 
     /**

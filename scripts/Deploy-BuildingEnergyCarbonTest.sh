@@ -48,22 +48,36 @@ release="$base/releases/$name"
 
 switched=false
 control_backup=
-rollback() {
+control_prepared=false
+fail_stop() {
   code=$?
   trap - ERR
-  if [[ -n "$control_backup" && -f "$control_backup" ]]; then
-    python3 "$control_config_tool" restore "$control_backup" || true
+  recovery_failed=false
+  if [[ "$switched" == true ]]; then
+    # The candidate may already have written D01 immutable evidence or migrations.
+    # Never revive an older last-write-wins package automatically; retain the candidate for manual recovery.
+    if ! systemctl stop "$service"; then
+      echo "TEST_DEPLOY_FAIL_STOP_FAILED service=$service release=$release" >&2
+      recovery_failed=true
+    fi
+  fi
+  if [[ "$control_prepared" == true ]]; then
+    if ! python3 "$control_config_tool" restore "$control_backup"; then
+      echo "TEST_DEPLOY_CONTROL_RESTORE_FAILED backup=$control_backup" >&2
+      recovery_failed=true
+    fi
   fi
   if [[ "$switched" == true ]]; then
-    ln -s "$previous" "$base/.rollback-$name-$$" && mv -Tf "$base/.rollback-$name-$$" "$base/current" || true
+    echo "TEST_DEPLOY_FAIL_STOP_D01_GUARD release=$release previous=$previous" >&2
   fi
-  if [[ "$switched" == true || -n "$control_backup" ]]; then
-    systemctl restart "$service" || true
+  if [[ "$recovery_failed" == true ]]; then
+    echo "TEST_DEPLOY_RECOVERY_FAILED original_code=$code" >&2
+    exit 1
   fi
   echo "TEST_DEPLOY_FAILED code=$code" >&2
   exit "$code"
 }
-trap rollback ERR
+trap fail_stop ERR
 
 stage=$(mktemp -d "$base/releases/.stage-$name-XXXXXX")
 python3 - "$archive" "$stage" <<'PY'
@@ -86,6 +100,20 @@ web_hash=$(sed -n 's/^webIndexSha256=//p' <<< "$manifest")
 [[ "$commit" =~ ^[0-9a-f]{40}$ && "$jar_hash" =~ ^[0-9a-f]{64}$ && "$web_hash" =~ ^[0-9a-f]{64}$ ]]
 [[ "$(sha256sum "$stage/building-energy-carbon-platform.jar" | cut -d' ' -f1)" == "$jar_hash" ]]
 [[ "$(sha256sum "$stage/web/index.html" | cut -d' ' -f1)" == "$web_hash" ]]
+# D01 必须经过停写、双库备份和独立迁移；旧的单步发布入口不能承载这次升级。
+python3 - "$stage/building-energy-carbon-platform.jar" "$stage/MANIFEST.txt" <<'PY'
+import pathlib
+import sys
+import zipfile
+
+manifest = dict(line.split('=', 1) for line in pathlib.Path(sys.argv[2]).read_text().splitlines() if '=' in line)
+requires_d01 = manifest.get('expectedMigration', '').isdigit() and int(manifest['expectedMigration']) >= 84
+if zipfile.is_zipfile(sys.argv[1]):
+    with zipfile.ZipFile(sys.argv[1]) as jar:
+        requires_d01 = requires_d01 or any('/V84__mysql_telemetry_immutable_conflicts.sql' in name for name in jar.namelist())
+if requires_d01:
+    raise SystemExit('D01_STAGED_RELEASE_REQUIRED: use d01_release.py')
+PY
 # mktemp creates a root-only directory; normalize artifact access before switching the running service.
 # Packages contain only public application artifacts, never server credentials or shared configuration.
 find "$stage" -type d -exec chmod 0755 {} +
@@ -97,6 +125,7 @@ runuser -u "$service_user" -- bash -c 'cd "$1" && test -r building-energy-carbon
 control_backup_dir=$(mktemp -d "$base/backups/control-$name-XXXXXX")
 control_backup="$control_backup_dir/control-before.env"
 python3 "$control_config_tool" prepare "$control_backup"
+control_prepared=true
 mv "$stage" "$release"
 ln -s "$release" "$base/.next-$name-$$"
 mv -Tf "$base/.next-$name-$$" "$base/current"

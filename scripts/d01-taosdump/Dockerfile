@@ -1,0 +1,13 @@
+# Build only the D01 backup client; never install or replace the server binary.
+FROM tdengine/tdengine@sha256:ae60a3a45dee241c79a54a5b301731dd12469b8e57ac857f4df932cf136335fc AS build
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked sed -i 's|http://archive.ubuntu.com|https://archive.ubuntu.com|g; s|http://security.ubuntu.com|https://security.ubuntu.com|g' /etc/apt/sources.list && apt-get -o Acquire::Retries=3 update && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends gcc-11 libavro-dev libjansson-dev libsnappy-dev liblzma-dev zlib1g-dev python3 ca-certificates curl
+WORKDIR /build
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y --no-install-recommends cmake make pkg-config
+RUN curl --fail --location --output avro.tar.gz https://api.github.com/repos/apache/avro/tarball/release-1.9.0 && echo '6365e76e1dc0a0af7be26067a74befe7923b699e8476313ddab18511ec19f1a7  avro.tar.gz' | sha256sum -c - && mkdir avro && tar -xzf avro.tar.gz -C avro --strip-components=1 && sed -i -e 's/project(AvroC)/project(AvroC C)/' -e '/add_subdirectory(tests)/d' -e '/add_subdirectory(examples)/d' -e '/add_subdirectory(docs)/d' avro/lang/c/CMakeLists.txt && cmake -S avro/lang/c -B avro-build -DCMAKE_C_COMPILER=gcc-11 -DCMAKE_BUILD_TYPE=Release && cmake --build avro-build --target avro-static -j2
+RUN curl --fail --location --output source.tar.gz https://api.github.com/repos/taosdata/taos-tools/tarball/3bb61cc2ccea8e092cc96dc3619969302567fd4d && echo '0b35b7fd7258e41c8ed271cb50fd8817a38d82242ad14269d6850ed424d486fb  source.tar.gz' | sha256sum -c - && tar -xzf source.tar.gz --strip-components=1
+COPY patch_password.py /build/patch_password.py
+RUN python3 patch_password.py
+RUN gcc-11 -O2 -DLINUX -DTD_VER_COMPATIBLE_3_0_0_0 -DTAOSDUMP_TAG='"3.2.3.0-d01-stdin"' -DTAOSDUMP_COMMIT_SHA1='"3bb61cc-d01"' -Iinc -Ideps/toolscJson/inc -Iavro/lang/c/src -I/usr/local/taos/include src/taosdump.c src/toolstime.c src/toolsSys.c src/toolsDir.c src/toolsString.c -o taosdump-d01 -L/usr/local/taos/driver -ltaos avro-build/src/libavro.a -Wl,-Bstatic -ljansson -lsnappy -llzma -lz -Wl,-Bdynamic -l:libstdc++.so.6 -lm -lpthread -latomic
+RUN mkdir /out && cp taosdump-d01 LICENSE /out/ && cat avro/LICENSE.txt avro/NOTICE.txt /usr/share/doc/libjansson-dev/copyright /usr/share/doc/libsnappy-dev/copyright /usr/share/doc/liblzma-dev/copyright /usr/share/doc/zlib1g-dev/copyright >> /out/LICENSE && sha256sum /out/taosdump-d01 && ldd /out/taosdump-d01
+FROM scratch
+COPY --from=build /out/ /

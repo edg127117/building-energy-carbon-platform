@@ -74,6 +74,12 @@ describe('navigation authorization mapping', () => {
     ])).map(page => page.title)).toEqual(['敏感变更申请'])
   })
 
+  it('recognizes the data quality conflict page under alarm management', () => {
+    expect(authorizedPages(tree('operations', 'alarms', [
+      menu('/operations/alarms/dataQuality', { menuName: '数据质量冲突处置' }),
+    ])).map(page => page.title)).toEqual(['数据质量冲突处置'])
+  })
+
   it('does not render children of disabled or hidden directories', () => {
     expect(authorizedPages([menu('/configuration', { menuType: 'M', status: 0, children: [
       menu('/configuration/access', { menuType: 'M', children: [menu('/configuration/access/users')] }),

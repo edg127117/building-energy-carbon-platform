@@ -70,8 +70,9 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
         assertThat(jdbc.queryForList("SELECT version,checksum,success FROM flyway_schema_history WHERE version<>'76' ORDER BY installed_rank"))
                 .isEqualTo(historyBeforeAccess);
-        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
-        assertThat(flyway.migrate().migrationsExecuted).as("V76到V83执行本轮配置迁移").isEqualTo(7);
+        Flyway configuration = Flyway.configure().dataSource(dataSource)
+                .locations("filesystem:src/env/init").target("83").load();
+        assertThat(configuration.migrate().migrationsExecuted).as("V76到V83执行本轮配置迁移").isEqualTo(7);
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
@@ -79,6 +80,12 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
+        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
+        assertThat(flyway.migrate().migrationsExecuted).as("V83到V84只增加D01原始保全与冲突治理").isEqualTo(1);
+        assertThat(jdbc.queryForObject("""
+                SELECT version FROM flyway_schema_history
+                WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
+                """, String.class)).isEqualTo("84");
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).as("重跑迁移不得重复建表或改写历史").isZero();
         assertThat(jdbc.queryForObject("""

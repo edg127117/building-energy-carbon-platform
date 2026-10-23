@@ -49,6 +49,7 @@ public class InterpolationFillService {
 
     public static final String ALGORITHM_VERSION = "LINEAR_V1";
     private static final long MINUTE_MILLIS = 60_000L;
+    private static final int MAX_CONFIRMED_GAP_MINUTES = 5000;
     private static final ZoneId PROJECT_ZONE = ZoneId.of("Asia/Shanghai");
 
     private final DataQualityProperties properties;
@@ -115,6 +116,152 @@ public class InterpolationFillService {
                     finalizedAt,
                     maxGapMinutes);
         }
+    }
+
+    /** 已确认端点更正同时影响左右缺口；以新端点证据建任务，显式替代旧 Q1，不改写 Q0。 */
+    public void correctFromChangedEndpoint(RawMinuteAggregate changed,long finalizedAt) {
+        if(changed.dataQuality()!=0)throw new IllegalArgumentException("Confirmed endpoint must be Q0");
+        PointRuntimeConfig point=pointConfigProvider.findAll().stream()
+                .filter(p->p.pointId().equals(changed.pointId())&&p.buildingId().equals(changed.buildingId()))
+                .findFirst().orElseThrow(()->new IllegalStateException("Confirmed interpolation point unavailable"));
+        if(!isEligiblePoint(point)) {
+            // 累计量等本来不参与插值的点可正常结束；只有遗留 Q1 依赖才需要阻止假完成。
+            boolean hasQ1=correctionRows(point,changed.minuteStart()-MINUTE_MILLIS,
+                    changed.minuteStart()+2*MINUTE_MILLIS).stream()
+                    .anyMatch(r->r.dataQuality()==1&&r.minuteStart()!=changed.minuteStart());
+            if(hasQ1)throw new IllegalStateException("Confirmed interpolation point ineligible with historical Q1");
+            return;
+        }
+        int gap=properties.getInterpolation().getMaxGapMinutes();
+        if(gap<1||gap>MAX_CONFIRMED_GAP_MINUTES)throw new IllegalStateException("Confirmed interpolation capacity exceeded");
+        long radius=(gap+1L)*MINUTE_MILLIS;
+        long from=changed.minuteStart()-radius,to=changed.minuteStart()+radius+MINUTE_MILLIS;
+        List<RawMinuteAggregate> range=correctionRows(point,from,to);
+        // 当前自动补点范围可能已缩小；只按相邻现存 Q1 的冻结证据扩展，不能漏掉旧任务依赖。
+        for(int direction:new int[]{-1,1}) {
+            long adjacentAt=changed.minuteStart()+direction*MINUTE_MILLIS;
+            var adjacent=range.stream().filter(r->r.minuteStart()==adjacentAt&&r.dataQuality()==1).findFirst();
+            boolean endpointPresent=range.stream().anyMatch(r->r.dataQuality()==0
+                    &&(direction<0?r.minuteStart()<changed.minuteStart():r.minuteStart()>changed.minuteStart()));
+            if(adjacent.isPresent()&&!endpointPresent) {
+                long endpoint=historicalEndpoint(point,changed.minuteStart(),adjacent.orElseThrow(),direction);
+                if(direction<0)from=Math.min(from,endpoint);else to=Math.max(to,endpoint+MINUTE_MILLIS);
+            }
+        }
+        if(from<changed.minuteStart()-radius||to>changed.minuteStart()+radius+MINUTE_MILLIS)
+            range=correctionRows(point,from,to);
+        RawMinuteAggregate confirmed=range.stream().filter(r->r.pointId().equals(point.pointId())
+                &&r.buildingId().equals(point.buildingId())&&r.minuteStart()==changed.minuteStart()&&r.dataQuality()==0)
+                .findFirst().orElseThrow(()->new IllegalStateException("Confirmed endpoint unavailable"));
+        var rows=new ArrayList<>(range.stream().filter(r->r.pointId().equals(point.pointId())
+                &&r.buildingId().equals(point.buildingId())&&r.minuteStart()!=changed.minuteStart()).toList());
+        rows.add(confirmed);
+        RawMinuteAggregate left=rows.stream().filter(r->r.dataQuality()==0&&r.minuteStart()<changed.minuteStart())
+                .max(Comparator.comparingLong(RawMinuteAggregate::minuteStart)).orElse(null);
+        RawMinuteAggregate right=rows.stream().filter(r->r.dataQuality()==0&&r.minuteStart()>changed.minuteStart())
+                .min(Comparator.comparingLong(RawMinuteAggregate::minuteStart)).orElse(null);
+        for(int direction:new int[]{-1,1}) {
+            boolean hasQ1=rows.stream().anyMatch(r->r.dataQuality()==1
+                    &&r.minuteStart()==changed.minuteStart()+direction*MINUTE_MILLIS);
+            if(hasQ1&&(direction<0?left:right)==null)
+                throw new IllegalStateException("Historical interpolation endpoint unavailable");
+        }
+        if(left!=null)correctGap(point,left,confirmed,rows,finalizedAt,
+                Math.max(gap,Math.toIntExact((confirmed.minuteStart()-left.minuteStart())/MINUTE_MILLIS-1)));
+        if(right!=null)correctGap(point,confirmed,right,rows,finalizedAt,
+                Math.max(gap,Math.toIntExact((right.minuteStart()-confirmed.minuteStart())/MINUTE_MILLIS-1)));
+    }
+
+    private List<RawMinuteAggregate> correctionRows(PointRuntimeConfig point,long from,long to) {
+        return minuteRepository.findRange(Set.of(point.pointId()),from,to).stream()
+                .filter(r->r.pointId().equals(point.pointId())&&r.buildingId().equals(point.buildingId())).toList();
+    }
+
+    /** 历史端点只限定依赖范围，数值仍须回读现存 Q0；证据损坏或过大时保留失败任务。 */
+    private long historicalEndpoint(PointRuntimeConfig point,long changed,RawMinuteAggregate adjacent,int direction) {
+        var task=fillTaskRepository.findByIdForUpdate(requireText(adjacent.qualityTaskId(),"previousTaskId"))
+                .orElseThrow(()->new IllegalStateException("Previous interpolation evidence unavailable"));
+        if(task.getSourceType()!=FillSourceType.INTERPOLATION||!point.pointId().equals(task.getPointId())
+                ||!point.buildingId().equals(task.getBuildingId())||task.getApplyStatus()==FillApplyStatus.VOIDED)
+            throw new IllegalStateException("Previous interpolation ownership or status mismatch");
+        var evidence=(FillTaskEvidence.Interpolation)evidenceCodec.decode(task.getSourceType(),task.getEvidenceJson());
+        if(!ALGORITHM_VERSION.equals(evidence.algorithmVersion())||evidence.leftMinute()>changed||evidence.rightMinute()<changed
+                ||adjacent.minuteStart()<=evidence.leftMinute()||adjacent.minuteStart()>=evidence.rightMinute())
+            throw new IllegalStateException("Previous interpolation endpoint mismatch");
+        long endpoint=direction<0?evidence.leftMinute():evidence.rightMinute();
+        long distance=direction<0?Math.subtractExact(changed,endpoint):Math.subtractExact(endpoint,changed);
+        if(distance<MINUTE_MILLIS||distance>(MAX_CONFIRMED_GAP_MINUTES+1L)*MINUTE_MILLIS)
+            throw new IllegalStateException("Historical interpolation capacity exceeded");
+        return endpoint;
+    }
+
+    private void correctGap(PointRuntimeConfig point,RawMinuteAggregate left,RawMinuteAggregate right,
+            List<RawMinuteAggregate> rows,long finalizedAt,int maximumGap) {
+        var interpolation=interpolator.interpolate(left.minuteStart(),left.averageValue(),
+                right.minuteStart(),right.averageValue(),maximumGap);
+        if(interpolation.isEmpty())return;
+        if(interpolation.stream().anyMatch(m->!isWithinRange(point,m.value())))
+            throw new IllegalStateException("Confirmed interpolation outside point range");
+        Map<Long,RawMinuteAggregate> existing=rows.stream().collect(Collectors.toMap(
+                RawMinuteAggregate::minuteStart,r->r,(first,ignored)->first));
+        // 复用人工作废的任务行锁；先核验旧归属再独立建任务，避免留下可恢复的无效 WAITING 任务。
+        Set<String> checked=new java.util.HashSet<>();
+        for(var minute:interpolation) {
+            var old=existing.get(minute.minuteStart());
+            if(old!=null&&old.dataQuality()==1) {
+                String prior=requireText(old.qualityTaskId(),"previousTaskId");
+                if(checked.add(prior)) {
+                    var evidence=fillTaskRepository.findByIdForUpdate(prior)
+                            .orElseThrow(()->new IllegalStateException("Previous interpolation evidence unavailable"));
+                    if(evidence.getSourceType()!=FillSourceType.INTERPOLATION
+                            ||!point.pointId().equals(evidence.getPointId())||!point.buildingId().equals(evidence.getBuildingId())
+                            ||evidence.getApplyStatus()==FillApplyStatus.VOIDED)
+                        throw new IllegalStateException("Previous interpolation ownership or status mismatch");
+                }
+            }
+        }
+        var candidate=newTask(point,left,right,interpolation.size(),finalizedAt);
+        // 幂等键包含端点值；不能复用原自动任务中已冻结的旧端点证据。
+        String content=point.pointId()+":"+left.minuteStart()+":"+Double.toString(left.averageValue())+":"+left.finalizedAt()
+                +":"+right.minuteStart()+":"+Double.toString(right.averageValue())+":"+right.finalizedAt()+":"+ALGORITHM_VERSION;
+        try {
+            candidate.setIdempotencyKey("D01_Q1:"+java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(content.getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+        } catch(java.security.NoSuchAlgorithmException failure) {throw new IllegalStateException(failure);}
+        var task=fillTaskRepository.getOrCreateDurably(candidate);
+        if(task.getApplyStatus()==FillApplyStatus.VOIDED||task.getApplyStatus()==FillApplyStatus.REPLACED)
+            throw new IllegalStateException("Confirmed interpolation task is terminal");
+        String taskId=requireText(task.getTaskId(),"taskId");
+        Map<String,List<RawMinuteAggregate>> replacements=new LinkedHashMap<>();
+        for(var minute:interpolation) {
+            var old=existing.get(minute.minuteStart());
+            if(old!=null&&old.dataQuality()==0)continue;
+            String prior=null;
+            if(old!=null&&old.dataQuality()==1&&!taskId.equals(old.qualityTaskId())) {
+                prior=requireText(old.qualityTaskId(),"previousTaskId");
+            }
+            replacements.computeIfAbsent(prior,ignored->new ArrayList<>())
+                    .add(generatedMinute(point,minute,finalizedAt,taskId));
+        }
+        var all=new ArrayList<MinuteQualityWriteResult>();
+        for(var replacement:replacements.entrySet()) {
+            var generated=replacement.getValue();
+            try {
+                var results=minuteRepository.saveAllWithQualityPriority(generated,replacement.getKey());
+                validateWriteResults(generated,results);
+                for(int i=0;i<results.size();i++) {
+                    var outcome=results.get(i).outcome();
+                    if(!isActualWrite(outcome)&&outcome!=MinuteQualityWriteResult.Outcome.IDEMPOTENT)
+                        throw new IllegalStateException("Confirmed interpolation changed concurrently");
+                    // 上次可能落盘后在 READY 中断，幂等重试也必须补齐公式通知。
+                    publishReady(generated.get(i),finalizedAt);
+                }
+                all.addAll(results);
+            } catch(RuntimeException failure) {recordFailures(taskId,generated,failure);throw failure;}
+        }
+        markFirstAppliedBestEffort(taskId,all);
+        recordReplacedTasksBestEffort(all);
+        reconcile(taskId,interpolation.size(),all,finalizedAt);
     }
 
     private Map<Long, LinkedHashMap<String, RawMinuteAggregate>>

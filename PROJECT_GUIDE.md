@@ -171,7 +171,7 @@ V73 增加非空安全版本，历史账号初始为 1；无版本的旧 JWT 必
 
 `GET /api/v1/assets/equipment/{equipmentId}/readings` 沿用资产接口的平台管理员权限，
 从 MySQL 确定设备当前测点及单位，再按建筑、设备和测点身份批量读取 TDengine 中各测点的最新原始事件。
-返回的是已入库原始值，不是分钟均值；`HAS_DATA` 只表示存在记录，不表示设备在线或运行正常。
+返回已入库事件的当前有效业务值：D01 冲突处置或已批准能源更正可选择正确值，原始证据不覆盖（见 [D01 边界](docs/designs/d01-immutable-telemetry-correction.md)）；不是分钟均值；`HAS_DATA` 只表示存在记录，不表示设备在线或运行正常。
 读数仍经过 `POINT_REALTIME_VIEW` 质量策略，受阻断时数值为空并返回 `usageStatus/reason`。
 `eventTime` 是事件时间，不能默认当作设备采样时间；`receivedTime` 是平台接收时间，
 `generatedAt` 是查询组装时间。原始数据已超出保留期时，不能用分钟均值补造原始读数。

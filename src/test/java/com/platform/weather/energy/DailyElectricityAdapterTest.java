@@ -74,7 +74,7 @@ class DailyElectricityAdapterTest {
         when(quality.resolve(eq(context), eq("P1"), eq(ENERGY_ACTIVITY_AGGREGATION), anyLong(), anyInt()))
                 .thenAnswer(call -> allowed(call.getArgument(4)));
         when(aggregation.governedEvidence(eq(7L), eq(List.of("ENERGY_MANAGER")), eq("B1"), eq("P1"),
-                any(Instant.class), any(Instant.class)))
+                any(Instant.class), any(Instant.class), any(Instant.class)))
                 .thenReturn(new NativeQuantityAggregationService.GovernedEvidence(List.of(), List.of()));
         when(aggregation.aggregateCumulative(any())).thenReturn(new NativeQuantityAggregationService.NativeQuantityResult(
                 new BigDecimal("12.50"), "kWh", BigDecimal.ONE, 0, List.of("P1@1"), List.of(), List.of(), List.of(), true));
@@ -140,7 +140,7 @@ class DailyElectricityAdapterTest {
     @Test
     void calculatesFromLatestQualifiedReadingBeforeMidnightAndMarksApproximate() {
         long before = LEFT_MIDNIGHT - 6 * 60_000L;
-        when(raw.findPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
+        when(raw.findOriginalPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
                 .thenReturn(List.of(event(before, 100.0), event(RIGHT_MIDNIGHT, 112.5)));
 
         var result = adapter.calculate(7L, List.of("ENERGY_MANAGER"), "B1", "S1", "P1", DAY, DAY).getFirst();
@@ -165,7 +165,7 @@ class DailyElectricityAdapterTest {
 
     @Test
     void doesNotUseAReadingAfterMidnightAsTheLeftBoundary() {
-        when(raw.findPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
+        when(raw.findOriginalPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
                 .thenReturn(List.of(event(LEFT_MIDNIGHT + 60_000, 100.0), event(RIGHT_MIDNIGHT, 112.5)));
 
         var result = adapter.calculate(7L, List.of("ENERGY_MANAGER"), "B1", "S1", "P1", DAY, DAY).getFirst();
@@ -210,7 +210,7 @@ class DailyElectricityAdapterTest {
 
     @Test
     void reportsMissingWhenRawHistoryIsEmpty() {
-        when(raw.findPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
+        when(raw.findOriginalPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
                 .thenReturn(List.of());
 
         var result = adapter.calculate(7L, List.of("ENERGY_MANAGER"), "B1", "S1", "P1", DAY, DAY).getFirst();
@@ -223,7 +223,7 @@ class DailyElectricityAdapterTest {
 
     @Test
     void reportsAnUnclassifiedCumulativeDecreaseInsteadOfProducingEnergy() {
-        when(raw.findPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
+        when(raw.findOriginalPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
                 .thenReturn(List.of(event(LEFT_MIDNIGHT, 100.0), event(RIGHT_MIDNIGHT, 90.0)));
         when(aggregation.aggregateCumulative(any())).thenThrow(new BusinessException(
                 409, "ENERGY_AGGREGATION_NEGATIVE_DELTA_UNCLASSIFIED", "unclassified negative delta"));
@@ -237,13 +237,13 @@ class DailyElectricityAdapterTest {
 
     @Test
     void passesApprovedResetEvidenceToTheNativeCumulativeCore() {
-        when(raw.findPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
+        when(raw.findOriginalPointHistory(eq("B1"), eq("E1"), eq("P1"), anyLong(), anyLong(), isNull(), eq(500)))
                 .thenReturn(List.of(event(LEFT_MIDNIGHT, 100.0), event(RIGHT_MIDNIGHT, 10.0)));
         var reset = new MeterEventEvidence("ME1", "MEV1", "B1", "P1", MeterEventType.RESET,
                 Instant.ofEpochMilli(RIGHT_MIDNIGHT), EvidenceStatus.APPROVED, new BigDecimal("100"),
                 new BigDecimal("10"), null, null, null, "RV1", "RV1", "evidence", 9L, 10L, false);
         when(aggregation.governedEvidence(eq(7L), eq(List.of("ENERGY_MANAGER")), eq("B1"), eq("P1"),
-                any(Instant.class), any(Instant.class)))
+                any(Instant.class), any(Instant.class), any(Instant.class)))
                 .thenReturn(new NativeQuantityAggregationService.GovernedEvidence(List.of(reset), List.of()));
 
         var result = adapter.calculate(7L, List.of("ENERGY_MANAGER"), "B1", "S1", "P1", DAY, DAY).getFirst();
@@ -281,7 +281,7 @@ class DailyElectricityAdapterTest {
 
     @Test void counterIdentityChangeIsNotTreatedAsOrdinaryPositiveConsumption() {
         RawTelemetryEvent changed=new RawTelemetryEvent("P1","PC1","device","external","replacement","B1","S1","E1","E1","F","C","EPP",110d,RIGHT_MIDNIGHT,RIGHT_MIDNIGHT,0,1,false);
-        when(raw.findPointHistory(eq("B1"),eq("E1"),eq("P1"),anyLong(),anyLong(),isNull(),eq(500)))
+        when(raw.findOriginalPointHistory(eq("B1"),eq("E1"),eq("P1"),anyLong(),anyLong(),isNull(),eq(500)))
                 .thenReturn(List.of(event(LEFT_MIDNIGHT,100),changed));
         var result=adapter.calculate(7L,List.of("ENERGY_MANAGER"),"B1","S1","P1",DAY,DAY).getFirst();
         assertThat(result.energyKwh()).isNull();

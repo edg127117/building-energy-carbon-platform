@@ -156,6 +156,34 @@ class LateRealMinuteCorrectionServiceTest {
     }
 
     @Test
+    void confirmedOldCorrectionRetriesDownstreamWhenQ0WasAlreadyWritten() {
+        var current=minute(12.0,0,1,MINUTE+2000L,MINUTE+2000L,null);
+        when(minuteRepository.findPointMinute("P1",MINUTE)).thenReturn(Optional.of(current));
+        when(rawRepository.findWindow(MINUTE,MINUTE+60000,true)).thenReturn(List.of(event(12.0,1000L,2000L,false)));
+        when(minuteRepository.findByMinute(MINUTE,Set.of("B1"))).thenReturn(List.of(current));
+        doThrow(new IllegalStateException("interpolation unavailable")).doNothing().when(interpolationFillService).correctFromChangedEndpoint(any(),anyLong());
+        var old=new HvacLateRealEventStoredEvent("P1","B1",MINUTE,MINUTE+7*86400000L);
+        org.assertj.core.api.Assertions.assertThatThrownBy(()->service.applyConfirmedCorrection(old)).isInstanceOf(IllegalStateException.class);
+        service.applyConfirmedCorrection(old);
+        verify(eventPublisher,times(2)).publishEvent(any(Object.class));
+        verify(minuteRepository,never()).saveAllWithQualityPriority(anyList(),any());
+        verify(interpolationFillService,times(2)).correctFromChangedEndpoint(any(),anyLong());
+    }
+
+    @Test
+    void confirmedSmallCorrectionIsNotDiscardedByOrdinaryLateTolerance() {
+        var current=minute(12.0,0,1,MINUTE+2000,MINUTE+2000,null);
+        when(minuteRepository.findPointMinute("P1",MINUTE)).thenReturn(Optional.of(current));
+        when(rawRepository.findWindow(MINUTE,MINUTE+60000,true)).thenReturn(List.of(event(12.0000000001,1000L,2000L,false)));
+        when(minuteRepository.saveAllWithQualityPriority(anyList(),any())).thenReturn(List.of(new MinuteQualityWriteResult("P1",MINUTE,MinuteQualityWriteResult.Outcome.UPDATED_REAL,0,null)));
+        when(minuteRepository.findByMinute(MINUTE,Set.of("B1"))).thenReturn(List.of(current));
+        service.applyConfirmedCorrection(new HvacLateRealEventStoredEvent("P1","B1",MINUTE,MINUTE+7*86400000L));
+        @SuppressWarnings("unchecked") org.mockito.ArgumentCaptor<List<RawMinuteAggregate>> rows=org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(minuteRepository).saveAllWithQualityPriority(rows.capture(),any());
+        assertThat(rows.getValue().getFirst().averageValue()).isEqualTo(12.0000000001);
+    }
+
+    @Test
     void realMinuteIsUpdatedWhenAnotherLateSampleWasStoredAfterFirstAggregation() {
         RawMinuteAggregate incomplete = minute(
                 10.0, 0, 1,
