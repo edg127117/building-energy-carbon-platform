@@ -380,7 +380,8 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 @unittest.skipUnless(sys.platform == "linux", "installer requires POSIX uid and filesystem semantics")
 class InstallerTest(unittest.TestCase):
     def test_completed_v84_record_is_archived_only_after_revocation_and_baseline_checks(self):
-        for scenario in ("success", "active_grant", "failed", "credential", "timer", "baseline", "code", "config"):
+        for scenario in ("success", "frontend_successor", "backend_changed", "foreign_current",
+                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
                 root = Path(directory)
                 for name, path in (("INSTALL", root / "tools"), ("DATA", root / "data"), ("BASE", root / "test"),
@@ -396,6 +397,13 @@ class InstallerTest(unittest.TestCase):
                 candidate.mkdir(parents=True)
                 (installer.BASE / "current").symlink_to(candidate)
                 (candidate / "building-energy-carbon-platform.jar").write_bytes(b"deployed v84")
+                if scenario in ("frontend_successor", "backend_changed", "foreign_current"):
+                    successor = root / "foreign" if scenario == "foreign_current" else installer.BASE / "releases/frontend-successor"
+                    successor.mkdir()
+                    (successor / "building-energy-carbon-platform.jar").write_bytes(
+                        b"new backend" if scenario == "backend_changed" else b"deployed v84")
+                    (installer.BASE / "current").unlink()
+                    (installer.BASE / "current").symlink_to(successor)
                 config = {"format": "D01_TEMP_AUTH_V1", "user": "user1", "release": old_release,
                           "archive_name": old_release + "-authorized.tar.gz",
                           "jar_sha256": hashlib.sha256(b"deployed v84").hexdigest(),
@@ -432,7 +440,7 @@ class InstallerTest(unittest.TestCase):
                     calls.append(args)
                     return "active" if scenario == "timer" else "inactive" if "ActiveState" in args else "disabled"
                 stack.enter_context(patch.object(installer, "run", side_effect=run))
-                if scenario == "success":
+                if scenario in ("success", "frontend_successor"):
                     installer.retire_completed_v84("d01-" + "b" * 12)
                     archives = list(installer.HISTORY.iterdir())
                     self.assertEqual(len(archives), 1)

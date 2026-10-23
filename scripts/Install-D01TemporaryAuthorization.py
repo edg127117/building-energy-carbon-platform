@@ -283,14 +283,17 @@ def retire_completed_v84(next_release):
     trusted_parent(state_path)
     state = json.loads(state_path.read_text())
     candidate = BASE / "releases" / release
+    current = (BASE / "current").resolve()
     require(state.get("phase") == "AWAITING_BUSINESS_ACCEPTANCE" and state.get("candidate_started") is True
-            and state.get("release") == str(candidate) and str((BASE / "current").resolve()) == str(candidate),
+            and state.get("release") == str(candidate) and current.is_relative_to(BASE / "releases"),
             "D01_OLD_BASELINE_CHANGED")
-    # 复核当前进程、运行配置和其他站点；时间参数仅用于排除错误时钟，不限制维护后的正常重启。
+    # 后续前端发布可以更换目录，但不能替换已核验的后端。完成维护后允许服务正常重启。
     retry_baseline(state, int(time.time()))
     require(state.get("config_hashes") == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
     require(hashlib.sha256((candidate / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
-            == state.get("jar_sha256") == config.get("jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
+            == state.get("jar_sha256") == config.get("jar_sha256")
+            == hashlib.sha256((current / "building-energy-carbon-platform.jar").read_bytes()).hexdigest(),
+            "D01_OLD_BASELINE_JAR_CHANGED")
     for artifact in (BASE / "incoming" / (next_release + "-authorized.tar.gz"), BASE / "releases" / next_release):
         require(not artifact.exists() and not artifact.is_symlink(), "D01_NEW_RELEASE_ALREADY_EXISTS")
     require(set(config.get("code_sha256", {})) == {name for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
