@@ -46,6 +46,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 @ExtendWith(MockitoExtension.class)
 class AssetManagementServiceTest {
     @Mock private BuildingService buildingService;
+    @Mock private D01TestBuildingRetirementService retirementService;
     @Mock private BizSpaceService spaceService;
     @Mock private BizSystemGroupService systemGroupService;
     @Mock private BizEquipmentService equipmentService;
@@ -82,6 +83,7 @@ class AssetManagementServiceTest {
         Building building = new Building();
         building.setBuildingId("B1");
         when(buildingService.getById("B1")).thenReturn(building);
+        when(retirementService.status("B1")).thenReturn("ACTIVE");
         when(spaceService.count(any())).thenReturn(1L);
 
         var result = service.buildingDetail("B1", List.of("PLATFORM_ADMIN"));

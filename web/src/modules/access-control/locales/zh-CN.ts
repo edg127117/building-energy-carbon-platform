@@ -162,7 +162,8 @@ export default {
     summaryUnavailable: '申请内容请打开详情查看',
     summaryFields: {
       adapter: '协议类型',
-      buildingId: '建筑编号', bindingType: '绑定方式', pointCount: '测点数量', pointMode: '测点创建方式',
+      buildingId: '建筑编号', buildingName: '建筑名称', evidenceSha256: '归档前证据摘要 SHA-256',
+      bindingType: '绑定方式', pointCount: '测点数量', pointMode: '测点创建方式',
       productId: '产品编号', equipmentName: '设备名称', action: '操作', userId: '用户编号', roleId: '角色编号', roleCount: '角色数量',
       buildingCount: '建筑数量', menuCount: '菜单数量', menuId: '菜单编号', menuName: '菜单名称',
       menuType: '菜单类型', status: '状态',
@@ -233,6 +234,8 @@ export default {
     configureTemperatureRule: '配置温度模板匹配规则',
     activateDeviceIdentity: '启用设备身份',
     deactivateDeviceIdentity: '停用设备身份',
+    excludeD01TestBuilding: '排除 D01 合成建筑统计',
+    archiveD01TestBuilding: '归档 D01 合成建筑并保留审计关联',
     publishProtocolConfiguration: '发布或回退协议配置',
     grantBackendDuty: '授予后台职责',
     revokeBackendDuty: '撤销后台职责',

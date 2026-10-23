@@ -27,6 +27,7 @@ OTHER = Path("/var/www/iot-platform/current")
 OTHER_SERVICE = "nginx.service"
 JAR = "building-energy-carbon-platform.jar"
 V84 = "BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql"
+V85 = "BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retirement.sql"
 CONTROL = Path("/etc/building-energy-carbon-test/daikin-control-disabled.env")
 RUNTIME_KEYS = ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_FLYWAY_ENABLED", "TDENGINE_INITIALIZATION_ENABLED",
                 "MQTT_ENABLED", "MQTT_CLIENT_ID", "MYSQL_CONTAINER_NAME", "MYSQL_VOLUME_NAME",
@@ -181,16 +182,23 @@ def prepare(name, archive, expected_sha, credentials):
     try:
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
-        require(manifest.get("expectedMigration") == "84", "D01_V84_PACKAGE_REQUIRED")
+        target_schema = manifest.get("expectedMigration")
+        require(target_schema in ("84", "85"), "D01_V84_OR_V85_PACKAGE_REQUIRED")
+        state.update(source_schema=str(int(target_schema) - 1), target_schema=target_schema)
         require(re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "D01_COMMIT_REQUIRED")
         require(sha(target / JAR) == manifest["backendJarSha256"] and
                 sha(target / "web/index.html") == manifest["webIndexSha256"], "D01_PACKAGE_CONTENT_MISMATCH")
         with zipfile.ZipFile(target / JAR) as jar:
             jar.read(V84)
+            versions = [int(match[1]) for name in jar.namelist()
+                        if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
+            require(max(versions) == int(target_schema), "D01_PACKAGE_SCHEMA_MISMATCH")
+            if target_schema == "85":
+                jar.read(V85)
             jar.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
         state["jar_sha256"] = sha(target / JAR)
         state["web_sha256"] = sha(target / "web/index.html")
-        schema("validate83", state, credentials)
+        schema("validate" + state["source_schema"], state, credentials)
         state_path = state_directory() / ("d01-" + name + ".json")
         write_state(state_path, state, new=True)
         return state_path
@@ -203,6 +211,7 @@ def freeze(state_path, writers_fenced, ingress_retained, accept_ingress_loss=Fal
            loss_acceptance_reference=None):
     state = protected_json(state_path)
     require(state["phase"] == "PREPARED", "D01_PREPARED_STATE_REQUIRED")
+    target_schema(state)
     require(writers_fenced and (ingress_retained != accept_ingress_loss),
             "D01_EXTERNAL_WRITERS_AND_INGRESS_DECISION_REQUIRED")
     require(not accept_ingress_loss or (isinstance(loss_acceptance_reference, str)
@@ -248,7 +257,7 @@ def schema(action, state, credentials):
             (endpoint.port or 3306) == int(actual_runtime.get("MYSQL_PORT", "3306")) and
             endpoint.path == "/iot_platform", "D01_SCHEMA_TARGET_MISMATCH")
     require(endpoint.username is None and endpoint.password is None, "D01_CREDENTIALS_MUST_NOT_BE_IN_URL")
-    if action == "upgrade84":
+    if action.startswith("upgrade"):
         require(values["user"] != actual_runtime.get("MYSQL_USER", "platform_app"), "D01_SEPARATE_MIGRATION_ACCOUNT_REQUIRED")
     env = {**os.environ, "D01_JDBC_URL": values["url"], "D01_JDBC_USER": values["user"],
            "D01_JDBC_PASSWORD": values["password"], "D01_WRITERS_FROZEN": "true"}
@@ -257,7 +266,8 @@ def schema(action, state, credentials):
                              "org.springframework.boot.loader.launch.PropertiesLauncher", action],
                             env=env, capture_output=True, text=True, timeout=300)
     # 不回显 JDBC 错误或凭据。数据库失败现场由有权限的维护者另行读取。
-    require(result.returncode == 0 and "D01_SCHEMA_VALIDATED=" in result.stdout, "D01_SCHEMA_CHECK_FAILED")
+    require(result.returncode == 0 and ("D01_SCHEMA_VALIDATED=" + action[-2:]) in result.stdout.splitlines(),
+            "D01_SCHEMA_CHECK_FAILED")
 
 
 def checked_restore(backup_dir, restore_report):
@@ -280,12 +290,20 @@ def checked_restore(backup_dir, restore_report):
             "D01_RESTORE_EXECUTION_EVIDENCE_CHANGED")
 
 
+def target_schema(state):
+    # 没有版本字段的已授权旧状态仅兼容 V84，不能被解释为 V85 升级授权。
+    target = state.get("target_schema", "84")
+    require(target in ("84", "85") and state.get("source_schema", "83") == str(int(target) - 1),
+            "D01_STATE_SCHEMA_MISMATCH")
+    return target
+
+
 def migrate(state_path, backup_dir, credentials, restore_report=None):
     state = frozen_state(state_path)
     require(state["phase"] == "FROZEN", "D01_UPGRADE_NOT_REENTRANT")
     checked_backup(state_path, state, backup_dir)
     checked_restore(backup_dir, restore_report)
-    schema("upgrade84", state, credentials)
+    schema("upgrade" + target_schema(state), state, credentials)
     # 不改冻结文件：备份哈希和冻结身份贯穿迁移、切换；迁移结果由 cutover 再次验证。
 
 
@@ -293,7 +311,7 @@ def cutover(state_path, backup_dir, credentials, restore_report=None):
     state = frozen_state(state_path)
     checked_backup(state_path, state, backup_dir)
     checked_restore(backup_dir, restore_report)
-    schema("validate84", state, credentials)
+    schema("validate" + target_schema(state), state, credentials)
     require(sha(Path(state["release"]) / "web/index.html") == state["web_sha256"], "D01_WEB_CHANGED")
     # 在首次启动前落盘不可自动回退标记。即使健康检查失败，也不能假定尚无后台写入。
     state.update(phase="STARTING", candidate_started=True)

@@ -17,13 +17,16 @@ public final class D01SchemaMigration {
     private D01SchemaMigration() { }
 
     public static void main(String[] args) {
-        if (args.length != 1 || !Set.of("validate83", "upgrade84", "validate84").contains(args[0])) {
+        if (args.length != 1) {
             throw new IllegalArgumentException("D01_SCHEMA_ACTION_REQUIRED");
         }
         run(args[0], System.getenv());
     }
 
     static void run(String action, Map<String, String> environment) {
+        String target = target(action);
+        boolean upgrade = action.startsWith("upgrade");
+        String expected = upgrade ? String.valueOf(Integer.parseInt(target) - 1) : target;
         String url = required(environment, "D01_JDBC_URL");
         if (!url.startsWith("jdbc:mysql://") || url.matches("(?is).*[?&](user|password)=.*")) {
             throw new IllegalArgumentException("D01_JDBC_URL_WITHOUT_CREDENTIALS_REQUIRED");
@@ -37,26 +40,25 @@ public final class D01SchemaMigration {
         }
         // 不提供 baseline/repair/clean：部分 DDL 失败必须保留现场，不能把失败历史伪装为成功。
         var flyway = Flyway.configure().dataSource(source).locations("classpath:db/migration/mysql")
-                .target(action.equals("validate83") ? "83" : "84")
+                .target(target)
                 .baselineOnMigrate(false).cleanDisabled(true).validateOnMigrate(true).load();
-        String expected = action.equals("validate84") ? "84" : "83";
         var current = flyway.info().current();
         if (current == null || !expected.equals(current.getVersion().getVersion())) {
             throw new IllegalStateException("D01_EXPECTED_SCHEMA_" + expected);
         }
-        if (action.equals("upgrade84")) {
+        if (upgrade) {
             if (!"true".equals(environment.get("D01_WRITERS_FROZEN"))) {
                 throw new IllegalStateException("D01_WRITERS_MUST_BE_FROZEN");
             }
-            // 先按 V83 校验已部署历史；V84 此时应为 pending，由 migrate 校验并执行。
+            // 先验证相邻旧版本；目标迁移由独立进程执行，不允许跨版、repair 或重复升级。
             Flyway.configure().dataSource(source).locations("classpath:db/migration/mysql")
-                    .target("83").baselineOnMigrate(false).cleanDisabled(true).load().validate();
+                    .target(expected).baselineOnMigrate(false).cleanDisabled(true).load().validate();
             if (flyway.migrate().migrationsExecuted != 1) {
                 throw new IllegalStateException("D01_EXACTLY_ONE_MIGRATION_REQUIRED");
             }
         }
         flyway.validate();
-        if (!action.equals("validate83")) {
+        if (!target.equals("83")) {
             var actual = Set.copyOf(jdbc.queryForList("""
                     SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE()
                     AND table_name IN ('biz_telemetry_raw_intent','biz_telemetry_conflict_evidence',
@@ -71,7 +73,23 @@ public final class D01SchemaMigration {
                 throw new IllegalStateException("D01_SCHEMA_INCOMPLETE");
             }
         }
-        System.out.println("D01_SCHEMA_VALIDATED=" + (action.equals("validate83") ? "83" : "84"));
+        if (target.equals("85") && jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS
+                WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='biz_test_building_retirement'
+                  AND REFERENCED_TABLE_NAME='building' AND DELETE_RULE='RESTRICT' AND UPDATE_RULE='RESTRICT'
+                """, Integer.class) != 1) {
+            throw new IllegalStateException("D01_V85_REFERENCE_INCOMPLETE");
+        }
+        System.out.println("D01_SCHEMA_VALIDATED=" + target);
+    }
+
+    static String target(String action) {
+        return switch (action) {
+            case "validate83" -> "83";
+            case "validate84", "upgrade84" -> "84";
+            case "validate85", "upgrade85" -> "85";
+            default -> throw new IllegalArgumentException("D01_SCHEMA_ACTION_REQUIRED");
+        };
     }
 
     private static String required(Map<String, String> environment, String key) {

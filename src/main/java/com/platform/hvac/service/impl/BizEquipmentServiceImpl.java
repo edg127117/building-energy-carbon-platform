@@ -23,6 +23,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 import java.util.Set;
 
@@ -46,6 +47,7 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
     private final BizSpaceMapper spaceMapper;
     private final EquipmentCodeAllocator codeAllocator;
     private final RelationGovernanceGuard relationGuard;
+    private final com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
 
     /**
      * 在调用方传入的建筑范围内分页查询 MySQL 设备，可进一步按建筑、分类和关键字筛选。
@@ -56,6 +58,8 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
         Page<BizEquipment> pageParam = new Page<>(page, size);
         if (accessibleBuildingIds != null && accessibleBuildingIds.isEmpty()) return Result.success(pageParam);
         LambdaQueryWrapper<BizEquipment> wrapper = new LambdaQueryWrapper<>();
+        if (!StringUtils.hasText(buildingId)) wrapper.notInSql(BizEquipment::getBuildingId,
+                "SELECT building_id FROM biz_test_building_retirement");
         if (accessibleBuildingIds != null) wrapper.in(BizEquipment::getBuildingId, accessibleBuildingIds);
         if (StringUtils.hasText(buildingId)) {
             wrapper.eq(BizEquipment::getBuildingId, buildingId);
@@ -79,7 +83,9 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
      * 编码并生成下一个编号。并发插入冲突重试三次后返回 409，避免覆盖或复用编号。</p>
      */
     @Override
+    @Transactional
     public Result<BizEquipment> add(BizEquipment equipment) {
+        retirementService.requireNotRetired(equipment.getBuildingId());
         relationGuard.requireLegacyForStructuralCreate(equipment.getBuildingId());
         BizEquipmentType type = equipmentTypeMapper.selectById(equipment.getTypeCode());
         if (type == null || !Integer.valueOf(1).equals(type.getStatus())) {
@@ -112,9 +118,11 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
      * 防止部分更新把设备移入不一致的关系。</p>
      */
     @Override
+    @Transactional
     public Result<BizEquipment> update(BizEquipment equipment) {
         BizEquipment existing = this.getById(equipment.getEquipId());
         if (existing == null) throw new BusinessException(404, "设备不存在");
+        retirementService.requireNotRetired(existing.getBuildingId());
         relationGuard.rejectChangedProjection(
                 existing.getBuildingId(), existing.getSpaceId(), equipment.getSpaceId());
         relationGuard.rejectChangedProjection(
@@ -143,7 +151,10 @@ public class BizEquipmentServiceImpl extends ServiceImpl<BizEquipmentMapper, Biz
 
     /** 逻辑删除设备台账；测点配置和 TDengine 数据不在此方法处理。 */
     @Override
+    @Transactional
     public Result<Void> delete(String equipId) {
+        BizEquipment existing = this.getById(equipId);
+        if (existing != null) retirementService.requireNotRetired(existing.getBuildingId());
         relationGuard.requireDeletable("EQUIPMENT", equipId);
         this.removeById(equipId);
         return Result.success();

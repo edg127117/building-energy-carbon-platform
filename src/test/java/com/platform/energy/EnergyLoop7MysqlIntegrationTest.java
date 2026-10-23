@@ -80,7 +80,7 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_user_backend_duty WHERE duty_key='OPERATIONS_OBSERVER'", Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
-        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
+        Flyway flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").target("84").load();
         assertThat(flyway.migrate().migrationsExecuted).as("V83到V84只增加D01原始保全与冲突治理").isEqualTo(1);
         assertThat(jdbc.queryForObject("""
                 SELECT version FROM flyway_schema_history
@@ -88,6 +88,16 @@ class EnergyLoop7MysqlIntegrationTest {
                 """, String.class)).isEqualTo("84");
         flyway.validate();
         assertThat(flyway.migrate().migrationsExecuted).as("重跑迁移不得重复建表或改写历史").isZero();
+        var historyBeforeRetirement = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
+        Flyway retirement = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").target("85").load();
+        assertThat(retirement.migrate().migrationsExecuted).as("V84到V85只新增D01合成建筑归档状态表").isEqualTo(1);
+        retirement.validate();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_test_building_retirement", Integer.class)).isZero();
+        assertThat(jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE version<>'85' ORDER BY installed_rank"))
+                .isEqualTo(historyBeforeRetirement);
+        assertThat(retirement.migrate().migrationsExecuted).as("V85重跑不得重复排除或改写资产").isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
         assertThat(jdbc.queryForObject("""
                 SELECT COUNT(*) FROM biz_equipment_type WHERE type_code='ODU'
                 """, Integer.class)).isEqualTo(1);

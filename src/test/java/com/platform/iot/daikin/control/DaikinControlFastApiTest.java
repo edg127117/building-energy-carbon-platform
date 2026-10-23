@@ -32,6 +32,7 @@ class DaikinControlFastApiTest {
                 .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
         int buildingDdl = migration.indexOf("CREATE TABLE IF NOT EXISTS `building`");
         f.jdbc.execute(migration.substring(buildingDdl, migration.indexOf(';', buildingDdl) + 1));
+        f.jdbc.execute("CREATE TABLE biz_test_building_retirement(building_id VARCHAR(32) PRIMARY KEY)");
         f.jdbc.update("""
                 INSERT INTO building(building_id,building_name,building_type,total_gfa,climate_zone,region_code)
                 VALUES('building','已对接建筑','办公',1000,'夏热冬冷','320100'),
@@ -117,6 +118,19 @@ class DaikinControlFastApiTest {
                 .thenReturn(null);
         mvc.perform(get("/v1/hvac-control/buildings").principal(auth)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(2));
+        assertThat(f.gateway.writes).hasValue(0);
+    }
+
+    @Test void retiredBuildingIsExcludedInBothOpenAndNormalBuildingLists() throws Exception {
+        f.jdbc.update("INSERT INTO biz_test_building_retirement(building_id) VALUES('building')");
+        mvc.perform(get("/v1/hvac-control/buildings").principal(auth)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(0));
+        f.props.setTestOpenControls(false);
+        when(scope.getAccessibleBuildingIds(org.mockito.ArgumentMatchers.eq(10L),org.mockito.ArgumentMatchers.anySet()))
+                .thenReturn(null);
+        mvc.perform(get("/v1/hvac-control/buildings").principal(auth)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.length()").value(1))
+                .andExpect(jsonPath("$.data[0].buildingId").value("other-building"));
         assertThat(f.gateway.writes).hasValue(0);
     }
 }

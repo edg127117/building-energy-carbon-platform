@@ -27,8 +27,8 @@ def emit(line):
     LOG.append(line)
 
 
-def java(mode, *args, expected=True, packaged=False):
-    env = {**probe.ENV, "D01_UPGRADE_ISOLATED": "true", "D01_WRITERS_FROZEN": "true"}
+def java(mode, *args, expected=True, packaged=False, writers_frozen=True):
+    env = {**probe.ENV, "D01_UPGRADE_ISOLATED": "true", "D01_WRITERS_FROZEN": str(writers_frozen).lower()}
     if packaged:
         invocation = [probe.JAVA, "-Dloader.main=com.platform.tools.D01SchemaMigration", "-cp",
                       str(ROOT / "target/iot-platform-demo-1.0-SNAPSHOT.jar"),

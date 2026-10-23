@@ -2,6 +2,7 @@ package com.platform.hvac.service;
 
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
+import com.platform.hvac.asset.service.D01TestBuildingRetirementService;
 import com.platform.hvac.model.entity.Building;
 import com.platform.hvac.service.impl.BuildingServiceImpl;
 import com.platform.relation.RelationGovernanceGuard;
@@ -23,12 +24,14 @@ class BuildingServiceImplTest {
     private BuildingMapper mapper;
     @Mock
     private RelationGovernanceGuard relationGuard;
+    @Mock
+    private D01TestBuildingRetirementService retirementService;
 
     private BuildingServiceImpl service;
 
     @BeforeEach
     void setUp() {
-        service = new BuildingServiceImpl(relationGuard);
+        service = new BuildingServiceImpl(relationGuard, retirementService);
         ReflectionTestUtils.setField(service, "baseMapper", mapper);
     }
 

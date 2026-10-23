@@ -11,6 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 from unittest.mock import Mock, patch
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -52,6 +53,15 @@ class CredentialReuseTest(unittest.TestCase):
     def test_sufficient_privileges_from_wrong_authenticated_account_are_rejected(self):
         with self.assertRaisesRegex(RuntimeError, "AUTHENTICATED_ACCOUNT_MISMATCH"):
             credential_source.mysql_rights(self.complete, "migration")
+
+    def test_v85_requires_parent_references_but_does_not_grant_anything(self):
+        grants = "".join("GRANT SELECT, INSERT, UPDATE, DELETE, CREATE ON `" + db + "`.* TO 'platform_migrator'@'%'\n"
+                         for db in ("iot_platform", "iot_platform_archive"))
+        output = self.migration_metadata + grants
+        credential_source.mysql_rights(output, "migration", "84")
+        with self.assertRaisesRegex(RuntimeError, "V85_REFERENCES_PRIVILEGE_MISSING"):
+            credential_source.mysql_rights(output, "migration", "85")
+        credential_source.mysql_rights(output + "GRANT REFERENCES ON `iot_platform`.* TO 'platform_migrator'@'%'", "migration", "85")
 
     def test_partial_revokes_and_unresolved_roles_never_become_global_permission(self):
         with self.assertRaisesRegex(RuntimeError, "PARTIAL_REVOKE"):
@@ -228,6 +238,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
             jar.write_bytes(b"administrator pinned executable")
             operation = object.__new__(bridge.Maintenance)
             operation.release = Mock(JAR=jar.name)
+            operation.release.target_schema.side_effect = lambda state: state.get("target_schema", "84")
             operation.schema_credentials = root / "private/schema.json"
             operation.config = {"jar_sha256": bridge.digest(jar), "web_sha256": "b" * 64}
             operation.original_schema = Mock()
@@ -239,6 +250,12 @@ class PrivilegeBoundaryTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "TRUSTED_JAR"):
                     operation.schema("upgrade84", {**state, "jar_sha256": "f" * 64}, operation.schema_credentials)
                 operation.original_schema.assert_not_called()
+                with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                    operation.schema("upgrade85", state, operation.schema_credentials)
+                operation.config["target_schema"] = "85"
+                with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                    operation.schema("upgrade85", state, operation.schema_credentials)
+                operation.schema("upgrade85", {**state, "target_schema": "85"}, operation.schema_credentials)
 
     def test_fixed_worker_command_drops_privileges(self):
         operation = object.__new__(bridge.Maintenance)
@@ -362,6 +379,104 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "linux", "installer requires POSIX uid and filesystem semantics")
 class InstallerTest(unittest.TestCase):
+    def test_completed_v84_record_is_archived_only_after_revocation_and_baseline_checks(self):
+        for scenario in ("success", "frontend_successor", "backend_changed", "foreign_current",
+                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config"):
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+                root = Path(directory)
+                for name, path in (("INSTALL", root / "tools"), ("DATA", root / "data"), ("BASE", root / "test"),
+                                   ("LAUNCHER", root / "entry"), ("SUDOERS", root / "grant"),
+                                   ("UNITS", root / "units"), ("HISTORY", root / "history")):
+                    stack.enter_context(patch.object(installer, name, path))
+                private = installer.DATA / "private"
+                private.mkdir(parents=True)
+                installer.INSTALL.mkdir()
+                installer.UNITS.mkdir()
+                old_release = "d01-" + "a" * 12
+                candidate = installer.BASE / "releases" / old_release
+                candidate.mkdir(parents=True)
+                (installer.BASE / "current").symlink_to(candidate)
+                (candidate / "building-energy-carbon-platform.jar").write_bytes(b"deployed v84")
+                if scenario in ("frontend_successor", "backend_changed", "foreign_current"):
+                    successor = root / "foreign" if scenario == "foreign_current" else installer.BASE / "releases/frontend-successor"
+                    successor.mkdir()
+                    (successor / "building-energy-carbon-platform.jar").write_bytes(
+                        b"new backend" if scenario == "backend_changed" else b"deployed v84")
+                    (installer.BASE / "current").unlink()
+                    (installer.BASE / "current").symlink_to(successor)
+                config = {"format": "D01_TEMP_AUTH_V1", "user": "user1", "release": old_release,
+                          "archive_name": old_release + "-authorized.tar.gz",
+                          "jar_sha256": hashlib.sha256(b"deployed v84").hexdigest(),
+                          "code_sha256": {name: hashlib.sha256(b"pinned").hexdigest() for name in installer.FILES
+                                          if name.endswith(".py") or name == "taosdump-d01"}}
+                for name in config["code_sha256"]:
+                    (installer.INSTALL / name).write_bytes(b"pinned")
+                (installer.INSTALL / "config.json").write_text(json.dumps(config))
+                phase = "FAILED" if scenario == "failed" else "AWAITING_BUSINESS_ACCEPTANCE"
+                (private / "operation.json").write_text(json.dumps({"phase": phase, "events": [{"phase": phase}],
+                                                                   "services_restored_at": 1}))
+                (private / "revoked.json").write_text('{"revoked_at":2}')
+                (private / "backup-evidence").write_bytes(b"old complete backup retained")
+                state = {"phase": "AWAITING_BUSINESS_ACCEPTANCE", "candidate_started": True,
+                         "release": str(candidate), "jar_sha256": config["jar_sha256"], "config_hashes": {"config": "hash"}}
+                (private / ("d01-" + old_release + ".json")).write_text(json.dumps(state))
+                for path in (installer.LAUNCHER, installer.UNITS / (installer.TIMER + ".service"),
+                             installer.UNITS / (installer.TIMER + ".timer")):
+                    path.write_text("old installed entry")
+                if scenario == "active_grant":
+                    installer.SUDOERS.write_text("active grant")
+                if scenario == "credential":
+                    (private / "schema.json").write_text("unrevoked secret")
+                if scenario == "code":
+                    (installer.INSTALL / "d01_release.py").write_text("changed")
+                stack.enter_context(patch.object(installer, "trusted_parent"))
+                baseline = stack.enter_context(patch.object(installer, "retry_baseline"))
+                if scenario == "baseline":
+                    baseline.side_effect = RuntimeError("D01_OLD_BASELINE_CHANGED")
+                stack.enter_context(patch.object(installer, "retry_configuration",
+                    return_value={} if scenario == "config" else {"config": "hash"}))
+                calls = []
+                def run(*args):
+                    calls.append(args)
+                    return "active" if scenario == "timer" else "inactive" if "ActiveState" in args else "disabled"
+                stack.enter_context(patch.object(installer, "run", side_effect=run))
+                if scenario in ("success", "frontend_successor"):
+                    installer.retire_completed_v84("d01-" + "b" * 12)
+                    archives = list(installer.HISTORY.iterdir())
+                    self.assertEqual(len(archives), 1)
+                    self.assertEqual((archives[0] / "data/private/backup-evidence").read_bytes(), b"old complete backup retained")
+                    self.assertFalse(installer.INSTALL.exists())
+                else:
+                    with self.assertRaises(RuntimeError):
+                        installer.retire_completed_v84("d01-" + "b" * 12)
+                    self.assertTrue((private / "backup-evidence").exists())
+                    self.assertFalse(installer.HISTORY.exists())
+                self.assertFalse(any(verb in args for args in calls for verb in ("stop", "restart", "start")))
+
+    def test_package_manifest_pins_v85_and_rejects_mislabeled_jar(self):
+        for declared, actual in (("85", "85"), ("84", "85"), ("85", "84"), ("86", "85")):
+            jar = io.BytesIO()
+            with zipfile.ZipFile(jar, "w") as packaged:
+                packaged.writestr("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql", "fixture")
+                if actual == "85":
+                    packaged.writestr("BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retirement.sql", "fixture")
+                packaged.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", "fixture")
+            jar_bytes = jar.getvalue()
+            manifest = ("expectedMigration=" + declared + "\ncommit=" + "a" * 40 + "\nbackendJarSha256="
+                        + hashlib.sha256(jar_bytes).hexdigest() + "\nwebIndexSha256=" + hashlib.sha256(b"web").hexdigest())
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+                for name, content in (("MANIFEST.txt", manifest.encode()), ("building-energy-carbon-platform.jar", jar_bytes),
+                                      ("web/index.html", b"web")):
+                    info = tarfile.TarInfo(name)
+                    info.size = len(content)
+                    archive.addfile(info, io.BytesIO(content))
+            if declared == actual == "85":
+                self.assertEqual(installer.package_manifest(stream.getvalue())[0]["expectedMigration"], "85")
+            else:
+                with self.assertRaises(RuntimeError):
+                    installer.package_manifest(stream.getvalue())
+
     @unittest.skipUnless(getattr(os, "geteuid", lambda: -1)() == 0, "real root/user permission regression")
     def test_secret_umask_does_not_block_unprivileged_tool_read(self):
         with tempfile.TemporaryDirectory(dir="/run", prefix="d01-permissions-") as directory:
@@ -577,6 +692,24 @@ class InstallerTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "BUNDLE_HASH_MISMATCH"):
                     installer.install(bundle, "a" * 64)
                 credentials.assert_not_called()
+
+    def test_v85_requires_new_maintenance_reference_before_touching_old_authorization(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            bundle = Path(directory) / "bundle"
+            bundle.write_bytes(b"verified fixture")
+            stack.enter_context(patch.object(installer.os, "geteuid", return_value=0))
+            stack.enter_context(patch.object(installer.sys.stdin, "isatty", return_value=True))
+            stack.enter_context(patch.dict(os.environ))
+            stack.enter_context(patch.object(installer, "bundle_files", return_value={"release.tar.gz": b"fixture"}))
+            stack.enter_context(patch.object(installer, "package_manifest", return_value=({"expectedMigration": "85"}, b"jar")))
+            retired = stack.enter_context(patch.object(installer, "retire_completed_v84"))
+            credentials = stack.enter_context(patch.object(installer, "credentials"))
+            for reference in (None, "", " ", "x\n", "x" * 513):
+                with self.assertRaisesRegex(RuntimeError, "NEW_MAINTENANCE_REFERENCE_REQUIRED"):
+                    installer.install(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest(),
+                                      replace_revoked_completed=True, authorization_reference=reference)
+            retired.assert_not_called()
+            credentials.assert_not_called()
 
     def test_failed_install_cleanup_preserves_preexisting_files(self):
         with tempfile.TemporaryDirectory() as directory:

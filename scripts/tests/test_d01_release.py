@@ -84,6 +84,8 @@ class D01ReleaseTest(unittest.TestCase):
         package = self.base / "package"
         with zipfile.ZipFile(package / release.JAR, "w") as jar:
             jar.writestr(release.V84, "V84 SQL")
+            if migration == "85":
+                jar.writestr(release.V85, "V85 SQL")
             jar.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", b"fixture")
         (package / "web/index.html").write_bytes(b"candidate")
         (package / "MANIFEST.txt").write_text("commit=" + "a" * 40 + "\nexpectedMigration=" + migration +
@@ -108,9 +110,60 @@ class D01ReleaseTest(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_wrong_schema_package_never_switches_or_stops_services(self):
-        with self.assertRaisesRegex(RuntimeError, "D01_V84_PACKAGE_REQUIRED"):
+        with self.assertRaisesRegex(RuntimeError, "D01_V84_OR_V85_PACKAGE_REQUIRED"):
             self.prepare("83")
         self.assertEqual(self.events, [])
+
+    def test_v85_uses_adjacent_baseline_then_exact_target_without_changing_controls(self):
+        self.prepare("85")
+        self.assertEqual(self.schema.call_args.args[0], "validate84")
+        self.assertEqual(self.events, [])
+        state = release.protected_json(self.state)
+        self.assertEqual((state["source_schema"], state["target_schema"]), ("84", "85"))
+        release.freeze(self.state, True, True)
+        frozen_hash = release.sha(self.state)
+        release.migrate(self.state, self.base, self.base)
+        self.assertEqual(self.schema.call_args.args[0], "upgrade85")
+        self.assertEqual(release.sha(self.state), frozen_hash)
+        release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.schema.call_args.args[0], "validate85")
+        self.assertEqual(release.protected_json(self.state)["phase"], "AWAITING_BUSINESS_ACCEPTANCE")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_mismatched_v85_baseline_cannot_stop_services(self):
+        self.prepare("85")
+        state = release.protected_json(self.state)
+        state["source_schema"] = "83"
+        release.write_state(self.state, state)
+        with self.assertRaisesRegex(RuntimeError, "STATE_SCHEMA_MISMATCH"):
+            release.freeze(self.state, True, True)
+        self.assertEqual(self.events, [])
+
+    def test_v85_missing_restore_cannot_migrate_or_start(self):
+        self.prepare("85")
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        self.restore.side_effect = RuntimeError("D01_RESTORE_EVIDENCE_REQUIRED")
+        for action in (release.migrate, release.cutover):
+            with self.assertRaisesRegex(RuntimeError, "RESTORE_EVIDENCE"):
+                action(self.state, self.base, self.base)
+        self.schema.assert_not_called()
+        self.assertFalse(any(event[1] == "start" for event in self.events))
+
+    def test_v85_start_failure_preserves_candidate_and_never_restarts_old_version(self):
+        self.prepare("85")
+        release.freeze(self.state, True, True)
+        original = self.command
+        def fail(*args):
+            if args == ("systemctl", "start", release.BACKEND):
+                raise RuntimeError("fixture failure")
+            return original(*args)
+        with patch.object(release, "command", side_effect=fail), patch.object(release.subprocess, "run") as stopped:
+            stopped.return_value.returncode = 0
+            with self.assertRaisesRegex(RuntimeError, "NO_LEGACY_RESTART"):
+                release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.current.resolve().name, "d01-candidate")
+        self.assertEqual(release.protected_json(self.state)["phase"], "FAILED_STOPPED")
 
     def test_freeze_needs_external_writers_and_retry_confirmation(self):
         self.prepare()
@@ -310,6 +363,26 @@ class RestoreReportTest(unittest.TestCase):
         self.evidence.write_text("tampered")
         with self.assertRaisesRegex(RuntimeError, "EVIDENCE_CHANGED"):
             release.checked_restore(self.backup, self.report)
+
+
+class SchemaProcessTest(unittest.TestCase):
+    def test_v85_requires_exact_success_marker_and_separate_account(self):
+        values = {"url": "jdbc:mysql://127.0.0.1:13316/iot_platform", "user": "platform_migrator", "password": "fixture"}
+        state = {"release": "/root/trusted-tools", "runtime_controls": {
+            "MYSQL_HOST": "127.0.0.1", "MYSQL_PORT": "13316", "MYSQL_USER": "platform_app"}}
+        with patch.object(release, "protected_json", return_value=values), patch.object(release.subprocess, "run") as command:
+            command.return_value.returncode = 0
+            command.return_value.stdout = "D01_SCHEMA_VALIDATED=84\n"
+            with self.assertRaisesRegex(RuntimeError, "SCHEMA_CHECK_FAILED"):
+                release.schema("upgrade85", state, Path("/protected/schema.json"))
+            command.return_value.stdout = "D01_SCHEMA_VALIDATED=85\n"
+            release.schema("upgrade85", state, Path("/protected/schema.json"))
+            self.assertEqual(command.call_args.args[0][-1], "upgrade85")
+            values["user"] = "platform_app"
+            command.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, "SEPARATE_MIGRATION_ACCOUNT"):
+                release.schema("upgrade85", state, Path("/protected/schema.json"))
+            command.assert_not_called()
 
 
 if __name__ == "__main__":

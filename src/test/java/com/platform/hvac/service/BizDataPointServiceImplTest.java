@@ -56,6 +56,8 @@ class BizDataPointServiceImplTest {
     private PointCodeNamingValidator namingValidator;
     @Mock
     private RelationGovernanceGuard relationGuard;
+    @Mock
+    private com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
 
     private BizDataPointServiceImpl service;
 
@@ -67,7 +69,7 @@ class BizDataPointServiceImplTest {
                 systemGroupMapper,
                 namingRuleMapper,
                 namingValidator,
-                relationGuard);
+                relationGuard, retirementService);
         ReflectionTestUtils.setField(service, "baseMapper", dataPointMapper);
     }
 
