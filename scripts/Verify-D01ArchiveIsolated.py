@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import uuid
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,7 +60,42 @@ def main():
         parent_collation = sql(mysql, "SELECT COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='iot_platform' AND TABLE_NAME='building' AND COLUMN_NAME='building_id'")
         database_collation = sql(mysql, "SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='iot_platform'")
         assert parent_collation != database_collation, "fixture must exercise changed database default collation"
-        upgrade.java("upgrade85")
+        # 执行实际发布 JAR 内的独立入口，不能用测试辅助 Flyway 代替发布证明。
+        upgrade.java("validate84", packaged=True)
+        password = uuid.uuid4().hex
+        sql(mysql, "CREATE USER 'platform_migrator'@'%' IDENTIFIED BY '" + password + "'; "
+            "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE ON iot_platform.* TO 'platform_migrator'@'%'; "
+            "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE ON iot_platform_archive.* TO 'platform_migrator'@'%';")
+        probe.ENV.update(D01_JDBC_USER="platform_migrator", D01_JDBC_PASSWORD=password)
+        upgrade.java("upgrade85", expected=False, packaged=True)
+        assert before == sql(mysql, checksums), "denied migration changed existing evidence"
+        assert sql(mysql, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='iot_platform' AND table_name='biz_test_building_retirement'") == "0"
+        # MySQL/Flyway 的失败记录必须保留；此实例不 repair 或再次迁移。
+        assert sql(mysql, "SELECT COUNT(*) FROM flyway_schema_history WHERE version='85' AND success=0") == "1"
+        upgrade.java("validate85", expected=False, packaged=True)
+        failed_mysql = mysql
+        failed_checksum = sql(failed_mysql, checksums)
+        mysql, _ = upgrade.new_mysql(network, "archive-authorized")
+        upgrade.java("init83")
+        upgrade.java("upgrade84", packaged=True)
+        # 备份恢复同一份非空 V84 数据，在另一新实例验证具有最小所需权限的迁移。
+        dump = subprocess.run([probe.DOCKER, "--host", "npipe:////./pipe/dockerDesktopLinuxEngine",
+            "exec", failed_mysql, "sh", "-c", 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysqldump -uroot --single-transaction --set-gtid-purged=OFF --no-tablespaces --ignore-table=iot_platform.flyway_schema_history --databases iot_platform iot_platform_archive'],
+            env=probe.ENV, capture_output=True, timeout=120)
+        assert dump.returncode == 0, "isolated V84 evidence export failed"
+        upgrade.input_command(mysql, 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot', dump.stdout)
+        assert sql(mysql, checksums) == failed_checksum == before
+        sql(mysql, "CREATE USER 'platform_migrator'@'%' IDENTIFIED BY '" + password + "'; "
+            "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE,REFERENCES ON iot_platform.* TO 'platform_migrator'@'%'; "
+            "GRANT SELECT,INSERT,UPDATE,DELETE,CREATE ON iot_platform_archive.* TO 'platform_migrator'@'%';")
+        probe.ENV.update(D01_JDBC_USER="platform_migrator", D01_JDBC_PASSWORD=password)
+        # 新实例的 Flyway 时间戳不同，保留本实例升级前历史以逐行比较。
+        history = sql(mysql, history_query)
+        upgrade.java("upgrade85", expected=False, packaged=True, writers_frozen=False)
+        assert sql(mysql, "SELECT COUNT(*) FROM flyway_schema_history WHERE version='85'") == "0"
+        upgrade.java("upgrade85", packaged=True)
+        upgrade.java("validate85", packaged=True)
+        upgrade.java("upgrade85", expected=False, packaged=True)
         assert before == sql(mysql, checksums), "pre-existing table contents changed"
         assert history == sql(mysql, history_query), "pre-existing Flyway history changed"
         assert sql(mysql, "SELECT COUNT(*) FROM flyway_schema_history WHERE version='85' AND success=1") == "1"
@@ -80,6 +116,9 @@ def main():
                   "existing_tables_preserved": len(tables), "old_flyway_history_preserved": True,
                   "parent_collation": parent_collation, "database_collation": database_collation,
                   "migration85_success": True, "failed_evidence_preserved": True, "foreign_key_verified": True}
+        report.update(packaged_migrator=True, separate_migration_account=True, missing_references_rejected=True,
+                      failed_history_preserved=True, duplicate_upgrade_rejected=True, nonempty_v84_copy_restored=True)
+        report["unfrozen_upgrade_rejected"] = True
         (ROOT / "target/d01-archive-isolated-result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print("D01_ARCHIVE_MYSQL_VERIFIED " + json.dumps(report, ensure_ascii=False), flush=True)
     finally:

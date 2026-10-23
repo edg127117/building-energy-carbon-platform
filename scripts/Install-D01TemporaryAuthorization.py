@@ -16,6 +16,7 @@ import tarfile
 import time
 import types
 import uuid
+import zipfile
 
 INSTALL = Path("/opt/building-energy-d01-maintenance")
 DATA = Path("/var/lib/building-energy-d01-maintenance")
@@ -178,7 +179,10 @@ def retire_failed_prepare(*, online_backup=False, next_release=None):
         expected_keys = {'format', 'phase', 'release', 'previous_release', 'previous_jar_sha256', 'other_release',
                          'other_link', 'other_pid', 'other_reload', 'config_hashes', 'runtime_controls', 'backup_targets',
                          'backend_service', 'web_service', 'candidate_started', 'jar_sha256', 'web_sha256'}
-        require(set(state) == expected_keys, "D01_OLD_PREPARED_FIELDS_INVALID")
+        require(set(state) in (expected_keys, expected_keys | {"source_schema", "target_schema"})
+                and state.get("target_schema", "84") in ("84", "85")
+                and state.get("source_schema", "83") == str(int(state.get("target_schema", "84")) - 1),
+                "D01_OLD_PREPARED_FIELDS_INVALID")
         require(state.get("phase") == "PREPARED" and state.get("format") == "D01_PREPARED_V1"
                 and state.get("previous_release") == config["previous_release"]
                 and state.get("release") == str(BASE / "releases" / release)
@@ -253,6 +257,66 @@ def json_bytes(value):
     return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode()
 
 
+def retire_completed_v84(next_release):
+    """只归档已撤销且仍在运行的 V84 维护记录；不删除旧备份或重置失败状态。"""
+    require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
+    private = DATA / "private"
+    paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
+    for path in (*paths, private / "revoked.json", private / "operation.json", INSTALL / "config.json"):
+        trusted_parent(path)
+    config = json.loads((INSTALL / "config.json").read_text())
+    operation = json.loads((private / "operation.json").read_text())
+    release = config.get("release", "")
+    require(config.get("format") == "D01_TEMP_AUTH_V1" and config.get("user") == "user1"
+            and config.get("target_schema", "84") == "84"
+            and re.fullmatch(r"d01-[a-f0-9]{12}", release) and next_release != release
+            and config.get("archive_name") == release + "-authorized.tar.gz", "D01_OLD_RELEASE_ID_INVALID")
+    require(operation.get("phase") == "AWAITING_BUSINESS_ACCEPTANCE"
+            and operation.get("events", [])[-1].get("phase") == "AWAITING_BUSINESS_ACCEPTANCE"
+            and type(operation.get("services_restored_at")) is int, "D01_OLD_OPERATION_NOT_COMPLETED")
+    for name in ("schema.json", "backup.json"):
+        require(not (private / name).exists() and not (private / name).is_symlink(), "D01_OLD_CREDENTIALS_NOT_REVOKED")
+    for key, expected in (("ActiveState", "inactive"), ("UnitFileState", "disabled")):
+        require(run("/usr/bin/systemctl", "show", TIMER + ".timer", "-p", key, "--value") == expected,
+                "D01_OLD_TIMER_NOT_REVOKED")
+    state_path = private / ("d01-" + release + ".json")
+    trusted_parent(state_path)
+    state = json.loads(state_path.read_text())
+    candidate = BASE / "releases" / release
+    require(state.get("phase") == "AWAITING_BUSINESS_ACCEPTANCE" and state.get("candidate_started") is True
+            and state.get("release") == str(candidate) and str((BASE / "current").resolve()) == str(candidate),
+            "D01_OLD_BASELINE_CHANGED")
+    # 复核当前进程、运行配置和其他站点；时间参数仅用于排除错误时钟，不限制维护后的正常重启。
+    retry_baseline(state, int(time.time()))
+    require(state.get("config_hashes") == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
+    require(hashlib.sha256((candidate / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
+            == state.get("jar_sha256") == config.get("jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
+    for artifact in (BASE / "incoming" / (next_release + "-authorized.tar.gz"), BASE / "releases" / next_release):
+        require(not artifact.exists() and not artifact.is_symlink(), "D01_NEW_RELEASE_ALREADY_EXISTS")
+    require(set(config.get("code_sha256", {})) == {name for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
+            "D01_OLD_CODE_MANIFEST_INVALID")
+    for name, digest in config["code_sha256"].items():
+        trusted_parent(INSTALL / name)
+        require(hashlib.sha256((INSTALL / name).read_bytes()).hexdigest() == digest, "D01_OLD_INSTALLED_CODE_CHANGED")
+    trusted_parent(HISTORY.parent)
+    require(all(path.stat().st_dev == HISTORY.parent.stat().st_dev for path in paths),
+            "D01_REVOKED_ARCHIVE_FILESYSTEM_MISMATCH")
+    if not HISTORY.exists():
+        HISTORY.mkdir(mode=0o700)
+        HISTORY.chmod(0o700)
+    trusted_parent(HISTORY)
+    require(HISTORY.is_dir() and HISTORY.stat().st_mode & 0o077 == 0, "D01_HISTORY_NOT_PRIVATE")
+    archive = HISTORY / ("completed-v84-" + uuid.uuid4().hex)
+    archive.mkdir(mode=0o700)
+    try:
+        for source, name in zip(paths, ("tools", "data", "launcher", "authorization.service", "authorization.timer")):
+            source.rename(archive / name)
+        run("/usr/bin/systemctl", "daemon-reload")
+    except Exception:
+        raise RuntimeError("D01_REVOKED_ARCHIVE_INCOMPLETE_ADMIN_REQUIRED") from None
+    print("D01_REVOKED_ATTEMPT_ARCHIVED=" + str(archive))
+
+
 def bundle_files(raw):
     with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as archive:
         members = archive.getmembers()
@@ -271,23 +335,32 @@ def package_manifest(raw):
         manifest = dict(line.split("=", 1) for line in archive.extractfile("MANIFEST.txt").read().decode().splitlines() if "=" in line)
         jar = archive.extractfile("building-energy-carbon-platform.jar").read()
         index = archive.extractfile("web/index.html").read()
-        require(manifest.get("expectedMigration") == "84"
+        require(manifest.get("expectedMigration") in ("84", "85")
                 and re.fullmatch("[a-f0-9]{40}", manifest.get("commit", ""))
                 and hashlib.sha256(jar).hexdigest() == manifest.get("backendJarSha256")
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
+        with zipfile.ZipFile(io.BytesIO(jar)) as packaged:
+            versions = [int(match[1]) for name in packaged.namelist()
+                        if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
+            require(versions and max(versions) == int(manifest["expectedMigration"]), "D01_PACKAGE_SCHEMA_MISMATCH")
+            packaged.read("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql")
+            if manifest["expectedMigration"] == "85":
+                packaged.read("BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retirement.sql")
+            packaged.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
         return manifest, jar
 
 
-def credentials(jar, source):
+def credentials(jar, source, target_schema="84"):
     print("复用服务器既有受保护管理员配置，执行只读登录及权限核查；无需输入数据库密码。")
     # The module is compiled from the already hashed bundle bytes, never
     # imported from the administrator's cwd or a user-writable upload path.
     module = types.ModuleType("d01_credentials")
     exec(compile(source, "verified-d01-credentials", "exec"), module.__dict__)
-    return module.discover(jar)
+    return module.discover(jar, target_schema)
 
 
-def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revoked_online_backup=False):
+def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revoked_online_backup=False,
+            replace_revoked_completed=False, authorization_reference=None):
     global TIMER_ATTEMPTED
     require(os.geteuid() == 0, "D01_ADMIN_REQUIRED")
     require(sys.stdin.isatty(), "D01_ADMIN_TERMINAL_REQUIRED")
@@ -301,7 +374,16 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     require(hashlib.sha256(raw).hexdigest() == expected_sha, "D01_BUNDLE_HASH_MISMATCH")
     files = bundle_files(raw)
     manifest, jar = package_manifest(files["release.tar.gz"])
-    require(not (replace_revoked_prepare and replace_revoked_online_backup), "D01_ONE_REPLACEMENT_MODE_REQUIRED")
+    target_schema = manifest.get("expectedMigration", "84")
+    require(sum((replace_revoked_prepare, replace_revoked_online_backup, replace_revoked_completed)) <= 1,
+            "D01_ONE_REPLACEMENT_MODE_REQUIRED")
+    require(target_schema != "85" or (isinstance(authorization_reference, str)
+            and 0 < len(authorization_reference.strip()) <= 512
+            and not any(c in authorization_reference for c in "\0\r\n")), "D01_NEW_MAINTENANCE_REFERENCE_REQUIRED")
+    if replace_revoked_completed:
+        require(target_schema == "85", "D01_COMPLETED_REPLACEMENT_REQUIRES_V85")
+        if INSTALL.exists() or INSTALL.is_symlink():
+            retire_completed_v84("d01-" + manifest["commit"][:12])
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
         retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release="d01-" + manifest["commit"][:12])
     for destination in (INSTALL, DATA, LAUNCHER, SUDOERS,
@@ -313,7 +395,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
             "D01_EXPECTED_SERVICE_USER_REQUIRED")
     previous = str((BASE / "current").resolve())
     require(Path(previous).is_relative_to(BASE / "releases"), "D01_CURRENT_OUTSIDE_TEST_RELEASES")
-    schema, backup, credential_report = credentials(jar, files["d01_credentials.py"])
+    schema, backup, credential_report = credentials(jar, files["d01_credentials.py"], target_schema)
     expires = int(time.time()) + 24 * 3600
     release = "d01-" + manifest["commit"][:12]
     sudoers = "# One installed D01 operation; no wildcard arguments or SETENV.\n"
@@ -325,9 +407,10 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
               "archive_sha256": hashlib.sha256(files["release.tar.gz"]).hexdigest(),
               "jar_sha256": manifest["backendJarSha256"], "web_sha256": manifest["webIndexSha256"],
               "commit": manifest["commit"],
+              "target_schema": target_schema,
               "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
-              "authorization_reference": "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
+              "authorization_reference": authorization_reference or "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
     mkdir(INSTALL, 0o755)
     mkdir(DATA, 0o755)
     private = DATA / "private"
@@ -379,12 +462,16 @@ if __name__ == "__main__":
                         help="archive only a revoked attempt that failed before freeze; preserve all evidence")
     parser.add_argument("--replace-revoked-online-backup", action="store_true",
                         help="archive a revoked failed online backup; keep partial backups and old release artifacts")
+    parser.add_argument("--replace-revoked-completed", action="store_true",
+                        help="archive revoked V84 maintenance records and backups before a separately approved V85 operation")
+    parser.add_argument("--authorization-reference", help="non-secret reference to the new approved maintenance and ingress-loss decision")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGHUP, interrupted)
     try:
         install(args.bundle, args.sha256, replace_revoked_prepare=args.replace_revoked_prepare,
-                replace_revoked_online_backup=args.replace_revoked_online_backup)
+                replace_revoked_online_backup=args.replace_revoked_online_backup,
+                replace_revoked_completed=args.replace_revoked_completed, authorization_reference=args.authorization_reference)
     except BaseException as error:
         try:
             cleanup_failed_install()

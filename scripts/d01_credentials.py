@@ -132,7 +132,8 @@ def check_containers():
     return identities
 
 
-def mysql_rights(output, role):
+def mysql_rights(output, role, target_schema="84"):
+    require(target_schema in ("84", "85"), "D01_SCHEMA_TARGET_REQUIRED")
     lines = output.splitlines()
     require(lines and re.fullmatch(r"META\t[a-f0-9-]{36}\t[A-Z_]+\t[01]\t[01]\t[A-Za-z0-9+/=]+", lines[0]),
             "D01_MYSQL_PROBE_RESPONSE_INVALID")
@@ -162,6 +163,8 @@ def mysql_rights(output, role):
         require(all(allows(db, {"SELECT", "INSERT", "UPDATE", "DELETE", "CREATE"})
                     for db in ("iot_platform", "iot_platform_archive")),
                 "D01_MYSQL_MIGRATION_PRIVILEGES_MISSING")
+        require(target_schema != "85" or allows("iot_platform", {"REFERENCES"}),
+                "D01_MYSQL_V85_REFERENCES_PRIVILEGE_MISSING")
     else:
         require(all(allows(db, {"SELECT", "SHOW VIEW", "TRIGGER", "EVENT"})
                     for db in ("iot_platform", "iot_platform_archive"))
@@ -172,7 +175,7 @@ def mysql_rights(output, role):
     return identity
 
 
-def migration_probe(jar, password):
+def migration_probe(jar, password, target_schema="84"):
     with zipfile.ZipFile(io.BytesIO(jar)) as archive:
         drivers = [item for item in archive.infolist()
                    if re.fullmatch(r"BOOT-INF/lib/mysql-connector-j-[0-9.]+\.jar", item.filename)]
@@ -188,7 +191,7 @@ def migration_probe(jar, password):
                           str(path / "D01CredentialProbe.java")],
                          env={**ENV, "D01_URL": JDBC_URL, "D01_USER": "platform_migrator", "D01_PASSWORD": password},
                          timeout=60, code="D01_MYSQL_MIGRATION_LOGIN_OR_QUERY_FAILED")
-    return mysql_rights(output, "migration")
+    return mysql_rights(output, "migration", target_schema)
 
 
 def backup_mysql_probe(password, container_id):
@@ -232,12 +235,12 @@ def backup_td_probe(password):
     require(any(row.get("name") == "iot_telemetry" for row in databases), "D01_TDENGINE_SOURCE_DATABASE_MISSING")
 
 
-def discover(jar):
+def discover(jar, target_schema="84"):
     before = runtime_target()
     containers = check_containers()
     values = administrator_values()
     selected, identities, failures = {}, {}, []
-    for role, key, probe in (("MYSQL_MIGRATION", "mysql_migration_password", lambda p: migration_probe(jar, p)),
+    for role, key, probe in (("MYSQL_MIGRATION", "mysql_migration_password", lambda p: migration_probe(jar, p, target_schema)),
                              ("MYSQL_BACKUP", "mysql_root_password", lambda p: backup_mysql_probe(p, containers["MYSQL"])),
                              ("TDENGINE_BACKUP", "td_root_password", backup_td_probe)):
         try:
