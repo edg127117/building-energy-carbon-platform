@@ -114,6 +114,44 @@ class EnergySummaryCarbonActivityAdapterTest {
         assertThat(values.getFirst().traceEvidence().path("projectEnergyPathway").asText()).isEqualTo("PURCHASED_ELECTRICITY");
     }
 
+    @Test void approvedBillReplacesSameEnergyMeterTotalInsteadOfAddingBoth() {
+        var reporting=mock(com.platform.energy.reporting.ReportingCarbonInput.class);
+        var bill=new com.platform.carbon.CarbonModels.ActivitySegment("BILL","BLD001",PeriodType.MONTH,START,MONTH_END,
+                "UTC","ELECTRICITY",new BigDecimal("1000"),"KWH","LOCKED_NATIVE_COMPLETE","COMPLETE",
+                com.platform.carbon.CarbonModels.ResultNature.FORMAL,"h");
+        when(reporting.read("BLD001",START,MONTH_END,500)).thenReturn(new com.platform.energy.reporting.ReportingCarbonInput.Input(
+                List.of(bill),Map.of(com.platform.energy.reporting.ReportingCarbonInput.key("ELECTRICITY",START),"REPLACES_METER_TOTAL")));
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,MONTH_END,501)).thenReturn(List.of(snapshot("meter")));
+        when(summaryService.queryExcludingReportingSources(org.mockito.ArgumentMatchers.eq(0L),any(),any(),any()))
+                .thenReturn(new SummaryQueryView("BLD001","MONTH",START,END,List.of("ENERGY_ITEM","PERIOD"),0,List.of()));
+        var values=new EnergySummaryCarbonActivityAdapter(summaryService,snapshotReader,null,reporting).read("BLD001",PeriodType.MONTH,START,MONTH_END,500);
+        assertThat(values).containsExactly(bill);
+        org.mockito.Mockito.verify(summaryService,org.mockito.Mockito.never()).query(org.mockito.ArgumentMatchers.anyLong(),any(),any());
+    }
+    @Test void noMeterAssertionConflictingWithRealSealedMeterFailsClosed() {
+        var reporting=mock(com.platform.energy.reporting.ReportingCarbonInput.class);
+        when(reporting.read("BLD001",START,END,500)).thenReturn(new com.platform.energy.reporting.ReportingCarbonInput.Input(
+                List.of(),Map.of(com.platform.energy.reporting.ReportingCarbonInput.key("ELECTRICITY",START),"NO_METER")));
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,END,501)).thenReturn(List.of(snapshot("meter")));
+        when(summaryService.queryExcludingReportingSources(org.mockito.ArgumentMatchers.eq(0L),any(),any(),any()))
+                .thenReturn(new SummaryQueryView("BLD001","MONTH",START,END,List.of("ENERGY_ITEM","PERIOD"),0,List.of()));
+        assertThatThrownBy(()->new EnergySummaryCarbonActivityAdapter(summaryService,snapshotReader,null,reporting).read("BLD001",PeriodType.YEAR,START,END,500))
+                .hasMessageContaining("存在同能源");
+    }
+
+    @Test void rejectsAnnualBillResultWhenEarlierMonthsHaveNoAuthoritativeQuantity() {
+        var reporting=mock(com.platform.energy.reporting.ReportingCarbonInput.class);
+        var bill=new com.platform.carbon.CarbonModels.ActivitySegment("BILL","BLD001",PeriodType.MONTH,START,MONTH_END,
+                "UTC","ELECTRICITY",BigDecimal.ONE,"KWH","LOCKED_NATIVE_COMPLETE","COMPLETE",
+                com.platform.carbon.CarbonModels.ResultNature.FORMAL,"h");
+        when(reporting.read("BLD001",START,END,500)).thenReturn(new com.platform.energy.reporting.ReportingCarbonInput.Input(List.of(bill),Map.of()));
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,END,501)).thenReturn(List.of());
+        when(summaryService.query(org.mockito.ArgumentMatchers.eq(0L),any(),any())).thenReturn(
+                new SummaryQueryView("BLD001","MONTH",START,END,List.of(),0,List.of()));
+        assertThatThrownBy(()->new EnergySummaryCarbonActivityAdapter(summaryService,snapshotReader,null,reporting)
+                .read("BLD001",PeriodType.YEAR,START,END,500)).hasMessageContaining("未覆盖月份");
+    }
+
     private static SummaryQueryView summary(Map<String, BigDecimal> quantities, String... evidence) {
         SummaryGroupView group = new SummaryGroupView(
                 Map.of("ENERGY_ITEM", "ELECTRICITY", "PERIOD", START + "/" + MONTH_END),

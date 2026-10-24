@@ -307,6 +307,50 @@ public class EnergyConversionService {
         return result;
     }
 
+    public record FormalConversion(BigDecimal tce, String unit, String parameterVersionId,
+                                   String formulaVersionId, String standardCoalVersionId,
+                                   Object evidence) { }
+
+    /** 只评价已批准正式规则；是否成为正式结果由调用方的来源审核与封账决定。整段引用须同版。 */
+    public FormalConversion evaluateFormalRules(long user, Collection<String> roles, SimulationRequest request,
+                                                LocalDateTime endExclusive) {
+        authorization.requireReader(roles);
+        authorization.checkBuilding(user, roles, request.buildingId());
+        TimeRange interval = range(request.effectiveAt(), endExclusive);
+        if (endExclusive == null) validation("正式折标必须指定完整期间");
+        var item = approvedItem(request.energyItemCode(), interval.from());
+        var lastItem = approvedItem(request.energyItemCode(), endExclusive.minusNanos(1));
+        if (!item.versionId().equals(lastItem.versionId())) referenceConflict("期间跨能源品种版本");
+        var scope = parse(UsageScope.class, request.consumptionScope(), "使用范围无效");
+        validateConsumptionScope(item, scope);
+        String method = parse(ConversionMethod.class, request.method(), "折标方法无效").name();
+        String perspective = parse(ConversionPerspective.class, request.perspective(), "折标视角无效").name();
+        var matches = repository.findOverlappingFormalParameters(item.itemId(), method, perspective, scope.name(),
+                region(request.regionCode()), interval.from(), endExclusive);
+        if (matches.isEmpty()) throw EnergyConversionErrors.error(409, EnergyConversionErrors.RULE_MISSING,
+                "没有适用的已审核正式折标参数");
+        if (matches.size() != 1) throw EnergyConversionErrors.error(409, EnergyConversionErrors.RULE_CONFLICT,
+                "正式折标参数冲突，不能自动选最新值");
+        var selected = matches.getFirst();
+        requireRange(selected.effectiveFrom(), selected.effectiveTo(), interval, "折标参数未覆盖整个期间");
+        validateParameterReferences(selected, interval);
+        var conversion = catalogLookup.convert(nonNegative(request.quantity(), "活动量不能为负数"),
+                request.inputUnitCode(), selected.inputUnitCode(), interval.from()).orElseThrow(() ->
+                EnergyConversionErrors.error(409, EnergyConversionErrors.UNIT_INCOMPATIBLE, "活动量单位与正式规则不兼容"));
+        var endConversion = catalogLookup.convert(request.quantity(), request.inputUnitCode(), selected.inputUnitCode(),
+                endExclusive.minusNanos(1)).orElseThrow(() -> EnergyConversionErrors.error(409,
+                EnergyConversionErrors.UNIT_INCOMPATIBLE, "期间末尾单位不可用"));
+        if (!conversion.inputUnit().versionId().equals(endConversion.inputUnit().versionId())
+                || !conversion.targetUnit().versionId().equals(endConversion.targetUnit().versionId())
+                || !conversion.targetUnit().versionId().equals(selected.inputUnitVersionId()))
+            referenceConflict("期间跨单位版本或正式参数的单位引用失效");
+        var standard = selected.standardCoalVersionId() == null ? null : requireStandardCoal(selected.standardCoalVersionId());
+        var value = calculate(selected, standard, conversion.convertedQuantity());
+        return new FormalConversion(value, "TCE", selected.versionId(), selected.formulaVersionId(),
+                selected.standardCoalVersionId(), java.util.Map.of("parameter", parameterView(selected),
+                "conversion", conversion, "startInclusive", interval.from(), "endExclusive", endExclusive));
+    }
+
     public OptionsView options(Collection<String> roles) {
         authorization.requireReader(roles);
         return new OptionsView(names(RuleStatus.values()), names(ConversionMethod.values()),

@@ -37,7 +37,7 @@ interface RecalculationDraft {
   organizationBoundary: string
 }
 
-const props = defineProps<{ buildingId: string }>()
+const props = defineProps<{ buildingId: string, reportingMonth?: string }>()
 const emit = defineEmits<{ 'dirty-change': [dirty: boolean] }>()
 
 const batches = ref<CalculationBatch[]>([])
@@ -129,6 +129,7 @@ const dirty = computed(() => commandBusy.value || reviewTarget.value !== null
 
 watch(dirty, value => emit('dirty-change', value), { immediate: true })
 watch(() => props.buildingId, value => { void loadBuilding(value) }, { immediate: true })
+watch(() => props.reportingMonth, () => { applyReportingMonthContext() }, { immediate: true })
 
 function nextIdempotencyKey(): string {
   return createIdempotencyKey()
@@ -140,6 +141,12 @@ function emptyCalculationDraft(): CalculationDraft {
 
 function emptyRecalculationDraft(): RecalculationDraft {
   return { accountingYear: '', resultNature: '', reason: '', organizationBoundary: '' }
+}
+
+function applyReportingMonthContext(): void {
+  const month = props.reportingMonth?.trim() ?? ''
+  if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(month)) return
+  calculationNotice.value = copy.calculate.reportingMonth.replace('{month}', month)
 }
 
 function isExplicitInstant(value: string): boolean {
@@ -164,6 +171,7 @@ async function loadBuilding(value: string): Promise<void> {
   report.value = null
   recalculations.value = []
   calculationDraft.value = emptyCalculationDraft()
+  applyReportingMonthContext()
   recalculationDraft.value = emptyRecalculationDraft()
   batchesError.value = ''
   recalculationsError.value = ''
@@ -207,6 +215,7 @@ async function loadLists(buildingId = props.buildingId.trim(), buildingOwner = b
     batches.value = current?.buildingId === buildingId && !next.some(batch => batch.batchId === current.calculationBatchId)
       ? [batchFromDetail(current), ...next]
       : next
+    selectReportingMonthBatch()
   }
   else batchesError.value = requestErrorMessage(batchesResult.reason)
   if (recalculationResult.status === 'fulfilled') recalculations.value = recalculationResult.value
@@ -219,6 +228,14 @@ async function loadLists(buildingId = props.buildingId.trim(), buildingOwner = b
 
 function refreshLists(): void {
   void loadLists()
+}
+
+function selectReportingMonthBatch(): void {
+  if (selectedBatchId.value) return
+  const month = props.reportingMonth?.trim() ?? ''
+  if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(month)) return
+  const target = batches.value.find(batch => batch.periodType === 'MONTH' && batch.periodStart.slice(0, 10) === month)
+  if (target) selectBatch(target.batchId)
 }
 
 function selectBatch(batchId: string): void {

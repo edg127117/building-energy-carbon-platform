@@ -50,4 +50,22 @@ describe('碳因子维护接口契约', () => {
     expect(requestApi).toHaveBeenNthCalledWith(4, expect.objectContaining({ method: 'post', url: '/v1/carbon-management/factors/FV%2F1/activate', data: { expectedRevision: 4 } }))
     expect(requestApi).toHaveBeenNthCalledWith(5, expect.objectContaining({ method: 'post', url: '/v1/carbon-management/factors/FV%2F1/disable', data: { expectedRevision: 5 } }))
   })
+
+  it('按建筑维护真实面积和人数分母，并在独立审核后激活', async () => {
+    const denominator = {
+      buildingId: 'B/01', denominatorType: 'BUILDING_AREA' as const, value: '1200.5', unitCode: 'M2' as const,
+      sourceReference: '产权资料索引', evidenceReference: '归档凭证', usageNature: 'FORMAL' as const,
+      effectiveFrom: '2026-01-01', effectiveTo: null,
+    }
+
+    await carbonFactorsApi.listDenominators('B/01')
+    await carbonFactorsApi.createDenominator(denominator)
+    await carbonFactorsApi.reviewDenominator('DV/01', { expectedRevision: 2, approved: true, reviewComment: '独立复核通过' })
+    await carbonFactorsApi.activateDenominator('DV/01', { expectedRevision: 3 })
+
+    expect(requestApi).toHaveBeenNthCalledWith(1, expect.objectContaining({ method: 'get', url: '/v1/carbon-management/denominators', params: { buildingId: 'B/01' } }))
+    expect(requestApi).toHaveBeenNthCalledWith(2, expect.objectContaining({ method: 'post', url: '/v1/carbon-management/denominators', data: denominator }))
+    expect(requestApi).toHaveBeenNthCalledWith(3, expect.objectContaining({ method: 'post', url: '/v1/carbon-management/denominators/DV%2F01/review', data: { expectedRevision: 2, approved: true, reviewComment: '独立复核通过' } }))
+    expect(requestApi).toHaveBeenNthCalledWith(4, expect.objectContaining({ method: 'post', url: '/v1/carbon-management/denominators/DV%2F01/activate', data: { expectedRevision: 3 } }))
+  })
 })

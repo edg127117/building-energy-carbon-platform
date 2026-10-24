@@ -10,7 +10,7 @@ export default {
   accessFailed: '访问权限加载失败，请重试', noAccess: '暂无可访问的系统，请联系管理员配置权限',
   logoutFailed: '安全退出失败，请重试', back: '返回上一级', groups: '系统菜单',
   overview: '综合总览', running: '运行总览', realtime: '实时监控', hvac: '暖通空调监控', power: '电力监控', lighting: '照明插座监控', renewable: '可再生能源监控',
-  energy: '能耗管理', energyItems: '分项能耗', energyZones: '分区能耗', trend: '趋势对比', baselineAnalysis: '基准与定额分析', diagnosis: '能耗诊断',
+  energy: '能耗管理', energyItems: '能源账单填报', energyZones: '分区能耗', trend: '趋势对比', baselineAnalysis: '基准与定额分析', diagnosis: '能耗诊断',
   carbon: '碳排放管理', carbonOverview: '排放总览', carbonDetails: '排放明细', reduction: '减排管理', assets: '碳资产管理',
   devices: '设备管理', businessDevices: '用能设备台账', meters: '监测采集设备', alarms: '报警管理', liveAlarms: '实时报警', historyAlarms: '历史报警', dataQuality: '数据质量冲突处置',
   maintenance: '运维管理', plans: '维保计划', orders: '工单管理', faults: '故障记录', reports: '报表中心', energyReports: '能耗报表', carbonReports: '碳排报表',

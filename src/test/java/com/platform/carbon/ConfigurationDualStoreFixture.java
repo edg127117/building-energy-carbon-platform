@@ -98,13 +98,13 @@ final class ConfigurationDualStoreFixture {
     static String tdPassword() { return present("CONFIGURATION_DUAL_IT_TD_PASSWORD"); }
     static String tdDatabase() { return required("CONFIGURATION_DUAL_IT_TD_DB"); }
 
-    void assertMigratedTo83() {
+    void assertMigratedTo87() {
         String version = mysql.queryForObject("""
                 SELECT version FROM flyway_schema_history
                 WHERE success=1 ORDER BY installed_rank DESC LIMIT 1
                 """, String.class);
-        if (!"83".equals(version)) {
-            throw new AssertionError("双库验收应使用当前迁移链 V83，实际为 " + version);
+        if (!"87".equals(version)) {
+            throw new AssertionError("双库验收应使用当前迁移链 V87，实际为 " + version);
         }
         Integer columns = mysql.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.statistics

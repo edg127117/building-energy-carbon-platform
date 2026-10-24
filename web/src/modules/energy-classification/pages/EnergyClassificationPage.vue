@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { createIdempotencyKey } from '@/shared/utils/idempotency-key'
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ElAlert, ElButton, ElCard, ElCheckbox, ElDescriptions, ElDescriptionsItem, ElEmpty, ElForm, ElFormItem,
   ElInput, ElOption, ElPagination, ElSelect, ElSkeleton, ElSpace, ElTable, ElTableColumn, ElTabPane, ElTabs, ElTag, ElTree,
@@ -35,6 +35,7 @@ interface ClassificationTreeNode {
 }
 
 const route = useRoute()
+const router = useRouter()
 const workspace = useEnergyClassification()
 const buildings = useClassificationBuildings()
 const relationWorkspace = useRelationGovernanceOptions()
@@ -115,7 +116,19 @@ const schemeTrees = computed(() => workspace.configuration.value.schemes.map(sch
   nodes: treeNodes(scheme.code),
 })))
 
-watch(() => route.path, path => { activeTab.value = path.endsWith('/energyZones') ? 'analysis' : 'configuration' }, { immediate: true })
+watch(
+  () => [route.path, route.query.tab, route.query.buildingId],
+  ([path, tab, buildingId]) => {
+    const routePath = typeof path === 'string' ? path : ''
+    activeTab.value = tab === 'carbonResults' ? 'carbonResults' : routePath.endsWith('/energyZones') ? 'analysis' : 'configuration'
+    const requestedBuildingId = typeof buildingId === 'string' ? buildingId.trim() : ''
+    if (tab === 'carbonResults' && requestedBuildingId && workspace.buildingId.value !== requestedBuildingId && !hasUnsavedWorkspaceChanges()) {
+      buildingInput.value = requestedBuildingId
+      loadBuilding()
+    }
+  },
+  { immediate: true },
+)
 watch(importSignature, () => {
   if (previewSignature.value) {
     previewSignature.value = ''
@@ -129,8 +142,7 @@ watch(
 onMounted(() => { void buildings.search() })
 
 function loadBuilding() {
-  if (projectDirty.value || relationDirty.value || factorDirty.value || profileDirty.value || workbookDirty.value || manualPeriodDirty.value
-    || boundarySummaryPolicyDirty.value || carbonResultsDirty.value || configurationDirty.value) {
+  if (hasUnsavedWorkspaceChanges()) {
     localError.value = t('energyClassification.validation.unsaved')
     return
   }
@@ -145,8 +157,23 @@ function loadBuilding() {
   void relationWorkspace.loadBuilding(buildingInput.value)
 }
 
+function hasUnsavedWorkspaceChanges(): boolean {
+  return projectDirty.value || relationDirty.value || factorDirty.value || profileDirty.value || workbookDirty.value || manualPeriodDirty.value
+    || boundarySummaryPolicyDirty.value || carbonResultsDirty.value || configurationDirty.value
+}
+
 function searchBuildings(keyword: string) {
   void buildings.search(1, keyword)
+}
+
+function openDailyWorkspace() {
+  const query = { ...route.query }
+  delete query.mode
+  void router.push({ path: route.path, query })
+}
+
+function openParameterPackages() {
+  void router.push({ path: route.path, query: { ...route.query, mode: 'parameters' } })
 }
 
 function navigateProjectGuide(domain: string) {
@@ -495,6 +522,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
         <h1>{{ t('energyClassification.title') }}</h1>
         <p>{{ t('energyClassification.description') }}</p>
       </div>
+      <ElSpace v-if="route.path.endsWith('/energyItems') && route.query.mode === 'professional'" wrap><ElButton @click="openParameterPackages">{{ t('energyClassification.actions.openParameterPackages') }}</ElButton><ElButton @click="openDailyWorkspace">{{ t('energyClassification.actions.openDailyWorkspace') }}</ElButton></ElSpace>
     </header>
 
     <ElCard shadow="never" class="building-card">
@@ -728,7 +756,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
       <ElTabPane :label="t('energyClassification.carbonResults.title')" name="carbonResults">
         <section class="tab-content">
           <BoundarySummaryPolicyPanel :building-id="workspace.buildingId.value" @dirty-change="boundarySummaryPolicyDirty = $event" />
-          <CarbonResultsPanel :building-id="workspace.buildingId.value" @dirty-change="carbonResultsDirty = $event" />
+          <CarbonResultsPanel :building-id="workspace.buildingId.value" :reporting-month="typeof route.query.reportingMonth === 'string' ? route.query.reportingMonth : ''" @dirty-change="carbonResultsDirty = $event" />
         </section>
       </ElTabPane>
 

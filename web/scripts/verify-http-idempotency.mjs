@@ -15,10 +15,16 @@ const candidates = Object.values(networkInterfaces()).flat().filter(item => item
 const address = process.env.HTTP_TEST_HOST || candidates.find(item => item.address.startsWith('192.168.'))?.address
   || candidates.find(item => /^(10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(item.address))?.address
 assert(address, 'A local LAN IPv4 address is required; set HTTP_TEST_HOST if necessary')
-const paths = ['/operations/energy/energyItems', '/operations/energy/energyZones', '/configuration/space/equipmentSpaces']
+const pages = [
+  { path: '/operations/energy/energyItems', kind: 'reporting' },
+  { path: '/operations/energy/energyItems?mode=parameters', kind: 'parameters' },
+  { path: '/operations/energy/energyZones', kind: 'classification' },
+  { path: '/configuration/space/equipmentSpaces', kind: 'equipment' },
+]
+const routePaths = [...new Set(pages.map(item => item.path.split('?')[0]))]
 const menus = []
 let menuId = 0
-for (const path of paths) {
+for (const path of routePaths) {
   const workspace = '/' + path.split('/')[1]
   const groupPath = path.slice(0, path.lastIndexOf('/'))
   const entry = (value, type) => ({ id: ++menuId, menuName: '', path: value, menuType: type, visible: 1, status: 1, sortOrder: menuId, children: [] })
@@ -47,7 +53,8 @@ let browser
 const results = []
 try {
   browser = await chromium.launch({ ...(process.env.PLAYWRIGHT_BROWSER_CHANNEL ? { channel: process.env.PLAYWRIGHT_BROWSER_CHANNEL } : {}), headless: true, args: ['--no-proxy-server'] })
-  for (const path of paths) {
+  for (const pageSpec of pages) {
+    const { path, kind } = pageSpec
     const context = await browser.newContext()
     try {
       const page = await context.newPage()
@@ -78,7 +85,12 @@ try {
       assert.deepEqual(capabilities, { secure: false, randomUUID: 'undefined', getRandomValues: 'function' }, 'The test must use a real insecure HTTP origin without a crypto shim')
       assert(!(await page.locator('body').innerText()).includes('页面加载失败'))
       const tabs = []
-      if (path.startsWith('/operations/energy/')) {
+      if (kind === 'reporting') {
+        assert(await page.getByRole('heading', { name: '能源账单填报', exact: true }).isVisible())
+      } else if (kind === 'parameters') {
+        assert(await page.getByRole('heading', { name: '专业参数包', exact: true }).isVisible())
+        assert.equal(requests.some(request => request.path.includes('/energy-parameter-packages/')), false)
+      } else if (kind === 'classification') {
         assert(await page.getByRole('heading', { name: '通用计量分类', exact: true }).isVisible())
         for (const tab of await page.getByRole('tab').all()) {
           tabs.push(await tab.innerText()); await tab.click()

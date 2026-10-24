@@ -105,7 +105,9 @@ class FlywayMigrationConfigurationTest {
                 "V82__mysql_energy_configuration_menus.sql",
                 "V83__mysql_formal_boundary_summary_policy.sql",
                 "V84__mysql_telemetry_immutable_conflicts.sql",
-                "V85__mysql_d01_test_building_retirement.sql");
+                "V85__mysql_d01_test_building_retirement.sql",
+                "V86__mysql_energy_reporting.sql",
+                "V87__mysql_heat_co2_factor_formula.sql");
 
 
         Set<String> versions = migrations.stream()

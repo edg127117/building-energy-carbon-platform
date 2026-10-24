@@ -68,10 +68,18 @@ public class GlobalExceptionHandler {
                 "CARBON_VALIDATION_FAILED");
         return response;
     }
-    /**
-     * 把 Service 抛出的脱敏业务码映射为相同语义的 HTTP 状态。
-     * 401/403 供前端区分重新登录和权限不足，404/409 表示资源或状态冲突，503 表示依赖暂不可用。
-     */
+    /** Servlet在读取工作簿前拒绝超限文件时返回413，不把用户输入问题伪装为系统故障。 */
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public Map<String,Object> handleUploadTooLarge(HttpServletRequest request) {
+        Map<String,Object> response=new HashMap<>();
+        response.put("code",413);response.put("success",false);response.put("msg","上传文件超过允许大小，请缩小文件后重试");
+        response.put("errorCode",request.getRequestURI().startsWith(request.getContextPath()+"/v1/energy-reporting/")
+                ?"REPORTING_WORKBOOK_TOO_LARGE":"UPLOAD_TOO_LARGE");
+        addTraceId(response,request);return response;
+    }
+
+    /** 把Service的脱敏业务码映射为对应HTTP状态，避免把可预期业务阻断映射为500。 */
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<Map<String, Object>> handleBusinessException(
             BusinessException e, HttpServletRequest request) {
@@ -176,6 +184,10 @@ public class GlobalExceptionHandler {
             response.put("errorCode", relationErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-point-profiles")) {
             response.put("errorCode", energyMetadataErrorCode);
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-reporting")) {
+            response.put("errorCode",onboardingErrorCode.replace("ONBOARDING_","REPORTING_"));
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-parameter-packages")) {
+            response.put("errorCode",onboardingErrorCode.replace("ONBOARDING_","ENERGY_PARAMETER_PACKAGE_"));
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-catalog")) {
             response.put("errorCode", energyCatalogErrorCode);
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-conversion")) {

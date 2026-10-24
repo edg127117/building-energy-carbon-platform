@@ -15,6 +15,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class CarbonCalculationCoreTest {
     private final CarbonCalculationCore core = new CarbonCalculationCore();
 
+    @Test void billStandardVolumeCannotUseFactorFromAnotherState() {
+        var original=activity("NATURAL_GAS",BigDecimal.ONE,"NM3");
+        var trace=CarbonEvidence.object();trace.put("contractVersion","ENERGY_BILL_CARBON_V1");trace.put("standardConditionCode","INPUT_CONDITION");
+        var input=new ActivitySegment(original.snapshotId(),original.buildingId(),original.periodType(),original.startInclusive(),original.endExclusive(),original.timezoneId(),original.energyItemCode(),original.quantity(),original.unitCode(),original.lockStatus(),original.completeness(),original.resultNature(),original.evidenceHash(),trace);
+        var value=factor("NATURAL_GAS",FactorCategory.STATIONARY_COMBUSTION,ScopeType.SCOPE_1,ApplicabilityLevel.NATIONAL,null,
+                List.of(component(ComponentType.LOWER_HEATING_VALUE,"1","MJ/KG"),component(ComponentType.CARBON_CONTENT_PER_HEAT,"1","KG_C_PER_MJ"),component(ComponentType.OXIDATION_RATE,"1","RATIO")));
+        assertThatThrownBy(()->new CarbonCalculationCore().match(input,"420000",ResultNature.DEVELOPMENT_SIMULATION,List.of(value)))
+                .isInstanceOf(com.platform.framework.exception.BusinessException.class).hasMessageContaining("标准状态不一致");
+    }
     @Test
     void approvedProjectPathSupportsCustomEnergyCodesWithoutGuessingFromNames() {
         var original=activity("CUSTOM_ELEC",new BigDecimal("1000"),"KWH");
@@ -129,6 +138,40 @@ class CarbonCalculationCoreTest {
                 BigDecimal.ONE, "M3", "KG"))
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(CarbonErrors.UNIT_INCOMPATIBLE);
+    }
+
+    @Test
+    void refusesMidPeriodFactorChangeRatherThanSelectingWholePeriodFallback() throws Exception {
+        var activity=activity("ELECTRICITY",new BigDecimal("928127"),"KWH");
+        var national=direct("NATIONAL","ELECTRICITY",FactorCategory.PURCHASED_ELECTRICITY_LOCATION,ApplicabilityLevel.NATIONAL,null,"0.5703");
+        var province=direct("PROVINCE","ELECTRICITY",FactorCategory.PURCHASED_ELECTRICITY_LOCATION,ApplicabilityLevel.PROVINCE,"420000","0.4044");
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        var node=mapper.valueToTree(province);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)node).put("effectiveFrom","2026-06-01T00:00:00");
+        ((com.fasterxml.jackson.databind.node.ObjectNode)node).put("effectiveTo","2026-07-01T00:00:00");
+        var partial=mapper.treeToValue(node,FactorVersion.class);
+        assertThatThrownBy(()->core.match(activity,"420000",ResultNature.DEVELOPMENT_SIMULATION,List.of(national,partial)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("跨因子");
+        var original=core.calculate(activity,core.match(activity,"420000",ResultNature.DEVELOPMENT_SIMULATION,List.of(national)),null);
+        assertThat(original.exactEmissionKgCo2e()).isEqualByComparingTo("529310.8281");
+    }
+
+    @Test
+    void heatCo2MassRetainsCoverageAndUsesTraceableGwpOne() throws Exception {
+        var heat=activity("HEAT",new BigDecimal("10"),"GJ");
+        var original=direct("HEAT_CO2","HEAT",FactorCategory.PURCHASED_HEAT,ApplicabilityLevel.NATIONAL,null,"110");
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(original);
+        node.put("resultBasis","GAS_MASS");node.put("gasCoverage","CO2_ONLY_HEAT");node.put("inputUnitCode","GJ");
+        node.put("formulaVersionId","CFV_HEAT_CO2_V1");
+        node.set("components",mapper.valueToTree(List.of(component(ComponentType.DIRECT_EMISSION_FACTOR,"110","KG_CO2/GJ"))));
+        var factor=mapper.treeToValue(node,FactorVersion.class);
+        var match=core.match(heat,"420000",ResultNature.DEVELOPMENT_SIMULATION,List.of(factor));
+        var result=core.calculate(heat,match,gwp());
+        assertThat(result.exactEmissionKgCo2e()).isEqualByComparingTo("1100");
+        assertThat(result.evidenceJson()).contains("CO2_ONLY_HEAT");
+        assertThat(result.gwpVersionId()).isEqualTo("CGWP_CO2_V1");
+        assertThatThrownBy(()->core.calculate(heat,match,null)).isInstanceOf(BusinessException.class).hasMessageContaining("GWP=1");
     }
 
     private static SummaryMetric metric(List<SummaryMetric> values, String code) {

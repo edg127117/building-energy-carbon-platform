@@ -79,6 +79,10 @@ public class RestAccessDeniedHandler implements AccessDeniedHandler {
             body.put("errorCode", "RELATION_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-point-profiles")) {
             body.put("errorCode", "ENERGY_METADATA_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-reporting")) {
+            body.put("errorCode", "REPORTING_FORBIDDEN");
+        } else if (path.startsWith(request.getContextPath() + "/v1/energy-parameter-packages")) {
+            body.put("errorCode", "ENERGY_PARAMETER_PACKAGE_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-catalog")) {
             body.put("errorCode", "ENERGY_CATALOG_FORBIDDEN");
         } else if (path.startsWith(request.getContextPath() + "/v1/energy-conversion")) {

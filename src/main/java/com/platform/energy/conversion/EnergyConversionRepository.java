@@ -202,6 +202,18 @@ class EnergyConversionRepository {
                 consumptionScope, regionCode, usageScope, timestamp(at), timestamp(at));
     }
 
+    /** 正式整段计算须检查所有相交参数，包括仅在月中短暂有效的冲突版本。 */
+    List<ParameterRow> findOverlappingFormalParameters(String itemId,String method,String perspective,
+            String scope,String region,LocalDateTime start,LocalDateTime end) {
+        return jdbc.query(parameterSelect()+"""
+             WHERE p.energy_item_id=? AND f.method=? AND f.perspective=?
+               AND v.consumption_scope=? AND v.region_code=? AND v.usage_scope='PRODUCTION'
+               AND v.status='APPROVED' AND v.effective_from<?
+               AND (v.effective_to IS NULL OR v.effective_to>?)
+             ORDER BY p.parameter_code,v.version_no DESC
+            """,EnergyConversionRepository::parameterRow,itemId,method,perspective,scope,region,timestamp(end),timestamp(start));
+    }
+
     int approveParameter(String versionId, int expectedRevision, long reviewerId, LocalDateTime now) {
         return jdbc.update("""
                 UPDATE biz_energy_conversion_parameter_version
