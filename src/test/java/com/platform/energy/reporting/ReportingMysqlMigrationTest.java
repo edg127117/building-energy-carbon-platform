@@ -11,6 +11,33 @@ import static org.assertj.core.api.Assertions.*;
 /** 一次性空库先迁移V85再升级V86/V87，验证历史校验和、现有资产和职责不被重写。 */
 @EnabledIfEnvironmentVariable(named="REPORTING_MYSQL_ISOLATED",matches="true")
 class ReportingMysqlMigrationTest {
+    @Test void reportingStorageKeepsTransactionsAndUnicodeUnderLegacyDefaults() throws Exception {
+        String url=System.getenv("REPORTING_MYSQL_URL");assertThat(url).startsWith("jdbc:mysql://127.0.0.1:39487/iot_platform");
+        var ds=new DriverManagerDataSource(url,System.getenv("REPORTING_MYSQL_USER"),System.getenv("REPORTING_MYSQL_PASSWORD"));
+        var jdbc=new JdbcTemplate(ds);String schema="reporting_storage_"+java.util.UUID.randomUUID().toString().replace("-","");
+        jdbc.execute("CREATE DATABASE "+schema+" CHARACTER SET latin1 COLLATE latin1_swedish_ci");
+        try(var connection=ds.getConnection();var statement=connection.createStatement()) {
+            statement.execute("USE "+schema);statement.execute("SET SESSION default_storage_engine=MyISAM");
+            for(String sql:java.nio.file.Files.readString(java.nio.file.Path.of("src/env/init/V86__mysql_energy_reporting.sql")).split(";"))
+                if(!sql.isBlank())statement.execute(sql);
+            int tables=0;
+            try(var result=statement.executeQuery("SELECT engine,table_collation FROM information_schema.tables WHERE table_schema=DATABASE()")) {
+                while(result.next()){tables++;assertThat(result.getString(1)).isEqualTo("InnoDB");assertThat(result.getString(2)).startsWith("utf8mb4_");}
+            }
+            assertThat(tables).isEqualTo(5);connection.setAutoCommit(false);
+            String payload="{\"evidence\":\"中文凭证🌱\"}";
+            try(var insert=connection.prepareStatement("INSERT INTO biz_energy_reporting_receipt VALUES ('B','request','hash',?)")) {
+                insert.setString(1,payload);assertThat(insert.executeUpdate()).isEqualTo(1);
+            }
+            try(var result=statement.executeQuery("SELECT response_json FROM biz_energy_reporting_receipt")) {
+                assertThat(result.next()).isTrue();assertThat(result.getString(1)).isEqualTo(payload);
+            }
+            connection.rollback();
+            try(var result=statement.executeQuery("SELECT COUNT(*) FROM biz_energy_reporting_receipt")) {
+                assertThat(result.next()).isTrue();assertThat(result.getInt(1)).isZero();
+            }
+        } finally {jdbc.execute("DROP DATABASE "+schema);}
+    }
     @Test void upgradesWithoutChangingExistingHistoryAssetsOrDuties() {
         String url=System.getenv("REPORTING_MYSQL_URL");assertThat(url).startsWith("jdbc:mysql://127.0.0.1:39487/iot_platform");
         var ds=new DriverManagerDataSource(url,System.getenv("REPORTING_MYSQL_USER"),System.getenv("REPORTING_MYSQL_PASSWORD"));

@@ -6,7 +6,7 @@ export type ReportingMeterOverlap = 'NO_METER' | 'REPLACES_METER_TOTAL' | 'PENDI
 export type ReportingValueStatus = 'CONFIRMED' | 'PENDING_CONFIRMATION' | 'NOT_APPLICABLE' | 'MISSING'
 export type ReportingDataNature = 'NATIVE_QUANTITY' | 'AMOUNT_ESTIMATE'
 export type ReportingSourceTransition = 'submit' | 'approve' | 'reject'
-export type ReportingBatchTransition = 'submit' | 'approve' | 'reject' | 'seal'
+export type ReportingBatchTransition = 'submit' | 'approve' | 'reject' | 'seal' | 'refresh-sources'
 
 export interface ReportingSourceConfiguration {
   name: string

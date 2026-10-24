@@ -84,6 +84,19 @@ class ReportingApiContractTest {
         var docs=mvc.perform(get("/v3/api-docs").header("Authorization",token(1,"PLATFORM_ADMIN"))).andExpect(status().isOk()).andReturn();
         assertThat(json.readTree(docs.getResponse().getContentAsString()).path("paths").has("/v1/energy-reporting/buildings/{building}/batches")).isTrue();
     }
+    @Test void refreshSourcesHttpCommandRemainsAnIdempotentOwnerDraftOperation() throws Exception {
+        var batch=postData(BASE+"/batches",1,"BUILDING_OWNER","{\"month\":\"2024-01-01\",\"reason\":\"先建草稿\",\"idempotencyKey\":\"refresh-create\"}");
+        String path=BASE+"/batches/"+batch.path("batchId").asText()+"/refresh-sources";
+        String command="{\"expectedRevision\":0,\"reason\":\"更新来源\",\"idempotencyKey\":\"refresh-command\"}";
+        var refreshed=postData(path,1,"BUILDING_OWNER",command);
+        assertThat(refreshed.path("status").asText()).isEqualTo("DRAFT");assertThat(refreshed.path("revision").asLong()).isEqualTo(1);
+        assertThat(postData(path,1,"BUILDING_OWNER",command)).isEqualTo(refreshed);
+        mvc.perform(post(path).header("Authorization",token(2,"PLATFORM_ADMIN")).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"expectedRevision\":1,\"reason\":\"不能改他人草稿\",\"idempotencyKey\":\"foreign-refresh\"}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(post(path.replace("BLD001","BLD002")).header("Authorization",token(1,"BUILDING_OWNER"))
+                .contentType(MediaType.APPLICATION_JSON).content(command)).andExpect(status().isForbidden());
+    }
     @Test void heatMaterialCanCreateCo2MassFactorWithoutClaimingCo2eDirectCoverage() throws Exception {
         var source=postData("/v1/carbon-management/factor-sources",2,"PLATFORM_ADMIN", """
             {"sourceCode":"HEAT_SAMPLE_SOURCE","sourceName":"已确认资料热力参数","publisher":"隔离验收来源",

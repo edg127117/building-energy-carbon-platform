@@ -49,7 +49,7 @@ public class ReportingController {
     public Result<Preview> preview(Authentication a,@PathVariable String building,@PathVariable String id) {
         return Result.success(service.preview(SecurityUser.userId(a),SecurityUser.roles(a),building,id));
     }
-    @PostMapping("/batches/{id}/{action:submit|approve|reject|seal}")
+    @PostMapping("/batches/{id}/{action:submit|approve|reject|seal|refresh-sources}")
     public Result<Batch> command(Authentication a,@PathVariable String building,@PathVariable String id,@PathVariable String action,@Valid @RequestBody Command r) {
         return Result.success(service.batchCommand(SecurityUser.userId(a),SecurityUser.roles(a),building,id,action,r));
     }

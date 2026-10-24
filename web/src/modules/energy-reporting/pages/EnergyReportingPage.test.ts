@@ -8,7 +8,7 @@ const routeState = vi.hoisted(() => ({
   replace: vi.fn(),
   push: vi.fn(),
 }))
-const reportingApi = vi.hoisted(() => ({ context: vi.fn(), createBatch: vi.fn() }))
+const reportingApi = vi.hoisted(() => ({ context: vi.fn(), createBatch: vi.fn(), transitionBatch: vi.fn() }))
 const buildingsApi = vi.hoisted(() => ({ listReportingBuildings: vi.fn() }))
 
 vi.mock('@/modules/auth/public', async importOriginal => ({ ...(await importOriginal<typeof import('@/modules/auth/public')>()), useSession: () => ({ user: { id: 1, roles: ['ENERGY_MANAGER'] } }) }))
@@ -136,6 +136,45 @@ describe('能源账单填报页', () => {
       supersedesBatchId: 'BATCH-1',
     }))
     wrapper.unmount()
+  })
+
+  it('空草稿可显式更新已审核来源行，仍需预检和独立审核', async () => {
+    const value = context()
+    value.batches[0].rows = []
+    const wrapper = await mountPage(value)
+    const refreshed = context()
+    refreshed.batches[0].revision = 4
+    refreshed.batches[0].rows[0].quantity = null
+    refreshed.batches[0].rows[0].valueStatus = 'MISSING'
+    reportingApi.transitionBatch.mockResolvedValue(refreshed.batches[0])
+    reportingApi.context.mockResolvedValue(refreshed)
+    const page = wrapper.vm as unknown as { batchActionReason: string }
+    page.batchActionReason = '来源审批完成，更新空草稿'
+    await nextTick()
+    await wrapper.get('[data-test="batch-refresh-sources"]').trigger('click')
+    await flushPromises()
+
+    expect(reportingApi.transitionBatch).toHaveBeenCalledWith('B-1', 'BATCH-1', 'refresh-sources', expect.objectContaining({
+      expectedRevision: 3, reason: '来源审批完成，更新空草稿',
+    }))
+    expect(wrapper.find('.batch-table input').exists()).toBe(true)
+    expect(wrapper.find('[data-test="batch-submit"]').attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('更新来源不能改动已提交批次或绕过本人草稿及未保存修改保护', async () => {
+    const wrapper = await mountPage(context('SUBMITTED', fullCapabilities, 2))
+    expect(wrapper.find('[data-test="batch-refresh-sources"]').exists()).toBe(false)
+    const page = wrapper.vm as unknown as { batchActionReason: string; transitionBatch: (action: string) => Promise<void> }
+    page.batchActionReason = '不允许的动作'
+    await page.transitionBatch('refresh-sources')
+    expect(reportingApi.transitionBatch).not.toHaveBeenCalled()
+    wrapper.unmount()
+
+    const editable = await mountPage(context())
+    await editable.find('.batch-table input').setValue('120')
+    expect(editable.get('[data-test="batch-refresh-sources"]').attributes('disabled')).toBeDefined()
+    editable.unmount()
   })
 
   it('工作簿超过 1 MiB 时在上传前拒绝', async () => {

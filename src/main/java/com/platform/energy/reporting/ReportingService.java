@@ -70,8 +70,8 @@ public class ReportingService {
     public Source createSource(long user,Collection<String> roles,String building,CreateSource request) {
         read(user,roles,building);require(user,roles,BackendDuty.ENERGY_RULE_MAINTAIN);repository.lock(building);
         return once(user,building,request.idempotencyKey(),"CREATE_SOURCE",request,Source.class,()->{
-            validateSource(request.configuration(),false);
-            var value=new Source(id(),0,"DRAFT",user,null,request.configuration());
+            var configuration=normalizedSource(request.configuration());validateSource(configuration,false);
+            var value=new Source(id(),0,"DRAFT",user,null,configuration);
             repository.insert(stored(building,value));log(user,building,"CREATE_REPORTING_SOURCE",value.sourceId(),request.configuration().reason());return value;
         });
     }
@@ -79,8 +79,8 @@ public class ReportingService {
     public Source saveSource(long user,Collection<String> roles,String building,String id,SaveSource request) {
         read(user,roles,building);require(user,roles,BackendDuty.ENERGY_RULE_MAINTAIN);repository.lock(building);
         var old=source(building,id);revision(old.revision(),request.expectedRevision());author(old.createdBy(),user);
-        state(old.status(),"DRAFT");validateSource(request.configuration(),false);
-        var value=new Source(id,old.revision()+1,"DRAFT",user,null,request.configuration());update(stored(building,value),old.revision());
+        state(old.status(),"DRAFT");var configuration=normalizedSource(request.configuration());validateSource(configuration,false);
+        var value=new Source(id,old.revision()+1,"DRAFT",user,null,configuration);update(stored(building,value),old.revision());
         log(user,building,"SAVE_REPORTING_SOURCE",id,request.configuration().reason());return value;
     }
     @Transactional(rollbackFor=Exception.class,isolation=Isolation.READ_COMMITTED)
@@ -116,8 +116,7 @@ public class ReportingService {
             var current=existing.stream().filter(b->"SEALED".equals(b.status())).findFirst().orElse(null);
             if(current!=null&&!current.batchId().equals(request.supersedesBatchId()))throw conflict("已有封账，修订须明确引用原批次");
             if(request.supersedesBatchId()!=null&&(current==null||!current.batchId().equals(request.supersedesBatchId())))throw conflict("修订目标不是本月当前封账");
-            List<Row> rows=current==null?sources(building).stream().filter(s->"APPROVED".equals(s.status())&&covers(s.configuration(),request.month()))
-                    .map(s->new Row(s.sourceId(),s.revision(),null,"MISSING",request.month(),request.month().plusMonths(1),"","",null,"","","NATIVE_QUANTITY")).toList():current.rows();
+            List<Row> rows=draftRows(building,request.month(),current==null?List.of():current.rows());
             var value=new Batch(id(),building,request.month(),"DRAFT",0,user,null,request.supersedesBatchId(),rows,null);
             repository.insert(stored(value));log(user,building,"CREATE_REPORTING_BATCH",value.batchId(),request.reason());return value;
         });
@@ -145,7 +144,12 @@ public class ReportingService {
         if(Set.of("approve","reject","seal").contains(action))require(user,roles,BackendDuty.ENERGY_LOCK_APPROVE);
         return once(user,building,request.idempotencyKey(),"BATCH_"+id+"_"+action,request,Batch.class,()->{
             var old=batch(building,id);revision(old.revision(),request.expectedRevision());String status;Long reviewer=old.reviewedBy();Snapshot snapshot=null;
+            List<Row> rows=old.rows();
             switch(action) {
+                case "refresh-sources" -> {
+                    author(old.createdBy(),user);state(old.status(),"DRAFT");
+                    rows=draftRows(building,old.month(),old.rows());reviewer=null;status="DRAFT";
+                }
                 case "submit" -> {author(old.createdBy(),user);state(old.status(),"DRAFT");ready(prepare(user,roles,old));status="SUBMITTED";}
                 case "approve" -> {state(old.status(),"SUBMITTED");separate(old.createdBy(),user);
                     var reviewed=prepare(user,roles,old);ready(reviewed);snapshot=reviewed.snapshot();exclusionDuty(user,roles,old);reviewer=user;status="REVIEWED";}
@@ -167,7 +171,7 @@ public class ReportingService {
                 }
                 default -> throw invalid("填报操作无效");
             }
-            var value=new Batch(id,building,old.month(),status,old.revision()+1,old.createdBy(),reviewer,old.supersedesBatchId(),old.rows(),snapshot);
+            var value=new Batch(id,building,old.month(),status,old.revision()+1,old.createdBy(),reviewer,old.supersedesBatchId(),rows,snapshot);
             update(stored(value),old.revision());log(user,building,"REPORTING_BATCH_"+action.toUpperCase(Locale.ROOT),id,request.reason());return value;
         });
     }
@@ -192,6 +196,8 @@ public class ReportingService {
                 var start=batch.month().atStartOfDay();var end=batch.month().plusMonths(1).atStartOfDay();
                 var item=lookup.findApprovedItem(c.energyItemCode(),start).orElseThrow(()->conflict("能源品种未审核"));
                 var unit=lookup.findApprovedUnit(c.unitCode(),start).orElseThrow(()->conflict("单位未审核"));
+                // 来源最初审核时的目录不能代替实际账期目录，后续路径或标准状态变化也须重新校验。
+                validateCatalog(c,item,unit,true);
                 if(lookup.findApprovedItem(c.energyItemCode(),end.minusNanos(1)).filter(i->i.versionId().equals(item.versionId())).isEmpty()
                     ||lookup.findApprovedUnit(c.unitCode(),end.minusNanos(1)).filter(i->i.versionId().equals(unit.versionId())).isEmpty())
                     throw conflict("期间跨能源或单位版本，不能按天猜分");
@@ -239,11 +245,17 @@ public class ReportingService {
         if(Set.of("WATER","GREEN_ENERGY").contains(c.pathway())) {if(formal&&"PRIMARY".equals(c.purpose()))throw conflict("水与绿色能源仅预留，未启用核算");return;}
         if(!Set.of("STATIONARY_COMBUSTION","PURCHASED_ELECTRICITY","PURCHASED_HEAT").contains(c.pathway()))throw invalid("不支持该能源路径，移动源不在本期范围");
         var item=lookup.findApprovedItem(c.energyItemCode(),c.effectiveFrom().atStartOfDay()).orElseThrow(()->conflict("来源须选择已审核能源"));
+        var unit=lookup.findApprovedUnit(c.unitCode(),c.effectiveFrom().atStartOfDay()).orElseThrow(()->conflict("来源单位须已审核"));
+        validateCatalog(c,item,unit,formal);
+    }
+    private static void validateCatalog(SourceConfig c,EnergyCatalogLookup.ApprovedEnergyItem item,
+                                        EnergyCatalogLookup.ApprovedUnit unit,boolean formal) {
+        if(Set.of("WATER","GREEN_ENERGY").contains(c.pathway()))return;
+        if(!c.energyItemCode().equals(item.itemCode())||!c.unitCode().equals(unit.unitCode()))throw conflict("来源须使用目录的规范编码");
         if(!item.usageScopes().contains(c.pathway())||!switch(c.pathway()){
             case "PURCHASED_ELECTRICITY"->"ELECTRICITY".equals(item.compatibleCategory());
             case "PURCHASED_HEAT"->"HEAT".equals(item.compatibleCategory());
             default->Set.of("NATURAL_GAS","FUEL").contains(item.compatibleCategory());})throw invalid("能源品种与核算路径不一致");
-        var unit=lookup.findApprovedUnit(c.unitCode(),c.effectiveFrom().atStartOfDay()).orElseThrow(()->conflict("来源单位须已审核"));
         if(!Set.of("MASS","NORMAL_VOLUME","ENERGY","ACTUAL_VOLUME").contains(unit.dimensionCode()))throw invalid("来源必须使用原生用量单位");
         if(Set.of("PURCHASED_ELECTRICITY","PURCHASED_HEAT").contains(c.pathway())&&!"ENERGY".equals(unit.dimensionCode()))
             throw invalid("外购电与热必须选择能量单位，不能录入质量、流量或功率");
@@ -252,6 +264,23 @@ public class ReportingService {
         if(formal&&"ACTUAL_VOLUME".equals(unit.dimensionCode()))throw conflict("普通体积与标准体积换算条件未明确");
         if(formal&&"NORMAL_VOLUME".equals(unit.dimensionCode())&&blank(unit.standardConditionCode()))throw conflict("标准体积的状态条件尚未确认");
         if(formal&&"PRIMARY".equals(c.purpose())&&"PENDING_CONFIRMATION".equals(c.meterOverlap()))throw conflict("与表计的覆盖关系尚待确认");
+    }
+    private static SourceConfig normalizedSource(SourceConfig c) {
+        if(c==null)throw invalid("来源配置必填");
+        return new SourceConfig(c.name(),canonicalCode(c.energyItemCode()),canonicalCode(c.unitCode()),c.channel(),c.pathway(),
+                c.purpose(),c.coverage(),c.meterOverlap(),c.timezoneId(),c.effectiveFrom(),c.effectiveTo(),c.evidence(),c.reason(),
+                c.conversionMethod(),c.conversionPerspective(),c.regionCode(),c.supersedesSourceId());
+    }
+    private static String canonicalCode(String value){return value==null?null:value.trim().toUpperCase(Locale.ROOT);}
+    /** 只刷新本人草稿的来源身份；同一来源保留原始填写，新来源必须重新填量，不跨身份猜测单位或复制数值。 */
+    private List<Row> draftRows(String building,LocalDate month,List<Row> existing) {
+        Map<String,Row> previous=new HashMap<>();existing.forEach(r->previous.put(r.sourceId(),r));
+        return sources(building).stream().filter(s->"APPROVED".equals(s.status())&&covers(s.configuration(),month)).map(s->{
+            var row=previous.get(s.sourceId());
+            return row==null?new Row(s.sourceId(),s.revision(),null,"MISSING",month,month.plusMonths(1),"","",null,"","","NATIVE_QUANTITY")
+                    :new Row(s.sourceId(),s.revision(),row.quantity(),row.valueStatus(),row.startDate(),row.endDate(),row.evidence(),row.note(),
+                            row.exclusionQuantity(),row.exclusionReason(),row.exclusionEvidence(),row.dataNature());
+        }).toList();
     }
     private void checkAuthority(String building,Source proposed) {
         var c=proposed.configuration();if(!"PRIMARY".equals(c.purpose()))return;

@@ -13,7 +13,7 @@ export default {
   tabs: { source: '来源配置', batch: '月度填报' },
   actions: {
     addSource: '新增来源', edit: '编辑', save: '保存', cancel: '取消', refresh: '刷新', submit: '提交审核', approve: '审核通过', reject: '退回草稿',
-    createBatch: '新建本月草稿', createRevisionBatch: '新建修订草稿', preview: '预检', seal: '封存', openProfessional: '进入专业配置', openParameters: '维护专业参数包', openCarbonResults: '进入碳核算与报告', restore: '还原已保存内容',
+    refreshBatchSources: '更新来源行', createBatch: '新建本月草稿', createRevisionBatch: '新建修订草稿', preview: '预检', seal: '封存', openProfessional: '进入专业配置', openParameters: '维护专业参数包', openCarbonResults: '进入碳核算与报告', restore: '还原已保存内容',
     downloadWorkbookTemplate: '下载账单模板', chooseWorkbook: '选择工作簿', previewWorkbook: '上传并预览', openWorkbookMapping: '实施人员单元格映射', adoptWorkbookRows: '采纳预览行', clearWorkbook: '移除文件', remove: '移除',
   },
   source: {
@@ -52,6 +52,7 @@ export default {
     reason: '本次操作说明',
     reasonPlaceholder: '说明创建、保存、审核或封存原因',
     revisionHint: '本月已有封存批次。新建修订草稿会引用当前封存批次，原封存记录会保留。',
+    refreshSourcesHint: '来源审批或替代后，可更新本人草稿的来源行。同一来源保留填写内容，新来源留空，已不适用的来源移除；原封账不变，仍须预检和独立审核。',
     draftHint: '先保存月行，再执行预检；服务端会复核来源修订号、期间和状态。',
     previewReady: '服务端预检已通过；当前保存内容未变化时可提交审核。',
     previewRequired: '请先对当前已保存的月行执行预检。',

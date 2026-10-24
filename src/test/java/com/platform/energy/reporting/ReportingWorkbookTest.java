@@ -120,5 +120,21 @@ class ReportingWorkbookTest {
         var preview=service.preview(1,ROLES,"B","BATCH",file(bytes),request);
         assertThat(preview.rows()).isEmpty();assertThat(preview.issues()).anyMatch(i->i.message().contains("2021年"));
     }
+    @Test void explicitMonetaryOrUnknownUnitCannotBeRelabelledAsPhysicalEnergy() throws Exception {
+        for(String originalUnit:List.of("元","万元","待确认单位")) {
+            byte[] bytes;
+            try(var book=new XSSFWorkbook();var out=new ByteArrayOutputStream()) {
+                var row=book.createSheet("8-电力").createRow(4);
+                row.createCell(19).setCellValue(originalUnit);row.createCell(20).setCellValue("88375");
+                book.write(out);bytes=out.toByteArray();
+            }
+            var request=new ReportingWorkbookService.Request("CELL_MAPPING",List.of(new ReportingWorkbookService.Mapping(
+                    "SOURCE","8-电力","U5","KWH",MONTH,MONTH.plusMonths(1),"NATIVE_QUANTITY","原工作簿")));
+            var preview=service.preview(1,ROLES,"B","BATCH",file(bytes),request);
+            assertThat(preview.rows()).as("明确标注的单位不能被忽略: %s",originalUnit).isEmpty();
+            assertThat(preview.issues()).anyMatch(i->i.message().contains(originalUnit));
+        }
+        verify(lookup,never()).convert(any(),any(),any(),any());
+    }
     private static MockMultipartFile file(byte[] bytes){return new MockMultipartFile("file","input.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",bytes);}
 }

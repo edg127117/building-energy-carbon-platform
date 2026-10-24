@@ -175,6 +175,10 @@ class ReportingWorkflowTest {
         assertThat(closed.configuration().effectiveTo()).isEqualTo(MONTH.plusMonths(1));
         assertThat(service.batch(1,OWNER,BUILDING,old.batchId()).snapshot()).isEqualTo(old.snapshot());
         assertThat(new ReportingCarbonInput(service).read(BUILDING,start(),end(),100).activities().getFirst().quantity()).isEqualByComparingTo("1000");
+        var revision=createRevision(old);
+        assertThat(revision.rows().getFirst().sourceRevision()).isEqualTo(closed.revision());
+        assertThat(revision.rows().getFirst().quantity()).isEqualByComparingTo("1000");
+        assertThat(service.preview(1,OWNER,BUILDING,revision.batchId()).ready()).isTrue();
     }
     @Test void frozenTenThousandStandardVolumeIsConvertedExactlyOnceAndKeepsConditions() {
         var lookup=(EnergyCatalogLookup)org.springframework.test.util.ReflectionTestUtils.getField(service,"lookup");
@@ -199,6 +203,70 @@ class ReportingWorkflowTest {
         assertThatThrownBy(()->create("failed")).isInstanceOf(IllegalStateException.class);
         assertThat(repository.list(BUILDING,"BATCH")).isEmpty();
         assertThat(repository.receipt(BUILDING,"failed")).isNull();
+    }
+    @Test void sourceCodesAreCanonicalBeforeAuthorityComparisonAndFreezing() {
+        var c=config("normalized","NO_METER");
+        var lookup=(EnergyCatalogLookup)org.springframework.test.util.ReflectionTestUtils.getField(service,"lookup");
+        var canonicalItem=lookup.findApprovedItem("ELECTRICITY",MONTH.atStartOfDay());
+        var canonicalUnit=lookup.findApprovedUnit("KWH",MONTH.atStartOfDay());
+        when(lookup.findApprovedItem(eq(" electricity "),any())).thenReturn(canonicalItem);
+        when(lookup.findApprovedUnit(eq(" kwh "),any())).thenReturn(canonicalUnit);
+        var raw=new SourceConfig(c.name()," electricity "," kwh ",c.channel(),c.pathway(),c.purpose(),c.coverage(),
+                c.meterOverlap(),c.timezoneId(),c.effectiveFrom(),c.effectiveTo(),c.evidence(),c.reason(),null,null,null,null);
+        var source=tx.execute(s->service.createSource(2,ADMIN,BUILDING,new CreateSource(raw,"normalized")));
+        assertThat(source.configuration().energyItemCode()).isEqualTo("ELECTRICITY");
+        assertThat(source.configuration().unitCode()).isEqualTo("KWH");
+        var submitted=tx.execute(s->service.sourceCommand(2,ADMIN,BUILDING,source.sourceId(),"submit",new Command(0L,"提交",null)));
+        var approved=tx.execute(s->service.sourceCommand(3,ADMIN,BUILDING,source.sourceId(),"approve",new Command(submitted.revision(),"审核",null)));
+        var sealed=seal(save(create("normalized-batch"),row(approved,"1000",null)));
+        assertThat(new ReportingCarbonInput(service).read(BUILDING,start(),end(),100).activities()).singleElement()
+                .satisfies(a->{assertThat(a.energyItemCode()).isEqualTo("ELECTRICITY");assertThat(a.unitCode()).isEqualTo("KWH");});
+        assertThat(sealed.snapshot().nativeStatus()).isEqualTo("COMPLETE");
+        var duplicate=tx.execute(s->service.createSource(2,ADMIN,BUILDING,new CreateSource(config("duplicate","NO_METER"),"duplicate-source")));
+        var pending=tx.execute(s->service.sourceCommand(2,ADMIN,BUILDING,duplicate.sourceId(),"submit",new Command(0L,"提交",null)));
+        assertThatThrownBy(()->tx.execute(s->service.sourceCommand(3,ADMIN,BUILDING,duplicate.sourceId(),"approve",new Command(pending.revision(),"审核",null))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("主来源");
+    }
+    @Test void billingMonthCatalogMustStillSupportTheApprovedSourcePathway() {
+        var source=approved("catalog-change","NO_METER");
+        var lookup=(EnergyCatalogLookup)org.springframework.test.util.ReflectionTestUtils.getField(service,"lookup");
+        when(lookup.findApprovedItem(eq("ELECTRICITY"),any())).thenAnswer(i->{
+            LocalDateTime at=i.getArgument(1);boolean later=!at.isBefore(MONTH.atStartOfDay());
+            return Optional.of(new EnergyCatalogLookup.ApprovedEnergyItem("ei","ELECTRICITY",later?"ei-v2":"ei-v1",later?2:1,
+                    later?"HEAT":"ELECTRICITY",later?List.of("PURCHASED_HEAT"):List.of("PURCHASED_ELECTRICITY"),
+                    "STANDARD","隔离目录变更",LocalDateTime.of(2000,1,1,0,0),null));
+        });
+        var batch=save(create("catalog-change-batch"),row(source,"1000",null));
+        assertThat(service.preview(1,OWNER,BUILDING,batch.batchId()).ready()).isFalse();
+        assertThatThrownBy(()->command(batch,"submit",1,OWNER)).isInstanceOf(BusinessException.class).hasMessageContaining("核算路径");
+        assertThat(service.batch(1,OWNER,BUILDING,batch.batchId()).status()).isEqualTo("DRAFT");
+    }
+    @Test void refreshSourcesRepairsAnEmptyDraftWithoutBypassingReviewOrCopyingNewSourceQuantities() {
+        var empty=create("empty-before-source");var source=approved("late-approved","NO_METER");
+        var refreshed=command(empty,"refresh-sources",1,OWNER);
+        assertThat(refreshed.status()).isEqualTo("DRAFT");assertThat(refreshed.snapshot()).isNull();
+        assertThat(refreshed.rows()).singleElement().satisfies(r->{assertThat(r.sourceId()).isEqualTo(source.sourceId());
+            assertThat(r.sourceRevision()).isEqualTo(source.revision());assertThat(r.quantity()).isNull();assertThat(r.valueStatus()).isEqualTo("MISSING");});
+        assertThat(command(empty,"refresh-sources",1,OWNER)).isEqualTo(refreshed);
+        assertThat(service.preview(1,OWNER,BUILDING,refreshed.batchId()).ready()).isFalse();
+        var saved=save(refreshed,row(source,"1000",null));
+        assertThatThrownBy(()->command(saved,"refresh-sources",2,ADMIN)).isInstanceOf(BusinessException.class).hasMessageContaining("本人");
+        var submitted=command(saved,"submit",1,OWNER);
+        assertThatThrownBy(()->command(submitted,"refresh-sources",1,OWNER)).isInstanceOf(BusinessException.class).hasMessageContaining("状态");
+        verify(changes,never()).sealed(anyString(),any(),anyString(),any(),anyLong());
+    }
+    @Test void refreshDoesNotCopyQuantitiesAcrossReplacementSourceIdentities() {
+        var old=approved("old-current","NO_METER");var draft=save(create("old-draft"),row(old,"1000",null));
+        var c=config("replacement-current","NO_METER");
+        var configuration=new SourceConfig(c.name(),c.energyItemCode(),c.unitCode(),c.channel(),c.pathway(),c.purpose(),c.coverage(),
+                c.meterOverlap(),c.timezoneId(),MONTH,null,c.evidence(),c.reason(),null,null,null,old.sourceId());
+        var created=tx.execute(s->service.createSource(2,ADMIN,BUILDING,new CreateSource(configuration,"replacement-current")));
+        var submitted=tx.execute(s->service.sourceCommand(2,ADMIN,BUILDING,created.sourceId(),"submit",new Command(0L,"提交",null)));
+        var replacement=tx.execute(s->service.sourceCommand(3,ADMIN,BUILDING,created.sourceId(),"approve",new Command(submitted.revision(),"审核",null)));
+        var refreshed=command(draft,"refresh-sources",1,OWNER);
+        assertThat(refreshed.rows()).singleElement().satisfies(r->{assertThat(r.sourceId()).isEqualTo(replacement.sourceId());
+            assertThat(r.quantity()).isNull();assertThat(r.valueStatus()).isEqualTo("MISSING");});
+        assertThat(service.preview(1,OWNER,BUILDING,refreshed.batchId()).ready()).isFalse();
     }
     private Source approved(String name,String overlap) {
         var created=tx.execute(s->service.createSource(2,ADMIN,BUILDING,new CreateSource(config(name,overlap),"src:"+name)));

@@ -132,10 +132,13 @@ public class ReportingWorkbookService {
         int column=switch(sheet.getSheetName().trim()){case "8-电力"->19;case "4-固定源化石燃料"->26;default->-1;};
         var row=sheet.getRow(ref.getRow());if(column<0||row==null)return null;var cell=row.getCell(column);
         if(cell==null||cell.getCellType()!=CellType.STRING)return null;
-        return switch(text(cell).replace(" ","").toUpperCase(Locale.ROOT)) {
+        String declared=text(cell).replace(" ","").toUpperCase(Locale.ROOT);
+        if(declared.isBlank())return null;
+        // 明确写出的费用或未知单位也是约束，不能按“未提供”跳过后重新标成实物用量。
+        return switch(declared) {
             case "KWH","千瓦时"->"KWH";case "MWH","兆瓦时"->"MWH";
             case "立方米","M3","M³"->"M3";case "NM3","NM³","标准立方米"->"NM3";
-            case "KG","千克"->"KG";case "T","吨"->"T";default->null;
+            case "KG","千克"->"KG";case "T","吨"->"T";default->declared;
         };
     }
     private static String text(Cell c) {
