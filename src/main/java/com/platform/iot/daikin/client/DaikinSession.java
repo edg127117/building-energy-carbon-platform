@@ -31,6 +31,9 @@ public final class DaikinSession {
     private final DaikinHttpBudget budget;
     private final ReentrantLock tokenLock = new ReentrantLock();
     private volatile DaikinWireCodec.Token token;
+    private static final Duration AUTHENTICATION_BACKOFF = Duration.ofSeconds(30);
+    // 由 tokenLock 保护；认证被拒后让后续采集轮次再试，避免并发请求逐个重新登录。
+    private Instant authenticationRetryAt = Instant.MIN;
 
     public DaikinSession(DaikinClientConfiguration configuration, DaikinWireCodec wireCodec,
                                 DaikinHttpTransport transport, ObjectMapper objectMapper, Clock clock) {
@@ -53,20 +56,27 @@ public final class DaikinSession {
         String validatedPath = endpoint.path(resourceId);
         Map<String, String> safeParameters = validateParameters(parameters);
         DaikinWireCodec.Token current = validToken();
-        JsonNode response;
         try {
-            response = invoke(endpoint, validatedPath, safeParameters, current.accessToken());
+            return readWithToken(endpoint, validatedPath, safeParameters, current);
         } catch (DaikinClientException ex) {
             if (ex.code() != DaikinClientException.Code.AUTHENTICATION_REQUIRED) {
                 throw ex;
             }
-            response = invoke(endpoint, validatedPath, safeParameters, renewToken(current).accessToken());
-            return requireReadSuccess(response);
         }
-        if (safeAuthenticationFailure(response)) {
-            response = invoke(endpoint, validatedPath, safeParameters, renewToken(current).accessToken());
+        DaikinWireCodec.Token renewed = renewToken(current);
+        try {
+            return readWithToken(endpoint, validatedPath, safeParameters, renewed);
+        } catch (DaikinClientException ex) {
+            if (ex.code() == DaikinClientException.Code.AUTHENTICATION_REQUIRED) {
+                rejectToken(renewed);
+            }
+            throw ex;
         }
-        return requireReadSuccess(response);
+    }
+
+    private JsonNode readWithToken(DaikinEndpoint endpoint, String path, Map<String, String> parameters,
+                                   DaikinWireCodec.Token current) {
+        return requireReadSuccess(invoke(endpoint, path, parameters, current.accessToken()));
     }
 
     /** 只由控制适配器调用。即使收到认证失败也不重发有副作用的 PUT。 */
@@ -121,27 +131,63 @@ public final class DaikinSession {
                     && token.expiresAt().isAfter(clock.instant().plus(configuration.tokenRefreshSkew()))) {
                 return token;
             }
-            return requestToken(rejected);
+            return requestToken(token);
         } finally {
             tokenLock.unlock();
         }
     }
 
     private DaikinWireCodec.Token requestToken(DaikinWireCodec.Token previous) {
-        DaikinEndpoint endpoint = previous != null && !previous.refreshKey().isBlank()
-                ? DaikinEndpoint.TOKEN_REFRESH : DaikinEndpoint.TOKEN;
-        Map<String, String> tokenParameters = endpoint == DaikinEndpoint.TOKEN_REFRESH
-                ? Map.of("refreshKey", previous.refreshKey())
-                : Map.of("pass", configuration.credentials().secret());
-        String refreshAccessToken = endpoint == DaikinEndpoint.TOKEN_REFRESH ? previous.accessToken() : null;
-        JsonNode envelope = requireSuccess(invoke(endpoint, endpoint.path(null), tokenParameters,
-                refreshAccessToken));
+        if (clock.instant().isBefore(authenticationRetryAt)) {
+            throw new DaikinClientException(DaikinClientException.Code.AUTHENTICATION_REQUIRED);
+        }
+        try {
+            if (previous != null && !previous.refreshKey().isBlank()) {
+                try {
+                    return acquireToken(DaikinEndpoint.TOKEN_REFRESH,
+                            Map.of("refreshKey", previous.refreshKey()), previous.accessToken());
+                } catch (DaikinClientException ex) {
+                    if (ex.code() != DaikinClientException.Code.AUTHENTICATION_REQUIRED) {
+                        throw ex;
+                    }
+                    // 仅明确的认证拒绝触发一次完整登录；网络/响应错误不推断为凭据失效。
+                    token = null;
+                }
+            }
+            return acquireToken(DaikinEndpoint.TOKEN,
+                    Map.of("pass", configuration.credentials().secret()), null);
+        } catch (DaikinClientException ex) {
+            if (ex.code() == DaikinClientException.Code.AUTHENTICATION_REQUIRED) {
+                token = null;
+                authenticationRetryAt = clock.instant().plus(AUTHENTICATION_BACKOFF);
+            }
+            throw ex;
+        }
+    }
+
+    private DaikinWireCodec.Token acquireToken(DaikinEndpoint endpoint, Map<String, String> parameters,
+                                               String accessToken) {
+        JsonNode envelope = requireReadSuccess(invoke(endpoint, endpoint.path(null), parameters, accessToken));
         DaikinWireCodec.Token decoded = safeDecodeToken(endpoint, envelope);
         if (!decoded.expiresAt().isAfter(clock.instant())) {
             throw new DaikinClientException(DaikinClientException.Code.INVALID_TOKEN_RESPONSE);
         }
         token = decoded;
+        authenticationRetryAt = Instant.MIN;
         return decoded;
+    }
+
+    private void rejectToken(DaikinWireCodec.Token rejected) {
+        lockToken();
+        try {
+            // 迟到的失败不能清除其他请求刚取得的新一代凭据。
+            if (token == rejected) {
+                token = null;
+                authenticationRetryAt = clock.instant().plus(AUTHENTICATION_BACKOFF);
+            }
+        } finally {
+            tokenLock.unlock();
+        }
     }
 
     private JsonNode invoke(DaikinEndpoint endpoint, String path, Map<String, String> parameters,

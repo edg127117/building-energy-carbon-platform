@@ -106,7 +106,7 @@ const fastWatch = useDaikinFastWatch({
 const detailError = computed(() => current.error.value || fastWatch.error.value)
 
 const isOutdoor = computed(() => props.deviceKind === 'OUTDOOR')
-const structured = computed(() => daikinStructuredDetail(current.data.value?.fields ?? [], props.deviceKind))
+const structured = computed(() => daikinStructuredDetail(current.data.value?.fields ?? [], props.deviceKind, current.data.value?.active ?? false))
 const tempUnit = computed(() => roomHistory.data.value?.unit || setHistory.data.value?.unit || roomTempCurrent.data.value?.unit || setpointCurrent.data.value?.unit || '°C')
 
 const heroRoomTemp = computed(() => {
