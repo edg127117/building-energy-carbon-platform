@@ -75,7 +75,7 @@ class EerpServiceTest {
         });
         var publicReader=new CalculationPointReadService(scope,pointService,reader,quality);
         nativeAggregation=spy(new NativeQuantityAggregationService(new EnergyAggregationCore(),new EnergyAggregationAuthorization(duties,scope),mock(EnergyAggregationGovernanceService.class)));
-        doReturn(new NativeQuantityAggregationService.GovernedEvidence(List.of(),List.of())).when(nativeAggregation).governedEvidence(anyLong(),anyCollection(),anyString(),anyString(),any(),any());
+        doReturn(new NativeQuantityAggregationService.GovernedEvidence(List.of(),List.of())).when(nativeAggregation).governedEvidence(anyLong(),anyCollection(),anyString(),anyString(),any(),any(),any());
         calculator=new EerpPeriodCalculator(publicReader,nativeAggregation,codec);
         validator=new EerpConfigurationValidator(relations,pointService,equipmentService,limits,codec);
         snapshots=new NativePeriodSnapshotService(jdbc,values,new EnergyPeriodAuthorization(duties,scope),mapper);

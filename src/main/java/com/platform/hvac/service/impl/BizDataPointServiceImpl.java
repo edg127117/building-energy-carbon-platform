@@ -19,6 +19,7 @@ import com.platform.relation.RelationGovernanceGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -43,6 +44,7 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
     private final BizPointNamingRuleMapper namingRuleMapper;
     private final PointCodeNamingValidator namingValidator;
     private final RelationGovernanceGuard relationGuard;
+    private final com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
 
     /** 按设备 ID 从 MySQL 返回测点档案；设备存在性和建筑权限由 Controller 校验。 */
     @Override
@@ -69,7 +71,9 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
      * 任一校验失败都不会写库或刷新快照。</p>
      */
     @Override
+    @Transactional
     public Result<BizDataPoint> add(BizDataPoint point) {
+        retirementService.requireNotRetired(point.getBuildingId());
         relationGuard.requireLegacyForStructuralCreate(point.getBuildingId());
         point.setPointId(null);
         validateRelationships(point);
@@ -86,11 +90,13 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
      * 标准身份和归属字段不能通过普通更新改变。</p>
      */
     @Override
+    @Transactional
     public Result<BizDataPoint> update(BizDataPoint point) {
         BizDataPoint existing = this.getById(point.getPointId());
         if (existing == null) {
             throw new BusinessException(404, "测点不存在");
         }
+        retirementService.requireNotRetired(existing.getBuildingId());
         // null 在旧的部分更新契约中表示“未提供”，不会清空数据库关系字段。
         if (point.getEquipId() != null) {
             relationGuard.rejectChangedProjection(
@@ -138,7 +144,10 @@ public class BizDataPointServiceImpl extends ServiceImpl<BizDataPointMapper, Biz
 
     /** 逻辑删除 MySQL 测点后刷新配置快照，不删除 TDengine 中的历史分钟数据。 */
     @Override
+    @Transactional
     public Result<Void> delete(String pointId) {
+        BizDataPoint existing = this.getById(pointId);
+        if (existing != null) retirementService.requireNotRetired(existing.getBuildingId());
         relationGuard.requireDeletable("POINT", pointId);
         this.removeById(pointId);
         configProvider.refreshAll();

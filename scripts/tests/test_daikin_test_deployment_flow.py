@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zipfile
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
@@ -77,15 +78,19 @@ else:print((pathlib.Path(os.environ['TEST_BASE'])/'current/web/index.html').read
         self.env = {**os.environ, "PATH": str(mock) + ":" + os.environ["PATH"],
                     "TEST_ROOT": str(self.root), "TEST_BASE": str(self.base), "TEST_RUNTIME_ENV": str(self.runtime)}
 
-    def deploy(self, name="candidate"):
+    def deploy(self, name="candidate", migration=None, d01_jar=False):
         package = self.root / ("package-" + name)
         (package / "web").mkdir(parents=True)
         (package / "building-energy-carbon-platform.jar").write_bytes(b"offline candidate")
+        if d01_jar:
+            with zipfile.ZipFile(package / "building-energy-carbon-platform.jar", "w") as jar:
+                jar.writestr("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql", "fixture")
         (package / "web/index.html").write_text(name)
         sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
         (package / "MANIFEST.txt").write_text(
             "commit=" + "a" * 40 + "\nbackendJarSha256=" + sha(package / "building-energy-carbon-platform.jar")
             + "\nwebIndexSha256=" + sha(package / "web/index.html") + "\n"
+            + ("expectedMigration=" + migration + "\n" if migration else "")
         )
         archive = self.base / "incoming" / (name + ".tar.gz")
         with tarfile.open(archive, "w:gz") as stream:
@@ -95,6 +100,19 @@ else:print((pathlib.Path(os.environ['TEST_BASE'])/'current/web/index.html').read
                                 env=self.env, text=True, capture_output=True, timeout=15)
         self.assertEqual(os.readlink(self.port80), "unchanged-other-site")
         return result
+
+    def test_d01_manifest_refuses_single_step_deployment_before_configuration_change(self):
+        result = self.deploy(migration="84")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("D01_STAGED_RELEASE_REQUIRED", result.stderr)
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_d01_jar_without_manifest_hint_also_refuses_single_step_deployment(self):
+        result = self.deploy(d01_jar=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("D01_STAGED_RELEASE_REQUIRED", result.stderr)
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
 
     def test_publish_and_next_update_both_keep_test_open(self):
         first = self.deploy()
@@ -107,20 +125,21 @@ else:print((pathlib.Path(os.environ['TEST_BASE'])/'current/web/index.html').read
         self.assertEqual((self.base / "current").resolve(), self.base / "releases/next-candidate")
         self.assertEqual(len(list((self.base / "backups").glob("*/control-before.env"))), 2)
 
-    def test_restart_failure_restores_release_and_exact_configuration(self):
+    def test_restart_failure_keeps_candidate_stopped_and_restores_exact_configuration(self):
         self.env["TEST_FAIL_RESTART"] = "1"
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn("TEST_DEPLOY_FAIL_STOP_D01_GUARD", result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/candidate")
 
-    def test_runtime_override_fails_acceptance_and_rolls_back(self):
+    def test_runtime_override_fails_acceptance_and_keeps_candidate_stopped(self):
         self.env["TEST_RUNTIME_OVERRIDE"] = "1"
         result = self.deploy()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("TEST_CONTROL_RUNTIME_CONFIG_MISMATCH", result.stderr)
         self.assertEqual(self.config.read_bytes(), self.original)
-        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/candidate")
 
     def test_non_test_environment_never_opens_or_switches_release(self):
         self.env["TEST_MODE"] = "PRODUCTION"

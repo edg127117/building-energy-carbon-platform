@@ -21,7 +21,7 @@ class ReportingMysqlWorkflowTest extends ReportingWorkflowTest {
         admin.execute("CREATE DATABASE "+database+" CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
         var ds=new DriverManagerDataSource("jdbc:mysql://127.0.0.1:39487/"+database+"?useSSL=false&allowPublicKeyRetrieval=true",user,password);
         var jdbc=new JdbcTemplate(ds);
-        for(String sql:Files.readString(Path.of("src/env/init/V84__mysql_energy_reporting.sql")).split(";"))if(!sql.isBlank())jdbc.execute(sql);
+        for(String sql:Files.readString(Path.of("src/env/init/V86__mysql_energy_reporting.sql")).split(";"))if(!sql.isBlank())jdbc.execute(sql);
         return ds;
     }
     @AfterEach void removeOnlyOwnTemporarySchema() {

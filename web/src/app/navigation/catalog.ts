@@ -19,7 +19,7 @@ export const pages: PageEntry[] = [
   ...group('operations', 'energy', ['energyItems', 'energyZones', 'trend', 'baselineAnalysis', 'diagnosis']),
   ...group('operations', 'carbon', ['carbonOverview', 'carbonDetails', 'trend', 'reduction', 'assets']),
   ...group('operations', 'devices', ['businessDevices', 'pendingDevices', 'meters']),
-  ...group('operations', 'alarms', ['liveAlarms', 'historyAlarms']),
+  ...group('operations', 'alarms', ['liveAlarms', 'historyAlarms', 'dataQuality']),
   ...group('operations', 'maintenance', ['plans', 'orders', 'faults']),
   ...group('operations', 'reports', ['energyReports', 'carbonReports']),
   ...group('configuration', 'ingestion', ['products', 'protocols', 'collection', 'interfaces']),

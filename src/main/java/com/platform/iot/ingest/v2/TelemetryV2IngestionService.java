@@ -9,6 +9,7 @@ import com.platform.iot.ingest.standard.StandardTelemetryMessage;
 import com.platform.iot.ingest.standard.StandardTelemetryOutcome;
 import com.platform.iot.ingest.standard.StandardTelemetryResult;
 import com.platform.iot.reliability.AckMode;
+import com.platform.iot.reliability.TelemetryMessageJournal;
 import com.platform.iot.reliability.ReceiptStatus;
 import com.platform.iot.reliability.mapper.TelemetryReceiptFailureMapper;
 import com.platform.iot.reliability.mapper.TelemetryReceiptMapper;
@@ -44,6 +45,7 @@ public class TelemetryV2IngestionService {
     private final AckModeResolver ackModeResolver;
     private final MeterRegistry meterRegistry;
     private final String trustedAdapterAckTopic;
+    private final TelemetryMessageJournal journal;
 
     public TelemetryV2IngestionService(
             DeviceIdentityProvider identityProvider,
@@ -54,7 +56,7 @@ public class TelemetryV2IngestionService {
             AckModeResolver ackModeResolver,
             MeterRegistry meterRegistry,
             @Value("${mqtt.topics.v2-adapter-ack:platform/telemetry/v2/ack/adapter}")
-            String trustedAdapterAckTopic) {
+            String trustedAdapterAckTopic, TelemetryMessageJournal journal) {
         this.identityProvider = identityProvider;
         this.unknownDeviceHandler = unknownDeviceHandler;
         this.standardIngestionService = standardIngestionService;
@@ -63,9 +65,9 @@ public class TelemetryV2IngestionService {
         this.ackModeResolver = ackModeResolver;
         this.meterRegistry = meterRegistry;
         this.trustedAdapterAckTopic = trustedAdapterAckTopic;
+        this.journal = journal;
     }
 
-    @Transactional
     public V2ProcessingResult ingest(TelemetryV2Message message, long platformReceivedAt) {
         String envelopeError = validateEnvelope(message, platformReceivedAt);
         if (envelopeError != null) {
@@ -101,7 +103,64 @@ public class TelemetryV2IngestionService {
                     "协议模板与设备绑定不一致");
         }
 
-        String payloadHash = payloadHash(message);
+        String hash=payloadHash(message);
+        var entry=journal.find(message.canonicalMessageId());
+        if(entry==null) {
+            var prior=receiptMapper.selectById(message.canonicalMessageId());
+            var batch=prior==null?standardIngestionService.prepareImmutable(toStandardMessage(message),platformReceivedAt):null;
+            if(batch!=null && batch.result().outcome()!=StandardTelemetryOutcome.ACCEPTED) {
+                if(batch.result().outcome()==StandardTelemetryOutcome.RETRYABLE_FAILURE)
+                    return retryable(message.canonicalMessageId(),"PREPARATION_UNAVAILABLE",batch.result().detail());
+                return permanent(message.canonicalMessageId(),ReceiptStatus.PLATFORM_REJECTED,"PLATFORM_REJECTED",mode,platformReceivedAt,null,batch.result().detail());
+            }
+            var snapshot=new TelemetryMessageJournal.Snapshot(message,binding,mode,platformReceivedAt,batch==null?java.util.List.of():batch.events());
+            entry=prior==null?journal.freeze(hash,snapshot):journal.freezeLegacy(prior.getPayloadHash(),snapshot,
+                    permanent(message.canonicalMessageId(),ReceiptStatus.DUPLICATE_PERSISTED,"DUPLICATE_PERSISTED",mode,platformReceivedAt,prior.getPersistedAt(),null));
+        }
+        if(!hash.equals(entry.hash())) {
+            journal.conflict(message.canonicalMessageId(),hash,message);
+            recordFailure(message.canonicalMessageId(),binding.buildingId(),"IDEMPOTENCY","MESSAGE_CONFLICT","同一业务键不同内容已留存");
+            return permanent(message.canonicalMessageId(),ReceiptStatus.MESSAGE_CONFLICT,"MESSAGE_CONFLICT",mode,platformReceivedAt,null,"同一业务键不同内容已留存");
+        }
+        return process(message.canonicalMessageId(),false);
+    }
+
+    public V2ProcessingResult recover(String id) {return process(id,true);}
+
+    private V2ProcessingResult process(String id,boolean recovery) {
+        var initial=java.util.Objects.requireNonNull(journal.find(id));
+        // 时序写入不占用消息收口连接。冻结内容可以跨实例重复回放，避免嵌套独立事务耗尽连接池。
+        StandardTelemetryResult storage=null;
+        if(initial.terminal()==null && !initial.snapshot().events().isEmpty())
+            storage=standardIngestionService.ingestPrepared(initial.snapshot().events());
+        final StandardTelemetryResult prepared=storage;
+        return journal.locked(id,entry->{
+            var result=finishFrozen(entry,prepared);
+            if(!result.retryable()&&entry.terminal()==null) {
+                journal.complete(id,result);
+                if(recovery && (result.status()==ReceiptStatus.PLATFORM_PERSISTED || result.status()==ReceiptStatus.DUPLICATE_PERSISTED))
+                    journal.queueRecovered(entry.snapshot().events());
+            }
+            return result;
+        });
+    }
+
+    private V2ProcessingResult finishFrozen(TelemetryMessageJournal.Entry entry,StandardTelemetryResult storage) {
+        var frozen=entry.snapshot();
+        var message=frozen.message();
+        var binding=frozen.binding();
+        var mode=frozen.mode();
+        long platformReceivedAt=frozen.receivedAt();
+        String payloadHash=entry.hash();
+        if(entry.terminal()!=null) {
+            var terminal=entry.terminal();
+            if(terminal.status()==ReceiptStatus.PLATFORM_PERSISTED || terminal.status()==ReceiptStatus.DUPLICATE_PERSISTED) {
+                receiptMapper.incrementAttempt(message.canonicalMessageId(),time(System.currentTimeMillis()),trimToNull(message.batchId()),nullableTime(message.retransmittedAt()));
+                return permanent(message.canonicalMessageId(),ReceiptStatus.DUPLICATE_PERSISTED,"DUPLICATE_PERSISTED",mode,System.currentTimeMillis(),
+                        terminal.applicationAck().persistedAtEpochMillis()==null?null:time(terminal.applicationAck().persistedAtEpochMillis()),null);
+            }
+            return terminal;
+        }
         LocalDateTime receivedTime = time(platformReceivedAt);
         TelemetryReceipt existing = receiptMapper.selectForUpdate(message.canonicalMessageId());
         if (existing != null) {
@@ -125,8 +184,7 @@ public class TelemetryV2IngestionService {
                     existing.getPersistedAt(), null);
         }
 
-        StandardTelemetryResult storage = standardIngestionService.ingestImmutable(
-                toStandardMessage(message), platformReceivedAt);
+        if(storage==null) return retryable(message.canonicalMessageId(),"FROZEN_BATCH_UNAVAILABLE","冻结批次缺少测点证据，不能补造成功回执");
         if (storage.outcome() == StandardTelemetryOutcome.RETRYABLE_FAILURE) {
             meterRegistry.counter("iot.telemetry.v2", "outcome", "retryable").increment();
             recordFailure(message.canonicalMessageId(), binding.buildingId(),
@@ -271,7 +329,7 @@ public class TelemetryV2IngestionService {
                 || message.collectedAt() != null && message.collectedAt() <= 0
                 || message.retransmittedAt() != null && message.retransmittedAt() <= 0
                 || message.sourceSeq() != null && message.sourceSeq() < 0
-                || message.metrics() == null || message.metrics().isEmpty()
+                || message.metrics() == null || message.metrics().isEmpty() || message.metrics().size()>500
                 || !("DEVICE_REPORTED".equals(message.timeSource())
                 || "ADAPTER_RECEIVED".equals(message.timeSource()))
                 || !("DEVICE_REPORTED".equals(message.idSource())
@@ -281,6 +339,10 @@ public class TelemetryV2IngestionService {
                 || "DERIVED".equals(message.dedupMode())
                 || "NONE".equals(message.dedupMode()))) {
             return "V2 报文结构、版本、身份或时间字段无效";
+        }
+        for(var metric:message.metrics()) {
+            if(metric==null||!hasText(metric.code())||metric.value()==null||!hasText(metric.unit())||!hasText(metric.sourceField()))
+                return "V2 指标内容缺失";
         }
         if (message.collectedAt() == null
                 && !"ADAPTER_RECEIVED".equals(message.timeSource())) {

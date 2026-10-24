@@ -50,6 +50,12 @@ public class NativeQuantityAggregationService {
             String pointId,
             Instant fromInclusive,
             Instant toExclusive) {
+        return governedEvidence(userId,roles,buildingId,pointId,fromInclusive,toExclusive,Instant.now());
+    }
+
+    public GovernedEvidence governedEvidence(long userId,Collection<String> roles,String buildingId,String pointId,
+            Instant fromInclusive,Instant toExclusive,Instant calculationAsOf) {
+        if(calculationAsOf==null)throw error(INPUT_INCOMPLETE,"计算水位不能为空");
         validateReadScope(buildingId, pointId, fromInclusive, toExclusive);
         authorization.requireRunner(userId, roles);
         authorization.checkBuilding(userId, roles, buildingId);
@@ -57,7 +63,7 @@ public class NativeQuantityAggregationService {
                 .approvedEvents(buildingId, pointId, fromInclusive, toExclusive,
                         MAX_GOVERNED_EVIDENCE_PER_TYPE + 1);
         List<CorrectionEvidence> corrections = governanceService
-                .approvedCorrections(buildingId, pointId, MAX_GOVERNED_EVIDENCE_PER_TYPE + 1);
+                .approvedCorrections(buildingId, pointId, calculationAsOf);
         if (events.size() > MAX_GOVERNED_EVIDENCE_PER_TYPE
                 || corrections.size() > MAX_GOVERNED_EVIDENCE_PER_TYPE) {
             throw error(INPUT_INCOMPLETE, "已审核计量事件或修正超过原生量单次读取上限");

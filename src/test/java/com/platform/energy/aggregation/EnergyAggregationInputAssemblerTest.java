@@ -64,7 +64,7 @@ class EnergyAggregationInputAssemblerTest {
                 .thenReturn(Optional.of(unit()));
         when(relation.effectiveMeteringAssignments(anyLong(), anyCollection(), eq("BLD001"),
                 eq(1), eq(500))).thenReturn(assignments());
-        when(governance.approvedCorrections(anyString(), anyString())).thenReturn(List.of());
+        when(governance.approvedCorrections(anyString(), anyString(), any(java.time.Instant.class))).thenReturn(List.of());
         when(governance.approvedEvents(anyString(), anyString(), any(), any())).thenReturn(List.of());
 
         var result = new EnergyAggregationCore().aggregate(assembler.load(

@@ -183,6 +183,8 @@ public class EnergyAggregationGovernanceService {
         }
         String qualityVersion = original.policySource() + ":" + original.policyVersion()
                 + ":" + original.policyConfigRevision();
+        repository.lockCorrectionIdentity(row.correctionId());
+        repository.requireCurrentTelemetryResolution(versionId);
         CorrectionVersionRow previous = repository.findLatestApprovedCorrection(row.correctionId());
         if (previous != null) repository.disableCorrectionVersion(previous.correctionVersionId());
         if (repository.approveCorrection(versionId, request.expectedRevision(), userId,
@@ -195,6 +197,7 @@ public class EnergyAggregationGovernanceService {
                 approved.correctionId(), versionId, approved.buildingId(),
                 "status=APPROVED;qualityPolicyVersion=" + qualityVersion,
                 self(row.createdBy(), userId));
+        repository.correctionChanged(approved);
         return correctionView(approved);
     }
 
@@ -296,6 +299,12 @@ public class EnergyAggregationGovernanceService {
                         row.rolloverModulus(), row.oldMeterId(), row.newMeterId(),
                         row.relationVersionBefore(), row.relationVersionAfter(), row.evidenceReference(),
                         row.createdBy(), row.approvedBy(), row.simulationFlag());
+    }
+
+    List<CorrectionEvidence> approvedCorrections(String building,String point,Instant asOf) {
+        // 既有审批时间按服务 JVM 本地时间保存，水位必须用同一时区比较，不能把未来更正带回历史计算。
+        return repository.correctionsAsOf(building,point,LocalDateTime.ofInstant(asOf,java.time.ZoneId.systemDefault()))
+                .stream().map(EnergyAggregationGovernanceService::correctionEvidence).toList();
     }
 
     List<CorrectionEvidence> approvedCorrections(String buildingId, String pointId) {

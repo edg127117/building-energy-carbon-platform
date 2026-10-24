@@ -121,7 +121,9 @@ class EnergyLoop7TdengineIntegrationTest {
             }
             jdbc.execute(rawInsert(database, "a_mixed", "A_MIXED", "RETENTION_TEST", old + 1000, 21)
                     .replace("LOOP7_SIMULATION", "OTHER_SOURCE"));
-            var repository = new TdengineHvacRawEventRepository(jdbc, properties);
+            var ledger=org.mockito.Mockito.mock(com.platform.iot.reliability.RawTelemetryLedger.class);
+            org.mockito.Mockito.when(ledger.retireBefore(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong())).thenAnswer(i->i.getArgument(1));
+            var repository = new TdengineHvacRawEventRepository(jdbc, properties,ledger,new com.platform.iot.reliability.RawTelemetryCodec(new com.fasterxml.jackson.databind.ObjectMapper()));
             String cursor = null;
             boolean deleted = false;
             for (int scan = 0; scan < 10; scan++) {

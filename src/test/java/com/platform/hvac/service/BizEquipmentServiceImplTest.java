@@ -49,13 +49,15 @@ class BizEquipmentServiceImplTest {
     private BizSpaceMapper spaceMapper;
     @Mock
     private RelationGovernanceGuard relationGuard;
+    @Mock
+    private com.platform.hvac.asset.service.D01TestBuildingRetirementService retirementService;
 
     private BizEquipmentServiceImpl service;
 
     @BeforeEach
     void setUp() {
         service = new BizEquipmentServiceImpl(equipmentTypeMapper, productMapper, systemGroupMapper,
-                spaceMapper, new EquipmentCodeAllocator(), relationGuard);
+                spaceMapper, new EquipmentCodeAllocator(), relationGuard, retirementService);
         ReflectionTestUtils.setField(service, "baseMapper", equipmentMapper);
     }
 

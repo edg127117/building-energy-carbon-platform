@@ -93,7 +93,7 @@ public class EnergyAggregationInputAssembler {
         Set<String> factIdentities = new HashSet<>();
         facts.forEach(value -> factIdentities.add(value.factIdentity()));
         List<CorrectionEvidence> corrections = governanceService
-                .approvedCorrections(query.buildingId(), query.pointId()).stream()
+                .approvedCorrections(query.buildingId(), query.pointId(),query.calculationAsOf()).stream()
                 .filter(value -> factIdentities.contains(value.originalFactIdentity())).toList();
         Instant eventFrom = facts.stream().map(ActivityFact::eventTime).min(Instant::compareTo)
                 .orElse(query.startInclusive());

@@ -1,6 +1,9 @@
 package com.platform.iot.temporal;
 
 import com.platform.config.TdengineProperties;
+import com.platform.iot.reliability.RawTelemetryLedger;
+import com.platform.iot.reliability.RawTelemetryCodec;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.iot.temporal.impl.TdengineHvacRawEventRepository;
 import com.platform.iot.temporal.model.RawEventWriteResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
@@ -29,13 +32,19 @@ class TdengineHvacRawEventRepositoryTest {
     private JdbcTemplate template;
 
     private TdengineHvacRawEventRepository repository;
+    private RawTelemetryLedger ledger;
+    private final RawTelemetryCodec codec=new RawTelemetryCodec(new ObjectMapper());
 
     @BeforeEach
     void setUp() {
         TdengineProperties properties = new TdengineProperties();
         properties.setDatabase("iot_telemetry");
         properties.setStRawEvent("st_raw_event");
-        repository = new TdengineHvacRawEventRepository(template, properties);
+        ledger=mock(RawTelemetryLedger.class);
+        lenient().when(ledger.effective(anyList())).thenAnswer(i->i.getArgument(0));
+        lenient().when(ledger.selections(anyCollection(),anyLong(),anyLong())).thenReturn(Map.of());
+        lenient().when(ledger.retireBefore(anyString(),anyLong())).thenAnswer(i->i.getArgument(1));
+        repository = new TdengineHvacRawEventRepository(template, properties,ledger,codec);
     }
 
     @Test
@@ -58,6 +67,7 @@ class TdengineHvacRawEventRepositoryTest {
     void retentionDeletesOnlyOnePointBeforeItsCutoff() {
         long cutoff = 1_700_000_000_000L;
 
+        when(template.queryForList(startsWith("SELECT point_id FROM"))).thenReturn(List.of(Map.of("point_id","POINT001")));
         repository.deletePointBefore("raw_custom_1", cutoff);
 
         verify(template).execute("DELETE FROM iot_telemetry.raw_custom_1 WHERE ts < " + cutoff);
@@ -123,6 +133,7 @@ class TdengineHvacRawEventRepositoryTest {
                 "point_id", "POINT001",
                 "bucket_time", new Timestamp(1_700_000_000_000L),
                 "average_value", 12.5,
+                "sample_count", 2,
                 "data_quality", 1)));
 
         var result = repository.findEquipmentTrend(
@@ -150,59 +161,48 @@ class TdengineHvacRawEventRepositoryTest {
     }
 
     @Test
-    void createsChildBeforeFirstPointEventIsQueriedAndInserted() {
-        when(template.queryForList(startsWith("SELECT val"))).thenReturn(List.of());
-
-        RawEventWriteResult result = repository.upsert(event(12.3));
-
-        assertThat(result).isEqualTo(RawEventWriteResult.INSERTED);
-        // 第一次遇到某测点时先创建子表，避免 SELECT 一个尚不存在的子表而导致首条数据丢失。
-        verify(template).execute(startsWith(
-                "CREATE TABLE IF NOT EXISTS iot_telemetry.st_raw_event_POINT001"));
-        verify(template).execute(startsWith(
-                "INSERT INTO iot_telemetry.st_raw_event_POINT001"));
+    void writesOnlyFrozenIntentAndPreservesDoublePrecision() {
+        var frozen=event(1.12345678901234);
+        when(ledger.reserve(any(),any())).thenReturn(new RawTelemetryLedger.Reservation(frozen,false,false));
+        when(ledger.storeFrozen(any(),any())).thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
+        when(template.queryForList(startsWith("SELECT *"))).thenReturn(List.of(),List.of(stored(frozen)));
+        assertThat(repository.upsert(frozen)).isEqualTo(RawEventWriteResult.INSERTED);
+        verify(template).execute(contains("1.12345678901234"));
+        verify(template).execute(contains("VALUES (1800000000000,1800000001000,"));
     }
 
     @Test
-    void ignoresExactDuplicateAndDoesNotWriteSecondRow() {
-        when(template.queryForList(startsWith("SELECT val")))
-                .thenReturn(List.of(Map.of(
-                        "val", 12.3,
-                        "source_system", "MQTT_FREEZE_V1",
-                        "source_point_code", "WCR1_TWin",
-                        "source_device_id", "WCR1")));
-
-        RawEventWriteResult result = repository.upsert(event(12.3));
-
-        assertThat(result).isEqualTo(RawEventWriteResult.DUPLICATE);
-        verify(template, never()).execute(startsWith("INSERT INTO"));
+    void rejectsConflictThroughLegacyUpsertWithoutTdengineMutation() {
+        when(ledger.reserve(any(),any())).thenReturn(new RawTelemetryLedger.Reservation(event(100),true,false));
+        assertThat(repository.upsert(event(120))).isEqualTo(RawEventWriteResult.CONFLICT_REJECTED);
+        verifyNoInteractions(template);
     }
 
     @Test
-    void overwritesConflictingValueAtSamePointAndEventTime() {
-        when(template.queryForList(startsWith("SELECT val")))
-                .thenReturn(List.of(Map.of(
-                        "val", 11.8,
-                        "source_system", "MQTT_FREEZE_V1",
-                        "source_point_code", "WCR1_TWin",
-                        "source_device_id", "WCR1")));
-
-        RawEventWriteResult result = repository.upsert(event(12.3));
-
-        assertThat(result).isEqualTo(RawEventWriteResult.CONFLICT_UPDATED);
-        verify(template).execute(startsWith(
-                "INSERT INTO iot_telemetry.st_raw_event_POINT001"));
+    void rejectsRetiredFactWithoutResurrection() {
+        when(ledger.reserve(any(),any())).thenReturn(new RawTelemetryLedger.Reservation(null,false,true));
+        assertThat(repository.insertImmutable(event(120))).isEqualTo(RawEventWriteResult.EXPIRED);
+        verifyNoInteractions(template);
     }
 
     @Test
-    void createsOneChildOnlyOnceForRepeatedEventsInSameProcess() {
-        when(template.queryForList(startsWith("SELECT val"))).thenReturn(List.of());
+    void verifiesDuplicateAgainstAllFrozenIdentityFields() {
+        var frozen=event(12.3);
+        when(ledger.reserve(any(),any())).thenReturn(new RawTelemetryLedger.Reservation(frozen,false,false));
+        when(ledger.storeFrozen(any(),any())).thenAnswer(i->((java.util.function.Supplier<?>)i.getArgument(1)).get());
+        when(template.queryForList(startsWith("SELECT *"))).thenReturn(List.of(stored(frozen)));
+        assertThat(repository.insertImmutable(frozen)).isEqualTo(RawEventWriteResult.DUPLICATE);
+        verify(template,never()).execute(anyString());
+    }
 
-        repository.upsert(event(12.3));
-        repository.upsert(event(12.4));
-
-        verify(template, times(1)).execute(startsWith("CREATE TABLE IF NOT EXISTS"));
-        verify(template, times(2)).execute(startsWith("INSERT INTO"));
+    private Map<String,Object> stored(RawTelemetryEvent e) {
+        var r=new HashMap<String,Object>();
+        r.put("point_id",e.pointId());r.put("point_code",e.pointCode());r.put("building_id",e.buildingId());
+        r.put("system_group_id",e.systemGroupId());r.put("equip_id",e.equipId());r.put("equip_code",e.equipCode());
+        r.put("family_code",e.familyCode());r.put("component_code",e.componentCode());r.put("suffix_code",e.suffixCode());
+        r.put("source_system",e.sourceSystem());r.put("source_point_code",e.sourcePointCode());r.put("source_device_id",e.sourceDeviceId());
+        r.put("ts",new Timestamp(e.eventTime()));r.put("received_time",new Timestamp(e.receivedTime()));r.put("val",e.value());
+        r.put("data_quality",e.dataQuality());r.put("is_for_calc",e.isForCalc());r.put("late_flag",e.late()?1:0);return r;
     }
 
     @Test

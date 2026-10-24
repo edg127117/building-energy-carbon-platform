@@ -128,10 +128,11 @@ describe('office and monitor composition', () => {
     expect(router.currentRoute.value.path).toBe('/403')
   })
   it('registers all confirmed pages without granting them by role', () => {
-    expect(pages).toHaveLength(52)
+    expect(pages).toHaveLength(53)
     expect(pages.filter(page => page.path.includes('/weather'))).toHaveLength(3)
     expect(pages.some(page => page.path === '/configuration/ingestion/protocols')).toBe(true)
     expect(pages.some(page => page.path === '/configuration/access/changeRequests')).toBe(true)
+    expect(pages.some(page => page.path === '/operations/alarms/dataQuality')).toBe(true)
     expect(new Set(pages.map(page => page.path)).size).toBe(pages.length)
     expect(authorizedPages([])).toEqual([])
     const session = authorize()

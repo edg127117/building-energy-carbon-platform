@@ -72,7 +72,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest(properties = {
         "spring.flyway.enabled=true",
         "spring.flyway.locations=classpath:db/migration/mysql",
-        "spring.flyway.target=85",
+        "spring.flyway.target=87",
         "spring.sql.init.mode=never",
         "database.charset-fix.enabled=false",
         "mybatis-plus.configuration.log-impl=org.apache.ibatis.logging.nologging.NoLoggingImpl",
@@ -141,7 +141,7 @@ class ConfigurationDualStoreAcceptanceTest {
     void accepts_real_formal_native_month_and_preserves_dual_store_failure_boundaries()
             throws InterruptedException {
         ConfigurationDualStoreFixture fixture = new ConfigurationDualStoreFixture(mysql, taos, tdengine);
-        fixture.assertMigratedTo85();
+        fixture.assertMigratedTo87();
         fixture.initializeTdEnergyStore();
         fixture.seedSyntheticBase();
 

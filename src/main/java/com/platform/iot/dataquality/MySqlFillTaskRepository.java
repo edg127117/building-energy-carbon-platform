@@ -60,9 +60,13 @@ public class MySqlFillTaskRepository implements FillTaskRepository {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper 不能为空");
     }
 
-    /**
-     * 唯一键冲突说明另一线程已创建相同业务批次，此时重新读取并复用该任务。
-     */
+    @Override
+    @Transactional(propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public BizDataQualityFillTask getOrCreateDurably(BizDataQualityFillTask candidate) {
+        return getOrCreate(candidate);
+    }
+
+    /** 唯一键冲突说明另一线程已创建相同业务批次，此时重新读取并复用该任务。 */
     @Override
     @Transactional
     public BizDataQualityFillTask getOrCreate(BizDataQualityFillTask candidate) {

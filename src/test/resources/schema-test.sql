@@ -1,4 +1,5 @@
 DROP TABLE IF EXISTS sys_auth_cleanup;
+DROP TABLE IF EXISTS biz_test_building_retirement;
 DROP TABLE IF EXISTS biz_daikin_monitor_inbox;
 DROP TABLE IF EXISTS biz_daikin_monitor_round;
 DROP TABLE IF EXISTS biz_daikin_directory_sync_job;
@@ -141,6 +142,19 @@ CREATE TABLE building (
   create_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   update_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   del_flag TINYINT DEFAULT 0
+);
+
+CREATE TABLE biz_test_building_retirement (
+  building_id VARCHAR(32) PRIMARY KEY,
+  status VARCHAR(16) NOT NULL,
+  evidence_sha256 CHAR(64) NOT NULL,
+  exclusion_request_id VARCHAR(32) NOT NULL,
+  excluded_at TIMESTAMP(3) NOT NULL,
+  archive_request_id VARCHAR(32),
+  archived_at TIMESTAMP(3),
+  CONSTRAINT fk_test_building_retirement_building FOREIGN KEY (building_id)
+    REFERENCES building (building_id) ON DELETE RESTRICT,
+  CONSTRAINT chk_test_building_retirement_status CHECK (status IN ('EXCLUDED','ARCHIVED'))
 );
 
 CREATE TABLE biz_space (

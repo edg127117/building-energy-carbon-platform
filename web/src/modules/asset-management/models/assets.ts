@@ -31,6 +31,7 @@ export type AssetBuilding = {
   constructionYear: number | null
   totalGfa: number | null
   climateZone: string | null
+  regionCode: string | null
   status: string
   references: AssetReferences
   allowedActions: AssetAction[]
@@ -44,6 +45,7 @@ export type AssetBuildingForm = {
   constructionYear: number | null
   totalGfa: number | null
   climateZone: string | null
+  regionCode: string | null
   status: 'ACTIVE'
 }
 

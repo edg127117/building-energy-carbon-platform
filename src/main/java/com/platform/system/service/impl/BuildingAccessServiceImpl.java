@@ -10,6 +10,7 @@ import com.platform.audit.TraceContext;
 import com.platform.framework.exception.BusinessException;
 import com.platform.hvac.mapper.BuildingMapper;
 import com.platform.hvac.model.entity.Building;
+import com.platform.hvac.asset.service.D01TestBuildingRetirementService;
 import com.platform.security.FormalRole;
 import com.platform.system.mapper.BuildingAccessRequestMapper;
 import com.platform.system.mapper.SysUserBuildingMapper;
@@ -47,6 +48,7 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
     private final SysUserBuildingMapper userBuildingMapper;
     private final SysUserMapper userMapper;
     private final BuildingMapper buildingMapper;
+    private final D01TestBuildingRetirementService retirementService;
     private final BuildingScopeService scopeService;
     private final BackendDutyService dutyService;
     private final AuditEvidenceWriter auditWriter;
@@ -66,7 +68,9 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
                         .eq(BuildingAccessRequest::getUserId, userId)
                         .eq(BuildingAccessRequest::getStatus, BuildingAccessStatus.PENDING.name()))
                 .stream().map(BuildingAccessRequest::getBuildingId).collect(java.util.stream.Collectors.toSet());
-        return buildingMapper.selectList(new LambdaQueryWrapper<Building>().orderByAsc(Building::getBuildingName))
+        return buildingMapper.selectList(new LambdaQueryWrapper<Building>()
+                        .notInSql(Building::getBuildingId, "SELECT building_id FROM biz_test_building_retirement")
+                        .orderByAsc(Building::getBuildingName))
                 .stream().filter(b -> !granted.contains(b.getBuildingId()) && !pending.contains(b.getBuildingId())).toList();
     }
 
@@ -76,8 +80,10 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
      * 历史 REJECTED/CANCELLED 记录不阻止再次申请。
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public BuildingAccessDtos.RequestView submit(Long userId, Collection<String> roles, BuildingAccessDtos.SubmitRequest input) {
         rejectPlatformAdmin(roles);
+        retirementService.requireNotRetired(input.buildingId());
         if (buildingMapper.selectById(input.buildingId()) == null) throw new BusinessException(404, "建筑不存在");
         if (userBuildingMapper.selectCount(new LambdaQueryWrapper<SysUserBuilding>()
                 .eq(SysUserBuilding::getUserId, userId).eq(SysUserBuilding::getBuildingId, input.buildingId())) > 0) {
@@ -131,6 +137,7 @@ public class BuildingAccessServiceImpl implements BuildingAccessService {
         // 行锁与事务共同保证申请只能从 PENDING 成功流转一次。
         BuildingAccessRequest request = requireLockedRequest(requestId);
         requirePending(request);
+        retirementService.requireNotRetired(request.getBuildingId());
         SysUser user = userMapper.selectById(request.getUserId());
         if (user == null || user.getStatus() == null || user.getStatus() != 1) throw new BusinessException(409, "申请用户不可用");
         if (buildingMapper.selectById(request.getBuildingId()) == null) throw new BusinessException(409, "申请建筑不可用");
