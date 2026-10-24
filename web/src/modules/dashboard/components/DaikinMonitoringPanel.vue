@@ -10,12 +10,12 @@ import { formatDateTime } from '@/shared/utils/format'
 import { daikinApi } from '../api/daikin'
 import { hvacControlApi } from '../api/hvac-control'
 import {
-  daikinCurrentValue, daikinFieldTone, daikinLabel, daikinOutdoorStatusLabel, daikinOutdoorStatusTone,
+  daikinDeviceRunState, daikinRunStateLabel, daikinCurrentValue, daikinFieldTone, daikinLabel, daikinOutdoorStatusLabel, daikinOutdoorStatusTone,
   daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
   groupDaikinDevicesBySpace, groupDaikinDevicesBySystem, isDaikinDeviceRunning, normalizeDaikinSpaceName,
   type DaikinQuickStatus,
 } from '../models/daikin-display'
-import type { DaikinDevice, DeviceCurrent } from '../models/daikin'
+import type { DaikinDevice, DeviceCurrent, StateSummary } from '../models/daikin'
 import type { HvacControlBatch, HvacControlOperation } from '../models/hvac-control'
 import { useDaikinResource } from '../composables/use-daikin-resource'
 import { useHvacControlAccess } from '../composables/use-hvac-control-access'
@@ -26,7 +26,7 @@ import HvacDeviceGrantPanel from './HvacDeviceGrantPanel.vue'
 interface CardTelemetry {
   fanSpeed: string | null
   isFilterDirty: boolean
-  compressorOnOff: string | null
+  compressorOnOff: StateSummary | null
   inCommunicationError: boolean
   hasHardFault: boolean
   roomTemp: number | null
@@ -53,7 +53,7 @@ const quickStatus = ref<DaikinQuickStatus>('ALL')
 const groupMode = ref<'SYSTEM' | 'SPACE'>('SYSTEM')
 const viewMode = ref<'CARD' | 'TABLE'>('CARD')
 const showSpaceSummary = ref(true)
-const spaceSummaryFilter = ref<'ALL' | 'RUNNING' | 'STOPPED'>('ALL')
+const spaceSummaryFilter = ref<'ALL' | 'RUNNING' | 'STOPPED' | 'UNKNOWN'>('ALL')
 const spaceSummaryPage = ref(1)
 const SPACE_SUMMARY_PAGE_SIZE = 6
 const collapsedGroups = ref<Record<string, boolean>>({})
@@ -93,10 +93,10 @@ const rawDevices = computed(() => {
   }
   return items
 })
-const statusCounts = computed(() => daikinQuickStatusCounts(rawDevices.value))
-const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevices.value, quickStatus.value))
-const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value))
-const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? []))
+const statusCounts = computed(() => daikinQuickStatusCounts(rawDevices.value, compressorState))
+const filteredDevices = computed(() => filterDaikinDevicesByQuickStatus(rawDevices.value, quickStatus.value, compressorState))
+const systemGroups = computed(() => groupDaikinDevicesBySystem(filteredDevices.value, rawDevices.value, compressorState))
+const spaceGroups = computed(() => groupDaikinDevicesBySpace(filteredDevices.value, spaces.data.value ?? [], compressorState))
 const selectedDevice = computed(() => rawDevices.value.find(item => item.equipmentId === selected.value))
 const buildingName = computed(() => buildings.data.value?.find(item => item.buildingId === building.value)?.buildingName ?? building.value)
 const batchSelectedDevices = computed(() => batchSelectedEquipmentIds.value
@@ -104,7 +104,7 @@ const batchSelectedDevices = computed(() => batchSelectedEquipmentIds.value
   .filter((item): item is DaikinDevice => item != null))
 
 const spaceSummaryItems = computed(() => {
-  const groups = groupDaikinDevicesBySpace(rawDevices.value, spaces.data.value ?? [])
+  const groups = groupDaikinDevicesBySpace(rawDevices.value, spaces.data.value ?? [], compressorState)
   return groups.map(group => {
     const opt = spaceFilterOptions.value.find(item => item.label === group.spaceName)
     const roomTemps: number[] = []
@@ -126,7 +126,8 @@ const spaceSummaryItems = computed(() => {
       spaceName: group.spaceName,
       spaceOptionValue: opt?.value ?? '',
       runningCount: group.runningCount,
-      stoppedCount: Math.max(0, group.devices.length - group.runningCount),
+      stoppedCount: group.stoppedCount,
+      unknownCount: group.unknownCount,
       avgRoomTemp,
       avgSetTemp,
     }
@@ -142,15 +143,17 @@ const spaceSummaryItems = computed(() => {
 const spaceSummaryCounts = computed(() => ({
   ALL: spaceSummaryItems.value.length,
   RUNNING: spaceSummaryItems.value.filter(item => item.runningCount > 0).length,
-  STOPPED: spaceSummaryItems.value.filter(item => item.runningCount === 0).length,
+  STOPPED: spaceSummaryItems.value.filter(item => item.runningCount === 0 && item.unknownCount === 0).length,
+  UNKNOWN: spaceSummaryItems.value.filter(item => item.unknownCount > 0).length,
 }))
 
 const filteredSpaceSummaryItems = computed(() => {
   if (spaceSummaryFilter.value === 'RUNNING') {
     return spaceSummaryItems.value.filter(item => item.runningCount > 0)
   }
+  if (spaceSummaryFilter.value === 'UNKNOWN') return spaceSummaryItems.value.filter(item => item.unknownCount > 0)
   if (spaceSummaryFilter.value === 'STOPPED') {
-    return spaceSummaryItems.value.filter(item => item.runningCount === 0)
+    return spaceSummaryItems.value.filter(item => item.runningCount === 0 && item.unknownCount === 0)
   }
   return spaceSummaryItems.value
 })
@@ -160,7 +163,7 @@ const pagedSpaceSummaryItems = computed(() => {
   return filteredSpaceSummaryItems.value.slice(start, start + SPACE_SUMMARY_PAGE_SIZE)
 })
 
-function selectSpaceSummaryFilter(filter: 'ALL' | 'RUNNING' | 'STOPPED') {
+function selectSpaceSummaryFilter(filter: 'ALL' | 'RUNNING' | 'STOPPED' | 'UNKNOWN') {
   spaceSummaryFilter.value = filter
   spaceSummaryPage.value = 1
 }
@@ -305,7 +308,7 @@ async function selectAllFilteredDevices() {
         seenEquipmentIds.add(item.equipmentId)
         const inSelectedSpace = selectedSpace == null || selectedSpace.spaceIds.length <= 1
           || (item.spaceId != null && selectedSpaceIds.has(item.spaceId))
-        if (inSelectedSpace && filterDaikinDevicesByQuickStatus([item], selectedQuickStatus).length) {
+        if (inSelectedSpace && filterDaikinDevicesByQuickStatus([item], selectedQuickStatus, compressorState).length) {
           matchingItems.push(item)
           if (matchingItems.length > pageSize) {
             rejectSelection('filteredTooMany')
@@ -326,6 +329,15 @@ async function selectAllFilteredDevices() {
   } finally {
     if (isCurrentRequest()) batchSelectionLoading.value = false
   }
+}
+
+function compressorState(device: DaikinDevice) {
+  return cardTelemetry.value[device.equipmentId]?.compressorOnOff
+}
+
+function deviceRunState(row: DaikinDevice | Record<string, unknown>) {
+  const device = row as DaikinDevice
+  return daikinDeviceRunState(device, compressorState(device))
 }
 
 function deviceHealthLabel(row: DaikinDevice): string {
@@ -375,7 +387,11 @@ function cardStatus(snapshot: DeviceCurrent) {
   return {
     fanSpeed: findField('fanSpeed'),
     isFilterDirty: findField('isFilterDirty') === 'true',
-    compressorOnOff: findField('compressorOnOff'),
+    compressorOnOff: (() => {
+      const field = snapshot.fields.find(row => row.fieldName === 'compressorOnOff')
+      return field ? { value: field.valueVisible && snapshot.active ? field.normalizedValue : null,
+        status: field.status, stale: field.stale, lastValidAt: field.lastValidAt } : null
+    })(),
     inCommunicationError: findField('inCommunicationError') === 'true',
     hasHardFault: findField('inError') === 'true' || findField('inEmergency') === 'true'
       || findField('inCommunicationError') === 'true' || Boolean(findField('errorCode')),
@@ -584,6 +600,7 @@ onUnmounted(() => {
               ['ALL', 'quickAll', statusCounts.ALL],
               ['RUNNING', 'quickRunning', statusCounts.RUNNING],
               ['STOPPED', 'quickStopped', statusCounts.STOPPED],
+              ['UNKNOWN', 'quickUnknown', statusCounts.UNKNOWN],
               ['EXCEPTION', 'quickException', statusCounts.EXCEPTION],
               ['STALE', 'quickStale', statusCounts.STALE],
             ] as const)"
@@ -648,6 +665,7 @@ onUnmounted(() => {
                   ['ALL', 'filterAllSpaces', spaceSummaryCounts.ALL],
                   ['RUNNING', 'filterRunningSpaces', spaceSummaryCounts.RUNNING],
                   ['STOPPED', 'filterStoppedSpaces', spaceSummaryCounts.STOPPED],
+                  ['UNKNOWN', 'filterUnknownSpaces', spaceSummaryCounts.UNKNOWN],
                 ] as const)"
                 :key="tab[0]"
                 type="button"
@@ -688,12 +706,14 @@ onUnmounted(() => {
               <div class="space-chip-top">
                 <strong class="space-chip-name">{{ item.spaceName }}</strong>
                 <ElTag v-if="item.runningCount > 0" type="success">{{ summaryText('runningBadge') }}</ElTag>
+                <ElTag v-else-if="item.unknownCount > 0" type="info">{{ text('unknownLabel') }}</ElTag>
                 <ElTag v-else type="info">{{ summaryText('stoppedBadge') }}</ElTag>
               </div>
               <div class="space-chip-metrics">
                 <span class="tone-success">{{ summaryText('runningPrefix') }}{{ ' ' }}{{ item.runningCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</span>
                 <span>{{ ' · ' }}</span>
                 <span class="tone-muted">{{ summaryText('stoppedPrefix') }}{{ ' ' }}{{ item.stoppedCount }}{{ ' ' }}{{ text('unitCountSuffix') }}</span>
+                <span v-if="item.unknownCount > 0" class="tone-muted">{{ ' · ' }}{{ text('unknownLabel') }} {{ item.unknownCount }} {{ text('unitCountSuffix') }}</span>
                 <template v-if="item.avgRoomTemp != null">
                   <span>{{ ' · ' }}</span>
                   <span>{{ summaryText('avgTempPrefix') }}{{ ' ' }}{{ item.avgRoomTemp }}{{ '°C' }}</span>
@@ -763,7 +783,7 @@ onUnmounted(() => {
                   <header class="device-card-header">
                     <div>
                       <div class="device-title-row">
-                        <span class="status-dot" :class="isDaikinDeviceRunning(item, cardTelemetry[item.equipmentId]?.compressorOnOff) ? 'dot-running' : 'dot-stopped'" />
+                        <span class="status-dot" :class="`dot-${deviceRunState(item).toLowerCase()}`" />
                         <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
                       </div>
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ spaceNameOf(item.spaceId) }}</p>
@@ -792,8 +812,8 @@ onUnmounted(() => {
                       </div>
                       <div class="metric-cell">
                         <span class="metric-label">{{ text('compressorStateCard') }}</span>
-                        <strong class="metric-value" :class="`tone-${daikinFieldTone('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff)}`">
-                          {{ daikinCurrentValue('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff ?? null) }}
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('compressorOnOff', deviceRunState(item) === 'UNKNOWN' ? null : cardTelemetry[item.equipmentId]?.compressorOnOff?.value)}`">
+                          {{ deviceRunState(item) === 'UNKNOWN' ? text('unknownLabel') : daikinCurrentValue('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff?.value ?? null) }}
                         </strong>
                       </div>
                       <div class="metric-cell">
@@ -807,7 +827,7 @@ onUnmounted(() => {
                       <div class="metric-cell">
                         <span class="metric-label">{{ text('runStateLabel') }}</span>
                         <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
-                          {{ isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel') }}
+                          {{ daikinRunStateLabel(item) }}
                         </strong>
                       </div>
                       <div class="metric-cell">
@@ -868,7 +888,7 @@ onUnmounted(() => {
                   <header class="device-card-header">
                     <div>
                       <div class="device-title-row">
-                        <span class="status-dot" :class="isDaikinDeviceRunning(item, cardTelemetry[item.equipmentId]?.compressorOnOff) ? 'dot-running' : 'dot-stopped'" />
+                        <span class="status-dot" :class="`dot-${deviceRunState(item).toLowerCase()}`" />
                         <strong class="device-card-name">{{ item.equipmentName || text('unnamed') }}</strong>
                       </div>
                       <p class="device-card-sub">{{ item.equipmentCode }}{{ ' · ' }}{{ text(item.deviceKind === 'OUTDOOR' ? 'outdoorBadge' : 'indoorBadge') }}</p>
@@ -897,8 +917,8 @@ onUnmounted(() => {
                       </div>
                       <div class="metric-cell">
                         <span class="metric-label">{{ text('compressorStateCard') }}</span>
-                        <strong class="metric-value" :class="`tone-${daikinFieldTone('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff)}`">
-                          {{ daikinCurrentValue('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff ?? null) }}
+                        <strong class="metric-value" :class="`tone-${daikinFieldTone('compressorOnOff', deviceRunState(item) === 'UNKNOWN' ? null : cardTelemetry[item.equipmentId]?.compressorOnOff?.value)}`">
+                          {{ deviceRunState(item) === 'UNKNOWN' ? text('unknownLabel') : daikinCurrentValue('compressorOnOff', cardTelemetry[item.equipmentId]?.compressorOnOff?.value ?? null) }}
                         </strong>
                       </div>
                       <div class="metric-cell">
@@ -912,7 +932,7 @@ onUnmounted(() => {
                       <div class="metric-cell">
                         <span class="metric-label">{{ text('runStateLabel') }}</span>
                         <strong class="metric-value" :class="isDaikinDeviceRunning(item) ? 'tone-success' : 'tone-muted'">
-                          {{ isDaikinDeviceRunning(item) ? text('runningLabel') : text('stoppedLabel') }}
+                          {{ daikinRunStateLabel(item) }}
                         </strong>
                       </div>
                       <div class="metric-cell">
@@ -964,7 +984,7 @@ onUnmounted(() => {
           <ElTableColumn :label="text('equipment')" min-width="180">
             <template #default="{ row }">
               <div class="device-title-row">
-                <span class="status-dot" :class="isDaikinDeviceRunning(row, cardTelemetry[row.equipmentId]?.compressorOnOff) ? 'dot-running' : 'dot-stopped'" />
+                <span class="status-dot" :class="`dot-${deviceRunState(row).toLowerCase()}`" />
                 <strong>{{ row.equipmentName || text('unnamed') }}</strong>
               </div>
               <span class="table-sub">{{ row.equipmentCode || row.equipmentId }}</span>
@@ -979,7 +999,7 @@ onUnmounted(() => {
           <ElTableColumn :label="text('runStateLabel')">
             <template #default="{ row }">
               <strong :class="isDaikinDeviceRunning(row, cardTelemetry[row.equipmentId]?.compressorOnOff) ? 'tone-success' : 'tone-muted'">
-                {{ row.deviceKind === 'OUTDOOR' ? daikinOutdoorStatusLabel(row, cardTelemetry[row.equipmentId]?.compressorOnOff) : (isDaikinDeviceRunning(row) ? text('runningLabel') : text('stoppedLabel')) }}
+                {{ row.deviceKind === 'OUTDOOR' ? daikinOutdoorStatusLabel(row, cardTelemetry[row.equipmentId]?.compressorOnOff) : daikinRunStateLabel(row) }}
               </strong>
             </template>
           </ElTableColumn>
@@ -1080,6 +1100,7 @@ onUnmounted(() => {
 .pill-count { opacity: 0.85; }
 .status-dot { display: inline-block; width: var(--bec-space-tight); height: var(--bec-space-tight); border-radius: var(--bec-radius-tag); flex-shrink: 0; }
 .dot-running { background: var(--bec-color-success); }
+.dot-unknown { background: var(--bec-color-warning); }
 .dot-stopped { background: var(--bec-color-text-disabled); }
 .dot-exception { background: var(--bec-color-warning); }
 .dot-stale { background: var(--bec-color-error); }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   daikinLabel, daikinFieldLabel, daikinFieldExplanation, daikinFieldTone,
   daikinCurrentFieldValue, daikinCurrentValue, daikinCurrentFields,
-  daikinOutdoorStatusLabel, daikinOutdoorStatusTone, isDaikinDeviceRunning,
+  daikinDeviceRunState, daikinRunStateLabel, daikinOutdoorStatusLabel, daikinOutdoorStatusTone, isDaikinDeviceRunning,
   daikinQuickStatusCounts, filterDaikinDevicesByQuickStatus,
   groupDaikinDevicesBySystem, groupDaikinDevicesBySpace,
   daikinStructuredDetail, daikinTemperatureSummary, filterDaikinStateEvents,
@@ -131,7 +131,7 @@ describe('manufacturer display boundaries', () => {
       hasActiveException: true,
     })
     const list = [odu, iduOn, iduStale]
-    expect(daikinQuickStatusCounts(list)).toEqual({ ALL: 3, RUNNING: 1, STOPPED: 2, EXCEPTION: 1, STALE: 1 })
+    expect(daikinQuickStatusCounts(list)).toEqual({ ALL: 3, RUNNING: 1, STOPPED: 1, UNKNOWN: 1, EXCEPTION: 1, STALE: 1 })
     const runningOnly = filterDaikinDevicesByQuickStatus(list, 'RUNNING')
     expect(runningOnly).toEqual([iduOn])
     expect(filterDaikinDevicesByQuickStatus(list, 'EXCEPTION')).toEqual([iduStale])
@@ -159,6 +159,56 @@ describe('manufacturer display boundaries', () => {
       ['B302', ['大金内机-B302-1']],
       ['B308', ['大金内机-B308-1', '大金内机-B308-2']],
     ])
+  })
+  it('never confirms stale, inactive, absent or invalid observations as stopped', () => {
+    const observed = (value: string) => ({ value, status: 'PRESENT', lastValidAt: 1000, stale: false })
+    const fresh = { equipmentId: 'fresh', equipmentCode: 'fresh', equipmentName: 'fresh', systemGroupId: 'SYS-1', deviceKind: 'INDOOR', active: true, stale: false, lastValidAt: 1000,
+      onOff: observed('off'), unitStatus: null } as DaikinDevice
+    const unknown = [
+      { ...fresh, equipmentId: 'stale-off', stale: true },
+      { ...fresh, equipmentId: 'stale-on', stale: true, onOff: observed('on') },
+      { ...fresh, equipmentId: 'unobserved', lastValidAt: null },
+      { ...fresh, equipmentId: 'inactive', active: false },
+      { ...fresh, equipmentId: 'field-stale', onOff: { ...observed('off'), stale: true } },
+      { ...fresh, equipmentId: 'field-missing', onOff: { ...observed('off'), status: 'MISSING' } },
+      { ...fresh, equipmentId: 'field-unobserved', onOff: { ...observed('off'), lastValidAt: null } },
+      { ...fresh, equipmentId: 'unknown-code', onOff: observed('future') },
+      { ...fresh, equipmentId: 'no-state', onOff: null },
+    ]
+    for (const device of unknown) {
+      expect(daikinDeviceRunState(device)).toBe('UNKNOWN')
+      expect(daikinRunStateLabel(device)).toBe('状态未知')
+    }
+    const running = { ...fresh, equipmentId: 'running', onOff: observed('on') }
+    const list = [fresh, running, ...unknown]
+    const counts = daikinQuickStatusCounts(list)
+    expect(counts).toMatchObject({ RUNNING: 1, STOPPED: 1, UNKNOWN: unknown.length })
+    expect(counts.RUNNING + counts.STOPPED + counts.UNKNOWN).toBe(list.length)
+    expect(filterDaikinDevicesByQuickStatus(list, 'STOPPED')).toEqual([fresh])
+    expect(filterDaikinDevicesByQuickStatus(list, 'UNKNOWN')).toEqual(unknown)
+    const group = groupDaikinDevicesBySpace(list, [])[0]!
+    expect(group).toMatchObject({ runningCount: 1, stoppedCount: 1, unknownCount: unknown.length })
+    expect(groupDaikinDevicesBySystem(list)[0]).toMatchObject({ runningCount: 1, stoppedCount: 1, unknownCount: unknown.length })
+    const outdoor = { ...fresh, deviceKind: 'OUTDOOR', onOff: null, lastValidAt: 2000 }
+    expect(daikinDeviceRunState(outdoor, observed('off'))).toBe('STOPPED')
+    expect(daikinDeviceRunState(outdoor, { ...observed('off'), stale: true })).toBe('UNKNOWN')
+    expect(daikinDeviceRunState(outdoor, { ...observed('on'), lastValidAt: null })).toBe('UNKNOWN')
+    expect(daikinQuickStatusCounts([outdoor], () => observed('off')).STOPPED).toBe(1)
+    expect(daikinDeviceRunState(outdoor, observed('on'))).toBe('RUNNING')
+    expect(filterDaikinDevicesByQuickStatus([outdoor], 'STOPPED', () => observed('off'))).toEqual([outdoor])
+  })
+  it('keeps historical state evidence without presenting stale details as current operation', () => {
+    const field: CurrentField = { fieldName: 'onOff', normalizedValue: 'off', rawJson: '"off"', status: 'PRESENT',
+      lastValidAt: 1000, lastAttemptAt: 1000, lastAttemptRawJson: null, valueVisible: true, stale: true,
+      mappingVersion: 1, lastAttemptMappingVersion: 1 }
+    for (const value of ['on', 'off']) {
+      const detail = daikinStructuredDetail([{ ...field, normalizedValue: value }], 'INDOOR')
+      expect(detail.healthBadgeLabel).toBe('状态未知')
+      expect(detail.coreTiles[0]?.value).toBe('状态未知')
+    }
+    expect(field.normalizedValue).toBe('off')
+    expect(daikinStructuredDetail([], 'INDOOR').healthBadgeLabel).toBe('状态未知')
+    expect(daikinStructuredDetail([{ ...field, stale: false }], 'INDOOR', false).healthBadgeLabel).toBe('状态未知')
   })
   it('structures 37 protocol fields with semantic tones and filters state events by field and time window', () => {
     expect(daikinFieldTone('onOff', 'on')).toBe('success')
@@ -226,12 +276,12 @@ describe('manufacturer display boundaries', () => {
       onOff: { value: null, status: 'MISSING', lastValidAt: null, stale: false },
       unitStatus: { value: null, status: 'MISSING', lastValidAt: null, stale: false },
     }
-    expect(isDaikinDeviceRunning(protocolOutdoorDevice)).toBe(true)
-    expect(isDaikinDeviceRunning(protocolOutdoorDevice, 'off')).toBe(false)
-    expect(daikinOutdoorStatusLabel(protocolOutdoorDevice)).toBe('运行中')
-    expect(daikinOutdoorStatusTone(protocolOutdoorDevice)).toBe('success')
-    expect(daikinOutdoorStatusLabel(protocolOutdoorDevice, 'off')).toBe('已关机')
-    expect(daikinOutdoorStatusTone(protocolOutdoorDevice, 'off')).toBe('muted')
+    expect(isDaikinDeviceRunning(protocolOutdoorDevice)).toBe(false)
+    expect(isDaikinDeviceRunning(protocolOutdoorDevice, { value: 'off', status: 'PRESENT', stale: false, lastValidAt: 1700000000000 })).toBe(false)
+    expect(daikinOutdoorStatusLabel(protocolOutdoorDevice)).toBe('状态未知')
+    expect(daikinOutdoorStatusTone(protocolOutdoorDevice)).toBe('muted')
+    expect(daikinOutdoorStatusLabel(protocolOutdoorDevice, { value: 'off', status: 'PRESENT', stale: false, lastValidAt: 1700000000000 })).toBe('已关机')
+    expect(daikinOutdoorStatusTone(protocolOutdoorDevice, { value: 'off', status: 'PRESENT', stale: false, lastValidAt: 1700000000000 })).toBe('muted')
 
     const events = [
       { eventId: 1, fieldName: 'onOff', beforeNormalizedValue: 'off', afterNormalizedValue: 'on', previousObservedAt: 1000, observedAt: 2000, afterGap: false },

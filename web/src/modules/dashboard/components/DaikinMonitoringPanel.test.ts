@@ -141,6 +141,53 @@ describe('DaikinMonitoringPanel', () => {
     return wrapper
   }
 
+  it('过期及无观测不计入关机，卡片、筛选和空间摘要统一显示未知', async () => {
+    const initial = await daikinApi.devices('BLD001', 1)
+    const template = initial.items[1]!
+    const devices = [
+      { ...template, equipmentId: 'stale-off', equipmentName: '过期内机', stale: true,
+        onOff: { ...template.onOff!, value: 'off' }, unitStatus: { ...template.unitStatus!, value: 'stopped' } },
+      { ...template, equipmentId: 'unobserved', equipmentName: '无观测内机', lastValidAt: null, onOff: null, unitStatus: null },
+    ]
+    vi.mocked(daikinApi.devices).mockResolvedValue({ total: devices.length, items: devices })
+    const wrapper = mount(DaikinMonitoringPanel, { global: { stubs: { DaikinDeviceDetail: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('已关机（0）')
+    expect(wrapper.text()).toContain('状态未知（2）')
+    expect(wrapper.findAll('.device-card')).toHaveLength(2)
+    for (const card of wrapper.findAll('.device-card')) {
+      expect(card.text()).toContain('状态未知')
+      expect(card.text()).not.toContain('已关机')
+    }
+    expect(wrapper.find('.space-summary-chip').text()).toContain('状态未知')
+    expect(wrapper.find('.space-summary-chip').text()).not.toContain('全部关机')
+    const stopped = wrapper.findAll('.status-pill').find(button => button.text().includes('已关机'))!
+    await stopped.trigger('click')
+    expect(wrapper.findAll('.device-card')).toHaveLength(0)
+    const unknown = wrapper.findAll('.status-pill').find(button => button.text().includes('状态未知'))!
+    await unknown.trigger('click')
+    expect(wrapper.findAll('.device-card')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it.each([false, true])('外机压缩机按字段自身新鲜度统一卡片、计数与筛选 stale=%s', async stale => {
+    const initial = await daikinApi.devices('BLD001', 1)
+    const outdoor = { ...initial.items[0]!, lastValidAt: 2000, unitStatus: null, onOff: null }
+    vi.mocked(daikinApi.devices).mockResolvedValue({ total: 1, items: [outdoor] })
+    vi.mocked(daikinApi.current).mockResolvedValue({ equipmentId: outdoor.equipmentId, active: true, lastValidAt: 2000,
+      fields: [{ fieldName: 'compressorOnOff', normalizedValue: 'off', rawJson: '"off"', status: 'PRESENT',
+        lastValidAt: 1000, stale, valueVisible: true, lastAttemptAt: 2000, lastAttemptRawJson: null,
+        mappingVersion: 1, lastAttemptMappingVersion: 1 }] })
+    const wrapper = mount(DaikinMonitoringPanel, { global: { stubs: { DaikinDeviceDetail: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain(`已关机（${stale ? 0 : 1}）`)
+    expect(wrapper.find('.device-card').text()).toContain(stale ? '状态未知' : '已关机')
+    expect(wrapper.find(stale ? '.dot-unknown' : '.dot-stopped').exists()).toBe(true)
+    await wrapper.findAll('.status-pill').find(button => button.text().includes('已关机'))!.trigger('click')
+    expect(wrapper.findAll('.device-card')).toHaveLength(stale ? 0 : 1)
+    wrapper.unmount()
+  })
+
   it('详情关注静默同步最新状态和事件当前页，关闭后停止读取', async () => {
     vi.mocked(daikinApi.startFastWatch).mockResolvedValue({ enabled: true, intervalMillis: 5000, expiresAt: Date.now() + 15000 })
     vi.mocked(daikinApi.events).mockResolvedValue({ items: [], nextCursor: 'older-page' })
