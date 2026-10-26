@@ -200,6 +200,11 @@ jobs:
         env:
           REPORTING_RELEASE_ISOLATED: 'true'
         run: python3 scripts/Verify-ReportingReleaseIsolated.py
+      - name: Verify root to runtime-user authorization boundaries offline
+        run: >-
+          sudo python3 -m unittest
+          scripts.tests.test_d01_maintenance.PrivilegeBoundaryTest.test_root_parent_socket_authenticates_real_unprivileged_child_and_expiry
+          scripts.tests.test_d01_maintenance.InstallerTest.test_secret_umask_does_not_block_unprivileged_tool_read -v
       - name: Preserve isolated rehearsal evidence
         if: always()
         uses: actions/upload-artifact@v4
