@@ -181,6 +181,7 @@ class TestD01Backup(unittest.TestCase):
         report = backup_tool.validate(backup)
         self.assertEqual(self.freeze_id, manifest["freeze_id"])
         self.assertEqual(report["freeze_state_sha256"], manifest["freeze_state_sha256"])
+        self.assertEqual(report["sources"], manifest["sources"])
         self.assertEqual(["iot_platform", "iot_platform_archive"], manifest["sources"]["mysql"]["databases"])
         self.assertEqual("iot_telemetry", manifest["sources"]["tdengine"]["database"])
         self.assertEqual({
