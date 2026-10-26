@@ -58,7 +58,16 @@ def new_mysql():
            "-p", "127.0.0.1::3306", "--mount", "type=volume,source=" + volume + ",target=/var/lib/mysql", "mysql:8.4")
     RESOURCES.append(("container", name))
     owned("container", name)
-    bindings = json.loads(docker("inspect", "--format", '{{json .NetworkSettings.Ports}}', name))["3306/tcp"]
+    requested = json.loads(docker("inspect", "--format", '{{json .HostConfig.PortBindings}}', name))["3306/tcp"]
+    assert len(requested) == 1 and requested[0]["HostIp"] == "127.0.0.1"
+    deadline = time.monotonic() + 20
+    while True:
+        bindings = json.loads(docker("inspect", "--format", '{{json .NetworkSettings.Ports}}', name)).get("3306/tcp")
+        if bindings:
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("REPORTING_ISOLATED_LOOPBACK_PORT_NOT_PUBLISHED")
+        time.sleep(1)
     assert len(bindings) == 1 and bindings[0]["HostIp"] == "127.0.0.1"
     instance = (name, bindings[0]["HostPort"])
     deadline = time.monotonic() + 150
@@ -132,7 +141,7 @@ def main():
     NETWORK = "reporting-release-" + NONCE[:16]
     try:
         assert docker("info", "--format", "{{.OSType}}").strip() == b"linux"
-        docker("network", "create", "--internal", "--label", LABEL, NETWORK)
+        docker("network", "create", "--driver", "bridge", "--opt", "com.docker.network.bridge.host_binding_ipv4=127.0.0.1", "--label", LABEL, NETWORK)
         RESOURCES.append(("network", NETWORK))
         source = new_mysql()
         java(source, "init83", packaged=False, user="root")
