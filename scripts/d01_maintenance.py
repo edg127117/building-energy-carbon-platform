@@ -190,8 +190,11 @@ class Maintenance:
                 and state["jar_sha256"] == self.config["jar_sha256"]
                 and state["web_sha256"] == self.config["web_sha256"], "D01_TRUSTED_JAR_REQUIRED")
         target = self.config.get("target_schema", "84")
+        source = self.config.get("source_schema", str(int(target) - 1))
+        actions = ("validate" + source, "validate" + target,
+                   *("upgrade" + str(v) for v in range(int(source) + 1, int(target) + 1)))
         require(self.release.target_schema(state) == target
-                and action in ("validate" + str(int(target) - 1), "upgrade" + target, "validate" + target),
+                and state.get("source_schema", "83") == source and action in actions,
                 "D01_AUTH_SCHEMA_MISMATCH")
         # Never run Java as root using the mutable application release directory.
         self.original_schema(action, {**state, "release": str(INSTALL)}, credentials)

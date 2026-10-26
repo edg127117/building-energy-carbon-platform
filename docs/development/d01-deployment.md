@@ -1,11 +1,11 @@
 # D01 升级与恢复操作边界
 
-本文对应 V83→V84 及 V84→V85，只说明 D01 必需的维护流程。隔离演练通过不代表已在运行测试系统执行；实际停写、备份、迁移、切换只在批准的维护窗口运行。测试发布仍固定在 `18080→18081`，不操作 80 端口、其 Nginx 或 `/var/www/iot-platform/current`。
+本文说明 D01 及后续填报迁移的维护流程：兼容 V83→V84、V84→V85，新增 V85→V86、V86→V87 和 V85→V86→V87。V86/V87 的包格式、版本授权及验收以第 8 节为准；第 6、7 节的 V85 候选和现场安排保留用于追溯。隔离演练通过不代表已在运行测试系统执行；实际停写、备份、迁移、切换只在批准的维护窗口运行。测试发布仍固定在 `18080→18081`，不操作 80 端口、其 Nginx 或 `/var/www/iot-platform/current`。
 
 ## 1. 前置核验
 
 - 记录实际后端包、前端包、清单和 SHA256，不能只依据 `current` 目录名推断运行的后端版本；前后端可能分别发布。
-- `d01_release.py prepare` 在旧系统运行时核验目标版本前一版的 Flyway 历史与校验和（目标 V84 对应 V83，目标 V85 对应 V84），检查候选包包含对应迁移和独立入口，准备产物和冻结计划；不停止服务、不改 `current`、不改控制开关。
+- `d01_release.py prepare` 在旧系统运行时核验目标版本前一版的 Flyway 历史与校验和（目标 V84 对应 V83，目标 V85 对应 V84；V86/V87 必须按第 8 节显式声明源版本），检查候选包包含对应迁移和独立入口，准备产物和冻结计划；不停止服务、不改 `current`、不改控制开关。
 - 运行环境必须为 TEST，`MYSQL_FLYWAY_ENABLED=false`、`TDENGINE_INITIALIZATION_ENABLED=false`，迁移使用独立账号。配置文件、服务 unit、控制开关和 MQTT clientId 在各阶段保持原值。
 - MySQL 主库、`iot_platform_archive` 和 TDengine 都必须有可恢复备份。旧的 `backup-server-compat.sh` 不作为 D01 备份依据；D01 使用 `d01_backup.py`，不在本任务中改动服务器既有定时备份任务。
 - 先在新建隔离实例恢复备份、核对存量摘要。`SHA256SUMS` 只证明文件完整，不能代替恢复和业务验收。
@@ -17,14 +17,14 @@
 
 脚本要求 Linux、Python 3.10+、Java 21、Docker CLI 和 systemd，维护入口使用 sudo/root。把 `d01_release.py`、`d01_backup.py`、`daikin_test_deployment_config.py` 放在同一受控目录；维护期间禁止其他发布流程或人工改动配置及 `current`。
 
-发布包根目录包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`，清单填写 `commit`、`backendJarSha256`、`webIndexSha256`、`expectedMigration=84` 或 `expectedMigration=85`，必须与 JAR 的最大 MySQL 迁移版本一致。通用 `Deploy-BuildingEnergyCarbonTest.sh` 拒绝 D01 包，避免绕过冻结及独立迁移。
+发布包根目录包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`，清单填写 `commit`、`backendJarSha256`、`webIndexSha256`、`expectedMigration=84`、`85`、`86` 或 `87`（V86/V87 还必须填写 `sourceMigration`），必须与 JAR 的最大 MySQL 迁移版本一致。通用 `Deploy-BuildingEnergyCarbonTest.sh` 拒绝 D01 包，避免绕过冻结及独立迁移。
 
 通过受保护渠道创建 root 所有的普通 0600 JSON 文件（须与 sudo 后的实际执行用户一致），不把密码写进命令行、日志、Git 或清单：
 
 - schema 凭据：`{"url":"jdbc:mysql://127.0.0.1:<端口>/iot_platform?...","user":"<独立迁移账号>","password":"<秘密>"}`。URL 不得携带 user/password 参数。
 - backup 凭据：`{"mysql":{"user":"<备份账号>","password":"<秘密>"},"tdengine":{"user":"<备份账号>","password":"<秘密>"}}`。必须使用核实有效的账号，不从容器初始化环境推断当前密码；MySQL 账号需具有双库、routines/events/triggers 所需备份权限。
 
-凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83`、`upgrade84`、`validate84`、`upgrade85`、`validate85`；不提供 baseline、repair、clean 或降级操作。
+凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83` 及 V84 至 V87 的 `upgrade<版本>`、`validate<版本>`；不提供 baseline、repair、clean 或降级操作。
 
 ### 一次维护的临时授权
 
@@ -198,3 +198,49 @@ V85 只新增 `biz_test_building_retirement`；迁移本身不排除任何建筑
    保留 `admin` 已批准的全部测试权限、正式角色、服务器备份、审核链和两条故障记录。Broker 清理沿用已有管理入口，无法操作时明确记为未完成，不提前报告 D01 全部关闭。
 
 全流程只需要新的维护批准及必要时管理员一次受控安装；若只读权限核验发现实际缺项，停在在线阶段报告，不要求重复配置已可用账号。
+
+
+## 8. V86/V87 填报发布适配
+
+这是发布工具能力说明，不代表已安装服务器工具、升级数据库或发布应用。V84/V85 的既有迁移及校验和保持不变；不会自动审批参数、发布楼宇配置、授予职责或改变空调控制开关。
+
+### 包与版本计划
+
+| 源版本 | 清单字段 | 独立迁移顺序 |
+| --- | --- | --- |
+| V85 | `sourceMigration=85`，`expectedMigration=86` | `validate85` → `upgrade86` → `validate86` |
+| V85 | `sourceMigration=85`，`expectedMigration=87` | `validate85` → `upgrade86` → `upgrade87` → `validate87` |
+| V86 | `sourceMigration=86`，`expectedMigration=87` | `validate86` → `upgrade87` → `validate87` |
+
+每个 `upgrade` 进程仍只允许执行一条相邻迁移。V87 包从 V85 升级时，两个进程共享同一次冻结、备份和恢复证据，中途不启动应用。清单最大版本必须与 JAR 内最大 MySQL 迁移版本一致；缺少源版本、错误标注、V84 直接到 V87、未知版本和旧候选 V84/V85 编号均不能自动兼容或 repair。若服务器尚非 V85/V86，先单独处理既有维护步骤，不能靠修改清单跨过它们。
+
+旧的无版本状态只代表 V83→V84。临时授权同时固定源版本、目标版本、代码及包摘要；V86/V87 必须提供新的 `--authorization-reference`。旧授权不能扩成新版本计划。更换已撤销完成记录时，旧记录的目标版本必须等于本轮源版本；旧失败 prepare/online-backup 只能重试同一个版本计划。备份与恢复证据归档保留，不重置失败状态。
+
+### 发布和失败处理
+
+继续使用 `prepare` → 在线备份与新实例恢复 → `freeze` → 冻结备份与新实例恢复 → `migrate` → `cutover`。通用单步部署脚本继续拒绝含 D01 迁移的包；运行账户的 Flyway 和 TDengine 初始化保持关闭，DDL 只由独立迁移账号执行。
+
+- `prepare` 核验实际源库，失败时不停止服务或切换 `current`。
+- 备份、冻结身份、源容器/卷、恢复报告或证据摘要不匹配时，迁移及切换均拒绝。
+- V86 部分 DDL 或 V87 在 V86 成功后失败时，保持冻结及现有结构/证据；不自动重试、repair、降级、原地恢复或重启旧应用。切换必须重新验证完整 V87。
+- 候选首次启动前写入不可自动回退标记；启动或验收失败时停止候选并保留现场，停止失败单独报告。启动后可能已有业务写入，不能按“页面未就绪”推断无写入。
+- 控制文件原始摘要、生效控制参数、MQTT clientId、服务配置、18080→18081 路由以及 80 站点链接/PID/reload 保持原有保护；维护流程不修改这些配置。
+
+### 验收
+
+迁移记录仅增加计划中的 V86/V87，历史版本、校验和、资产、审批、职责及归档库数据保持原样。V86 五表必须为 InnoDB/utf8mb4，只有全局参数导入锁种子；V87 只登记既定热力 CO2 公式，不生成因子、建筑生效配置或填报数据。既有非空填报数据允许通过后续结构核验，不要求业务表清空。
+
+普通离线门禁运行：
+
+```bash
+python3 -m unittest scripts/tests/test_d01_backup.py scripts/tests/test_d01_release.py scripts/tests/test_d01_maintenance.py -v
+```
+
+真实引擎演练需 Java 21、Docker Linux 引擎，且只新建本机回环端口、独立卷和带随机所有权标签的容器：
+
+```bash
+./mvnw --batch-mode --no-transfer-progress -DskipTests package dependency:build-classpath -Dmdep.outputFile=target/reporting-release-classpath.txt
+REPORTING_RELEASE_ISOLATED=true python3 scripts/Verify-ReportingReleaseIsolated.py
+```
+
+PR 的 `Reporting release V86 V87` 独立 CI 执行同一演练，检查打包后的迁移入口、V85→V86→V87、错误版本/未冻结/运行账号 DDL 拒绝、V86 部分 DDL、V87 后续失败及双 MySQL 库备份恢复到新实例。结果保存在 `target/reporting-release-results.txt`。此处使用合成非空数据；systemd、控制状态和站点保护由 Linux 离线门禁覆盖，不能冒充服务器切换、真实 TDengine 恢复或现场验收。本轮不改变既有 MySQL/TDengine 完整备份恢复门禁。

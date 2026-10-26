@@ -28,6 +28,8 @@ OTHER_SERVICE = "nginx.service"
 JAR = "building-energy-carbon-platform.jar"
 V84 = "BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql"
 V85 = "BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retirement.sql"
+V86 = "BOOT-INF/classes/db/migration/mysql/V86__mysql_energy_reporting.sql"
+V87 = "BOOT-INF/classes/db/migration/mysql/V87__mysql_heat_co2_factor_formula.sql"
 CONTROL = Path("/etc/building-energy-carbon-test/daikin-control-disabled.env")
 RUNTIME_KEYS = ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_FLYWAY_ENABLED", "TDENGINE_INITIALIZATION_ENABLED",
                 "MQTT_ENABLED", "MQTT_CLIENT_ID", "MYSQL_CONTAINER_NAME", "MYSQL_VOLUME_NAME",
@@ -183,8 +185,11 @@ def prepare(name, archive, expected_sha, credentials):
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
-        require(target_schema in ("84", "85"), "D01_V84_OR_V85_PACKAGE_REQUIRED")
-        state.update(source_schema=str(int(target_schema) - 1), target_schema=target_schema)
+        require(target_schema in ("84", "85", "86", "87"), "D01_SUPPORTED_PACKAGE_REQUIRED")
+        # 新版本显式锁定源版本；同一个 V87 包可从 V85 逐版升级，或从已核验的 V86 升级。
+        source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
+        state.update(source_schema=source_schema, target_schema=target_schema)
+        validate_schema_plan(state)
         require(re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "D01_COMMIT_REQUIRED")
         require(sha(target / JAR) == manifest["backendJarSha256"] and
                 sha(target / "web/index.html") == manifest["webIndexSha256"], "D01_PACKAGE_CONTENT_MISMATCH")
@@ -193,8 +198,9 @@ def prepare(name, archive, expected_sha, credentials):
             versions = [int(match[1]) for name in jar.namelist()
                         if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
             require(max(versions) == int(target_schema), "D01_PACKAGE_SCHEMA_MISMATCH")
-            if target_schema == "85":
-                jar.read(V85)
+            for version, migration in ((85, V85), (86, V86), (87, V87)):
+                if int(target_schema) >= version:
+                    jar.read(migration)
             jar.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
         state["jar_sha256"] = sha(target / JAR)
         state["web_sha256"] = sha(target / "web/index.html")
@@ -290,12 +296,17 @@ def checked_restore(backup_dir, restore_report):
             "D01_RESTORE_EXECUTION_EVIDENCE_CHANGED")
 
 
-def target_schema(state):
-    # 没有版本字段的已授权旧状态仅兼容 V84，不能被解释为 V85 升级授权。
+def validate_schema_plan(state):
+    # 旧授权缺少版本字段时只代表 83→84；新增路径不能借用旧授权或跳过中间迁移。
     target = state.get("target_schema", "84")
-    require(target in ("84", "85") and state.get("source_schema", "83") == str(int(target) - 1),
-            "D01_STATE_SCHEMA_MISMATCH")
+    source = state.get("source_schema", "83")
+    require((source, target) in (("83", "84"), ("84", "85"), ("85", "86"),
+                                 ("85", "87"), ("86", "87")), "D01_STATE_SCHEMA_MISMATCH")
     return target
+
+
+def target_schema(state):
+    return validate_schema_plan(state)
 
 
 def migrate(state_path, backup_dir, credentials, restore_report=None):
@@ -303,7 +314,10 @@ def migrate(state_path, backup_dir, credentials, restore_report=None):
     require(state["phase"] == "FROZEN", "D01_UPGRADE_NOT_REENTRANT")
     checked_backup(state_path, state, backup_dir)
     checked_restore(backup_dir, restore_report)
-    schema("upgrade" + target_schema(state), state, credentials)
+    target = target_schema(state)
+    # 每个独立进程只执行一条迁移；任一步失败保留冻结现场，不自动重试、repair 或启动旧应用。
+    for version in range(int(state.get("source_schema", "83")) + 1, int(target) + 1):
+        schema("upgrade" + str(version), state, credentials)
     # 不改冻结文件：备份哈希和冻结身份贯穿迁移、切换；迁移结果由 cutover 再次验证。
 
 
