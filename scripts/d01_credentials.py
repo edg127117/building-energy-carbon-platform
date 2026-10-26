@@ -133,7 +133,7 @@ def check_containers():
 
 
 def mysql_rights(output, role, target_schema="84"):
-    require(target_schema in ("84", "85"), "D01_SCHEMA_TARGET_REQUIRED")
+    require(target_schema in ("84", "85", "86", "87"), "D01_SCHEMA_TARGET_REQUIRED")
     lines = output.splitlines()
     require(lines and re.fullmatch(r"META\t[a-f0-9-]{36}\t[A-Z_]+\t[01]\t[01]\t[A-Za-z0-9+/=]+", lines[0]),
             "D01_MYSQL_PROBE_RESPONSE_INVALID")

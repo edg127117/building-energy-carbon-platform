@@ -149,7 +149,7 @@ def retry_baseline(state, prepared):
             'D01_OTHER_SITE_CHANGED')
 
 
-def retire_failed_prepare(*, online_backup=False, next_release=None):
+def retire_failed_prepare(*, online_backup=False, next_release=None, source_schema="83", target_schema="84"):
     """Archive only an explicitly requested, revoked pre-freeze attempt."""
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
@@ -158,6 +158,11 @@ def retire_failed_prepare(*, online_backup=False, next_release=None):
         trusted_parent(path)
     operation = json.loads((private / "operation.json").read_text())
     config = json.loads((INSTALL / "config.json").read_text())
+    # 失败重授权只能重试同一个版本计划；不能先归档旧现场，再借新包扩大授权范围。
+    old_target = config.get("target_schema", "84")
+    require(old_target == target_schema
+            and config.get("source_schema", str(int(old_target) - 1)) == source_schema,
+            "D01_RETRY_SCHEMA_PLAN_MISMATCH")
     expected_events = ["PREPARED", "FAILED"] if online_backup else ["FAILED"]
     require(operation.get("phase") == "FAILED"
             and operation.get("failed_action") == ("online-backup" if online_backup else "prepare")
@@ -180,8 +185,9 @@ def retire_failed_prepare(*, online_backup=False, next_release=None):
                          'other_link', 'other_pid', 'other_reload', 'config_hashes', 'runtime_controls', 'backup_targets',
                          'backend_service', 'web_service', 'candidate_started', 'jar_sha256', 'web_sha256'}
         require(set(state) in (expected_keys, expected_keys | {"source_schema", "target_schema"})
-                and state.get("target_schema", "84") in ("84", "85")
-                and state.get("source_schema", "83") == str(int(state.get("target_schema", "84")) - 1),
+                and state.get("target_schema", "84") in ("84", "85", "86", "87")
+                and (state.get("source_schema", "83"), state.get("target_schema", "84")) in
+                    (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87")),
                 "D01_OLD_PREPARED_FIELDS_INVALID")
         require(state.get("phase") == "PREPARED" and state.get("format") == "D01_PREPARED_V1"
                 and state.get("previous_release") == config["previous_release"]
@@ -257,8 +263,9 @@ def json_bytes(value):
     return (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode()
 
 
-def retire_completed_v84(next_release):
-    """只归档已撤销且仍在运行的 V84 维护记录；不删除旧备份或重置失败状态。"""
+def retire_completed(next_release, source_schema="84"):
+    """只归档与新源版本一致、已撤销且仍在运行的完成记录；不重置失败现场或删除备份。"""
+    require(source_schema in ("84", "85", "86"), "D01_COMPLETED_SOURCE_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
     paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
@@ -268,7 +275,7 @@ def retire_completed_v84(next_release):
     operation = json.loads((private / "operation.json").read_text())
     release = config.get("release", "")
     require(config.get("format") == "D01_TEMP_AUTH_V1" and config.get("user") == "user1"
-            and config.get("target_schema", "84") == "84"
+            and config.get("target_schema", "84") == source_schema
             and re.fullmatch(r"d01-[a-f0-9]{12}", release) and next_release != release
             and config.get("archive_name") == release + "-authorized.tar.gz", "D01_OLD_RELEASE_ID_INVALID")
     require(operation.get("phase") == "AWAITING_BUSINESS_ACCEPTANCE"
@@ -285,6 +292,7 @@ def retire_completed_v84(next_release):
     candidate = BASE / "releases" / release
     current = (BASE / "current").resolve()
     require(state.get("phase") == "AWAITING_BUSINESS_ACCEPTANCE" and state.get("candidate_started") is True
+            and state.get("target_schema", "84") == source_schema
             and state.get("release") == str(candidate) and current.is_relative_to(BASE / "releases"),
             "D01_OLD_BASELINE_CHANGED")
     # 后续前端发布可以更换目录，但不能替换已核验的后端。完成维护后允许服务正常重启。
@@ -309,7 +317,7 @@ def retire_completed_v84(next_release):
         HISTORY.chmod(0o700)
     trusted_parent(HISTORY)
     require(HISTORY.is_dir() and HISTORY.stat().st_mode & 0o077 == 0, "D01_HISTORY_NOT_PRIVATE")
-    archive = HISTORY / ("completed-v84-" + uuid.uuid4().hex)
+    archive = HISTORY / ("completed-v" + source_schema + "-" + uuid.uuid4().hex)
     archive.mkdir(mode=0o700)
     try:
         for source, name in zip(paths, ("tools", "data", "launcher", "authorization.service", "authorization.timer")):
@@ -338,17 +346,24 @@ def package_manifest(raw):
         manifest = dict(line.split("=", 1) for line in archive.extractfile("MANIFEST.txt").read().decode().splitlines() if "=" in line)
         jar = archive.extractfile("building-energy-carbon-platform.jar").read()
         index = archive.extractfile("web/index.html").read()
-        require(manifest.get("expectedMigration") in ("84", "85")
+        require(manifest.get("expectedMigration") in ("84", "85", "86", "87")
                 and re.fullmatch("[a-f0-9]{40}", manifest.get("commit", ""))
                 and hashlib.sha256(jar).hexdigest() == manifest.get("backendJarSha256")
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
+        target = manifest["expectedMigration"]
+        source = manifest.get("sourceMigration", str(int(target) - 1) if int(target) <= 85 else None)
+        require((source, target) in (("83", "84"), ("84", "85"), ("85", "86"),
+                                     ("85", "87"), ("86", "87")), "D01_PACKAGE_SCHEMA_PLAN_REQUIRED")
         with zipfile.ZipFile(io.BytesIO(jar)) as packaged:
             versions = [int(match[1]) for name in packaged.namelist()
                         if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
             require(versions and max(versions) == int(manifest["expectedMigration"]), "D01_PACKAGE_SCHEMA_MISMATCH")
             packaged.read("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql")
-            if manifest["expectedMigration"] == "85":
-                packaged.read("BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retirement.sql")
+            for version, filename in ((85, "V85__mysql_d01_test_building_retirement.sql"),
+                                      (86, "V86__mysql_energy_reporting.sql"),
+                                      (87, "V87__mysql_heat_co2_factor_formula.sql")):
+                if int(target) >= version:
+                    packaged.read("BOOT-INF/classes/db/migration/mysql/" + filename)
             packaged.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
         return manifest, jar
 
@@ -378,17 +393,19 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     files = bundle_files(raw)
     manifest, jar = package_manifest(files["release.tar.gz"])
     target_schema = manifest.get("expectedMigration", "84")
+    source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1))
     require(sum((replace_revoked_prepare, replace_revoked_online_backup, replace_revoked_completed)) <= 1,
             "D01_ONE_REPLACEMENT_MODE_REQUIRED")
-    require(target_schema != "85" or (isinstance(authorization_reference, str)
+    require(target_schema == "84" or (isinstance(authorization_reference, str)
             and 0 < len(authorization_reference.strip()) <= 512
             and not any(c in authorization_reference for c in "\0\r\n")), "D01_NEW_MAINTENANCE_REFERENCE_REQUIRED")
     if replace_revoked_completed:
-        require(target_schema == "85", "D01_COMPLETED_REPLACEMENT_REQUIRES_V85")
+        require(target_schema in ("85", "86", "87"), "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
         if INSTALL.exists() or INSTALL.is_symlink():
-            retire_completed_v84("d01-" + manifest["commit"][:12])
+            retire_completed("d01-" + manifest["commit"][:12], source_schema)
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
-        retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release="d01-" + manifest["commit"][:12])
+        retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release="d01-" + manifest["commit"][:12],
+                              source_schema=source_schema, target_schema=target_schema)
     for destination in (INSTALL, DATA, LAUNCHER, SUDOERS,
                         UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer")):
         trusted_parent(destination.parent)
@@ -410,7 +427,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
               "archive_sha256": hashlib.sha256(files["release.tar.gz"]).hexdigest(),
               "jar_sha256": manifest["backendJarSha256"], "web_sha256": manifest["webIndexSha256"],
               "commit": manifest["commit"],
-              "target_schema": target_schema,
+              "source_schema": source_schema, "target_schema": target_schema,
               "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
               "authorization_reference": authorization_reference or "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
@@ -466,7 +483,7 @@ if __name__ == "__main__":
     parser.add_argument("--replace-revoked-online-backup", action="store_true",
                         help="archive a revoked failed online backup; keep partial backups and old release artifacts")
     parser.add_argument("--replace-revoked-completed", action="store_true",
-                        help="archive revoked V84 maintenance records and backups before a separately approved V85 operation")
+                        help="archive revoked completed records matching the new source version; preserve all backups")
     parser.add_argument("--authorization-reference", help="non-secret reference to the new approved maintenance and ingress-loss decision")
     args = parser.parse_args()
     signal.signal(signal.SIGTERM, interrupted)
