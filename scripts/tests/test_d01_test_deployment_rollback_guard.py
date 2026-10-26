@@ -103,16 +103,19 @@ exec /bin/mv "$@"
             "TEST_RUNTIME_ENV": str(self.runtime),
         }
 
-    def deploy(self, name, expected_archive=None):
+    def deploy(self, name, expected_archive=None, expected_migration=None, source_migration=None):
         package = self.root / ("package-" + name)
         (package / "web").mkdir(parents=True)
         (package / "building-energy-carbon-platform.jar").write_bytes(b"offline d01 candidate")
         (package / "web/index.html").write_text(name)
         sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
-        (package / "MANIFEST.txt").write_text(
-            "commit=" + "a" * 40 + "\nbackendJarSha256=" + sha(package / "building-energy-carbon-platform.jar")
-            + "\nwebIndexSha256=" + sha(package / "web/index.html") + "\n"
-        )
+        manifest = ("commit=" + "a" * 40 + "\nbackendJarSha256=" + sha(package / "building-energy-carbon-platform.jar")
+                    + "\nwebIndexSha256=" + sha(package / "web/index.html") + "\n")
+        if expected_migration is not None:
+            manifest += "expectedMigration=" + expected_migration + "\n"
+        if source_migration is not None:
+            manifest += "sourceMigration=" + source_migration + "\n"
+        (package / "MANIFEST.txt").write_text(manifest)
         archive = self.base / "incoming" / (name + ".tar.gz")
         with tarfile.open(archive, "w:gz") as stream:
             for path in package.iterdir():
@@ -156,6 +159,15 @@ exec /bin/mv "$@"
         events = self.events()
         self.assertNotIn("restart " + str(self.base / "releases/previous"), events)
         self.assertFalse(any(event.startswith("stop ") for event in events), events)
+
+    def test_generic_deploy_rejects_v88_controlled_package_before_switch(self):
+        result = self.deploy("d01-v88", expected_migration="88", source_migration="87")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("D01_STAGED_RELEASE_REQUIRED", result.stderr)
+        self.assertEqual((self.base / "current").resolve(), self.base / "releases/previous")
+        self.assertEqual(self.config.read_bytes(), self.original_config)
+        self.assertFalse(any(event.startswith(("restart ", "stop ")) for event in self.events()), self.events())
 
     def test_fail_stop_error_is_explicit_and_never_restarts_previous_release(self):
         self.env["TEST_FAIL_RESTART"] = "1"

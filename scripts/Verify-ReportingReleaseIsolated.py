@@ -119,18 +119,18 @@ def old_rows(instance, tables):
     for db, names in tables.items():
         values[db] = hashlib.sha256(dump(instance, "--no-create-info", "--skip-add-locks", "--skip-disable-keys",
              "--order-by-primary", "--hex-blob", db, *names)).hexdigest()
-    values["history"] = sql(instance, "SELECT version,checksum,success FROM iot_platform.flyway_schema_history WHERE version NOT IN ('86','87') ORDER BY installed_rank")
+    values["history"] = sql(instance, "SELECT version,checksum,success FROM iot_platform.flyway_schema_history WHERE version NOT IN ('86','87','88') ORDER BY installed_rank")
     values["formulas"] = hashlib.sha256(dump(instance, "--no-create-info", "--skip-add-locks", "--skip-disable-keys",
              "--order-by-primary", "--where=formula_version_id<>'CFV_HEAT_CO2_V1'", "iot_platform", "biz_carbon_formula_version")).hexdigest()
     return values
 
 
-def restore_new(backup, expected, tables):
+def restore_new(backup, expected, tables, schema="85"):
     instance = new_mysql()
     sql(instance, backup.decode())
     accounts(instance)
     assert old_rows(instance, tables) == expected
-    java(instance, "validate85")
+    java(instance, "validate" + schema)
     return instance
 
 
@@ -155,12 +155,14 @@ def main():
         backup = dump(source, "--single-transaction", "--routines", "--events", "--triggers", "--databases", "iot_platform", "iot_platform_archive")
         assert backup
         java(source, "upgrade87", expected=False)
+        java(source, "upgrade88", expected=False)
         java(source, "upgrade86", expected=False, frozen=False)
         java(source, "upgrade86", expected=False, user="platform_app")
         assert old_rows(source, tables) == before
         emit("V85_WRONG_BASELINE_UNFROZEN_AND_APP_DDL_REJECTED")
         java(source, "upgrade86")
         java(source, "validate86")
+        java(source, "upgrade88", expected=False)
         assert old_rows(source, tables) == before
         assert sql(source, "SELECT COUNT(*) FROM iot_platform.flyway_schema_history WHERE version='86' AND success=1") == "1"
         java(source, "upgrade86", expected=False)
@@ -174,6 +176,28 @@ def main():
         assert sql(source, "SELECT COUNT(*) FROM iot_platform.biz_energy_reporting_record") == "0"
         assert sql(source, "SHOW GRANTS FOR 'platform_app'@'%'").count("GRANT") == 2
         emit("V86_TO_V87_EXACTLY_ONCE_VALIDATED_NO_BUILDING_CONFIGURATION_OR_DUTY_CHANGES")
+        backup87 = dump(source, "--single-transaction", "--routines", "--events", "--triggers", "--databases", "iot_platform", "iot_platform_archive")
+        java(source, "upgrade88", expected=False, frozen=False)
+        java(source, "upgrade88", expected=False, user="platform_app")
+        java(source, "validate87")
+        java(source, "upgrade88")
+        java(source, "validate88")
+        java(source, "upgrade88", expected=False)
+        assert old_rows(source, tables) == before
+        assert sql(source, "SELECT COUNT(*) FROM iot_platform.flyway_schema_history WHERE version='88' AND success=1") == "1"
+        emit("V87_TO_V88_PACKAGED_MIGRATOR_EXACTLY_ONCE_UNFROZEN_AND_APP_DDL_REJECTED_ROWS_PRESERVED")
+        failed88 = restore_new(backup87, before, tables, "87")
+        sql(failed88, "ALTER TABLE iot_platform.biz_carbon_factor_version DROP CHECK chk_carbon_electricity_years")
+        java(failed88, "upgrade88", expected=False)
+        assert sql(failed88, "SELECT COUNT(*) FROM iot_platform.flyway_schema_history WHERE version='88' AND success=0") == "1"
+        java(failed88, "upgrade88", expected=False)
+        java(failed88, "validate88", expected=False)
+        assert old_rows(failed88, tables) == before
+        recovered88 = restore_new(backup87, before, tables, "87")
+        java(recovered88, "upgrade88")
+        java(recovered88, "validate88")
+        assert old_rows(recovered88, tables) == before
+        emit("V88_FAILED_HISTORY_RETAINED_RETRY_REJECTED_V87_DUAL_DATABASE_BACKUP_RESTORED_TO_NEW_INSTANCE")
         restored = restore_new(backup, before, tables)
         emit("MYSQL_MAIN_ARCHIVE_BACKUP_RESTORED_TO_NEW_INSTANCE_SOURCE_NOT_OVERWRITTEN")
         sql(restored, "CREATE TABLE iot_platform.biz_energy_reporting_receipt(blocker INT)")

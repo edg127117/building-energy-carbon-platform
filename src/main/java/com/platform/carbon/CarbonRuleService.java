@@ -421,17 +421,18 @@ public class CarbonRuleService {
         }
     }
 
-    /** 数据年描述来源统计期，核算年约束业务使用期；不从发布日期推算两者。 */
+    /** 数据年描述统计期，核算年约束使用期；旧全国默认因子按已确认例外保留空数据年。 */
     private static void validateYears(FactorCategory category, CreateFactorVersionRequest request) {
         boolean anyYear = request.dataYear() != null || request.accountingYear() != null;
         boolean electricityCo2 = category == FactorCategory.PURCHASED_ELECTRICITY_LOCATION
                 && "GAS_MASS".equals(normalize(request.resultBasis()));
         if (!anyYear && !electricityCo2) return; // 既有版本缺失的年度证据保持缺失，不补造。
+        boolean undatedDefault = ElectricityDefaultFactorPolicy.allowsMissingDataYear(request);
         if (category != FactorCategory.PURCHASED_ELECTRICITY_LOCATION
-                || request.dataYear() == null || request.accountingYear() == null
-                || request.dataYear() < 1900 || request.dataYear() > 2200
+                || request.dataYear() == null && !undatedDefault || request.accountingYear() == null
+                || request.dataYear() != null && (request.dataYear() < 1900 || request.dataYear() > 2200)
                 || request.accountingYear() < 2000 || request.accountingYear() > 2200) {
-            validation("电力因子必须成对提供数据年度和核算年度");
+            validation("年度电力因子须提供数据年与核算年；仅已确认的2021/2022年全国0.5703默认因子可省略数据年");
         }
         LocalDateTime from = java.time.LocalDate.of(request.accountingYear(), 1, 1).atStartOfDay();
         if (request.effectiveFrom().isBefore(from) || request.effectiveTo() == null

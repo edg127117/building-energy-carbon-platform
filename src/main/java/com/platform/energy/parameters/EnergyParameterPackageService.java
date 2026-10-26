@@ -7,6 +7,7 @@ import com.platform.carbon.CarbonModels.DenominatorVersion;
 import com.platform.carbon.CarbonModels.FactorSourceVersion;
 import com.platform.carbon.CarbonModels.FactorVersion;
 import com.platform.carbon.CarbonRuleService;
+import com.platform.carbon.ElectricityDefaultFactorPolicy;
 import com.platform.carbon.api.CarbonContracts.CreateFactorSourceRequest;
 import com.platform.carbon.api.CarbonContracts.CreateFactorVersionRequest;
 import com.platform.carbon.api.CarbonContracts.FactorComponentRequest;
@@ -71,7 +72,7 @@ public class EnergyParameterPackageService {
     private static final BigDecimal NATURAL_GAS_MJ_PER_NM3 = new BigDecimal("38.931");
     private static final BigDecimal NATURAL_GAS_KG_C_PER_MJ = new BigDecimal("0.0153");
     private static final BigDecimal NATURAL_GAS_OXIDATION_RATE = new BigDecimal("0.99");
-    private static final BigDecimal ELECTRICITY_KG_CO2_PER_MWH = new BigDecimal("570.3");
+    private static final BigDecimal ELECTRICITY_KG_CO2_PER_MWH = ElectricityDefaultFactorPolicy.KG_CO2_PER_MWH;
     private static final BigDecimal HUBEI_2021_KG_CO2_PER_MWH = new BigDecimal("367.2");
     private static final BigDecimal HUBEI_2022_KG_CO2_PER_MWH = new BigDecimal("436.4");
     private static final BigDecimal HUBEI_2023_KG_CO2_PER_MWH = new BigDecimal("404.4");
@@ -520,7 +521,7 @@ public class EnergyParameterPackageService {
         ElectricityContextRequest electricity = request.electricity();
         if (electricity == null) {
             issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_CONTEXT_REQUIRED",
-                    "电力因子必须明确适用层级、地区（如适用）、数据年和核算年。"));
+                    "电力因子必须明确适用层级、地区（如适用）及核算年；年度平均因子另须真实数据年。"));
             return;
         }
         ElectricityCandidate candidate = electricityCandidate(itemCode);
@@ -536,14 +537,22 @@ public class EnergyParameterPackageService {
             issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_REGION_MISMATCH",
                     "湖北年度候选必须明确使用地区编码 420000，系统不会替换为其他地区。"));
         }
-        if (electricity.dataYear() == null || electricity.accountingYear() == null) {
-            issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_YEAR_REQUIRED", "电力因子必须成对提供数据年和核算年。"));
+        boolean undatedDefault = ElectricityDefaultFactorPolicy.supports(candidate.factorCode(), level, electricity.accountingYear());
+        if (electricity.dataYear() == null && !undatedDefault || electricity.accountingYear() == null) {
+            issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_YEAR_REQUIRED", "必须提供核算年；仅2021/2022年全国0.5703默认因子可省略数据年。"));
         } else {
+            if (electricity.accountingYear() < 2000 || electricity.accountingYear() > 2200
+                    || electricity.dataYear() != null && (electricity.dataYear() < 1900 || electricity.dataYear() > 2200)) {
+                issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_YEAR_INVALID", "核算年须为2000–2200，填写的数据年须为1900–2200。"));
+                return;
+            }
             if (candidate.dataYear() != null && !candidate.dataYear().equals(electricity.dataYear())) {
                 issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_DATA_YEAR_MISMATCH",
                         "该候选只能使用资料给定的数据年 " + candidate.dataYear() + "；核算年仍须由请求明确给出。"));
             }
-            if (request.effectiveFrom() != null && request.effectiveTo() != null) {
+            if (request.effectiveTo() == null) {
+                issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_EFFECTIVE_PERIOD_REQUIRED", "电力因子须明确有效期结束，不能无限期适用。"));
+            } else if (request.effectiveFrom() != null) {
                 LocalDateTime start = LocalDateTime.of(electricity.accountingYear(), 1, 1, 0, 0);
                 if (request.effectiveFrom().isBefore(start) || request.effectiveTo().isAfter(start.plusYears(1))) {
                     issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_EFFECTIVE_PERIOD_MISMATCH",
@@ -652,7 +661,7 @@ public class EnergyParameterPackageService {
 
     private static ElectricityCandidate electricityCandidate(String itemCode) {
         return switch (itemCode) {
-            case ELECTRICITY_FACTOR -> new ElectricityCandidate("ELECTRICITY_LOCATION_CO2_05703",
+            case ELECTRICITY_FACTOR -> new ElectricityCandidate(ElectricityDefaultFactorPolicy.FACTOR_CODE,
                     ELECTRICITY_KG_CO2_PER_MWH, null, "NATIONAL", null);
             case HUBEI_ELECTRICITY_FACTOR_2021 -> new ElectricityCandidate("HUBEI_ELECTRICITY_CO2_2021",
                     HUBEI_2021_KG_CO2_PER_MWH, 2021, "PROVINCE", "420000");
@@ -691,7 +700,7 @@ public class EnergyParameterPackageService {
                         "MJ/NM3; KG_C_PER_MJ; RATIO", List.of("standardConditionCode", "source metadata")),
                 new PackageItemDefinitionView(ELECTRICITY_FACTOR, "全国电力位置法 CO2 因子候选", "CARBON_FACTOR",
                         new BigDecimal("0.5703"), "TCO2/MWH", ELECTRICITY_KG_CO2_PER_MWH, "KG_CO2/MWH",
-                        List.of("electricity.applicabilityLevel=NATIONAL", "electricity.dataYear", "electricity.accountingYear", "source metadata")),
+                        List.of("electricity.applicabilityLevel=NATIONAL", "electricity.accountingYear", "effectiveFrom/effectiveTo", "source metadata；2021/2022年默认因子数据年可留空")),
                 new PackageItemDefinitionView(HUBEI_ELECTRICITY_FACTOR_2021, "湖北 2021 电力位置法 CO2 因子候选", "CARBON_FACTOR",
                         new BigDecimal("0.3672"), "KG_CO2/KWH", HUBEI_2021_KG_CO2_PER_MWH, "KG_CO2/MWH",
                         List.of("electricity.applicabilityLevel=PROVINCE", "electricity.regionCode=420000",

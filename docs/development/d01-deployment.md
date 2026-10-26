@@ -1,6 +1,6 @@
 # D01 升级与恢复操作边界
 
-本文说明 D01 及后续填报迁移的维护流程：兼容 V83→V84、V84→V85，新增 V85→V86、V86→V87 和 V85→V86→V87。V86/V87 的包格式、版本授权及验收以第 8 节为准；第 6、7 节的 V85 候选和现场安排保留用于追溯。隔离演练通过不代表已在运行测试系统执行；实际停写、备份、迁移、切换只在批准的维护窗口运行。测试发布仍固定在 `18080→18081`，不操作 80 端口、其 Nginx 或 `/var/www/iot-platform/current`。
+本文说明 D01 及后续填报迁移的维护流程：兼容 V83→V84、V84→V85、V85→V86、V86→V87 和 V85→V86→V87，并支持 V87→V88。V86/V87 的包格式、版本授权及验收以第 8 节为准，V88 见第 9 节；第 6、7 节的 V85 候选和现场安排保留用于追溯。隔离演练通过不代表已在运行测试系统执行；实际停写、备份、迁移、切换只在批准的维护窗口运行。测试发布仍固定在 `18080→18081`，不操作 80 端口、其 Nginx 或 `/var/www/iot-platform/current`。
 
 ## 1. 前置核验
 
@@ -17,14 +17,14 @@
 
 脚本要求 Linux、Python 3.10+、Java 21、Docker CLI 和 systemd，维护入口使用 sudo/root。把 `d01_release.py`、`d01_backup.py`、`daikin_test_deployment_config.py` 放在同一受控目录；维护期间禁止其他发布流程或人工改动配置及 `current`。
 
-发布包根目录包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`，清单填写 `commit`、`backendJarSha256`、`webIndexSha256`、`expectedMigration=84`、`85`、`86` 或 `87`（V86/V87 还必须填写 `sourceMigration`），必须与 JAR 的最大 MySQL 迁移版本一致。通用 `Deploy-BuildingEnergyCarbonTest.sh` 拒绝 D01 包，避免绕过冻结及独立迁移。
+发布包根目录包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`，清单填写 `commit`、`backendJarSha256`、`webIndexSha256`、`expectedMigration=84`、`85`、`86`、`87` 或 `88`（V86及以上还必须填写 `sourceMigration`），必须与 JAR 的最大 MySQL 迁移版本一致。通用 `Deploy-BuildingEnergyCarbonTest.sh` 拒绝 D01 包，避免绕过冻结及独立迁移。
 
 通过受保护渠道创建 root 所有的普通 0600 JSON 文件（须与 sudo 后的实际执行用户一致），不把密码写进命令行、日志、Git 或清单：
 
 - schema 凭据：`{"url":"jdbc:mysql://127.0.0.1:<端口>/iot_platform?...","user":"<独立迁移账号>","password":"<秘密>"}`。URL 不得携带 user/password 参数。
 - backup 凭据：`{"mysql":{"user":"<备份账号>","password":"<秘密>"},"tdengine":{"user":"<备份账号>","password":"<秘密>"}}`。必须使用核实有效的账号，不从容器初始化环境推断当前密码；MySQL 账号需具有双库、routines/events/triggers 所需备份权限。
 
-凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83` 及 V84 至 V87 的 `upgrade<版本>`、`validate<版本>`；不提供 baseline、repair、clean 或降级操作。
+凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83` 及 V84 至 V88 的 `upgrade<版本>`、`validate<版本>`；不提供 baseline、repair、clean 或降级操作。
 
 ### 一次维护的临时授权
 
@@ -243,4 +243,12 @@ python3 -m unittest scripts/tests/test_d01_backup.py scripts/tests/test_d01_rele
 REPORTING_RELEASE_ISOLATED=true python3 scripts/Verify-ReportingReleaseIsolated.py
 ```
 
-PR 的 `Reporting release V86 V87` 独立 CI 执行同一演练，检查打包后的迁移入口、V85→V86→V87、错误版本/未冻结/运行账号 DDL 拒绝、V86 部分 DDL、V87 后续失败及双 MySQL 库备份恢复到新实例。结果保存在 `target/reporting-release-results.txt`。此处使用合成非空数据；systemd、控制状态和站点保护由 Linux 离线门禁覆盖，不能冒充服务器切换、真实 TDengine 恢复或现场验收。本轮不改变既有 MySQL/TDengine 完整备份恢复门禁。
+PR 的既有 `Reporting release V86 V87` 独立 CI 继续使用原检查名，演练范围已覆盖打包后的迁移入口、V85→V86→V87→V88、错误版本/未冻结/运行账号 DDL 拒绝、失败保留及双 MySQL 库备份恢复到新实例。结果保存在 `target/reporting-release-results.txt`。此处使用合成非空数据；systemd、控制状态和站点保护由 Linux 离线门禁覆盖，不能冒充服务器切换、真实 TDengine 恢复或现场验收。本轮不改变既有 MySQL/TDengine 完整备份恢复门禁。
+
+## 9. V88 默认电力因子数据年兼容
+
+V88只接受清单 `sourceMigration=87`、`expectedMigration=88`，执行 `validate87` → `upgrade88` → `validate88`。V85/V86不能直接声明到V88；旧包及授权计划保持原有边界。已撤销且基线匹配的V87完成记录可整体保留归档，再安装固定新包摘要、版本及新维护依据的临时授权。
+
+V88修改 `chk_carbon_electricity_years`，允许已批准的2021/2022全国默认因子保留空数据年，详见[正式参数清单](formal-energy-parameters.md)。迁移不回填年份、不激活参数、不改变楼宇配置。迁移账号须具有主库 `ALTER` 直接权限，运行账号仍不授予DDL权限。新包必须包含V88迁移文件与独立迁移入口，通用发布脚本仍拒绝绕过分阶段维护。
+
+在线及冻结备份、主库/归档库/TDengine实际独立恢复、停写授权、源实例身份和控制状态核验继续适用。升级或最终校验失败时保持冻结和失败历史，不自动repair、重跑、降级或恢复旧应用；恢复必须在明确恢复时点和损失范围后另行批准。V88隔离CI补验未停写与运行账号DDL拒绝、重复升级拒绝、失败记录保留，以及V87双库备份在新实例恢复后重新升级。软件验证通过不代表已取得维护窗口或已部署。

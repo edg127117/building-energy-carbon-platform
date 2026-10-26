@@ -136,6 +136,61 @@ class EnergyParameterPackageApiContractTest {
                 .andExpect(jsonPath("$.errorCode").value("ENERGY_PARAMETER_PACKAGE_IDEMPOTENCY_CONFLICT"));
     }
 
+    @Test
+    void permitsOnlyDocumentedDefaultFactorToOmitDataYearAndStillRequiresBoundedAccountingYear() throws Exception {
+        String token = login("admin", "123456");
+        ensureElectricityRuleOptions();
+        grant("CARBON_RULE_MAINTAIN");
+        var request = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(hubei2023Request("DEFAULT-UNDATED"));
+        request.set("itemCodes", objectMapper.valueToTree(List.of("ELECTRICITY_FACTOR")));
+        request.put("effectiveFrom", "2022-01-01T00:00:00");
+        request.put("effectiveTo", "2023-01-01T00:00:00");
+        var electricity = (com.fasterxml.jackson.databind.node.ObjectNode) request.path("electricity");
+        electricity.put("applicabilityLevel", "NATIONAL");
+        electricity.putNull("regionCode");
+        electricity.putNull("dataYear");
+        electricity.put("accountingYear", 2022);
+        var source = (com.fasterxml.jackson.databind.node.ObjectNode) request.path("source");
+        source.put("sourceCode", "MEE_2023_43");
+        source.put("sourceName", "旧全国默认电力因子");
+        source.put("documentReference", "环办气候函〔2023〕43号");
+        source.put("sourceDocumentVersion", "2023年通知");
+        source.put("publicationYear", 2023);
+        source.put("applicabilityNote", "已确认的2021/2022核算年度全国默认值；来源未声明统计数据年");
+        mockMvc.perform(post("/v1/energy-parameter-packages/preview").header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.readyForImport").value(true));
+        var imported = data(mockMvc.perform(post("/v1/energy-parameter-packages/import")
+                        .header("Authorization", bearer(token)).contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk()).andReturn());
+        String version = imported.path("created").get(1).path("versionId").asText();
+        assertThat(jdbc.queryForObject("SELECT data_year FROM biz_carbon_factor_version WHERE factor_version_id=?", Integer.class, version)).isNull();
+        assertThat(jdbc.queryForObject("SELECT accounting_year FROM biz_carbon_factor_version WHERE factor_version_id=?", Integer.class, version)).isEqualTo(2022);
+
+        request.put("idempotencyKey", "DEFAULT-MISSING-YEAR");
+        electricity.putNull("accountingYear");
+        assertPreviewIssue(token, request.toString(), "ELECTRICITY_YEAR_REQUIRED");
+        electricity.put("accountingYear", 2023);
+        assertPreviewIssue(token, request.toString(), "ELECTRICITY_YEAR_REQUIRED");
+        electricity.put("accountingYear", 2022);
+        request.putNull("effectiveTo");
+        assertPreviewIssue(token, request.toString(), "ELECTRICITY_EFFECTIVE_PERIOD_REQUIRED");
+        request.put("effectiveTo", "2023-01-01T00:00:00");
+        electricity.put("accountingYear", -1);
+        electricity.put("dataYear", 2021);
+        assertPreviewIssue(token, request.toString(), "ELECTRICITY_YEAR_INVALID");
+        var hubei = (com.fasterxml.jackson.databind.node.ObjectNode) objectMapper.readTree(hubei2023Request("HUBEI-MISSING-DATA-YEAR"));
+        ((com.fasterxml.jackson.databind.node.ObjectNode) hubei.path("electricity")).putNull("dataYear");
+        assertPreviewIssue(token, hubei.toString(), "ELECTRICITY_YEAR_REQUIRED");
+    }
+
+    private void assertPreviewIssue(String token, String body, String code) throws Exception {
+        mockMvc.perform(post("/v1/energy-parameter-packages/preview").header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON).content(body))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.readyForImport").value(false))
+                .andExpect(jsonPath("$.data.issues[?(@.code == '" + code + "')]").exists());
+    }
+
     private void ensureElectricityRuleOptions() {
         Integer formulaCount = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM biz_carbon_formula_version

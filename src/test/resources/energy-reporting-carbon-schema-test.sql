@@ -119,6 +119,15 @@ CREATE TABLE IF NOT EXISTS `biz_carbon_factor_version` (
     CONSTRAINT `chk_carbon_factor_version_building` CHECK
         ((`applicability_level`='BUILDING_SPECIFIC' AND `building_id` IS NOT NULL) OR
          (`applicability_level`<>'BUILDING_SPECIFIC' AND `building_id` IS NULL)),
+    CONSTRAINT `chk_carbon_electricity_years` CHECK (
+        (data_year IS NULL AND accounting_year IS NULL)
+        OR (data_year IS NOT NULL AND accounting_year IS NOT NULL
+            AND data_year BETWEEN 1900 AND 2200 AND accounting_year BETWEEN 2000 AND 2200)
+        OR (data_year IS NULL AND accounting_year IN (2021,2022)
+            AND applicability_level='NATIONAL' AND usage_nature='FORMAL' AND input_unit_code='MWH'
+            AND YEAR(effective_from)=accounting_year AND effective_to IS NOT NULL
+            AND effective_to <= CAST(CONCAT(accounting_year+1,'-01-01 00:00:00') AS DATETIME))
+    ),
     CONSTRAINT `chk_carbon_factor_version_region` CHECK
         ((`applicability_level`='PROVINCE' AND `region_code` IS NOT NULL) OR
          (`applicability_level`<>'PROVINCE' AND `region_code` IS NULL))

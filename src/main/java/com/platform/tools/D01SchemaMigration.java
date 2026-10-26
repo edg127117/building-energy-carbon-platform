@@ -95,12 +95,26 @@ public final class D01SchemaMigration {
                 throw new IllegalStateException("D01_V86_STORAGE_INCOMPLETE");
             }
         }
-        if (target.equals("87") && jdbc.queryForObject("""
+        if (Integer.parseInt(target) >= 87 && jdbc.queryForObject("""
                 SELECT COUNT(*) FROM biz_carbon_formula_version
                 WHERE formula_version_id='CFV_HEAT_CO2_V1' AND algorithm_code='PURCHASED_HEAT_CO2_V1'
                   AND result_basis='GAS_MASS' AND gas_coverage='CO2_ONLY_HEAT'
                 """, Integer.class) != 1) {
             throw new IllegalStateException("D01_V87_FORMULA_INCOMPLETE");
+        }
+        if (Integer.parseInt(target) >= 88) {
+            String clause = jdbc.queryForObject("""
+                    SELECT c.CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS c
+                    JOIN information_schema.TABLE_CONSTRAINTS t
+                      ON t.CONSTRAINT_SCHEMA=c.CONSTRAINT_SCHEMA AND t.CONSTRAINT_NAME=c.CONSTRAINT_NAME
+                    WHERE c.CONSTRAINT_SCHEMA=DATABASE() AND c.CONSTRAINT_NAME='chk_carbon_electricity_years'
+                      AND t.TABLE_NAME='biz_carbon_factor_version' AND t.ENFORCED='YES'
+                    """, String.class);
+            String normalized = clause == null ? "" : clause.toLowerCase(java.util.Locale.ROOT).replaceAll("\\s+", "");
+            if (!normalized.contains("2021,2022") || !normalized.contains("national")
+                    || !normalized.contains("input_unit_code") || !normalized.contains("effective_to")) {
+                throw new IllegalStateException("D01_V88_DEFAULT_YEAR_CONSTRAINT_INCOMPLETE");
+            }
         }
         System.out.println("D01_SCHEMA_VALIDATED=" + target);
     }
@@ -112,6 +126,7 @@ public final class D01SchemaMigration {
             case "validate85", "upgrade85" -> "85";
             case "validate86", "upgrade86" -> "86";
             case "validate87", "upgrade87" -> "87";
+            case "validate88", "upgrade88" -> "88";
             default -> throw new IllegalArgumentException("D01_SCHEMA_ACTION_REQUIRED");
         };
     }
