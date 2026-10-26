@@ -301,18 +301,25 @@ class PrivilegeBoundaryTest(unittest.TestCase):
                 "r=types.SimpleNamespace(BASE=Path('/unused'),stage_package=lambda a,t: print('stage-user:'+str(m.os.getuid()))); "
                 "m.imported_modules=lambda: (r,None); "
                 "m.authorized_worker(sys.argv[2], {'expires_at':int(sys.argv[3]),'release':'fixture'})")
-        for expires, expected_success in ((config["expires_at"], True), (1, False)):
-            parent, child = bridge.socket.socketpair()
-            with parent, child:
-                parent.sendall(json.dumps({"action": "stage-user", "phase": "AUTHORIZED", "expires_at": expires}).encode())
-                parent.shutdown(bridge.socket.SHUT_WR)
-                result = bridge.subprocess.run([sys.executable, "-I", "-c", code,
-                    str(SCRIPTS / "d01_maintenance.py"), str(child.fileno()), str(expires)],
-                    pass_fds=(child.fileno(),), user=65534, group=65534, extra_groups=[],
-                    capture_output=True, text=True, timeout=10, env=bridge.SAFE_ENV)
-            self.assertEqual(result.returncode == 0, expected_success, result.stderr)
-            if expected_success:
-                self.assertIn("stage-user:65534", result.stdout)
+        # 降权进程不依赖 runner 工作目录的遍历权限；按安装后的公开工具权限放置同一模块。
+        with tempfile.TemporaryDirectory(dir="/run", prefix="d01-worker-") as directory:
+            root = Path(directory)
+            root.chmod(0o755)
+            module = root / "d01_maintenance.py"
+            module.write_bytes((SCRIPTS / "d01_maintenance.py").read_bytes())
+            module.chmod(0o644)
+            for expires, expected_success in ((config["expires_at"], True), (1, False)):
+                parent, child = bridge.socket.socketpair()
+                with parent, child:
+                    parent.sendall(json.dumps({"action": "stage-user", "phase": "AUTHORIZED", "expires_at": expires}).encode())
+                    parent.shutdown(bridge.socket.SHUT_WR)
+                    result = bridge.subprocess.run([sys.executable, "-I", "-c", code,
+                        str(module), str(child.fileno()), str(expires)],
+                        pass_fds=(child.fileno(),), user=65534, group=65534, extra_groups=[],
+                        capture_output=True, text=True, timeout=10, env=bridge.SAFE_ENV)
+                self.assertEqual(result.returncode == 0, expected_success, result.stderr)
+                if expected_success:
+                    self.assertIn("stage-user:65534", result.stdout)
 
     def test_command_environment_does_not_inherit_python_or_java_injection(self):
         with patch.dict(os.environ, {"PYTHONPATH": "/tmp/evil", "JAVA_TOOL_OPTIONS": "-javaagent:/tmp/evil.jar"}), \
