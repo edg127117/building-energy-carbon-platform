@@ -77,6 +77,15 @@ class EnergyConversionServiceIntegrationTest {
         assertThat(result.applicableInputUnitCode()).isEqualTo("T");
         assertThat(result.tce()).isEqualByComparingTo(
                 new BigDecimal("43.330").divide(new BigDecimal("29.3076"), java.math.MathContext.DECIMAL128));
+        var tonneInput = service.simulate(USER, ENERGY, new SimulationRequest(
+                "BLD001", "DIESEL", BigDecimal.ONE, " t ", "LOWER_HEATING_VALUE",
+                "CALORIFIC_EQUIVALENT", "STATIONARY_COMBUSTION", "GLOBAL", AT));
+        assertThat(tonneInput.tce()).isEqualByComparingTo(result.tce());
+        var tonneFormula = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "TONNE_COMPATIBILITY", "LOWER_HEATING_VALUE", "CALORIFIC_EQUIVALENT", "LOWER_HEATING_VALUE_V1",
+                "T", "TCE", "GJ_PER_INPUT_UNIT", "STANDARD", "吨输入接口兼容回归", AT, null));
+        assertThat(tonneFormula.applicableInputUnitCode()).isEqualTo("T");
+        assertThat(tonneFormula.status()).isEqualTo("PENDING_EXPERT");
     }
 
     @Test
@@ -171,6 +180,38 @@ class EnergyConversionServiceIntegrationTest {
                 null,"PURCHASED_HEAT","GLOBAL","PRODUCTION","MANUAL","隔离测试冲突参数",AT.plusDays(10),AT.plusDays(20)));
         service.approveParameter(USER,ENERGY,conflict.versionId(),conversionApprove());
         assertCode(()->service.evaluateFormalRules(USER,ENERGY,heatDirectRequest(BigDecimal.ONE),AT.plusMonths(1)),409,EnergyConversionErrors.RULE_CONFLICT);
+    }
+
+    @Test
+    void requiresWholeCatalogIntervalWithoutSubtractingFromExclusiveEnd() {
+        approveCatalog("EIV_HEAT_1", false);
+        var end = AT.plusMonths(1);
+        var formula = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "EXCLUSIVE_END_HEAT", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "隔离测试直接系数", AT, end));
+        service.approveFormula(USER, ENERGY, formula.versionId(), conversionApprove());
+        var parameter = service.createParameterVersion(USER, ENERGY, new CreateParameterVersionRequest(
+                "EXCLUSIVE_END_HEAT", "HEAT", formula.versionId(), new BigDecimal("0.5"), "TCE_PER_INPUT_UNIT",
+                null, "PURCHASED_HEAT", "GLOBAL", "PRODUCTION", "MANUAL", "隔离测试参数", AT, end));
+        service.approveParameter(USER, ENERGY, parameter.versionId(), conversionApprove());
+        jdbc.update("UPDATE biz_energy_item_version SET effective_to=? WHERE version_id='EIV_HEAT_1'", end);
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to=? WHERE version_id IN ('EUV_MJ_1','EUV_GJ_1')", end);
+        var input = heatDirectRequest(BigDecimal.ONE);
+        assertThat(service.evaluateFormalRules(USER, ENERGY, input, end).tce()).isEqualByComparingTo("0.5");
+
+        jdbc.update("UPDATE biz_energy_item_version SET effective_to=? WHERE version_id='EIV_HEAT_1'", AT.plusDays(10));
+        assertThatThrownBy(() -> service.evaluateFormalRules(USER, ENERGY, input, end))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("能源品种版本未覆盖整个期间");
+        jdbc.update("UPDATE biz_energy_item_version SET effective_to=? WHERE version_id='EIV_HEAT_1'", end);
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to=? WHERE version_id='EUV_MJ_1'", AT.plusDays(10));
+        var mj = new SimulationRequest("BLD001", "HEAT", new BigDecimal("1000"), "MJ", "DIRECT_TCE_FACTOR",
+                "CALORIFIC_EQUIVALENT", "PURCHASED_HEAT", "GLOBAL", AT);
+        assertThatThrownBy(() -> service.evaluateFormalRules(USER, ENERGY, mj, end))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("活动量单位版本未覆盖整个期间");
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to=? WHERE version_id='EUV_MJ_1'", end);
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to=? WHERE version_id='EUV_GJ_1'", AT.plusDays(10));
+        assertThatThrownBy(() -> service.evaluateFormalRules(USER, ENERGY, mj, end))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("折标输入单位版本未覆盖整个期间");
     }
 
     private void approveCore(String itemVersion, String formulaVersion,

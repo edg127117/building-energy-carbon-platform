@@ -184,6 +184,43 @@ class EnergyParameterPackageApiContractTest {
         assertPreviewIssue(token, hubei.toString(), "ELECTRICITY_YEAR_REQUIRED");
     }
 
+    @Test
+    void exposesOfficialElectricityFactorPrecisionAndDoesNotSkipFormulaReview() throws Exception {
+        String token = login("admin", "123456");
+        JsonNode catalog = data(mockMvc.perform(get("/v1/energy-parameter-packages/catalog")
+                .header("Authorization", bearer(token))).andExpect(status().isOk()).andReturn());
+        JsonNode definition = itemByCode(packageByCode(catalog.path("packages"), "B01").path("items"),
+                "ELECTRICITY_CALORIFIC_TCE_PARAMETER");
+        assertThat(definition.path("sourceValue").asText()).isEqualTo("0.1229");
+        assertThat(definition.path("sourceUnit").asText()).isEqualTo("KGCE/KWH");
+        assertThat(definition.path("normalizedValue").asText()).isEqualTo("0.0001229");
+        assertThat(definition.path("normalizedUnit").asText()).isEqualTo("TCE_PER_KWH");
+        grant("ENERGY_RULE_MAINTAIN");
+        jdbc.update("UPDATE biz_measurement_unit_version SET status='APPROVED',approved_by=1,approved_at=CURRENT_TIMESTAMP,config_revision=1 WHERE version_id IN ('EUV_KWH_1','EUV_TCE_1')");
+        String request = """
+                {"packageCode":"B01","itemCodes":["ELECTRICITY_CALORIFIC_TCE_FORMULA"],
+                 "source":{"sourceCode":"NBS_ELECTRICITY_2025","sourceName":"企业电力消费当量折标系数",
+                 "publisher":"国家统计局能源统计司","documentReference":"国家统计局能源统计司咨询答复",
+                 "sourceDocumentVersion":"2025-12-22答复","publicationYear":2025,
+                 "applicabilityNote":"电力消费当量折标；项目采用独立记录，不替换历史",
+                 "evidenceReference":"https://www.stats.gov.cn/hd/lyzx/zxgk/202601/t20260109_1962280.html",
+                 "energySourceType":"STANDARD"},"effectiveFrom":"2026-01-01T00:00:00",
+                 "effectiveTo":"2027-01-01T00:00:00","idempotencyKey":"OFFICIAL-ELECTRICITY-API"}
+                """;
+        JsonNode imported = data(mockMvc.perform(post("/v1/energy-parameter-packages/import")
+                        .header("Authorization", bearer(token)).contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.awaitingIndependentReview").value(true))
+                .andExpect(jsonPath("$.data.created[0].status").value("PENDING_EXPERT")).andReturn());
+        String versionId = imported.path("created").get(0).path("versionId").asText();
+        JsonNode replayed = data(mockMvc.perform(post("/v1/energy-parameter-packages/import")
+                        .header("Authorization", bearer(token)).contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk()).andReturn());
+        assertThat(replayed.path("created").get(0).path("versionId").asText()).isEqualTo(versionId);
+        assertPreviewIssue(token, request.replace("ELECTRICITY_CALORIFIC_TCE_FORMULA", "ELECTRICITY_CALORIFIC_TCE_PARAMETER"),
+                "ELECTRICITY_CALORIFIC_FORMULA_NOT_UNIQUE");
+    }
+
     private void assertPreviewIssue(String token, String body, String code) throws Exception {
         mockMvc.perform(post("/v1/energy-parameter-packages/preview").header("Authorization", bearer(token))
                         .contentType(MediaType.APPLICATION_JSON).content(body))

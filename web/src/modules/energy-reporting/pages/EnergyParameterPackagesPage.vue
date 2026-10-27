@@ -52,6 +52,7 @@ const previewIsCurrent = computed(() => !!preview.value && previewSignature.valu
 const canManageParameters = computed(() => session.user?.roles.some(role => role === 'ENERGY_MANAGER' || role === 'PLATFORM_ADMIN') === true)
 const canImport = computed(() => canManageParameters.value && !!preview.value?.readyForImport && previewIsCurrent.value && !packages.saving.value)
 const denominatorUnit = computed(() => denominatorDraft.value.denominatorType === 'BUILDING_AREA' ? 'M2' : 'PERSON')
+const denominatorUnitLabel = computed(() => unitLabel(denominatorUnit.value))
 const approvedVersionOptions = computed(() => (catalog.value?.existingVersions ?? []).filter(version => version.status === 'APPROVED'))
 const standardCoalOptions = computed(() => approvedVersionOptions.value.filter(version => version.domain === 'STANDARD_COAL'))
 const formulaOptions = computed(() => approvedVersionOptions.value.filter(version => version.domain === 'CONVERSION_FORMULA'))
@@ -335,7 +336,7 @@ function catalogState(requirement: ParameterPackageCatalogRequirement): string {
 }
 
 function dependencyText(value: ParameterPackageVersionContext): string {
-  return `${value.code} ${copy.separator} ${value.status}`
+  return `${parameterContextName(value.code)} ${copy.separator} ${statusLabel(value.status)}`
 }
 
 function dependencySummary(values: ParameterPackageVersionContext[]): string {
@@ -343,7 +344,70 @@ function dependencySummary(values: ParameterPackageVersionContext[]): string {
 }
 
 function previewDependencySummary(values: Array<{ dependencyType: string, status: string, message: string }>): string {
-  return values.map(value => `${value.dependencyType} ${copy.separator} ${value.status}${value.message ? ` ${copy.separator} ${value.message}` : ''}`).join('；')
+  return values.map(value => `${dependencyName(value.dependencyType)} ${copy.separator} ${statusLabel(value.status)} ${dependencyAction(value.status)}`).join('；')
+}
+
+function mappedLabel(values: Readonly<Record<string, string>>, value: string, fallback: string): string {
+  return values[value] ?? fallback
+}
+
+function packageName(packageCode: string): string {
+  return mappedLabel(copy.parameters.packageNames, packageCode, copy.parameters.unknownItem)
+}
+
+function parameterItemName(itemCode: string): string {
+  return mappedLabel(copy.parameters.itemNames, itemCode, copy.parameters.unknownItem)
+}
+
+function parameterItemHint(itemCode: string): string {
+  return mappedLabel(copy.parameters.itemHints, itemCode, copy.parameters.unknownIssueAction)
+}
+
+function parameterContextName(code: string): string {
+  return copy.parameters.itemNames[code]
+    ?? copy.parameters.energyItemNames[code]
+    ?? copy.parameters.unitNames[code]
+    ?? copy.parameters.packageNames[code]
+    ?? copy.parameters.catalogTypeNames[code]
+    ?? copy.parameters.objectTypeNames[code]
+    ?? copy.parameters.unknownCatalogVersion
+}
+
+function catalogTypeName(value: string): string {
+  return mappedLabel(copy.parameters.catalogTypeNames, value, copy.parameters.unknownCatalogVersion)
+}
+
+function objectTypeName(value: string): string {
+  return mappedLabel(copy.parameters.objectTypeNames, value, copy.parameters.unknownCatalogVersion)
+}
+
+function statusLabel(value: string): string {
+  return mappedLabel(copy.parameters.statusNames, value, copy.parameters.unknownStatus)
+}
+
+function unitLabel(value: string): string {
+  return value.split(';').map(unit => mappedLabel(copy.parameters.unitNames, unit.trim(), copy.parameters.unknownUnit)).join('；')
+}
+
+function quantityText(value: string | number | null | undefined, unit: string): string {
+  if (value === null || value === undefined || value === '') return copy.parameters.unavailable
+  return `${value} ${unitLabel(unit)}`
+}
+
+function dependencyName(value: string): string {
+  return mappedLabel(copy.parameters.dependencyTypeNames, value, parameterContextName(value))
+}
+
+function dependencyAction(value: string): string {
+  return mappedLabel(copy.parameters.dependencyActions, value, copy.parameters.dependencyActions.default)
+}
+
+function issueActionText(value: ParameterPackageIssue): string {
+  return mappedLabel(copy.parameters.issueActions, value.code, copy.parameters.unknownIssueAction)
+}
+
+function denominatorTypeName(value: CarbonDenominatorVersion['denominatorType']): string {
+  return value === 'BUILDING_AREA' ? copy.parameters.buildingArea : copy.parameters.residentPopulation
 }
 
 function tagType(status: string): 'success' | 'warning' | 'danger' | 'info' {
@@ -403,9 +467,10 @@ function nullable(value: string | null): string | null {
       <ElCard shadow="never">
         <template #header><div class="card-heading"><div><h2>{{ copy.parameters.catalogTitle }}</h2><p>{{ copy.parameters.catalogHint }}</p></div></div></template>
         <ElTable v-if="catalogRequirementRows.length" :data="catalogRequirementRows" size="small">
-          <ElTableColumn prop="catalogType" :label="copy.parameters.catalogType" min-width="150" />
-          <ElTableColumn prop="requiredCode" :label="copy.parameters.requiredCode" min-width="190" />
+          <ElTableColumn :label="copy.parameters.catalogType" min-width="150"><template #default="{ row }">{{ catalogTypeName(catalogRequirement(row).catalogType) }}</template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.requiredCode" min-width="190"><template #default="{ row }">{{ parameterContextName(catalogRequirement(row).requiredCode) }}</template></ElTableColumn>
           <ElTableColumn :label="copy.parameters.catalogState" min-width="260"><template #default="{ row }"><ElTag :type="catalogRequirement(row).versions.some((item: ParameterPackageVersionContext) => item.status === 'APPROVED') ? 'success' : 'warning'">{{ catalogState(catalogRequirement(row)) }}</ElTag><small v-if="catalogRequirement(row).versions.length">{{ dependencySummary(catalogRequirement(row).versions) }}</small></template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.technicalDetails" min-width="150"><template #default="{ row }"><details class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><div>{{ copy.parameters.catalogCode }}{{ copy.fieldSeparator }}<code>{{ catalogRequirement(row).catalogType }}</code></div><div>{{ copy.parameters.itemCode }}{{ copy.fieldSeparator }}<code>{{ catalogRequirement(row).requiredCode }}</code></div><div v-for="version in catalogRequirement(row).versions" :key="version.versionId"><code>{{ version.code }} {{ copy.separator }} {{ version.versionId }} {{ copy.separator }} {{ version.status }}</code></div></details></template></ElTableColumn>
         </ElTable>
         <ElEmpty v-else :description="copy.parameters.catalogNoVersion" :image-size="44" />
       </ElCard>
@@ -416,13 +481,14 @@ function nullable(value: string | null): string | null {
         <ElForm label-position="top" class="parameter-form">
           <div class="form-grid">
             <ElFormItem :label="copy.parameters.package">
-              <ElSelect v-model="packageDraft.packageCode" clearable :placeholder="copy.parameters.packagePlaceholder" :disabled="packages.saving.value">
-                <ElOption v-for="definition in catalog.packages" :key="definition.packageCode" :value="definition.packageCode" :label="definition.packageName" />
+              <ElSelect v-model="packageDraft.packageCode" data-test="parameter-package" clearable :placeholder="copy.parameters.packagePlaceholder" :disabled="packages.saving.value">
+                <ElOption v-for="definition in catalog.packages" :key="definition.packageCode" :value="definition.packageCode" :label="packageName(definition.packageCode)" />
               </ElSelect>
+              <details v-if="packageDraft.packageCode" class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><code>{{ packageDraft.packageCode }}</code></details>
             </ElFormItem>
             <ElFormItem :label="copy.parameters.items" class="wide-field">
               <ElCheckboxGroup v-model="packageDraft.itemCodes" :disabled="!selectedPackage || packages.saving.value">
-                <ElCheckbox v-for="item in selectedPackage?.items ?? []" :key="item.itemCode" :label="item.itemCode">{{ item.itemName }}</ElCheckbox>
+                <ElCheckbox v-for="item in selectedPackage?.items ?? []" :key="item.itemCode" :label="item.itemCode">{{ parameterItemName(item.itemCode) }}</ElCheckbox>
               </ElCheckboxGroup>
               <small>{{ copy.parameters.itemsHint }}</small>
             </ElFormItem>
@@ -473,10 +539,11 @@ function nullable(value: string | null): string | null {
           <section class="section-block">
             <h3>{{ copy.parameters.items }}</h3>
             <ElTable v-if="selectedPackage?.items.length" :data="selectedPackage.items" size="small">
-              <ElTableColumn prop="itemName" :label="copy.parameters.items" min-width="200" />
-              <ElTableColumn :label="copy.parameters.normalizedValue" min-width="130"><template #default="{ row }">{{ row.normalizedValue ?? '-' }}</template></ElTableColumn>
-              <ElTableColumn prop="normalizedUnit" :label="copy.parameters.normalizedUnit" min-width="160" />
-              <ElTableColumn :label="copy.parameters.requiredInputs" min-width="260"><template #default="{ row }">{{ row.requiredInputs.join('；') }}</template></ElTableColumn>
+              <ElTableColumn :label="copy.parameters.items" min-width="200"><template #default="{ row }">{{ parameterItemName(row.itemCode) }}</template></ElTableColumn>
+              <ElTableColumn :label="copy.parameters.sourceValue" min-width="220"><template #default="{ row }">{{ quantityText(row.sourceValue, row.sourceUnit) }}</template></ElTableColumn>
+              <ElTableColumn :label="copy.parameters.normalizedValue" min-width="220"><template #default="{ row }">{{ quantityText(row.normalizedValue, row.normalizedUnit) }}</template></ElTableColumn>
+              <ElTableColumn :label="copy.parameters.processingHint" min-width="300"><template #default="{ row }">{{ parameterItemHint(row.itemCode) }}</template></ElTableColumn>
+              <ElTableColumn :label="copy.parameters.technicalDetails" min-width="180"><template #default="{ row }"><details class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><div>{{ copy.parameters.itemCode }}{{ copy.fieldSeparator }}<code>{{ row.itemCode }}</code></div><div>{{ copy.parameters.unitCode }}{{ copy.fieldSeparator }}<code>{{ row.sourceUnit }} {{ copy.conversionArrow }} {{ row.normalizedUnit }}</code></div><div>{{ copy.parameters.requiredInputs }}{{ copy.fieldSeparator }}<code>{{ row.requiredInputs.join('；') }}</code></div></details></template></ElTableColumn>
             </ElTable>
           </section>
         </ElForm>
@@ -488,20 +555,20 @@ function nullable(value: string | null): string | null {
       <ElCard v-if="canManageParameters && preview && previewIsCurrent" shadow="never">
         <template #header><div class="card-heading"><div><h2>{{ copy.parameters.previewTitle }}</h2></div><ElTag :type="preview.readyForImport ? 'success' : 'warning'">{{ preview.readyForImport ? copy.parameters.previewReady : copy.parameters.previewBlocked }}</ElTag></div></template>
         <ElTable v-if="preview.items.length" :data="preview.items" size="small">
-          <ElTableColumn prop="itemCode" :label="copy.parameters.items" min-width="180" />
-          <ElTableColumn prop="normalizedValue" :label="copy.parameters.normalizedValue" min-width="130" />
-          <ElTableColumn prop="normalizedUnit" :label="copy.parameters.normalizedUnit" min-width="160" />
-          <ElTableColumn :label="copy.parameters.dependencies" min-width="280"><template #default="{ row }">{{ previewDependencySummary(row.dependencies) }}</template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.items" min-width="200"><template #default="{ row }">{{ parameterItemName(row.itemCode) }}</template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.normalizedValue" min-width="220"><template #default="{ row }">{{ quantityText(row.normalizedValue, row.normalizedUnit) }}</template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.dependencies" min-width="300"><template #default="{ row }"><span data-test="preview-dependencies">{{ previewDependencySummary(row.dependencies) }}</span></template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.technicalDetails" min-width="180"><template #default="{ row }"><details data-test="preview-dependency-technical" class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><div>{{ copy.parameters.itemCode }}{{ copy.fieldSeparator }}<code>{{ row.itemCode }}</code></div><div>{{ copy.parameters.unitCode }}{{ copy.fieldSeparator }}<code>{{ row.normalizedUnit }}</code></div><div v-for="dependency in row.dependencies" :key="dependency.dependencyType"><code>{{ dependency.dependencyType }} {{ copy.separator }} {{ dependency.status }} {{ copy.separator }} {{ dependency.versionId ?? copy.parameters.unavailable }}</code><div>{{ copy.parameters.serverMessage }}{{ copy.fieldSeparator }}<code>{{ dependency.message || copy.parameters.unavailable }}</code></div></div></details></template></ElTableColumn>
         </ElTable>
-        <ElTable v-if="preview.issues.length" :data="preview.issues" size="small"><ElTableColumn :label="copy.parameters.status" min-width="110"><template #default="{ row }"><ElTag :type="issueTagType(parameterPackageIssue(row))">{{ parameterPackageIssue(row).severity }}</ElTag></template></ElTableColumn><ElTableColumn prop="code" :label="copy.parameters.issues" min-width="180" /><ElTableColumn prop="itemCode" :label="copy.parameters.items" min-width="170" /><ElTableColumn prop="message" :label="copy.parameters.previewTitle" min-width="300" /></ElTable>
+        <ElTable v-if="preview.issues.length" :data="preview.issues" size="small"><ElTableColumn :label="copy.parameters.status" min-width="120"><template #default="{ row }"><ElTag :type="issueTagType(parameterPackageIssue(row))">{{ statusLabel(parameterPackageIssue(row).severity) }}</ElTag></template></ElTableColumn><ElTableColumn :label="copy.parameters.items" min-width="190"><template #default="{ row }">{{ parameterPackageIssue(row).itemCode ? parameterItemName(parameterPackageIssue(row).itemCode ?? '') : copy.parameters.generalIssue }}</template></ElTableColumn><ElTableColumn :label="copy.parameters.issues" min-width="340"><template #default="{ row }"><span data-test="preview-issue-action">{{ issueActionText(parameterPackageIssue(row)) }}</span></template></ElTableColumn><ElTableColumn :label="copy.parameters.technicalDetails" min-width="160"><template #default="{ row }"><details data-test="preview-issue-technical" class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><div>{{ copy.parameters.itemCode }}{{ copy.fieldSeparator }}<code>{{ parameterPackageIssue(row).itemCode ?? copy.parameters.unavailable }}</code></div><div><code>{{ parameterPackageIssue(row).code }}</code></div><div>{{ copy.parameters.serverMessage }}{{ copy.fieldSeparator }}<code>{{ parameterPackageIssue(row).message || copy.parameters.unavailable }}</code></div></details></template></ElTableColumn></ElTable>
         <ElAlert v-else type="success" :title="copy.parameters.noIssues" :closable="false" show-icon />
       </ElCard>
 
       <ElCard v-if="canManageParameters && importResult" shadow="never">
-        <template #header><div class="card-heading"><div><h2>{{ copy.parameters.importTitle }}</h2></div><ElTag :type="tagType(importResult.completionStatus)">{{ importResult.completionStatus }}</ElTag></div></template>
+        <template #header><div class="card-heading"><div><h2>{{ copy.parameters.importTitle }}</h2></div><ElTag :type="tagType(importResult.completionStatus)">{{ statusLabel(importResult.completionStatus) }}</ElTag></div></template>
         <ElAlert v-if="importResult.awaitingIndependentReview" type="warning" :title="copy.parameters.awaitingReview" :closable="false" show-icon />
-        <ElTable v-if="importResult.created.length" :data="importResult.created" size="small"><ElTableColumn prop="itemCode" :label="copy.parameters.items" min-width="180" /><ElTableColumn prop="objectType" :label="copy.parameters.objectType" min-width="180" /><ElTableColumn :label="copy.parameters.status" min-width="150"><template #default="{ row }"><ElTag :type="tagType(row.status)">{{ row.status }}</ElTag></template></ElTableColumn></ElTable>
-        <ElTable v-if="importResult.notices.length" :data="importResult.notices" size="small"><ElTableColumn prop="code" :label="copy.parameters.notices" min-width="180" /><ElTableColumn prop="message" :label="copy.parameters.importTitle" min-width="300" /></ElTable>
+        <ElTable v-if="importResult.created.length" :data="importResult.created" size="small"><ElTableColumn :label="copy.parameters.items" min-width="200"><template #default="{ row }">{{ parameterItemName(row.itemCode) }}</template></ElTableColumn><ElTableColumn :label="copy.parameters.objectType" min-width="180"><template #default="{ row }">{{ objectTypeName(row.objectType) }}</template></ElTableColumn><ElTableColumn :label="copy.parameters.status" min-width="150"><template #default="{ row }"><ElTag :type="tagType(row.status)">{{ statusLabel(row.status) }}</ElTag></template></ElTableColumn><ElTableColumn :label="copy.parameters.technicalDetails" min-width="180"><template #default="{ row }"><details class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><div>{{ copy.parameters.itemCode }}{{ copy.fieldSeparator }}<code>{{ row.itemCode }}</code></div><div><code>{{ row.objectType }} {{ copy.separator }} {{ row.versionId }} {{ copy.separator }} {{ row.status }}</code></div><div v-if="row.dependencyVersionIds.length"><code>{{ row.dependencyVersionIds.join('；') }}</code></div></details></template></ElTableColumn></ElTable>
+        <ElTable v-if="importResult.notices.length" :data="importResult.notices" size="small"><ElTableColumn :label="copy.parameters.notices" min-width="340"><template #default="{ row }">{{ issueActionText(parameterPackageIssue(row)) }}</template></ElTableColumn><ElTableColumn :label="copy.parameters.technicalDetails" min-width="160"><template #default="{ row }"><details class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><div><code>{{ row.code }}</code></div><div>{{ copy.parameters.serverMessage }}{{ copy.fieldSeparator }}<code>{{ row.message || copy.parameters.unavailable }}</code></div></details></template></ElTableColumn></ElTable>
       </ElCard>
 
       <ElCard shadow="never">
@@ -510,7 +577,7 @@ function nullable(value: string | null): string | null {
           <div class="form-grid">
             <ElFormItem :label="copy.parameters.denominatorType"><ElSelect v-model="denominatorDraft.denominatorType" :disabled="denominatorsSaving"><ElOption value="BUILDING_AREA" :label="copy.parameters.buildingArea" /><ElOption value="RESIDENT_POPULATION" :label="copy.parameters.residentPopulation" /></ElSelect></ElFormItem>
             <ElFormItem :label="copy.parameters.value"><ElInput v-model="denominatorDraft.value" inputmode="decimal" :disabled="denominatorsSaving" /></ElFormItem>
-            <ElFormItem :label="copy.parameters.unit"><ElInput :model-value="denominatorUnit" disabled /></ElFormItem>
+            <ElFormItem :label="copy.parameters.unit"><ElInput :model-value="denominatorUnitLabel" disabled /><details class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><code>{{ denominatorUnit }}</code></details></ElFormItem>
             <ElFormItem :label="copy.parameters.usageNature"><ElInput :model-value="copy.parameters.usage.FORMAL" disabled /></ElFormItem>
             <ElFormItem :label="copy.parameters.effectiveFrom"><ElDatePicker v-model="denominatorDraft.effectiveFrom" type="date" value-format="YYYY-MM-DD" :disabled="denominatorsSaving" /></ElFormItem>
             <ElFormItem :label="copy.parameters.effectiveTo"><ElDatePicker v-model="denominatorDraft.effectiveTo" type="date" value-format="YYYY-MM-DD" :disabled="denominatorsSaving" /></ElFormItem>
@@ -522,11 +589,11 @@ function nullable(value: string | null): string | null {
         <ElAlert type="info" :title="copy.parameters.roleHint" :closable="false" show-icon />
         <ElFormItem v-if="canManageParameters && denominators.some(item => item.status === 'PENDING_REVIEW')" :label="copy.parameters.reviewComment" class="review-comment"><ElInput v-model="denominatorReviewComment" type="textarea" :maxlength="500" show-word-limit :disabled="denominatorsSaving" /></ElFormItem>
         <ElTable v-if="denominators.length" v-loading="denominatorsLoading" data-test="denominator-list" :data="denominators" size="small">
-          <ElTableColumn :label="copy.parameters.denominatorType" min-width="150"><template #default="{ row }">{{ row.denominatorType === 'BUILDING_AREA' ? copy.parameters.buildingArea : copy.parameters.residentPopulation }}</template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.denominatorType" min-width="150"><template #default="{ row }">{{ denominatorTypeName(denominatorVersion(row).denominatorType) }}</template></ElTableColumn>
           <ElTableColumn prop="value" :label="copy.parameters.value" min-width="120" />
-          <ElTableColumn prop="unitCode" :label="copy.parameters.unit" min-width="100" />
+          <ElTableColumn :label="copy.parameters.unit" min-width="180"><template #default="{ row }">{{ unitLabel(denominatorVersion(row).unitCode) }}<details class="technical-details"><summary>{{ copy.parameters.technicalDetails }}</summary><code>{{ denominatorVersion(row).unitCode }} {{ copy.separator }} {{ denominatorVersion(row).denominatorVersionId }}</code></details></template></ElTableColumn>
           <ElTableColumn prop="effectiveFrom" :label="copy.parameters.effectiveFrom" min-width="130" />
-          <ElTableColumn :label="copy.parameters.status" min-width="130"><template #default="{ row }"><ElTag :type="tagType(row.status)">{{ row.status }}</ElTag></template></ElTableColumn>
+          <ElTableColumn :label="copy.parameters.status" min-width="130"><template #default="{ row }"><ElTag :type="tagType(row.status)">{{ statusLabel(row.status) }}</ElTag></template></ElTableColumn>
           <ElTableColumn v-if="canManageParameters" min-width="230" fixed="right"><template #default="{ row }"><ElSpace wrap><ElButton v-if="denominatorVersion(row).status === 'PENDING_REVIEW'" data-test="denominator-review" link type="success" :disabled="denominatorsSaving" @click="reviewDenominator(denominatorVersion(row), true)">{{ copy.parameters.review }}</ElButton><ElButton v-if="denominatorVersion(row).status === 'PENDING_REVIEW'" data-test="denominator-reject" link type="danger" :disabled="denominatorsSaving" @click="reviewDenominator(denominatorVersion(row), false)">{{ copy.parameters.reject }}</ElButton><ElButton v-if="denominatorVersion(row).status === 'APPROVED'" data-test="denominator-activate" link type="primary" :disabled="denominatorsSaving" @click="activateDenominator(denominatorVersion(row))">{{ copy.parameters.activate }}</ElButton></ElSpace></template></ElTableColumn>
         </ElTable>
         <ElEmpty v-else :description="copy.parameters.denominatorEmpty" :image-size="44" />
@@ -547,4 +614,7 @@ function nullable(value: string | null): string | null {
 .wide-field { grid-column: 1 / -1; }
 .section-block { padding-top: var(--bec-space-section); border-top: var(--bec-border-width) solid var(--bec-color-border); }
 .actions, .review-comment { margin-top: var(--bec-space-section); }
+.technical-details { margin-top: var(--bec-space-tight); color: var(--bec-color-text-secondary); }
+.technical-details summary { cursor: pointer; }
+.technical-details div { margin-top: var(--bec-space-tight); overflow-wrap: anywhere; }
 </style>

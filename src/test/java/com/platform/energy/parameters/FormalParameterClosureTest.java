@@ -102,6 +102,166 @@ class FormalParameterClosureTest {
     }
 
     @Test
+    @Order(-2)
+    void importsAndReviewsOfficialElectricityCalorificFactorWithoutReplacingHeatBasedHistory() {
+        units();
+        item("ELECTRICITY", "ELECTRICITY", "PURCHASED_ELECTRICITY");
+        var formulaRequest = electricityConversionRequest("ELECTRICITY_CALORIFIC_TCE_FORMULA", "official-formula");
+        var parameterRequest = electricityConversionRequest("ELECTRICITY_CALORIFIC_TCE_PARAMETER", "official-parameter");
+        var pendingFormula = packages.importPackage(AUTHOR, ROLES, formulaRequest);
+        String formulaId = id(pendingFormula, "ELECTRICITY_CALORIFIC_TCE_FORMULA");
+        assertThat(pendingFormula.created().getFirst().status()).isEqualTo("PENDING_EXPERT");
+        assertThat(packages.preview(AUTHOR, ROLES, parameterRequest).issues())
+                .anyMatch(issue -> "ELECTRICITY_CALORIFIC_FORMULA_NOT_UNIQUE".equals(issue.code()));
+        assertThatThrownBy(() -> conversion.approveFormula(AUTHOR, ROLES, formulaId, approval()))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        failure -> assertThat(failure.getErrorCode()).isEqualTo("BACKOFFICE_SELF_APPROVAL_DENIED"));
+        conversion.approveFormula(REVIEWER, ROLES, formulaId, approval());
+        assertThat(packages.preview(AUTHOR, ROLES, parameterRequest).readyForImport()).isTrue();
+        var imported = packages.importPackage(AUTHOR, ROLES, parameterRequest);
+        String parameterId = id(imported, "ELECTRICITY_CALORIFIC_TCE_PARAMETER");
+        assertThat(imported.created().getFirst().status()).isEqualTo("PENDING_EXPERT");
+        assertThat(id(packages.importPackage(AUTHOR, ROLES, parameterRequest), "ELECTRICITY_CALORIFIC_TCE_PARAMETER"))
+                .isEqualTo(parameterId);
+        var input = new EnergyConversionContracts.SimulationRequest(BUILDING, "ELECTRICITY", new BigDecimal("1000"),
+                "KWH", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "PURCHASED_ELECTRICITY", "GLOBAL", at(2026));
+        assertThatThrownBy(() -> conversion.evaluateFormalRules(AUTHOR, ROLES, input, at(2027)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("没有适用");
+        conversion.approveParameter(REVIEWER, ROLES, parameterId, approval());
+        var result = conversion.evaluateFormalRules(AUTHOR, ROLES, input, at(2027));
+        assertThat(result.tce()).isEqualByComparingTo("0.1229");
+        assertThat(result.parameterVersionId()).isEqualTo(parameterId);
+        assertThat(result.formulaVersionId()).isEqualTo(formulaId);
+        assertThat(result.standardCoalVersionId()).isNull();
+        var mwh = new EnergyConversionContracts.SimulationRequest(BUILDING, "ELECTRICITY", BigDecimal.ONE,
+                "MWH", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "PURCHASED_ELECTRICITY", "GLOBAL", at(2026));
+        assertThat(conversion.evaluateFormalRules(AUTHOR, ROLES, mwh, at(2027)).tce())
+                .isEqualByComparingTo("0.1229");
+        var parameter = conversion.listParameterVersions(ROLES).stream()
+                .filter(value -> parameterId.equals(value.versionId())).findFirst().orElseThrow();
+        assertThat(parameter.parameterValue()).isEqualByComparingTo("0.0001229");
+        assertThat(parameter.usageScope()).isEqualTo("PRODUCTION");
+        assertThat(parameter.sourceReference()).contains("stats.gov.cn", "2025-12-22");
+        var old = conversion.listParameterVersions(ROLES).stream()
+                .filter(value -> "ECPV_ELECTRICITY_CAL_1".equals(value.versionId())).findFirst().orElseThrow();
+        assertThat(old.status()).isEqualTo("PENDING_EXPERT");
+        assertThat(old.parameterValue()).isEqualByComparingTo("3.6");
+        var month = LocalDate.of(2026, 1, 1);
+        var config = new ReportingContracts.SourceConfig("隔离测试电力当量账单", "ELECTRICITY", "KWH", "BILL",
+                "PURCHASED_ELECTRICITY", "PRIMARY", "WHOLE_BUILDING", "NO_METER", "Asia/Shanghai", month,
+                month.plusMonths(1), "仅合成原生用量凭证，不代表现场", "核对官方当量折标",
+                "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "GLOBAL", null);
+        var source = reporting.createSource(AUTHOR, ROLES, BUILDING, new ReportingContracts.CreateSource(config, "electricity-source"));
+        reporting.sourceCommand(AUTHOR, ROLES, BUILDING, source.sourceId(), "submit", command(0, "electricity-source-submit"));
+        source = reporting.sourceCommand(REVIEWER, ROLES, BUILDING, source.sourceId(), "approve", command(1, "electricity-source-review"));
+        var batch = reporting.createBatch(AUTHOR, ROLES, BUILDING, new ReportingContracts.CreateBatch(month, "官方电力当量隔离验收", "electricity-batch", null));
+        var row = new ReportingContracts.Row(source.sourceId(), source.revision(), new BigDecimal("1000"), "CONFIRMED",
+                month, month.plusMonths(1), "隔离测试原生账单", null, new BigDecimal("100"), "仅碳排除测试",
+                "隔离排除凭证", "NATIVE_QUANTITY");
+        reporting.saveBatch(AUTHOR, ROLES, BUILDING, batch.batchId(), new ReportingContracts.SaveBatch(0L, List.of(row), "核对折标与碳排除独立"));
+        assertThat(reporting.preview(AUTHOR, ROLES, BUILDING, batch.batchId()).tceStatus()).isEqualTo("COMPLETE");
+        reporting.batchCommand(AUTHOR, ROLES, BUILDING, batch.batchId(), "submit", command(1, "electricity-submit"));
+        reporting.batchCommand(REVIEWER, ROLES, BUILDING, batch.batchId(), "approve", command(2, "electricity-review"));
+        var sealed = reporting.batchCommand(REVIEWER, ROLES, BUILDING, batch.batchId(), "seal", command(3, "electricity-seal"));
+        assertThat(sealed.snapshot().nativeStatus()).isEqualTo("COMPLETE");
+        assertThat(sealed.snapshot().tceStatus()).isEqualTo("COMPLETE");
+        assertThat(sealed.snapshot().rows()).singleElement().satisfies(value -> {
+            assertThat(value.nativeQuantity()).isEqualByComparingTo("1000");
+            assertThat(value.tce()).isEqualByComparingTo("0.1229");
+            assertThat(value.conversionEvidence().toString()).contains(parameterId, formulaId, "stats.gov.cn");
+        });
+        assertThatThrownBy(() -> conversion.evaluateFormalRules(AUTHOR, ROLES, input, at(2027).plusDays(1)))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        failure -> assertThat(failure.getErrorCode()).isEqualTo("ENERGY_CONVERSION_REFERENCE_VERSION_CONFLICT"));
+        var wrongUnit = new EnergyConversionContracts.SimulationRequest(BUILDING, "ELECTRICITY", BigDecimal.ONE,
+                "KG", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "PURCHASED_ELECTRICITY", "GLOBAL", at(2026));
+        assertThatThrownBy(() -> conversion.evaluateFormalRules(AUTHOR, ROLES, wrongUnit, at(2027)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("单位");
+        assertThat(packages.preview(AUTHOR, ROLES,
+                electricityConversionRequest("ELECTRICITY_CALORIFIC_TCE_PARAMETER", "duplicate-parameter")).issues())
+                .anyMatch(issue -> "EXISTING_PARAMETER_CONFLICT".equals(issue.code()));
+    }
+
+    @Test
+    @Order(-1)
+    void refusesElectricityConversionWithMissingUnitsWrongScopeOrConflictingFormulaVersions() {
+        var formulaRequest = electricityConversionRequest("ELECTRICITY_CALORIFIC_TCE_FORMULA", "missing-units");
+        assertThat(packages.preview(AUTHOR, ROLES, formulaRequest).issues())
+                .anyMatch(issue -> "REQUIRED_UNIT_NOT_APPROVED".equals(issue.code()));
+        units();
+        item("ELECTRICITY", "ELECTRICITY", "PURCHASED_HEAT");
+        var parameterRequest = electricityConversionRequest("ELECTRICITY_CALORIFIC_TCE_PARAMETER", "scope-error");
+        assertThat(packages.preview(AUTHOR, ROLES, parameterRequest).issues())
+                .anyMatch(issue -> "ELECTRICITY_ENERGY_ITEM_NOT_APPROVED".equals(issue.code()));
+        String formulaId = id(packages.importPackage(AUTHOR, ROLES, formulaRequest), "ELECTRICITY_CALORIFIC_TCE_FORMULA");
+        conversion.approveFormula(REVIEWER, ROLES, formulaId, approval());
+        var duplicate = conversion.createFormulaVersion(AUTHOR, ROLES, new EnergyConversionContracts.CreateFormulaVersionRequest(
+                "ELECTRICITY_CALORIFIC_TCE", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "KWH", "TCE", "TCE_PER_INPUT_UNIT", "STANDARD", "独立测试月中短期版本", at(2026).plusDays(10), at(2026).plusDays(20)));
+        conversion.approveFormula(REVIEWER, ROLES, duplicate.versionId(), approval());
+        var overlapping = new PackageRequest("B01", List.of("ELECTRICITY_CALORIFIC_TCE_PARAMETER"), parameterRequest.source(),
+                at(2026), TO, null, null, null, "formula-conflict");
+        assertThat(packages.preview(AUTHOR, ROLES, overlapping).issues())
+                .anyMatch(issue -> "ELECTRICITY_CALORIFIC_FORMULA_NOT_UNIQUE".equals(issue.code()));
+        assertThatThrownBy(() -> packages.importPackage(AUTHOR, ROLES, overlapping))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        failure -> assertThat(failure.getErrorCode()).isEqualTo("ENERGY_PARAMETER_PACKAGE_PREVIEW_BLOCKED"));
+    }
+
+    private PackageRequest electricityConversionRequest(String itemCode, String key) {
+        var source = new SourceMetadataRequest("NBS_ELECTRICITY_CONSUMPTION_2025", "企业电力消费当量折标系数",
+                "国家统计局能源统计司", "国家统计局能源统计司咨询答复", "2025-12-22答复", 2025,
+                null, "电力消费按当量值折标；本项目明确采用，不覆盖旧口径",
+                "https://www.stats.gov.cn/hd/lyzx/zxgk/202601/t20260109_1962280.html", "STANDARD");
+        return new PackageRequest("B01", List.of(itemCode), source, at(2026), at(2027), null, null, null, key);
+    }
+
+    @Test
+    @Order(0)
+    void reviewsExplicitJiangsu2026SelectionWithoutDerivingAccountingYearFromDataYear() {
+        // 用户明确的项目选用映射只在隔离建筑演练，不改通用目录的既有年度映射或真实楼宇。
+        jdbc.update("UPDATE building SET region_code='320000' WHERE building_id=?", BUILDING);
+        String document = "https://www.mee.gov.cn/xxgk2018/xxgk/xxgk01/202512/t20251231_1139517.html";
+        var source = carbon.createSource(AUTHOR, ROLES, new CarbonContracts.CreateFactorSourceRequest(
+                "CXG_JS_2026_SELECTION", "2023年电力二氧化碳排放因子", "生态环境部、国家统计局",
+                "公告2025年第47号", 2025, LocalDate.of(2025, 12, 31),
+                "用户明确本项目2026核算年采用江苏2023数据年0.5827；不是全国统一要求，不按年份偏移推算。",
+                document + "；用户明确的2026项目选用规则", "FORMAL"));
+        var pending = carbon.createFactor(AUTHOR, ROLES, new CarbonContracts.CreateFactorVersionRequest(
+                "CXG_JS_ELECTRICITY_CO2_2026", "SCOPE_2", "ELECTRICITY", "PURCHASED_ELECTRICITY_LOCATION",
+                "GAS_MASS", "CO2", "CO2_ONLY_ELECTRICITY", source.sourceVersionId(), "PROVINCE",
+                null, "320000", "KWH", null, "FORMAL", at(2026), at(2027),
+                "CFV_ELECTRICITY_CO2_V1", "CRP_DECIMAL128_V1",
+                List.of(new CarbonContracts.FactorComponentRequest("DIRECT_EMISSION_FACTOR", new BigDecimal("0.5827"),
+                        "KG_CO2/KWH", source.sourceVersionId(), document)), 2023, 2026));
+        var input = activity("ELECTRICITY", "1000", "KWH", 2026);
+        assertThat(pending.status()).isEqualTo(LifecycleStatus.PENDING_REVIEW);
+        assertThatThrownBy(() -> core.match(input, "320000", ResultNature.FORMAL, List.of(pending)))
+                .isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> carbon.reviewFactor(AUTHOR, ROLES, pending.factorVersionId(),
+                new CarbonContracts.ReviewRequest(0, true, "不能自审")))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        failure -> assertThat(failure.getErrorCode()).isEqualTo("BACKOFFICE_SELF_APPROVAL_DENIED"));
+        var reviewed = carbon.reviewFactor(REVIEWER, ROLES, pending.factorVersionId(),
+                new CarbonContracts.ReviewRequest(0, true, "独立核对明确项目选用年、地区、来源及数值"));
+        var factor = carbon.activateFactor(REVIEWER, ROLES, reviewed.factorVersionId(),
+                new CarbonContracts.LifecycleRequest(reviewed.configRevision()));
+        var result = core.calculate(input, core.match(input, "320000", ResultNature.FORMAL, List.of(factor)), gwp());
+        assertThat(result.exactEmissionKgCo2e()).isEqualByComparingTo("582.7");
+        var mwhInput = activity("ELECTRICITY", "1", "MWH", 2026);
+        assertThat(core.calculate(mwhInput, core.match(mwhInput, "320000", ResultNature.FORMAL, List.of(factor)), gwp())
+                .exactEmissionKgCo2e()).isEqualByComparingTo("582.7");
+        assertThat(result.factor().dataYear()).isEqualTo(2023);
+        assertThat(result.factor().accountingYear()).isEqualTo(2026);
+        assertThat(result.factor().sourceVersionId()).isEqualTo(source.sourceVersionId());
+        assertThat(source.publishedOn()).isEqualTo(LocalDate.of(2025, 12, 31));
+        assertThatThrownBy(() -> core.match(activity("ELECTRICITY", "1000", "KWH", 2025),
+                "320000", ResultNature.FORMAL, List.of(factor))).isInstanceOf(BusinessException.class);
+        assertThatThrownBy(() -> core.match(input, "420000", ResultNature.FORMAL, List.of(factor)))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
     @Order(1)
     void importsReviewsAndEvaluatesB01WithoutPromotingDevelopmentSeeds() {
         units();

@@ -59,6 +59,8 @@ public class EnergyParameterPackageService {
     public static final String NATURAL_GAS_LHV_PARAMETER = "NATURAL_GAS_LHV_PARAMETER";
     public static final String RAW_COAL_DIRECT_TCE_FORMULA = "RAW_COAL_DIRECT_TCE_FORMULA";
     public static final String RAW_COAL_DIRECT_TCE_PARAMETER = "RAW_COAL_DIRECT_TCE_PARAMETER";
+    public static final String ELECTRICITY_CALORIFIC_TCE_FORMULA = "ELECTRICITY_CALORIFIC_TCE_FORMULA";
+    public static final String ELECTRICITY_CALORIFIC_TCE_PARAMETER = "ELECTRICITY_CALORIFIC_TCE_PARAMETER";
     public static final String NATURAL_GAS_STATIONARY_FACTOR = "NATURAL_GAS_STATIONARY_FACTOR";
     public static final String ELECTRICITY_FACTOR = "ELECTRICITY_FACTOR";
     public static final String HUBEI_ELECTRICITY_FACTOR_2021 = "HUBEI_ELECTRICITY_FACTOR_2021";
@@ -69,6 +71,9 @@ public class EnergyParameterPackageService {
     private static final BigDecimal STANDARD_COAL_GJ_PER_TCE = new BigDecimal("29.3076");
     private static final BigDecimal NATURAL_GAS_GJ_PER_TEN_THOUSAND_NM3 = new BigDecimal("389.31");
     private static final BigDecimal RAW_COAL_TCE_PER_KG = new BigDecimal("0.0007143");
+    // 直接采用当量折标系数，不通过标准煤热值反推，以免改变已给定的 0.1229 kgce/kWh 口径。
+    private static final BigDecimal ELECTRICITY_CALORIFIC_TCE_PER_KWH = new BigDecimal("0.0001229");
+    private static final String ELECTRICITY_CALORIFIC_FORMULA_CODE = "ELECTRICITY_CALORIFIC_TCE";
     private static final BigDecimal NATURAL_GAS_MJ_PER_NM3 = new BigDecimal("38.931");
     private static final BigDecimal NATURAL_GAS_KG_C_PER_MJ = new BigDecimal("0.0153");
     private static final BigDecimal NATURAL_GAS_OXIDATION_RATE = new BigDecimal("0.99");
@@ -205,6 +210,27 @@ public class EnergyParameterPackageService {
                 }
                 case NATURAL_GAS_LHV_PARAMETER -> created.add(importNaturalGasLhvParameter(userId, roles, request));
                 case RAW_COAL_DIRECT_TCE_PARAMETER -> created.add(importRawCoalParameter(userId, roles, request));
+                case ELECTRICITY_CALORIFIC_TCE_FORMULA -> {
+                    FormulaVersionView value = conversionService.createFormulaVersion(userId, roles,
+                            new CreateFormulaVersionRequest(ELECTRICITY_CALORIFIC_FORMULA_CODE, "DIRECT_TCE_FACTOR",
+                                    "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1", "KWH", "TCE",
+                                    "TCE_PER_INPUT_UNIT", conversionSourceType(request), sourceReference(request),
+                                    request.effectiveFrom(), request.effectiveTo()));
+                    created.add(created(itemCode, "CONVERSION_FORMULA", value.versionId(), value.status(), List.of()));
+                }
+                case ELECTRICITY_CALORIFIC_TCE_PARAMETER -> {
+                    FormulaVersionView formula = electricityCalorificFormula(request,
+                            conversionService.listFormulaVersions(roles));
+                    if (formula == null) throw validation("请先建立并审核唯一适用的电力当量折标公式。");
+                    ParameterVersionView value = conversionService.createParameterVersion(userId, roles,
+                            new CreateParameterVersionRequest("ELECTRICITY_CALORIFIC_TCE_01229", "ELECTRICITY",
+                                    formula.versionId(), ELECTRICITY_CALORIFIC_TCE_PER_KWH,
+                                    "TCE_PER_INPUT_UNIT", null, "PURCHASED_ELECTRICITY", "GLOBAL", "PRODUCTION",
+                                    conversionSourceType(request), sourceReference(request), request.effectiveFrom(),
+                                    request.effectiveTo()));
+                    created.add(created(itemCode, "CONVERSION_PARAMETER", value.versionId(), value.status(),
+                            List.of(value.formulaVersionId())));
+                }
                 default -> throw validation("未知 B01 条目：" + itemCode);
             }
         }
@@ -305,12 +331,27 @@ public class EnergyParameterPackageService {
             case NATURAL_GAS_LHV_FORMULA -> requireUnits(itemCode, request, context, issues,
                     "TEN_THOUSAND_NM3", "TCE");
             case RAW_COAL_DIRECT_TCE_FORMULA -> requireUnits(itemCode, request, context, issues, "KG", "TCE");
+            case ELECTRICITY_CALORIFIC_TCE_FORMULA -> requireUnits(itemCode, request, context, issues, "KWH", "TCE");
+            case ELECTRICITY_CALORIFIC_TCE_PARAMETER -> {
+                requireUnits(itemCode, request, context, issues, "KWH", "TCE");
+                energyItemDependency(itemCode, "ELECTRICITY", "ELECTRICITY_ENERGY_ITEM_REQUIRED",
+                        "ELECTRICITY_ENERGY_ITEM_NOT_APPROVED", "电力能源品种", "PURCHASED_ELECTRICITY", request, context,
+                        dependencies, issues);
+                FormulaVersionView formula = electricityCalorificFormula(request, context.formulas());
+                if (formula == null) {
+                    issues.add(issue(itemCode, "BLOCKER", "ELECTRICITY_CALORIFIC_FORMULA_NOT_UNIQUE",
+                            "请先建立并审核覆盖适用期的电力当量折标公式；存在多个适用版本时，须先处理冲突。"));
+                }
+                dependencies.add(new DependencyView("CONVERSION_FORMULA", formula == null ? null : formula.versionId(),
+                        formula == null ? "MISSING_OR_CONFLICT" : "APPROVED", "电力当量折标公式"));
+                parameterConflict(itemCode, "ELECTRICITY_CALORIFIC_TCE_01229", request, context, issues);
+            }
             case NATURAL_GAS_LHV_PARAMETER -> {
                 dependencies.add(formulaDependency(itemCode, request, context, issues,
                         "naturalGasFormulaVersionId", "NATURAL_GAS_LHV_FORMULA"));
                 dependencies.add(standardCoalDependency(itemCode, request, context, issues));
                 energyItemDependency(itemCode, "NATURAL_GAS", "NATURAL_GAS_ENERGY_ITEM_REQUIRED",
-                        "NATURAL_GAS_ENERGY_ITEM_NOT_APPROVED", "天然气能源品种", request, context,
+                        "NATURAL_GAS_ENERGY_ITEM_NOT_APPROVED", "天然气能源品种", "STATIONARY_COMBUSTION", request, context,
                         dependencies, issues);
                 issues.add(issue(itemCode, "WARNING", "NATURAL_GAS_TCE_RANGE_NOT_AVERAGED",
                         "天然气 1.1–1.33 折标范围不能取中值；本条仅按给定低位热值创建候选参数。"));
@@ -327,6 +368,24 @@ public class EnergyParameterPackageService {
         }
         return itemPreview(itemCode, b01NormalizedValue(itemCode), b01NormalizedUnit(itemCode), dependencies, issues,
                 commonIssues.stream().anyMatch(value -> "BLOCKER".equals(value.severity())));
+    }
+
+    private static FormulaVersionView electricityCalorificFormula(PackageRequest request,
+                                                                   List<FormulaVersionView> formulas) {
+        // 自动引用前检查整个期间的相交版本，包含只在月中有效的冲突，不能默取最新或忽略短期版本。
+        List<FormulaVersionView> candidates = formulas.stream()
+                .filter(value -> ELECTRICITY_CALORIFIC_FORMULA_CODE.equals(value.formulaCode())
+                        && "APPROVED".equals(value.status())
+                        && overlaps(value.effectiveFrom(), value.effectiveTo(), request)).toList();
+        if (candidates.size() != 1) return null;
+        FormulaVersionView value = candidates.getFirst();
+        return "DIRECT_TCE_FACTOR".equals(value.method())
+                && "CALORIFIC_EQUIVALENT".equals(value.perspective())
+                && "DIRECT_TCE_FACTOR_V1".equals(value.algorithmCode())
+                && "KWH".equals(value.applicableInputUnitCode())
+                && "TCE".equals(value.resultUnitCode())
+                && "TCE_PER_INPUT_UNIT".equals(value.parameterUnit())
+                && covers(value.effectiveFrom(), value.effectiveTo(), request) ? value : null;
     }
 
     private ItemPreviewView previewB02Item(String itemCode, PackageRequest request, InspectionContext context,
@@ -463,22 +522,22 @@ public class EnergyParameterPackageService {
             return;
         }
         energyItemDependency(itemCode, RAW_COAL_ITEM_CODE, "RAW_COAL_ENERGY_ITEM_REQUIRED",
-                "RAW_COAL_ENERGY_ITEM_NOT_APPROVED", "RAW_COAL 能源品种", request, context, dependencies, issues);
+                "RAW_COAL_ENERGY_ITEM_NOT_APPROVED", "RAW_COAL 能源品种", "STATIONARY_COMBUSTION", request, context, dependencies, issues);
     }
 
     private void energyItemDependency(String itemCode, String code, String missingCode, String notApprovedCode,
-                                      String displayName, PackageRequest request, InspectionContext context,
+                                      String displayName, String consumptionScope, PackageRequest request, InspectionContext context,
                                       List<DependencyView> dependencies, List<IssueView> issues) {
         List<ItemVersionView> candidates = context.items().stream()
                 .filter(value -> normalized(code).equals(normalized(value.itemCode()))).toList();
         ItemVersionView value = candidates.stream().filter(candidate -> "APPROVED".equals(candidate.status())
                         && covers(candidate.effectiveFrom(), candidate.effectiveTo(), request)
-                        && candidate.usageScopes().contains("STATIONARY_COMBUSTION"))
+                        && candidate.usageScopes().contains(consumptionScope))
                 .findFirst().orElse(null);
         if (value == null) {
             String errorCode = candidates.isEmpty() ? missingCode : notApprovedCode;
             issues.add(issue(itemCode, "BLOCKER", errorCode,
-                    displayName + "必须存在覆盖适用期、适用于固定燃烧且已独立审核的版本。"));
+                    displayName + "必须存在覆盖适用期、符合能源使用范围且已独立审核的版本。"));
             dependencies.add(new DependencyView("ENERGY_ITEM", normalized(code), "MISSING", displayName));
             return;
         }
@@ -623,6 +682,7 @@ public class EnergyParameterPackageService {
             case STANDARD_COAL_LHV -> STANDARD_COAL_GJ_PER_TCE;
             case NATURAL_GAS_LHV_FORMULA, NATURAL_GAS_LHV_PARAMETER -> NATURAL_GAS_GJ_PER_TEN_THOUSAND_NM3;
             case RAW_COAL_DIRECT_TCE_FORMULA, RAW_COAL_DIRECT_TCE_PARAMETER -> RAW_COAL_TCE_PER_KG;
+            case ELECTRICITY_CALORIFIC_TCE_FORMULA, ELECTRICITY_CALORIFIC_TCE_PARAMETER -> ELECTRICITY_CALORIFIC_TCE_PER_KWH;
             default -> throw validation("未知 B01 条目：" + itemCode);
         };
     }
@@ -632,6 +692,7 @@ public class EnergyParameterPackageService {
             case STANDARD_COAL_LHV -> "GJ_PER_TCE";
             case NATURAL_GAS_LHV_FORMULA, NATURAL_GAS_LHV_PARAMETER -> "GJ_PER_TEN_THOUSAND_NM3";
             case RAW_COAL_DIRECT_TCE_FORMULA, RAW_COAL_DIRECT_TCE_PARAMETER -> "TCE_PER_KG";
+            case ELECTRICITY_CALORIFIC_TCE_FORMULA, ELECTRICITY_CALORIFIC_TCE_PARAMETER -> "TCE_PER_KWH";
             default -> throw validation("未知 B01 条目：" + itemCode);
         };
     }
@@ -690,7 +751,15 @@ public class EnergyParameterPackageService {
                         List.of("approved unit KG", "approved unit TCE")),
                 new PackageItemDefinitionView(RAW_COAL_DIRECT_TCE_PARAMETER, "原煤直接折标参数", "CONVERSION_PARAMETER",
                         new BigDecimal("0.7143"), "KGCE/KG", RAW_COAL_TCE_PER_KG, "TCE_PER_KG",
-                        List.of("dependencies.rawCoalEnergyItemCode=RAW_COAL", "dependencies.rawCoalFormulaVersionId"))));
+                        List.of("dependencies.rawCoalEnergyItemCode=RAW_COAL", "dependencies.rawCoalFormulaVersionId")),
+                new PackageItemDefinitionView(ELECTRICITY_CALORIFIC_TCE_FORMULA, "电力当量折标公式", "CONVERSION_FORMULA",
+                        new BigDecimal("0.1229"), "KGCE/KWH", ELECTRICITY_CALORIFIC_TCE_PER_KWH, "TCE_PER_KWH",
+                        List.of("approved unit KWH", "approved unit TCE",
+                                "source: https://www.stats.gov.cn/hd/lyzx/zxgk/202601/t20260109_1962280.html")),
+                new PackageItemDefinitionView(ELECTRICITY_CALORIFIC_TCE_PARAMETER, "电力当量折标参数", "CONVERSION_PARAMETER",
+                        new BigDecimal("0.1229"), "KGCE/KWH", ELECTRICITY_CALORIFIC_TCE_PER_KWH, "TCE_PER_KWH",
+                        List.of("approved energy item ELECTRICITY", "approved formula ELECTRICITY_CALORIFIC_TCE",
+                                "source metadata；仅创建待审核版本，项目选用单独记录，不覆盖历史口径"))));
     }
 
     private static PackageDefinitionView b02Definition() {
@@ -744,7 +813,7 @@ public class EnergyParameterPackageService {
             requirements.add(itemRequirement(code, items));
         }
         requirements.add(itemRequirement(RAW_COAL_ITEM_CODE, items));
-        for (String code : List.of("GJ", "TCE", "TEN_THOUSAND_NM3", "KG", "NM3", "MWH")) {
+        for (String code : List.of("GJ", "TCE", "TEN_THOUSAND_NM3", "KG", "T", "NM3", "KWH", "MWH")) {
             requirements.add(unitRequirement(code, units));
         }
         return List.copyOf(requirements);

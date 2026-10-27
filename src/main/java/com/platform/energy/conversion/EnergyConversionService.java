@@ -115,8 +115,8 @@ public class EnergyConversionService {
         ParameterUnit parameterUnit = parse(ParameterUnit.class, request.parameterUnit(), "参数单位无效");
         SourceType source = parse(SourceType.class, request.sourceType(), "来源类型无效");
         TimeRange range = range(request.effectiveFrom(), request.effectiveTo());
-        ApprovedUnit inputUnit = approvedUnit(code(request.applicableInputUnitCode(), "适用输入单位无效"), range.from());
-        ApprovedUnit resultUnit = approvedUnit(code(request.resultUnitCode(), "结果单位无效"), range.from());
+        ApprovedUnit inputUnit = approvedUnit(unitCode(request.applicableInputUnitCode(), "适用输入单位无效"), range.from());
+        ApprovedUnit resultUnit = approvedUnit(unitCode(request.resultUnitCode(), "结果单位无效"), range.from());
         validateFormula(method, perspective, algorithm, parameterUnit, inputUnit, resultUnit);
         LocalDateTime now = LocalDateTime.now();
         String formulaId = repository.findFormulaIdForUpdate(formulaCode);
@@ -284,7 +284,7 @@ public class EnergyConversionService {
         validateParameterReferences(parameter, new TimeRange(effectiveAt, effectiveAt.plusNanos(1)));
         BigDecimal quantity = nonNegative(request.quantity(), "活动量不能为负数");
         UnitConversion conversion = catalogLookup.convert(quantity,
-                        code(request.inputUnitCode(), "输入单位无效"), parameter.inputUnitCode(), effectiveAt)
+                        unitCode(request.inputUnitCode(), "输入单位无效"), parameter.inputUnitCode(), effectiveAt)
                 .orElseThrow(() -> EnergyConversionErrors.error(409,
                         EnergyConversionErrors.UNIT_INCOMPATIBLE, "输入单位不能换算到折标规则适用单位"));
         if (!Objects.equals(conversion.targetUnit().versionId(), parameter.inputUnitVersionId())) {
@@ -319,8 +319,8 @@ public class EnergyConversionService {
         TimeRange interval = range(request.effectiveAt(), endExclusive);
         if (endExclusive == null) validation("正式折标必须指定完整期间");
         var item = approvedItem(request.energyItemCode(), interval.from());
-        var lastItem = approvedItem(request.energyItemCode(), endExclusive.minusNanos(1));
-        if (!item.versionId().equals(lastItem.versionId())) referenceConflict("期间跨能源品种版本");
+        // 直接校验半开区间覆盖；期末减纳秒经 MySQL 时间精度舍入后可能回到失效时刻。
+        requireRange(item.effectiveFrom(), item.effectiveTo(), interval, "能源品种版本未覆盖整个期间");
         var scope = parse(UsageScope.class, request.consumptionScope(), "使用范围无效");
         validateConsumptionScope(item, scope);
         String method = parse(ConversionMethod.class, request.method(), "折标方法无效").name();
@@ -337,12 +337,11 @@ public class EnergyConversionService {
         var conversion = catalogLookup.convert(nonNegative(request.quantity(), "活动量不能为负数"),
                 request.inputUnitCode(), selected.inputUnitCode(), interval.from()).orElseThrow(() ->
                 EnergyConversionErrors.error(409, EnergyConversionErrors.UNIT_INCOMPATIBLE, "活动量单位与正式规则不兼容"));
-        var endConversion = catalogLookup.convert(request.quantity(), request.inputUnitCode(), selected.inputUnitCode(),
-                endExclusive.minusNanos(1)).orElseThrow(() -> EnergyConversionErrors.error(409,
-                EnergyConversionErrors.UNIT_INCOMPATIBLE, "期间末尾单位不可用"));
-        if (!conversion.inputUnit().versionId().equals(endConversion.inputUnit().versionId())
-                || !conversion.targetUnit().versionId().equals(endConversion.targetUnit().versionId())
-                || !conversion.targetUnit().versionId().equals(selected.inputUnitVersionId()))
+        requireRange(conversion.inputUnit().effectiveFrom(), conversion.inputUnit().effectiveTo(), interval,
+                "活动量单位版本未覆盖整个期间");
+        requireRange(conversion.targetUnit().effectiveFrom(), conversion.targetUnit().effectiveTo(), interval,
+                "折标输入单位版本未覆盖整个期间");
+        if (!conversion.targetUnit().versionId().equals(selected.inputUnitVersionId()))
             referenceConflict("期间跨单位版本或正式参数的单位引用失效");
         var standard = selected.standardCoalVersionId() == null ? null : requireStandardCoal(selected.standardCoalVersionId());
         var value = calculate(selected, standard, conversion.convertedQuantity());
@@ -537,6 +536,12 @@ public class EnergyConversionService {
     private static LocalDateTime requiredTime(LocalDateTime value) {
         if (value == null) validation("业务生效时间不能为空");
         return value;
+    }
+
+    private static String unitCode(String value, String message) {
+        String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        // 单字符 T 是目录中既有的吨单位身份；其他业务编码仍使用原有长度校验。
+        return "T".equals(normalized) ? normalized : code(value, message);
     }
 
     private static String code(String value, String message) {
