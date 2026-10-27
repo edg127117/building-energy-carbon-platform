@@ -194,7 +194,9 @@ class Maintenance:
         actions = ("validate" + source, "validate" + target,
                    *("upgrade" + str(v) for v in range(int(source) + 1, int(target) + 1)))
         require(self.release.target_schema(state) == target
-                and state.get("source_schema", "83") == source and action in actions,
+                and state.get("source_schema", "83") == source
+                and state.get("release_mode", "SCHEMA_UPGRADE") == self.config.get("release_mode", "SCHEMA_UPGRADE")
+                and action in actions,
                 "D01_AUTH_SCHEMA_MISMATCH")
         # Never run Java as root using the mutable application release directory.
         self.original_schema(action, {**state, "release": str(INSTALL)}, credentials)

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKER = shutil.which("docker") or str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/DockerDesktop/resources/bin/docker.exe")
@@ -44,8 +45,9 @@ def owned(kind, name):
 
 def sql(instance, statement):
     owned("container", instance[0])
-    return docker("exec", "-i", "-e", "MYSQL_PWD", instance[0], "mysql", "-uroot", "-N", "-B",
-                  data=statement.encode()).decode().strip()
+    payload = statement.encode("utf-8") if isinstance(statement, str) else statement
+    return docker("exec", "-i", "-e", "MYSQL_PWD", instance[0], "mysql", "--default-character-set=utf8mb4", "-uroot", "-N", "-B",
+                  data=b"SET SESSION time_zone='+00:00';\n" + payload).decode("utf-8").strip()
 
 
 def new_mysql():
@@ -82,12 +84,12 @@ def new_mysql():
         time.sleep(1)
 
 
-def java(instance, action, *, packaged=True, expected=True, frozen=True, user="platform_migrator"):
+def java(instance, action, *, packaged=True, expected=True, frozen=True, user="platform_migrator", archive=None):
     url = "jdbc:mysql://127.0.0.1:" + instance[1] + "/iot_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
     env = {**ENV, "D01_JDBC_URL": url, "D01_JDBC_USER": user, "D01_JDBC_PASSWORD": PASSWORD,
            "D01_WRITERS_FROZEN": str(frozen).lower(), "D01_UPGRADE_ISOLATED": "true"}
     if packaged:
-        args = [JAVA, "-Dloader.main=com.platform.tools.D01SchemaMigration", "-cp", str(JAR),
+        args = [JAVA, "-Dloader.main=com.platform.tools.D01SchemaMigration", "-cp", str(archive or JAR),
                 "org.springframework.boot.loader.launch.PropertiesLauncher", action]
     else:
         cp = os.pathsep.join((str(ROOT / "target/test-classes"), str(ROOT / "target/classes"),
@@ -111,7 +113,7 @@ def accounts(instance):
 def dump(instance, *args):
     owned("container", instance[0])
     return docker("exec", "-e", "MYSQL_PWD", instance[0], "mysqldump", "-uroot", "--set-gtid-purged=OFF",
-                  "--no-tablespaces", "--skip-comments", *args)
+                  "--no-tablespaces", "--skip-comments", "--default-character-set=utf8mb4", "--hex-blob", *args)
 
 
 def old_rows(instance, tables):
@@ -127,11 +129,128 @@ def old_rows(instance, tables):
 
 def restore_new(backup, expected, tables, schema="85"):
     instance = new_mysql()
-    sql(instance, backup.decode())
+    # 新镜像预建的空库可能使用不同默认 collation；CREATE IF NOT EXISTS 不会还原这些库级元数据。
+    # 仅清理由本任务刚创建且已验明无业务表的新实例空库，绝不对来源或非空目标执行 DROP。
+    assert sql(instance, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema IN ('iot_platform','iot_platform_archive')") == "0"
+    emit("RESTORE_NEW_EMPTY_DATABASE_DEFAULTS=" + sql(instance,
+         "SELECT SCHEMA_NAME,DEFAULT_COLLATION_NAME FROM information_schema.schemata WHERE schema_name IN ('iot_platform','iot_platform_archive') ORDER BY SCHEMA_NAME"))
+    sql(instance, "DROP DATABASE IF EXISTS iot_platform; DROP DATABASE IF EXISTS iot_platform_archive")
+    sql(instance, backup)
     accounts(instance)
     assert old_rows(instance, tables) == expected
     java(instance, "validate" + schema)
     return instance
+
+
+def identifier(name):
+    return "`" + name.replace("`", "``") + "`"
+
+
+def row_digest(expressions):
+    # NULL、空串和二进制值不混淆；HEX 不含分隔符，保留每列边界和重复行。
+    values = ["IF(" + value + " IS NULL,'N',CONCAT('V',HEX(CAST(" + value + " AS BINARY))))" for value in expressions]
+    return "SHA2(CONCAT_WS('|'," + ",".join(values) + "),256)"
+
+
+def database_image(instance):
+    image = {}
+    metadata = (
+        ("table", "tables", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME TABLE_TYPE ENGINE ROW_FORMAT TABLE_COLLATION CREATE_OPTIONS TABLE_COMMENT AUTO_INCREMENT"),
+        ("columns", "columns", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME COLUMN_NAME ORDINAL_POSITION COLUMN_DEFAULT IS_NULLABLE DATA_TYPE CHARACTER_MAXIMUM_LENGTH CHARACTER_OCTET_LENGTH NUMERIC_PRECISION NUMERIC_SCALE DATETIME_PRECISION CHARACTER_SET_NAME COLLATION_NAME COLUMN_TYPE COLUMN_KEY EXTRA COLUMN_COMMENT GENERATION_EXPRESSION"),
+        ("indexes", "statistics", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME INDEX_NAME NON_UNIQUE SEQ_IN_INDEX COLUMN_NAME COLLATION SUB_PART PACKED NULLABLE INDEX_TYPE COMMENT INDEX_COMMENT IS_VISIBLE EXPRESSION"),
+        ("constraints", "table_constraints", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME CONSTRAINT_NAME CONSTRAINT_TYPE ENFORCED"),
+        ("keys", "key_column_usage", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME CONSTRAINT_NAME COLUMN_NAME ORDINAL_POSITION POSITION_IN_UNIQUE_CONSTRAINT REFERENCED_TABLE_SCHEMA REFERENCED_TABLE_NAME REFERENCED_COLUMN_NAME"),
+        ("references", "referential_constraints", "CONSTRAINT_SCHEMA", "TABLE_NAME", "TABLE_NAME CONSTRAINT_NAME UNIQUE_CONSTRAINT_SCHEMA UNIQUE_CONSTRAINT_NAME MATCH_OPTION UPDATE_RULE DELETE_RULE REFERENCED_TABLE_NAME"),
+        ("views", "views", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME VIEW_DEFINITION CHECK_OPTION IS_UPDATABLE DEFINER SECURITY_TYPE CHARACTER_SET_CLIENT COLLATION_CONNECTION"),
+    )
+    for db in ("iot_platform", "iot_platform_archive"):
+        defaults = sql(instance, "SELECT DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME,DEFAULT_ENCRYPTION "
+                       "FROM information_schema.schemata WHERE schema_name='" + db + "'")
+        image[db + "::<database>"] = {"schema": hashlib.sha256(defaults.encode()).hexdigest(), "count": 0, "rows": ""}
+        structures = {}
+        # SHOW CREATE 的显式/继承 COLLATE 展开可能在恢复后改变；比较存储元数据，不能删去真实字符集/约束检查。
+        for part, source, scope, table, fields in metadata:
+            query = "SELECT " + identifier(table) + "," + row_digest([identifier(name) for name in fields.split()])
+            query += " FROM information_schema." + source + " WHERE " + identifier(scope) + "='" + db + "'"
+            for line in sql(instance, query).splitlines():
+                name, digest = line.split("\t")
+                structures.setdefault(name, {}).setdefault(part, []).append(digest)
+        check_query = "SELECT t.TABLE_NAME," + row_digest(["c.CONSTRAINT_NAME", "c.CHECK_CLAUSE"])
+        check_query += (" FROM information_schema.check_constraints c JOIN information_schema.table_constraints t "
+                        "ON t.CONSTRAINT_SCHEMA=c.CONSTRAINT_SCHEMA AND t.CONSTRAINT_NAME=c.CONSTRAINT_NAME "
+                        "WHERE t.TABLE_SCHEMA='" + db + "' AND t.CONSTRAINT_TYPE='CHECK'")
+        for line in sql(instance, check_query).splitlines():
+            name, digest = line.split("\t")
+            structures.setdefault(name, {}).setdefault("checks", []).append(digest)
+        columns = {}
+        for row in sql(instance, "SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.columns WHERE table_schema='" + db
+                       + "' ORDER BY TABLE_NAME,ORDINAL_POSITION").splitlines():
+            table, column = row.split("\t")
+            columns.setdefault(table, []).append(column)
+        assert set(columns) == set(structures), "REPORTING_V88_SCHEMA_OBJECT_SET_MISMATCH"
+        for table, names in columns.items():
+            target = identifier(db) + "." + identifier(table)
+            parts = {key: sorted(values) for key, values in structures[table].items()}
+            rows = sql(instance, "SELECT " + row_digest([identifier(name) for name in names]) + " FROM " + target).splitlines()
+            image[db + "." + table] = {"schema": hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest(),
+                "count": len(rows), "rows": hashlib.sha256("\n".join(sorted(rows)).encode()).hexdigest(),
+                "parts": parts, "rendering": hashlib.sha256(sql(instance, "SHOW CREATE TABLE " + target).encode()).hexdigest()}
+    return image
+
+
+def assert_database_image(instance, expected, stage):
+    actual = database_image(instance)
+    different = []
+    rendered = []
+    for name in sorted(actual.keys() | expected.keys()):
+        changed = [key for key in ("schema", "count", "rows")
+                   if actual.get(name, {}).get(key) != expected.get(name, {}).get(key)]
+        if changed:
+            old, new = expected.get(name, {}).get("parts", {}), actual.get(name, {}).get("parts", {})
+            different.append({"table": name, "parts": changed,
+                              "schema_parts": [key for key in sorted(old.keys() | new.keys()) if old.get(key) != new.get(key)]})
+        elif actual[name].get("rendering") != expected[name].get("rendering"):
+            rendered.append(name)
+    if different:
+        # 只输出差异对象和类型，不回显行值、SQL 或凭据。
+        emit("V88_SNAPSHOT_DIFFERENCE_" + stage + "=" + json.dumps(different, sort_keys=True))
+        raise AssertionError("REPORTING_V88_SNAPSHOT_MISMATCH_" + stage)
+    if rendered:
+        emit("V88_SCHEMA_RENDERING_DIFFERENCE_WITH_IDENTICAL_METADATA=" + json.dumps(rendered))
+
+
+def application_only(instance, legacy, tables):
+    # 合成二进制与重复/空行仅存在新建隔离实例，覆盖天气等 BLOB 证据的备份保真。
+    sql(instance, "CREATE TABLE iot_platform.application_only_binary_fixture (payload MEDIUMBLOB, marker VARBINARY(16)); "
+        "INSERT INTO iot_platform.application_only_binary_fixture VALUES (0x00FF80C328,0x0001),(0x00FF80C328,0x0001),(NULL,NULL)")
+    sql(instance, "INSERT INTO iot_platform.biz_energy_reporting_scope VALUES ('SYNTHETIC_APP_ONLY',9); "
+        "INSERT INTO iot_platform.biz_energy_reporting_record VALUES ('app-only-keep','SYNTHETIC_APP_ONLY','BATCH','DRAFT',7,'2026-10-01','{\"retained\":true}'); "
+        "INSERT INTO iot_platform.biz_energy_parameter_package_import_receipt "
+        "(receipt_id,scope_key,idempotency_key,request_hash,actor_id,package_code,status,response_json,created_at) "
+        "VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','GLOBAL_PARAMETER_PACKAGES','app-only-keep','" + "a" * 64
+        + "',1,'B01','SUCCEEDED','{\"fixture\":true}','2026-10-01')")
+    before = database_image(instance)
+    backup88 = dump(instance, "--single-transaction", "--routines", "--events", "--triggers", "--databases", "iot_platform", "iot_platform_archive")
+    # 仅改新建隔离实例的测试账号，证明 validate88 不依赖写入或 DDL 权限。
+    for db in ("iot_platform", "iot_platform_archive"):
+        sql(instance, "REVOKE ALL PRIVILEGES ON " + db + ".* FROM 'platform_migrator'@'%'; "
+            "GRANT SELECT ON " + db + ".* TO 'platform_migrator'@'%'")
+    java(instance, "validate88")
+    java(instance, "validate88")
+    assert_database_image(instance, before, "SOURCE_UNCHANGED")
+    assert old_rows(instance, tables) == legacy
+    with tempfile.TemporaryDirectory(prefix="v88-application-only-") as directory:
+        altered = Path(directory) / "changed-migration.jar"
+        migration = "BOOT-INF/classes/db/migration/mysql/V88__mysql_default_electricity_factor_year.sql"
+        with zipfile.ZipFile(JAR) as source, zipfile.ZipFile(altered, "w") as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                target.writestr(item, data + b"\nSELECT 1;\n" if item.filename == migration else data)
+        java(instance, "validate88", expected=False, archive=altered)
+    assert_database_image(instance, before, "SOURCE_UNCHANGED")
+    restored = restore_new(backup88, legacy, tables, "88")
+    assert_database_image(restored, before, "RESTORED_V88")
+    emit("V88_APPLICATION_ONLY_SELECT_ONLY_VALIDATION_CHECKSUM_REJECTION_ALL_ROWS_HISTORY_AND_DUAL_DATABASE_RESTORE_VERIFIED")
 
 
 def main():
@@ -180,12 +299,14 @@ def main():
         java(source, "upgrade88", expected=False, frozen=False)
         java(source, "upgrade88", expected=False, user="platform_app")
         java(source, "validate87")
+        java(source, "validate88", expected=False)
         java(source, "upgrade88")
         java(source, "validate88")
         java(source, "upgrade88", expected=False)
         assert old_rows(source, tables) == before
         assert sql(source, "SELECT COUNT(*) FROM iot_platform.flyway_schema_history WHERE version='88' AND success=1") == "1"
         emit("V87_TO_V88_PACKAGED_MIGRATOR_EXACTLY_ONCE_UNFROZEN_AND_APP_DDL_REJECTED_ROWS_PRESERVED")
+        application_only(source, before, tables)
         failed88 = restore_new(backup87, before, tables, "87")
         sql(failed88, "ALTER TABLE iot_platform.biz_carbon_factor_version DROP CHECK chk_carbon_electricity_years")
         java(failed88, "upgrade88", expected=False)

@@ -1,7 +1,7 @@
 import words from '../locales/daikin'
-import type { CurrentField, DaikinDevice, StateEvent, TemperatureReading } from './daikin'
+import type { CurrentField, DaikinDevice, StateEvent, StateSummary, TemperatureReading } from './daikin'
 
-export type DaikinQuickStatus = 'ALL' | 'RUNNING' | 'STOPPED' | 'EXCEPTION' | 'STALE'
+export type DaikinQuickStatus = 'ALL' | 'RUNNING' | 'STOPPED' | 'UNKNOWN' | 'EXCEPTION' | 'STALE'
 export type DaikinValueTone = 'success' | 'primary' | 'warning' | 'danger' | 'muted' | 'default'
 
 export interface DaikinSystemGroup {
@@ -10,6 +10,8 @@ export interface DaikinSystemGroup {
   outdoorUnit: DaikinDevice | null
   indoorUnits: DaikinDevice[]
   runningCount: number
+  stoppedCount: number
+  unknownCount: number
 }
 
 export interface DaikinSpaceGroup {
@@ -18,6 +20,8 @@ export interface DaikinSpaceGroup {
   spaceName: string
   devices: DaikinDevice[]
   runningCount: number
+  stoppedCount: number
+  unknownCount: number
 }
 
 export interface DaikinDetailRow {
@@ -161,83 +165,76 @@ export function daikinCurrentFields(fields: CurrentField[]): { primary: CurrentF
   return { primary, extended }
 }
 
-/**
- * 统一判定内机与外机是否处于在运状态：
- * 1. 若协议直接返回 onOff / unitStatus，直接采用；
- * 2. 若外机返回压缩机启停（compressorOnOff），优先采用；
- * 3. 若外机列表协议未下发内机专属 onOff/unitStatus 字段，则按外机启用、新鲜度有效且无活跃异常判定在运。
- */
-export function isDaikinDeviceRunning(
-  device:
-    | Partial<Pick<DaikinDevice, 'deviceKind' | 'active' | 'stale' | 'lastValidAt' | 'hasActiveException' | 'onOff' | 'unitStatus'>>
-    | null
-    | undefined,
-  compressorOnOff?: string | null,
-): boolean {
-  if (!device) return false
-  if (device.onOff?.value === 'on' || device.unitStatus?.value === 'operating') return true
-  if (device.onOff?.value === 'off' || device.unitStatus?.value === 'stopped') return false
-  if (typeof compressorOnOff === 'string') {
-    if (compressorOnOff === 'on') return true
-    if (compressorOnOff === 'off') return false
-  }
+export type DaikinRunState = 'RUNNING' | 'STOPPED' | 'UNKNOWN'
+type RunStateDevice = Partial<Pick<DaikinDevice, 'deviceKind' | 'active' | 'stale' | 'lastValidAt' | 'hasActiveException' | 'onOff' | 'unitStatus'>>
+export type DaikinCompressorState = (device: DaikinDevice) => StateSummary | null | undefined
+
+function freshStateValue(state: StateSummary | null | undefined): string | null {
+  return state?.status === 'PRESENT' && !state.stale && state.lastValidAt != null ? state.value : null
+}
+
+/** 启用和通信正常不能证明运行；只有新鲜、有效的启停观测才能确认运行或关机。 */
+export function daikinDeviceRunState(device: RunStateDevice | null | undefined, compressor?: StateSummary | null): DaikinRunState {
+  if (!device?.active || device.stale || device.lastValidAt == null) return 'UNKNOWN'
+  const onOff = freshStateValue(device.onOff)
+  const unitStatus = freshStateValue(device.unitStatus)
+  if (onOff === 'on' || unitStatus === 'operating') return 'RUNNING'
+  if (onOff === 'off' || unitStatus === 'stopped') return 'STOPPED'
   if (device.deviceKind === 'OUTDOOR') {
-    return Boolean(device.active && !device.stale && device.lastValidAt != null && !device.hasActiveException)
+    const compressorValue = freshStateValue(compressor)
+    if (compressorValue === 'on') return 'RUNNING'
+    if (compressorValue === 'off') return 'STOPPED'
   }
-  return false
+  return 'UNKNOWN'
 }
 
-export function daikinOutdoorStatusLabel(
-  device:
-    | Partial<Pick<DaikinDevice, 'deviceKind' | 'active' | 'stale' | 'lastValidAt' | 'hasActiveException' | 'onOff' | 'unitStatus'>>
-    | null
-    | undefined,
-  compressorOnOff?: string | null,
-): string {
-  if (!device) return '—'
-  if (device.unitStatus?.value) return daikinLabel(device.unitStatus.value)
-  if (device.hasActiveException) return words.exception
-  if (device.active === false) return words.inactive
-  if (device.stale) return words.stale
-  if (isDaikinDeviceRunning(device, compressorOnOff)) return words.runningLabel
-  return words.stoppedLabel
+export function isDaikinDeviceRunning(device: RunStateDevice | null | undefined, compressor?: StateSummary | null): boolean {
+  return daikinDeviceRunState(device, compressor) === 'RUNNING'
 }
 
-export function daikinOutdoorStatusTone(
-  device:
-    | Partial<Pick<DaikinDevice, 'deviceKind' | 'active' | 'stale' | 'lastValidAt' | 'hasActiveException' | 'onOff' | 'unitStatus'>>
-    | null
-    | undefined,
-  compressorOnOff?: string | null,
-): DaikinValueTone {
-  if (!device) return 'muted'
-  if (device.unitStatus?.value) return daikinFieldTone('unitStatus', device.unitStatus.value)
-  if (device.hasActiveException) return 'danger'
-  if (device.active === false) return 'muted'
-  if (device.stale) return 'warning'
-  return isDaikinDeviceRunning(device, compressorOnOff) ? 'success' : 'muted'
+export function daikinRunStateLabel(device: RunStateDevice | null | undefined, compressor?: StateSummary | null): string {
+  const state = daikinDeviceRunState(device, compressor)
+  return state === 'RUNNING' ? words.runningLabel : state === 'STOPPED' ? words.stoppedLabel : words.unknownLabel
 }
 
-export function daikinQuickStatusCounts(items: DaikinDevice[]): Record<DaikinQuickStatus, number> {
+export function daikinOutdoorStatusLabel(device: RunStateDevice | null | undefined, compressor?: StateSummary | null): string {
+  if (daikinDeviceRunState(device, compressor) === 'UNKNOWN') return words.unknownLabel
+  const unitStatus = freshStateValue(device?.unitStatus)
+  if (unitStatus) return daikinLabel(unitStatus)
+  if (device?.hasActiveException) return words.exception
+  return daikinRunStateLabel(device, compressor)
+}
+
+export function daikinOutdoorStatusTone(device: RunStateDevice | null | undefined, compressor?: StateSummary | null): DaikinValueTone {
+  if (daikinDeviceRunState(device, compressor) === 'UNKNOWN') return 'muted'
+  const unitStatus = freshStateValue(device?.unitStatus)
+  if (unitStatus) return daikinFieldTone('unitStatus', unitStatus)
+  if (device?.hasActiveException) return 'danger'
+  return isDaikinDeviceRunning(device, compressor) ? 'success' : 'muted'
+}
+
+export function daikinQuickStatusCounts(items: DaikinDevice[], compressor?: DaikinCompressorState): Record<DaikinQuickStatus, number> {
   return {
     ALL: items.length,
-    RUNNING: items.filter(item => isDaikinDeviceRunning(item)).length,
-    STOPPED: items.filter(item => !isDaikinDeviceRunning(item)).length,
+    RUNNING: items.filter(item => daikinDeviceRunState(item, compressor?.(item)) === 'RUNNING').length,
+    STOPPED: items.filter(item => daikinDeviceRunState(item, compressor?.(item)) === 'STOPPED').length,
+    UNKNOWN: items.filter(item => daikinDeviceRunState(item, compressor?.(item)) === 'UNKNOWN').length,
     EXCEPTION: items.filter(item => item.hasActiveException).length,
     STALE: items.filter(item => item.stale).length,
   }
 }
 
-export function filterDaikinDevicesByQuickStatus(items: DaikinDevice[], status: DaikinQuickStatus): DaikinDevice[] {
-  if (status === 'RUNNING') return items.filter(item => isDaikinDeviceRunning(item))
-  if (status === 'STOPPED') return items.filter(item => !isDaikinDeviceRunning(item))
+export function filterDaikinDevicesByQuickStatus(items: DaikinDevice[], status: DaikinQuickStatus, compressor?: DaikinCompressorState): DaikinDevice[] {
+  if (status === 'RUNNING' || status === 'STOPPED' || status === 'UNKNOWN') {
+    return items.filter(item => daikinDeviceRunState(item, compressor?.(item)) === status)
+  }
   if (status === 'EXCEPTION') return items.filter(item => item.hasActiveException)
   if (status === 'STALE') return items.filter(item => item.stale)
   return items
 }
 
 /** 按共享的多联机系统分组 ID 归集外机与内机；筛选内机时仍关联同系统外机标题。 */
-export function groupDaikinDevicesBySystem(items: DaikinDevice[], allDevices: DaikinDevice[] = items): DaikinSystemGroup[] {
+export function groupDaikinDevicesBySystem(items: DaikinDevice[], allDevices: DaikinDevice[] = items, compressor?: DaikinCompressorState): DaikinSystemGroup[] {
   const outdoorByGroup = new Map<string, DaikinDevice>()
   for (const dev of allDevices) {
     if (dev.deviceKind === 'OUTDOOR' && dev.systemGroupId && !outdoorByGroup.has(dev.systemGroupId)) {
@@ -264,7 +261,9 @@ export function groupDaikinDevicesBySystem(items: DaikinDevice[], allDevices: Da
     systemGroupId: bucket.systemGroupId,
     outdoorUnit: bucket.outdoorUnit,
     indoorUnits: bucket.indoorUnits,
-    runningCount: bucket.indoorUnits.filter(item => isDaikinDeviceRunning(item)).length,
+    runningCount: daikinQuickStatusCounts(bucket.indoorUnits, compressor).RUNNING,
+    stoppedCount: daikinQuickStatusCounts(bucket.indoorUnits, compressor).STOPPED,
+    unknownCount: daikinQuickStatusCounts(bucket.indoorUnits, compressor).UNKNOWN,
   }))
 }
 
@@ -275,7 +274,7 @@ export function normalizeDaikinSpaceName(spaceName: string): string {
   return match?.[1]?.trim() || trimmed
 }
 
-export function groupDaikinDevicesBySpace(items: DaikinDevice[], spaces: Array<{ spaceId: string; spaceName: string }>): DaikinSpaceGroup[] {
+export function groupDaikinDevicesBySpace(items: DaikinDevice[], spaces: Array<{ spaceId: string; spaceName: string }>, compressor?: DaikinCompressorState): DaikinSpaceGroup[] {
   const spaceNames = new Map(spaces.map(item => [item.spaceId, normalizeDaikinSpaceName(item.spaceName)]))
   const buckets = new Map<string, { spaceId: string | null; spaceName: string; devices: DaikinDevice[] }>()
   for (const item of items) {
@@ -302,7 +301,9 @@ export function groupDaikinDevicesBySpace(items: DaikinDevice[], spaces: Array<{
         spaceId: bucket.spaceId,
         spaceName: bucket.spaceName,
         devices: sortedDevices,
-        runningCount: sortedDevices.filter(item => isDaikinDeviceRunning(item)).length,
+        runningCount: daikinQuickStatusCounts(sortedDevices, compressor).RUNNING,
+        stoppedCount: daikinQuickStatusCounts(sortedDevices, compressor).STOPPED,
+        unknownCount: daikinQuickStatusCounts(sortedDevices, compressor).UNKNOWN,
       }
     })
     .sort((a, b) => {
@@ -313,7 +314,7 @@ export function groupDaikinDevicesBySpace(items: DaikinDevice[], spaces: Array<{
 }
 
 /** 将当前详情字段按温控核心、健康维保、设备档案、控制能力与待核验扩展分层组织。 */
-export function daikinStructuredDetail(fields: CurrentField[], deviceKind?: string | null): DaikinStructuredDetail {
+export function daikinStructuredDetail(fields: CurrentField[], deviceKind?: string | null, active = true): DaikinStructuredDetail {
   const { primary, extended } = daikinCurrentFields(fields)
   const primaryMap = new Map(primary.map(item => [item.fieldName, item]))
   const isOutdoor = deviceKind === 'OUTDOOR'
@@ -321,12 +322,14 @@ export function daikinStructuredDetail(fields: CurrentField[], deviceKind?: stri
     const item = primaryMap.get(fieldName)
     if (!item) return null
     if (isOutdoor && skipWhenMissingForOutdoor && item.status === 'MISSING' && !item.valueVisible) return null
-    const value = daikinCurrentFieldValue(item)
+    const unavailableState = ['onOff', 'unitStatus', 'compressorOnOff'].includes(fieldName)
+      && (!active || item.stale || item.lastValidAt == null || item.status !== 'PRESENT' || !item.valueVisible)
+    const value = unavailableState ? words.unknownLabel : daikinCurrentFieldValue(item)
     return {
       key: item.fieldName,
       label: daikinFieldLabel(item.fieldName),
       value,
-      tone: value === '—' ? 'muted' : daikinFieldTone(item.fieldName, item.normalizedValue),
+      tone: unavailableState || value === '—' ? 'muted' : daikinFieldTone(item.fieldName, item.normalizedValue),
       stale: item.stale,
       statusLabel: daikinLabel(item.status),
       explanation: daikinFieldExplanation(item.fieldName),
@@ -354,19 +357,16 @@ export function daikinStructuredDetail(fields: CurrentField[], deviceKind?: stri
     .filter((row): row is DaikinDetailRow => row != null)
   const hasDanger = healthRows.some(row => row.tone === 'danger')
   const hasWarning = healthRows.some(row => row.tone === 'warning')
-  const compressorState = primaryMap.get('compressorOnOff')?.normalizedValue
-  const isOperating =
-    primaryMap.get('unitStatus')?.normalizedValue === 'operating'
-    || primaryMap.get('onOff')?.normalizedValue === 'on'
-    || compressorState === 'on'
-    || (
-      isOutdoor
-      && compressorState !== 'off'
-      && primaryMap.get('controller.isConnectionUp')?.normalizedValue === 'true'
-      && primaryMap.get('controller.inForcedStop')?.normalizedValue !== 'true'
-    )
-  const healthBadgeType = hasDanger ? 'danger' : hasWarning ? 'warning' : isOperating ? 'success' : 'info'
-  const healthBadgeLabel = hasDanger || hasWarning ? words.healthExceptionBadge : isOperating ? words.healthNormalBadge : words.healthStoppedBadge
+  const stateSummary = (name: string): StateSummary | null => {
+    const field = primaryMap.get(name)
+    return field ? { value: field.valueVisible ? field.normalizedValue : null, status: field.status,
+      lastValidAt: field.lastValidAt, stale: field.stale } : null
+  }
+  const runState = daikinDeviceRunState({ deviceKind, active, stale: false,
+    lastValidAt: fields.find(field => field.lastValidAt != null)?.lastValidAt ?? null,
+    onOff: stateSummary('onOff'), unitStatus: stateSummary('unitStatus') }, stateSummary('compressorOnOff'))
+  const healthBadgeType = runState === 'UNKNOWN' ? 'info' : hasDanger ? 'danger' : hasWarning ? 'warning' : runState === 'RUNNING' ? 'success' : 'info'
+  const healthBadgeLabel = runState === 'UNKNOWN' ? words.unknownLabel : hasDanger || hasWarning ? words.healthExceptionBadge : runState === 'RUNNING' ? words.healthNormalBadge : words.healthStoppedBadge
 
   const archiveFieldNames = ['formalName', 'modelName', 'masterSlaveFlag', 'isGroupSlave', 'masterSlaveIds']
   const archiveRows = archiveFieldNames

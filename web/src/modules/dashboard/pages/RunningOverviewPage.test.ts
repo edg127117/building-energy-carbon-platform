@@ -215,6 +215,48 @@ describe('RunningOverviewPage', () => {
     })
   })
 
+  it('总览的无观测和过期设备保持未知，不进入已关机筛选', async () => {
+    const initial = await daikinApi.devices('BLD001', 1)
+    const items = initial.items.map((device, index) => ({ ...device, stale: index === 0,
+      lastValidAt: index === 0 ? device.lastValidAt : null, onOff: null, unitStatus: null }))
+    vi.mocked(daikinApi.devices).mockResolvedValue({ total: items.length, items })
+    const wrapper = mount(RunningOverviewPage, { global: { stubs: { DaikinDeviceDetail: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('状态未知')
+    const stopped = wrapper.findAll('button').find(button => button.text().startsWith('已关机'))!
+    expect(stopped.text()).toContain('0')
+    await stopped.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.hvac-inspection-table .el-table__row')).toHaveLength(0)
+    const unknown = wrapper.findAll('button').find(button => button.text().startsWith('状态未知'))!
+    expect(unknown.text()).toContain('2')
+    await unknown.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('大金内机-B308-1')
+    expect(wrapper.text()).toContain('大金内机-B307-1')
+    expect(wrapper.findAll('.dot-unknown')).toHaveLength(2)
+    wrapper.unmount()
+  })
+
+  it.each([false, true])('总览外机采用字段自身的新鲜度，计数与表格一致 stale=%s', async stale => {
+    const initial = await daikinApi.devices('BLD001', 1)
+    const outdoor = { ...initial.items[0]!, deviceKind: 'OUTDOOR', lastValidAt: 2000, unitStatus: null, onOff: null }
+    vi.mocked(daikinApi.devices).mockResolvedValue({ total: 1, items: [outdoor] })
+    vi.mocked(daikinApi.current).mockResolvedValue({ equipmentId: outdoor.equipmentId, active: true, lastValidAt: 2000,
+      fields: [{ fieldName: 'compressorOnOff', normalizedValue: 'off', rawJson: '"off"', status: 'PRESENT',
+        lastValidAt: 1000, stale, valueVisible: true, lastAttemptAt: 2000, lastAttemptRawJson: null,
+        mappingVersion: 1, lastAttemptMappingVersion: 1 }] })
+    const wrapper = mount(RunningOverviewPage, { global: { stubs: { DaikinDeviceDetail: true } } })
+    await flushPromises()
+    const stopped = wrapper.findAll('button').find(button => button.text().startsWith('已关机'))!
+    expect(stopped.text()).toContain(stale ? '0' : '1')
+    expect(wrapper.find(stale ? '.dot-unknown' : '.dot-stopped').exists()).toBe(true)
+    await stopped.trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.dot-stopped')).toHaveLength(stale ? 0 : 1)
+    wrapper.unmount()
+  })
+
   it('renders V4 3-tier layout, filters right device table by left space bar, and switches subsystems', async () => {
     const wrapper = mount(RunningOverviewPage, {
       global: {

@@ -73,6 +73,16 @@ class CredentialReuseTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "SCHEMA_TARGET_REQUIRED"):
             credential_source.mysql_rights(self.migration_metadata + grants, "migration", "89")
 
+    def test_application_only_uses_select_without_weakening_upgrade_or_backup_privileges(self):
+        grants = "".join("GRANT SELECT ON `" + db + "`.* TO 'platform_migrator'@'%'\n"
+                         for db in ("iot_platform", "iot_platform_archive"))
+        credential_source.mysql_rights(self.migration_metadata + grants, "migration", "88", "APPLICATION_ONLY")
+        for mode, target in (("SCHEMA_UPGRADE", "88"), ("APPLICATION_ONLY", "87"), ("unknown", "88")):
+            with self.subTest(mode=mode, target=target), self.assertRaises(RuntimeError):
+                credential_source.mysql_rights(self.migration_metadata + grants, "migration", target, mode)
+        with self.assertRaisesRegex(RuntimeError, "BACKUP_PRIVILEGES_MISSING"):
+            credential_source.mysql_rights(self.metadata + "GRANT SELECT ON *.* TO 'root'@'localhost'", "backup", "88", "APPLICATION_ONLY")
+
     def test_partial_revokes_and_unresolved_roles_never_become_global_permission(self):
         with self.assertRaisesRegex(RuntimeError, "PARTIAL_REVOKE"):
             credential_source.mysql_rights(self.complete + "REVOKE SELECT ON `iot_platform_archive`.* FROM 'root'@'localhost'", "backup")
@@ -182,6 +192,18 @@ class CredentialReuseTest(unittest.TestCase):
             self.assertFalse(report["backup_and_restore_verified"])
             self.assertNotIn("password", json.dumps(report))
 
+    def test_application_only_discovery_passes_mode_to_probe_without_printing_credentials(self):
+        values = {"mysql_migration_password": "migrate" * 4, "mysql_root_password": "mysql" * 4, "td_root_password": "td" * 8}
+        with patch.object(credential_source, "runtime_target"), patch.object(credential_source, "check_containers"), \
+                patch.object(credential_source, "administrator_values", return_value=values), \
+                patch.object(credential_source, "migration_probe", return_value="same-mysql") as probe, \
+                patch.object(credential_source, "backup_mysql_probe", return_value="same-mysql"), \
+                patch.object(credential_source, "backup_td_probe", return_value="td"):
+            _, _, report = credential_source.discover(b"pinned-jar", "88", "APPLICATION_ONLY")
+        probe.assert_called_once_with(b"pinned-jar", values["mysql_migration_password"], "88", "APPLICATION_ONLY")
+        self.assertEqual(report["release_mode"], "APPLICATION_ONLY")
+        self.assertNotIn(values["mysql_migration_password"], json.dumps(report))
+
     @unittest.skipUnless(sys.platform == "linux", "POSIX root configuration boundary")
     def test_credential_source_rejects_symlinks_and_open_permissions(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -282,6 +304,30 @@ class PrivilegeBoundaryTest(unittest.TestCase):
                 for action in ("upgrade87", "upgrade89", "validate86"):
                     with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
                         operation.schema(action, default_year, operation.schema_credentials)
+
+    def test_application_only_schema_wrapper_binds_mode_and_has_no_upgrade_action(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jar = root / "application.jar"
+            jar.write_bytes(b"pinned fixture")
+            operation = object.__new__(bridge.Maintenance)
+            operation.release = Mock(JAR=jar.name)
+            operation.release.target_schema.return_value = "88"
+            operation.schema_credentials = root / "schema.json"
+            operation.config = {"jar_sha256": bridge.digest(jar), "web_sha256": "b" * 64,
+                                "source_schema": "88", "target_schema": "88", "release_mode": "APPLICATION_ONLY"}
+            operation.original_schema = Mock()
+            state = {**operation.config, "release": "/user/writable/release"}
+            with patch.object(bridge, "INSTALL", root), patch.object(bridge, "protected"):
+                operation.schema("validate88", state, operation.schema_credentials)
+                self.assertEqual(operation.original_schema.call_args.args[1]["release"], str(root))
+                operation.original_schema.reset_mock()
+                for action in ("upgrade88", "upgrade89", "validate87", "repair", "clean", "baseline"):
+                    with self.subTest(action=action), self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                        operation.schema(action, state, operation.schema_credentials)
+                with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                    operation.schema("validate88", {**state, "release_mode": "SCHEMA_UPGRADE"}, operation.schema_credentials)
+                operation.original_schema.assert_not_called()
 
     def test_fixed_worker_command_drops_privileges(self):
         operation = object.__new__(bridge.Maintenance)
@@ -414,7 +460,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 class InstallerTest(unittest.TestCase):
     def test_completed_record_is_archived_only_after_revocation_and_baseline_checks(self):
         for scenario in ("success", "frontend_successor", "backend_changed", "foreign_current",
-                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config", "source_mismatch", "completed85", "completed86", "completed87"):
+                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config", "source_mismatch", "completed85", "completed86", "completed87", "completed88", "completed88_application"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
                 root = Path(directory)
                 for name, path in (("INSTALL", root / "tools"), ("DATA", root / "data"), ("BASE", root / "test"),
@@ -444,9 +490,11 @@ class InstallerTest(unittest.TestCase):
                                           if name.endswith(".py") or name == "taosdump-d01"}}
                 for name in config["code_sha256"]:
                     (installer.INSTALL / name).write_bytes(b"pinned")
-                source = "85" if scenario in ("source_mismatch", "completed85") else "86" if scenario == "completed86" else "87" if scenario == "completed87" else "84"
-                if scenario in ("completed85", "completed86", "completed87"):
+                source = "85" if scenario in ("source_mismatch", "completed85") else "86" if scenario == "completed86" else "87" if scenario == "completed87" else "88" if scenario in ("completed88", "completed88_application") else "84"
+                if scenario in ("completed85", "completed86", "completed87", "completed88", "completed88_application"):
                     config["target_schema"] = source
+                if scenario == "completed88_application":
+                    config.update(source_schema="88", release_mode="APPLICATION_ONLY")
                 (installer.INSTALL / "config.json").write_text(json.dumps(config))
                 phase = "FAILED" if scenario == "failed" else "AWAITING_BUSINESS_ACCEPTANCE"
                 (private / "operation.json").write_text(json.dumps({"phase": phase, "events": [{"phase": phase}],
@@ -455,8 +503,10 @@ class InstallerTest(unittest.TestCase):
                 (private / "backup-evidence").write_bytes(b"old complete backup retained")
                 state = {"phase": "AWAITING_BUSINESS_ACCEPTANCE", "candidate_started": True,
                          "release": str(candidate), "jar_sha256": config["jar_sha256"], "config_hashes": {"config": "hash"}}
-                if scenario in ("completed85", "completed86", "completed87"):
+                if scenario in ("completed85", "completed86", "completed87", "completed88", "completed88_application"):
                     state["target_schema"] = source
+                if scenario == "completed88_application":
+                    state.update(source_schema="88", release_mode="APPLICATION_ONLY")
                 (private / ("d01-" + old_release + ".json")).write_text(json.dumps(state))
                 for path in (installer.LAUNCHER, installer.UNITS / (installer.TIMER + ".service"),
                              installer.UNITS / (installer.TIMER + ".timer")):
@@ -478,7 +528,7 @@ class InstallerTest(unittest.TestCase):
                     calls.append(args)
                     return "active" if scenario == "timer" else "inactive" if "ActiveState" in args else "disabled"
                 stack.enter_context(patch.object(installer, "run", side_effect=run))
-                if scenario in ("success", "frontend_successor", "completed85", "completed86", "completed87"):
+                if scenario in ("success", "frontend_successor", "completed85", "completed86", "completed87", "completed88", "completed88_application"):
                     installer.retire_completed("d01-" + "b" * 12, source)
                     archives = list(installer.HISTORY.iterdir())
                     self.assertEqual(len(archives), 1)
@@ -491,15 +541,40 @@ class InstallerTest(unittest.TestCase):
                     self.assertFalse(installer.HISTORY.exists())
                 self.assertFalse(any(verb in args for args in calls for verb in ("stop", "restart", "start")))
 
+    def test_retry_cannot_change_application_only_mode_or_archive_a_different_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools, data = root / "tools", root / "data"
+            tools.mkdir()
+            private = data / "private"
+            private.mkdir(parents=True)
+            config = {"target_schema": "88", "source_schema": "88", "release_mode": "APPLICATION_ONLY"}
+            (tools / "config.json").write_text(json.dumps(config))
+            (private / "operation.json").write_text('{"phase":"FAILED"}')
+            original = (tools / "config.json").read_bytes()
+            with patch.object(installer, "INSTALL", tools), patch.object(installer, "DATA", data), \
+                    patch.object(installer, "SUDOERS", root / "missing-grant"), patch.object(installer, "trusted_parent"):
+                with self.assertRaisesRegex(RuntimeError, "RETRY_SCHEMA_PLAN_MISMATCH"):
+                    installer.retire_failed_prepare(source_schema="88", target_schema="88", release_mode="SCHEMA_UPGRADE")
+            self.assertEqual((tools / "config.json").read_bytes(), original)
+            self.assertTrue((private / "operation.json").exists())
+
     def test_package_manifest_pins_supported_migrations_and_rejects_mislabeled_jar(self):
-        for declared, actual, source, valid in (("84", "84", None, True), ("85", "85", None, True),
-                                                ("84", "85", None, False), ("85", "84", None, False),
-                                                ("86", "85", "85", False), ("86", "86", "85", True),
-                                                ("87", "87", "85", True), ("87", "87", "86", True),
-                                                ("87", "87", None, False), ("87", "87", "84", False),
-                                                ("88", "88", "87", True), ("88", "88", "85", False),
-                                                ("88", "88", "86", False), ("88", "88", None, False),
-                                                ("88", "87", "87", False)):
+        for declared, actual, source, mode, valid in (("84", "84", None, None, True), ("85", "85", None, None, True),
+                                                ("84", "85", None, None, False), ("85", "84", None, None, False),
+                                                ("86", "85", "85", None, False), ("86", "86", "85", None, True),
+                                                ("87", "87", "85", None, True), ("87", "87", "86", None, True),
+                                                ("87", "87", None, None, False), ("87", "87", "84", None, False),
+                                                ("88", "88", "87", None, True), ("88", "88", "85", None, False),
+                                                ("88", "88", "86", None, False), ("88", "88", None, None, False),
+                                                ("88", "87", "87", None, False),
+                                                ("88", "88", "88", "APPLICATION_ONLY", True),
+                                                ("88", "88", "88", None, False),
+                                                ("88", "88", "87", "APPLICATION_ONLY", False),
+                                                ("88", "88", "89", "APPLICATION_ONLY", False),
+                                                ("88", "89", "88", "APPLICATION_ONLY", False),
+                                                ("88", "88", "88", "unknown", False),
+                                                ("87", "87", "87", "APPLICATION_ONLY", False)):
             jar = io.BytesIO()
             with zipfile.ZipFile(jar, "w") as packaged:
                 packaged.writestr("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql", "fixture")
@@ -507,9 +582,11 @@ class InstallerTest(unittest.TestCase):
                     if int(actual) >= version:
                         filename = next((SCRIPTS.parent / "src/env/init").glob("V" + str(version) + "__*.sql")).name
                         packaged.writestr("BOOT-INF/classes/db/migration/mysql/" + filename, "fixture")
+                if int(actual) > 88:
+                    packaged.writestr("BOOT-INF/classes/db/migration/mysql/V" + actual + "__unreviewed_fixture.sql", "fixture")
                 packaged.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", "fixture")
             jar_bytes = jar.getvalue()
-            manifest = ("expectedMigration=" + declared + ("\nsourceMigration=" + source if source else "") + "\ncommit=" + "a" * 40 + "\nbackendJarSha256="
+            manifest = ("expectedMigration=" + declared + ("\nsourceMigration=" + source if source else "") + ("\nreleaseMode=" + mode if mode else "") + "\ncommit=" + "a" * 40 + "\nbackendJarSha256="
                         + hashlib.sha256(jar_bytes).hexdigest() + "\nwebIndexSha256=" + hashlib.sha256(b"web").hexdigest())
             stream = io.BytesIO()
             with tarfile.open(fileobj=stream, mode="w:gz") as archive:
@@ -521,7 +598,7 @@ class InstallerTest(unittest.TestCase):
             if valid:
                 self.assertEqual(installer.package_manifest(stream.getvalue())[0]["expectedMigration"], declared)
             else:
-                with self.assertRaises(RuntimeError):
+                with self.subTest(declared=declared, actual=actual, source=source, mode=mode), self.assertRaises(RuntimeError):
                     installer.package_manifest(stream.getvalue())
 
     @unittest.skipUnless(getattr(os, "geteuid", lambda: -1)() == 0, "real root/user permission regression")
@@ -792,6 +869,12 @@ class InstallerTest(unittest.TestCase):
             self.assertFalse(secret.exists())
 
     def test_install_publishes_exact_rule_only_after_timer_and_keeps_application_running(self):
+        self.install_publishes_rule("87", "SCHEMA_UPGRADE")
+
+    def test_application_only_install_binds_v88_mode_without_stopping_or_adding_commands(self):
+        self.install_publishes_rule("88", "APPLICATION_ONLY")
+
+    def install_publishes_rule(self, source, mode):
         with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
             root = Path(directory)
             base = root / "test"
@@ -813,7 +896,7 @@ class InstallerTest(unittest.TestCase):
             credentials = stack.enter_context(patch.object(installer, "credentials", return_value=(
                 {"password": "private-schema"}, {"password": "private-backup"}, {"backup_and_restore_verified": False})))
             stack.enter_context(patch.object(installer, "package_manifest", return_value=({"commit": "a" * 40,
-                "expectedMigration": "88", "sourceMigration": "87",
+                "expectedMigration": "88", "sourceMigration": source, "releaseMode": mode,
                 "backendJarSha256": "b" * 64, "webIndexSha256": "c" * 64}, b"pinned jar")))
             stack.enter_context(patch.dict(os.environ))
             calls = []
@@ -852,7 +935,9 @@ class InstallerTest(unittest.TestCase):
             self.assertEqual((installer.DATA / "private/schema.json").stat().st_mode & 0o777, 0o600)
             config = json.loads((installer.INSTALL / "config.json").read_text())
             self.assertNotIn("password", json.dumps(config))
-            self.assertEqual((config["source_schema"], config["target_schema"]), ("87", "88"))
+            self.assertEqual((config["source_schema"], config["target_schema"]), (source, "88"))
+            self.assertEqual(config["release_mode"], mode)
+            self.assertEqual(credentials.call_args.args[3], mode)
             self.assertTrue(all(not any(action in args for action in ("stop", "restart", "start")) for args in calls))
             unrelated = units / "unrelated.service"
             unrelated.write_text("preserved")
