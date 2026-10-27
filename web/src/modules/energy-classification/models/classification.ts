@@ -190,6 +190,18 @@ export interface ReadingView {
   normalizedQuantity: string | number | null
   createdBy: number
   batchStatus: string
+  unchangedReading?: UnchangedReadingDiagnostic | null
+}
+
+export interface UnchangedReadingDiagnostic {
+  pointId: string
+  energyItemCode: string
+  unit: string
+  startInclusive: string
+  endExclusive: string
+  intervalCount: number
+  counterValue: string
+  sources: { factId: string; batchId: string; sourceReference: string }[]
 }
 
 export interface RelationModelReference {

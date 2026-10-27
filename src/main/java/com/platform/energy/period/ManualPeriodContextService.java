@@ -42,7 +42,7 @@ public class ManualPeriodContextService {
         var window=EnergyPeriodBoundary.resolve("MONTH",month,policy.timezoneId());
         var rows=manual.readings(building,window.startInclusive(),window.endExclusive(),true);
         if(rows.size()>5000)throw error(409,LOCK_BLOCKED,"人工来源超过读取上限");
-        var readings=rows.stream().map(r->{try{return new ClassificationContracts.ReadingView(r.id(),r.batchId(),mapper.readValue(r.json(),ClassificationContracts.Reading.class),r.quantity(),r.author(),r.batchStatus());}
+        var readings=rows.stream().map(r->{try{return new ClassificationContracts.ReadingView(r.id(),r.batchId(),mapper.readValue(r.json(),ClassificationContracts.Reading.class),r.quantity(),r.author(),r.batchStatus(),null);}
             catch(Exception e){throw error(409,LOCK_BLOCKED,"人工来源证据无法读取");}}).filter(r->point.equals(r.reading().pointId())).toList();
         var current=periods.findCurrent(building,point,"MONTH",window.startInclusive(),window.endExclusive());
         var reference=current==null?null:new ProjectionReference(current.projectionId(),current.revision(),current.status(),current.nativeQuantity().toPlainString(),current.nativeUnitCode(),current.resultNature());
