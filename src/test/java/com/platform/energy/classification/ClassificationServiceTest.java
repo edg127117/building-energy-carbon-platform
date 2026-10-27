@@ -193,9 +193,26 @@ class ClassificationServiceTest {
         assertThat(service.preview(1,ROLES,BUILDING,request("pending",pending)).issues()).isNotEmpty();
         importApproved("pending",pending);assertThat(service.query(1,ROLES,BUILDING,query(v.versionId())).total()).isNull();
     }
+    @Test void historyDiagnosticsAreReadOnlyAndDoNotNeedPublishedClassification() {
+        var mid=FROM.plusSeconds(86400);
+        var a=new Reading("A",FROM,mid,"ELECTRICITY","kWh","CUMULATIVE",BigDecimal.TEN,BigDecimal.TEN,null,BigDecimal.ONE,false,"CONFIRMED","first ledger","EXACT",null);
+        var b=new Reading("A",mid,mid.plusSeconds(86400),"ELECTRICITY","kWh","CUMULATIVE",BigDecimal.TEN,BigDecimal.TEN,null,BigDecimal.ONE,false,"CONFIRMED","second ledger","EXACT",null);
+        importApproved("unchanged",a,b);
+        int before=jdbc.queryForObject("SELECT COUNT(*) FROM biz_energy_manual_reading",Integer.class);
+        var values=service.readings(1,ROLES,BUILDING,FROM,TO);
+        assertThat(values).hasSize(2).allSatisfy(r->assertThat(r.normalizedQuantity()).isEqualByComparingTo(BigDecimal.ZERO));
+        assertThat(values.stream().filter(r->r.unchangedReading()!=null)).singleElement().satisfies(r->{
+            assertThat(r.unchangedReading().intervalCount()).isEqualTo(2);
+            assertThat(r.unchangedReading().sources()).extracting(ReadingDiagnosticSource::sourceReference).containsExactly("first ledger","second ledger");
+        });
+        assertThat(repository.versions(BUILDING)).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_energy_manual_reading",Integer.class)).isEqualTo(before);
+        assertThat(service.readingBatch(1,ROLES,BUILDING,values.getFirst().batchId()).status()).isEqualTo("APPROVED");
+    }
     @Test void crossBuildingAuthorizationStopsRepositoryAccess(){
         doThrow(new BusinessException(403,"forbidden")).when(authorization).checkBuilding(3,ROLES,BUILDING);
         assertThatThrownBy(()->service.versions(3,ROLES,BUILDING)).hasMessage("forbidden");
+        assertThatThrownBy(()->service.readings(3,ROLES,BUILDING,FROM,TO)).hasMessage("forbidden");
     }
     @Test void waterQueryCannotMixElectricitySourcesOrPolicies(){
         var v=approved("R1");importApproved("electricity",reading("A","1000",null));

@@ -177,7 +177,8 @@ public class ClassificationService {
     public List<ReadingView> readings(long user,Collection<String> roles,String building,Instant from,Instant to) {
         read(user,roles,building);window(from,to);
         List<ClassificationRepository.StoredReading> values=repository.readings(building,from,to,false);limit(values.size());
-        return values.stream().map(r->new ReadingView(r.id(),r.batchId(),decode(r.json(),Reading.class),r.quantity(),r.author(),r.batchStatus())).toList();
+        var rows=values.stream().map(r->new ReadingView(r.id(),r.batchId(),decode(r.json(),Reading.class),r.quantity(),r.author(),r.batchStatus(),null)).toList();
+        return UnchangedReadingDiagnostics.annotate(rows);
     }
 
     public QueryView query(long user,Collection<String> roles,String building,QueryRequest request) {

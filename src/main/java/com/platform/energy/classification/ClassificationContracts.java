@@ -81,5 +81,11 @@ public final class ClassificationContracts {
                                    long revision, long createdBy, int count) {}
     @Schema(name="EnergyClassificationReadingView")
     public record ReadingView(String factId, String batchId, Reading reading,
-                              @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal normalizedQuantity, long createdBy, String batchStatus) {}
+                              @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal normalizedQuantity, long createdBy, String batchStatus,
+                              UnchangedReadingDiagnostic unchangedReading) {}
+    /** 只读历史现象，不代表设备故障、质量等级或正式封账裁决。区间保留原记录边界，结束不含。 */
+    public record UnchangedReadingDiagnostic(String pointId, String energyItemCode, String unit,
+            Instant startInclusive, Instant endExclusive, int intervalCount,
+            @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal counterValue, List<ReadingDiagnosticSource> sources) {}
+    public record ReadingDiagnosticSource(String factId, String batchId, String sourceReference) {}
 }
