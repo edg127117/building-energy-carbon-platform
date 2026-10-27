@@ -142,38 +142,81 @@ def restore_new(backup, expected, tables, schema="85"):
     return instance
 
 
+def identifier(name):
+    return "`" + name.replace("`", "``") + "`"
+
+
+def row_digest(expressions):
+    # NULL、空串和二进制值不混淆；HEX 不含分隔符，保留每列边界和重复行。
+    values = ["IF(" + value + " IS NULL,'N',CONCAT('V',HEX(CAST(" + value + " AS BINARY))))" for value in expressions]
+    return "SHA2(CONCAT_WS('|'," + ",".join(values) + "),256)"
+
+
 def database_image(instance):
-    # 按完整列值及行集合核对，保留重复行；导出 SQL 的排版或行顺序不是恢复后数据的身份。
     image = {}
+    metadata = (
+        ("table", "tables", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME TABLE_TYPE ENGINE ROW_FORMAT TABLE_COLLATION CREATE_OPTIONS TABLE_COMMENT AUTO_INCREMENT"),
+        ("columns", "columns", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME COLUMN_NAME ORDINAL_POSITION COLUMN_DEFAULT IS_NULLABLE DATA_TYPE CHARACTER_MAXIMUM_LENGTH CHARACTER_OCTET_LENGTH NUMERIC_PRECISION NUMERIC_SCALE DATETIME_PRECISION CHARACTER_SET_NAME COLLATION_NAME COLUMN_TYPE COLUMN_KEY EXTRA COLUMN_COMMENT GENERATION_EXPRESSION"),
+        ("indexes", "statistics", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME INDEX_NAME NON_UNIQUE SEQ_IN_INDEX COLUMN_NAME COLLATION SUB_PART PACKED NULLABLE INDEX_TYPE COMMENT INDEX_COMMENT IS_VISIBLE EXPRESSION"),
+        ("constraints", "table_constraints", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME CONSTRAINT_NAME CONSTRAINT_TYPE ENFORCED"),
+        ("keys", "key_column_usage", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME CONSTRAINT_NAME COLUMN_NAME ORDINAL_POSITION POSITION_IN_UNIQUE_CONSTRAINT REFERENCED_TABLE_SCHEMA REFERENCED_TABLE_NAME REFERENCED_COLUMN_NAME"),
+        ("references", "referential_constraints", "CONSTRAINT_SCHEMA", "TABLE_NAME", "TABLE_NAME CONSTRAINT_NAME UNIQUE_CONSTRAINT_SCHEMA UNIQUE_CONSTRAINT_NAME MATCH_OPTION UPDATE_RULE DELETE_RULE REFERENCED_TABLE_NAME"),
+        ("views", "views", "TABLE_SCHEMA", "TABLE_NAME", "TABLE_NAME VIEW_DEFINITION CHECK_OPTION IS_UPDATABLE DEFINER SECURITY_TYPE CHARACTER_SET_CLIENT COLLATION_CONNECTION"),
+    )
     for db in ("iot_platform", "iot_platform_archive"):
         defaults = sql(instance, "SELECT DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME,DEFAULT_ENCRYPTION "
                        "FROM information_schema.schemata WHERE schema_name='" + db + "'")
         image[db + "::<database>"] = {"schema": hashlib.sha256(defaults.encode()).hexdigest(), "count": 0, "rows": ""}
+        structures = {}
+        # SHOW CREATE 的显式/继承 COLLATE 展开可能在恢复后改变；比较存储元数据，不能删去真实字符集/约束检查。
+        for part, source, scope, table, fields in metadata:
+            query = "SELECT " + identifier(table) + "," + row_digest([identifier(name) for name in fields.split()])
+            query += " FROM information_schema." + source + " WHERE " + identifier(scope) + "='" + db + "'"
+            for line in sql(instance, query).splitlines():
+                name, digest = line.split("\t")
+                structures.setdefault(name, {}).setdefault(part, []).append(digest)
+        check_query = "SELECT t.TABLE_NAME," + row_digest(["c.CONSTRAINT_NAME", "c.CHECK_CLAUSE"])
+        check_query += (" FROM information_schema.check_constraints c JOIN information_schema.table_constraints t "
+                        "ON t.CONSTRAINT_SCHEMA=c.CONSTRAINT_SCHEMA AND t.CONSTRAINT_NAME=c.CONSTRAINT_NAME "
+                        "WHERE t.TABLE_SCHEMA='" + db + "' AND t.CONSTRAINT_TYPE='CHECK'")
+        for line in sql(instance, check_query).splitlines():
+            name, digest = line.split("\t")
+            structures.setdefault(name, {}).setdefault("checks", []).append(digest)
         columns = {}
         for row in sql(instance, "SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.columns WHERE table_schema='" + db
                        + "' ORDER BY TABLE_NAME,ORDINAL_POSITION").splitlines():
             table, column = row.split("\t")
             columns.setdefault(table, []).append(column)
+        assert set(columns) == set(structures), "REPORTING_V88_SCHEMA_OBJECT_SET_MISMATCH"
         for table, names in columns.items():
-            identifier = "`" + db + "`.`" + table.replace("`", "``") + "`"
-            ddl = sql(instance, "SHOW CREATE TABLE " + identifier)
-            expressions = ["IF(`" + name.replace("`", "``") + "` IS NULL,'N',CONCAT('V',HEX(CAST(`"
-                           + name.replace("`", "``") + "` AS BINARY))))" for name in names]
-            rows = sql(instance, "SELECT SHA2(CONCAT_WS('|'," + ",".join(expressions) + "),256) FROM " + identifier).splitlines()
-            image[db + "." + table] = {"schema": hashlib.sha256(ddl.encode()).hexdigest(), "count": len(rows),
-                                        "rows": hashlib.sha256("\n".join(sorted(rows)).encode()).hexdigest()}
+            target = identifier(db) + "." + identifier(table)
+            parts = {key: sorted(values) for key, values in structures[table].items()}
+            rows = sql(instance, "SELECT " + row_digest([identifier(name) for name in names]) + " FROM " + target).splitlines()
+            image[db + "." + table] = {"schema": hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest(),
+                "count": len(rows), "rows": hashlib.sha256("\n".join(sorted(rows)).encode()).hexdigest(),
+                "parts": parts, "rendering": hashlib.sha256(sql(instance, "SHOW CREATE TABLE " + target).encode()).hexdigest()}
     return image
 
 
 def assert_database_image(instance, expected, stage):
     actual = database_image(instance)
-    different = [name for name in sorted(actual.keys() | expected.keys()) if actual.get(name) != expected.get(name)]
+    different = []
+    rendered = []
+    for name in sorted(actual.keys() | expected.keys()):
+        changed = [key for key in ("schema", "count", "rows")
+                   if actual.get(name, {}).get(key) != expected.get(name, {}).get(key)]
+        if changed:
+            old, new = expected.get(name, {}).get("parts", {}), actual.get(name, {}).get("parts", {})
+            different.append({"table": name, "parts": changed,
+                              "schema_parts": [key for key in sorted(old.keys() | new.keys()) if old.get(key) != new.get(key)]})
+        elif actual[name].get("rendering") != expected[name].get("rendering"):
+            rendered.append(name)
     if different:
-        # 只输出差异表及摘要类型，不回显行值、SQL 或凭据。
-        details = [{"table": name, "parts": [key for key in ("schema", "count", "rows")
-                   if actual.get(name, {}).get(key) != expected.get(name, {}).get(key)]} for name in different]
-        emit("V88_SNAPSHOT_DIFFERENCE_" + stage + "=" + json.dumps(details, sort_keys=True))
+        # 只输出差异对象和类型，不回显行值、SQL 或凭据。
+        emit("V88_SNAPSHOT_DIFFERENCE_" + stage + "=" + json.dumps(different, sort_keys=True))
         raise AssertionError("REPORTING_V88_SNAPSHOT_MISMATCH_" + stage)
+    if rendered:
+        emit("V88_SCHEMA_RENDERING_DIFFERENCE_WITH_IDENTICAL_METADATA=" + json.dumps(rendered))
 
 
 def application_only(instance, legacy, tables):
