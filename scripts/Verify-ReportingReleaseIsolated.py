@@ -128,6 +128,12 @@ def old_rows(instance, tables):
 
 def restore_new(backup, expected, tables, schema="85"):
     instance = new_mysql()
+    # 新镜像预建的空库可能使用不同默认 collation；CREATE IF NOT EXISTS 不会还原这些库级元数据。
+    # 仅清理由本任务刚创建且已验明无业务表的新实例空库，绝不对来源或非空目标执行 DROP。
+    assert sql(instance, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema IN ('iot_platform','iot_platform_archive')") == "0"
+    emit("RESTORE_NEW_EMPTY_DATABASE_DEFAULTS=" + sql(instance,
+         "SELECT SCHEMA_NAME,DEFAULT_COLLATION_NAME FROM information_schema.schemata WHERE schema_name IN ('iot_platform','iot_platform_archive') ORDER BY SCHEMA_NAME"))
+    sql(instance, "DROP DATABASE IF EXISTS iot_platform; DROP DATABASE IF EXISTS iot_platform_archive")
     sql(instance, backup.decode())
     accounts(instance)
     assert old_rows(instance, tables) == expected
@@ -139,6 +145,9 @@ def database_image(instance):
     # 按完整列值及行集合核对，保留重复行；导出 SQL 的排版或行顺序不是恢复后数据的身份。
     image = {}
     for db in ("iot_platform", "iot_platform_archive"):
+        defaults = sql(instance, "SELECT DEFAULT_CHARACTER_SET_NAME,DEFAULT_COLLATION_NAME,DEFAULT_ENCRYPTION "
+                       "FROM information_schema.schemata WHERE schema_name='" + db + "'")
+        image[db + "::<database>"] = {"schema": hashlib.sha256(defaults.encode()).hexdigest(), "count": 0, "rows": ""}
         columns = {}
         for row in sql(instance, "SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.columns WHERE table_schema='" + db
                        + "' ORDER BY TABLE_NAME,ORDINAL_POSITION").splitlines():
