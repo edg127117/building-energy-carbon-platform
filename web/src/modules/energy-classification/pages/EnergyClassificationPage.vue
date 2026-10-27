@@ -628,6 +628,7 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
             <ElSkeleton v-if="relationWorkspace.loading.value || relationWorkspace.detailLoading.value" animated :rows="4" />
             <template v-else>
               <ElAlert v-if="relationWorkspace.error.value" :title="relationWorkspace.error.value.message" type="error" :closable="false" show-icon />
+              <ElEmpty v-else-if="relationWorkspace.modelUninitialized.value" :description="t('energyClassification.relation.modelUninitialized')" :image-size="48" />
               <ElEmpty v-else-if="!workspace.configuration.value.relationVersionId" :description="t('energyClassification.relation.noSelection')" :image-size="48" />
               <ElAlert v-else-if="!relationWorkspace.selectedVersion.value" :title="t('energyClassification.relation.noFormalVersion')" type="warning" :closable="false" show-icon />
               <template v-else>

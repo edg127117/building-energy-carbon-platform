@@ -79,6 +79,10 @@ describe('专业参数包权限边界', () => {
 
     expect(wrapper.find('[data-test="parameter-read-only"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="parameter-write-form"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('2021、2022年全国0.5703默认因子的数据年可留空')
+    const yearInputs = wrapper.findAllComponents({ name: 'ElInputNumber' }).filter(input => input.props('min') === 1900)
+    expect(yearInputs.length).toBeGreaterThanOrEqual(2)
+    expect(yearInputs.every(input => input.props('modelValue') === null)).toBe(true)
     expect(wrapper.find('[data-test="parameter-preview"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="parameter-import"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="denominator-write-form"]').exists()).toBe(true)

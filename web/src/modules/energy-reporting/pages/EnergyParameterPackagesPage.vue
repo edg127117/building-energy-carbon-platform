@@ -467,6 +467,7 @@ function nullable(value: string | null): string | null {
               <ElFormItem :label="copy.parameters.standardConditionCode"><ElInput v-model="packageDraft.standardConditionCode" :maxlength="100" :disabled="packages.saving.value" /></ElFormItem>
               <ElFormItem :label="copy.parameters.heatEvidence"><ElInput v-model="packageDraft.heat.co2eEvidenceReference" :maxlength="1000" :disabled="packages.saving.value" /></ElFormItem>
             </div>
+            <p class="field-help">{{ copy.parameters.dataYearHint }}</p>
           </section>
 
           <section class="section-block">

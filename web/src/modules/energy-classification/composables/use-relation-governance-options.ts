@@ -9,7 +9,7 @@ import type {
   RelationQueryMetadata,
   RelationVersionReference,
 } from '../models/classification'
-import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
+import { requestErrorCode, requestErrorMessage, requestErrorStatus } from '@/shared/utils/request-error'
 
 type RequestState = { message: string; code: string | null } | null
 
@@ -27,6 +27,7 @@ export function useRelationGovernanceOptions() {
   const metadata = ref<RelationQueryMetadata | null>(null)
   const loading = ref(false)
   const detailLoading = ref(false)
+  const modelUninitialized = ref(false)
   const error = ref<RequestState>(null)
   let buildingGeneration = 0
   let detailGeneration = 0
@@ -39,6 +40,7 @@ export function useRelationGovernanceOptions() {
     model.value = null
     versions.value = []
     clearDetails()
+    modelUninitialized.value = false
     error.value = null
     if (!target) {
       loading.value = false
@@ -52,8 +54,12 @@ export function useRelationGovernanceOptions() {
     if (owner !== buildingGeneration || buildingId.value !== target) return
     if (modelResult.status === 'fulfilled') model.value = modelResult.value
     if (versionsResult.status === 'fulfilled') versions.value = ordered(versionsResult.value)
-    const failed = modelResult.status === 'rejected' ? modelResult.reason : versionsResult.status === 'rejected' ? versionsResult.reason : null
-    if (failed) error.value = requestState(failed)
+    if (isUninitializedModel(modelResult, versionsResult)) {
+      modelUninitialized.value = true
+    } else {
+      const failed = versionsResult.status === 'rejected' ? versionsResult.reason : modelResult.status === 'rejected' ? modelResult.reason : null
+      if (failed) error.value = requestState(failed)
+    }
     loading.value = false
   }
 
@@ -112,7 +118,7 @@ export function useRelationGovernanceOptions() {
 
   return {
     buildingId, model, versions, formalVersions, selectedVersionId, selectedVersion,
-    boundaries, structures, nodes, metadata, loading, detailLoading, error,
+    boundaries, structures, nodes, metadata, loading, detailLoading, modelUninitialized, error,
     loadBuilding, loadSelectedVersion,
   }
 }
@@ -135,6 +141,21 @@ function boundariesFromAssignments(assignments: RelationMeteringAssignment[]): R
 
 function ordered(versions: RelationVersionReference[]): RelationVersionReference[] {
   return [...versions].sort((left, right) => right.versionNo - left.versionNo)
+}
+
+/**
+ * 仅在模型读取返回稳定的“未找到”且历史版本读取成功为空时显示初始化空态，
+ * 避免把权限、网络、版本或其他 404 伪装成可初始化的关系模型。
+ */
+function isUninitializedModel(
+  modelResult: PromiseSettledResult<RelationModelReference>,
+  versionsResult: PromiseSettledResult<RelationVersionReference[]>,
+): boolean {
+  return modelResult.status === 'rejected'
+    && requestErrorStatus(modelResult.reason) === 404
+    && requestErrorCode(modelResult.reason) === 'RELATION_NOT_FOUND'
+    && versionsResult.status === 'fulfilled'
+    && versionsResult.value.length === 0
 }
 
 function requestState(reason: unknown): RequestState {

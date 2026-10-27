@@ -99,7 +99,7 @@ class D01ReleaseTest(unittest.TestCase):
         package = self.base / "package"
         with zipfile.ZipFile(package / release.JAR, "w") as jar:
             jar.writestr(release.V84, "V84 SQL")
-            for version, path in ((85, release.V85), (86, release.V86), (87, release.V87)):
+            for version, path in ((85, release.V85), (86, release.V86), (87, release.V87), (88, release.V88)):
                 if int(migration) >= version:
                     jar.writestr(path, "fixture SQL")
             jar.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", b"fixture")
@@ -144,6 +144,20 @@ class D01ReleaseTest(unittest.TestCase):
         release.cutover(self.state, self.base, self.base)
         self.assertEqual(self.schema.call_args.args[0], "validate85")
         self.assertEqual(release.protected_json(self.state)["phase"], "AWAITING_BUSINESS_ACCEPTANCE")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_v88_uses_only_v87_baseline_and_one_bound_upgrade(self):
+        self.prepare("88", "87")
+        self.assertEqual(self.schema.call_args.args[0], "validate87")
+        self.assertEqual(self.events, [])
+        state = release.protected_json(self.state)
+        self.assertEqual((state["source_schema"], state["target_schema"]), ("87", "88"))
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        release.migrate(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade88"])
+        release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.schema.call_args.args[0], "validate88")
         self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_reporting_plans_preserve_controls_and_upgrade_one_version_at_a_time(self):
@@ -503,9 +517,10 @@ class BackupSourceIdentityTest(unittest.TestCase):
 class SchemaPlanTest(unittest.TestCase):
     def test_only_reviewed_paths_and_legacy_default_are_accepted(self):
         self.assertEqual(release.target_schema({}), "84")
-        for source, target in (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87")):
+        for source, target in (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88")):
             self.assertEqual(release.target_schema({"source_schema": source, "target_schema": target}), target)
-        for source, target in (("84", "87"), ("83", "86"), ("87", "87"), ("87", "86"), (None, "87"), ("87", "88")):
+        for source, target in (("84", "87"), ("83", "86"), ("87", "87"), ("87", "86"), (None, "87"),
+                               ("85", "88"), ("86", "88"), (None, "88")):
             with self.subTest(source=source, target=target), self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
                 release.target_schema({"source_schema": source, "target_schema": target})
 

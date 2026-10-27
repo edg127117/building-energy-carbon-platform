@@ -30,6 +30,7 @@ V84 = "BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_confli
 V85 = "BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retirement.sql"
 V86 = "BOOT-INF/classes/db/migration/mysql/V86__mysql_energy_reporting.sql"
 V87 = "BOOT-INF/classes/db/migration/mysql/V87__mysql_heat_co2_factor_formula.sql"
+V88 = "BOOT-INF/classes/db/migration/mysql/V88__mysql_default_electricity_factor_year.sql"
 CONTROL = Path("/etc/building-energy-carbon-test/daikin-control-disabled.env")
 RUNTIME_KEYS = ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_FLYWAY_ENABLED", "TDENGINE_INITIALIZATION_ENABLED",
                 "MQTT_ENABLED", "MQTT_CLIENT_ID", "MYSQL_CONTAINER_NAME", "MYSQL_VOLUME_NAME",
@@ -185,8 +186,8 @@ def prepare(name, archive, expected_sha, credentials):
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
-        require(target_schema in ("84", "85", "86", "87"), "D01_SUPPORTED_PACKAGE_REQUIRED")
-        # 新版本显式锁定源版本；同一个 V87 包可从 V85 逐版升级，或从已核验的 V86 升级。
+        require(target_schema in ("84", "85", "86", "87", "88"), "D01_SUPPORTED_PACKAGE_REQUIRED")
+        # 新版本显式锁定源版本；V87 可从 V85 逐版升级或从 V86 升级，V88 只接受已核验的 V87。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
         validate_schema_plan(state)
@@ -198,7 +199,7 @@ def prepare(name, archive, expected_sha, credentials):
             versions = [int(match[1]) for name in jar.namelist()
                         if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
             require(max(versions) == int(target_schema), "D01_PACKAGE_SCHEMA_MISMATCH")
-            for version, migration in ((85, V85), (86, V86), (87, V87)):
+            for version, migration in ((85, V85), (86, V86), (87, V87), (88, V88)):
                 if int(target_schema) >= version:
                     jar.read(migration)
             jar.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
@@ -312,7 +313,7 @@ def validate_schema_plan(state):
     target = state.get("target_schema", "84")
     source = state.get("source_schema", "83")
     require((source, target) in (("83", "84"), ("84", "85"), ("85", "86"),
-                                 ("85", "87"), ("86", "87")), "D01_STATE_SCHEMA_MISMATCH")
+                                 ("85", "87"), ("86", "87"), ("87", "88")), "D01_STATE_SCHEMA_MISMATCH")
     return target
 
 

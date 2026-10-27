@@ -30,6 +30,7 @@ export default {
   relation: {
     title: '计量关系快照', description: '分类版本只引用曾正式生效的关系版本。计量边界和表计结构仅从所选快照读取。',
     selectVersion: '关系版本', noFormalVersion: '暂无可引用的正式关系版本。请先在关系治理页面完成草稿、审核和生效。',
+    modelUninitialized: '该建筑尚未建立关系模型。请由具备能源管理员职责的实施人员按关系治理流程完成首版初始化；本页面不会自动创建或修改关系配置。',
     boundaries: '可选计量边界', structures: '表计结构', noStructures: '所选关系版本暂无可读取的表计结构。',
     noBoundaries: '所选关系版本暂无可读取的计量边界。', noSelection: '请先选择正式关系版本。',
     edit: '维护关系结构', editHint: '下方关系治理区按原有草稿、审核和生效流程写入；服务端继续校验职责分离与修订号。',
