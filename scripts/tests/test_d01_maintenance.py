@@ -582,6 +582,8 @@ class InstallerTest(unittest.TestCase):
                     if int(actual) >= version:
                         filename = next((SCRIPTS.parent / "src/env/init").glob("V" + str(version) + "__*.sql")).name
                         packaged.writestr("BOOT-INF/classes/db/migration/mysql/" + filename, "fixture")
+                if int(actual) > 88:
+                    packaged.writestr("BOOT-INF/classes/db/migration/mysql/V" + actual + "__unreviewed_fixture.sql", "fixture")
                 packaged.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", "fixture")
             jar_bytes = jar.getvalue()
             manifest = ("expectedMigration=" + declared + ("\nsourceMigration=" + source if source else "") + ("\nreleaseMode=" + mode if mode else "") + "\ncommit=" + "a" * 40 + "\nbackendJarSha256="
@@ -596,7 +598,7 @@ class InstallerTest(unittest.TestCase):
             if valid:
                 self.assertEqual(installer.package_manifest(stream.getvalue())[0]["expectedMigration"], declared)
             else:
-                with self.assertRaises(RuntimeError):
+                with self.subTest(declared=declared, actual=actual, source=source, mode=mode), self.assertRaises(RuntimeError):
                     installer.package_manifest(stream.getvalue())
 
     @unittest.skipUnless(getattr(os, "geteuid", lambda: -1)() == 0, "real root/user permission regression")

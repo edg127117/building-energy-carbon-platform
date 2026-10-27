@@ -136,10 +136,34 @@ def restore_new(backup, expected, tables, schema="85"):
 
 
 def database_image(instance):
-    # 包含所有 V88 表、正式参数、填报与审核行和完整 Flyway 历史，不能只比较 V85 旧表。
-    return {kind: hashlib.sha256(dump(instance, *flags, "--databases", "iot_platform", "iot_platform_archive")).hexdigest()
-            for kind, flags in (("schema", ("--no-data",)),
-                                ("rows", ("--no-create-info", "--skip-add-locks", "--skip-disable-keys", "--order-by-primary", "--hex-blob")))}
+    # 按完整列值及行集合核对，保留重复行；导出 SQL 的排版或行顺序不是恢复后数据的身份。
+    image = {}
+    for db in ("iot_platform", "iot_platform_archive"):
+        columns = {}
+        for row in sql(instance, "SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.columns WHERE table_schema='" + db
+                       + "' ORDER BY TABLE_NAME,ORDINAL_POSITION").splitlines():
+            table, column = row.split("\t")
+            columns.setdefault(table, []).append(column)
+        for table, names in columns.items():
+            identifier = "`" + db + "`.`" + table.replace("`", "``") + "`"
+            ddl = sql(instance, "SHOW CREATE TABLE " + identifier)
+            expressions = ["IF(`" + name.replace("`", "``") + "` IS NULL,'N',CONCAT('V',HEX(CAST(`"
+                           + name.replace("`", "``") + "` AS BINARY))))" for name in names]
+            rows = sql(instance, "SELECT SHA2(CONCAT_WS('|'," + ",".join(expressions) + "),256) FROM " + identifier).splitlines()
+            image[db + "." + table] = {"schema": hashlib.sha256(ddl.encode()).hexdigest(), "count": len(rows),
+                                        "rows": hashlib.sha256("\n".join(sorted(rows)).encode()).hexdigest()}
+    return image
+
+
+def assert_database_image(instance, expected, stage):
+    actual = database_image(instance)
+    different = [name for name in sorted(actual.keys() | expected.keys()) if actual.get(name) != expected.get(name)]
+    if different:
+        # 只输出差异表及摘要类型，不回显行值、SQL 或凭据。
+        details = [{"table": name, "parts": [key for key in ("schema", "count", "rows")
+                   if actual.get(name, {}).get(key) != expected.get(name, {}).get(key)]} for name in different]
+        emit("V88_SNAPSHOT_DIFFERENCE_" + stage + "=" + json.dumps(details, sort_keys=True))
+        raise AssertionError("REPORTING_V88_SNAPSHOT_MISMATCH_" + stage)
 
 
 def application_only(instance, legacy, tables):
@@ -157,7 +181,7 @@ def application_only(instance, legacy, tables):
             "GRANT SELECT ON " + db + ".* TO 'platform_migrator'@'%'")
     java(instance, "validate88")
     java(instance, "validate88")
-    assert database_image(instance) == before
+    assert_database_image(instance, before, "SOURCE_UNCHANGED")
     assert old_rows(instance, tables) == legacy
     with tempfile.TemporaryDirectory(prefix="v88-application-only-") as directory:
         altered = Path(directory) / "changed-migration.jar"
@@ -167,9 +191,9 @@ def application_only(instance, legacy, tables):
                 data = source.read(item.filename)
                 target.writestr(item, data + b"\nSELECT 1;\n" if item.filename == migration else data)
         java(instance, "validate88", expected=False, archive=altered)
-    assert database_image(instance) == before
+    assert_database_image(instance, before, "SOURCE_UNCHANGED")
     restored = restore_new(backup88, legacy, tables, "88")
-    assert database_image(restored) == before
+    assert_database_image(restored, before, "RESTORED_V88")
     emit("V88_APPLICATION_ONLY_SELECT_ONLY_VALIDATION_CHECKSUM_REJECTION_ALL_ROWS_HISTORY_AND_DUAL_DATABASE_RESTORE_VERIFIED")
 
 
