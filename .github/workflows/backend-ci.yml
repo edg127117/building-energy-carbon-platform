@@ -196,7 +196,7 @@ jobs:
         run: >-
           ./mvnw --batch-mode --no-transfer-progress -DskipTests package
           dependency:build-classpath -Dmdep.outputFile=target/reporting-release-classpath.txt
-      - name: Rehearse real MySQL upgrades, failures and dual-database restore
+      - name: Rehearse MySQL upgrades, V88 application-only validation and dual-database restore
         env:
           REPORTING_RELEASE_ISOLATED: 'true'
         run: python3 scripts/Verify-ReportingReleaseIsolated.py

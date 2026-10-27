@@ -187,9 +187,11 @@ def prepare(name, archive, expected_sha, credentials):
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
         require(target_schema in ("84", "85", "86", "87", "88"), "D01_SUPPORTED_PACKAGE_REQUIRED")
-        # 新版本显式锁定源版本；V87 可从 V85 逐版升级或从 V86 升级，V88 只接受已核验的 V87。
+        # 同版本换包必须显式声明，仅核验现有 V88，不能借空迁移区间跳过数据库校验。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
+        if "releaseMode" in manifest:
+            state["release_mode"] = manifest["releaseMode"]
         validate_schema_plan(state)
         require(re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "D01_COMMIT_REQUIRED")
         require(sha(target / JAR) == manifest["backendJarSha256"] and
@@ -268,6 +270,11 @@ def check_backup_sources(manifest):
 
 
 def schema(action, state, credentials):
+    target = target_schema(state)
+    source = state.get("source_schema", "83")
+    allowed = ("validate" + source, "validate" + target,
+               *("upgrade" + str(v) for v in range(int(source) + 1, int(target) + 1)))
+    require(action in allowed, "D01_SCHEMA_ACTION_NOT_AUTHORIZED")
     values = protected_json(credentials)
     endpoint = urllib.parse.urlparse(values["url"].removeprefix("jdbc:"))
     actual_runtime = state["runtime_controls"]
@@ -312,8 +319,11 @@ def validate_schema_plan(state):
     # 旧授权缺少版本字段时只代表 83→84；新增路径不能借用旧授权或跳过中间迁移。
     target = state.get("target_schema", "84")
     source = state.get("source_schema", "83")
-    require((source, target) in (("83", "84"), ("84", "85"), ("85", "86"),
-                                 ("85", "87"), ("86", "87"), ("87", "88")), "D01_STATE_SCHEMA_MISMATCH")
+    mode = state.get("release_mode", "SCHEMA_UPGRADE")
+    require((mode == "APPLICATION_ONLY" and (source, target) == ("88", "88"))
+            or (mode == "SCHEMA_UPGRADE" and (source, target) in
+                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"))),
+            "D01_STATE_SCHEMA_MISMATCH")
     return target
 
 
@@ -327,6 +337,10 @@ def migrate(state_path, backup_dir, credentials, restore_report=None):
     backup = checked_backup(state_path, state, backup_dir)
     checked_restore(backup_dir, restore_report)
     target = target_schema(state)
+    if state.get("release_mode") == "APPLICATION_ONLY":
+        # 仍经过停写、完整备份和恢复证据门禁；仅换包不运行任何 upgrade/repair，也不改冻结文件。
+        schema("validate" + target, state, credentials)
+        return
     # 每个独立进程只执行一条迁移；任一步失败保留冻结现场，不自动重试、repair 或启动旧应用。
     for version in range(int(state.get("source_schema", "83")) + 1, int(target) + 1):
         if version > int(state.get("source_schema", "83")) + 1:

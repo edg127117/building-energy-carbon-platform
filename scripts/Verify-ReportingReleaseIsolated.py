@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import uuid
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKER = shutil.which("docker") or str(Path(os.environ.get("LOCALAPPDATA", "")) / "Programs/DockerDesktop/resources/bin/docker.exe")
@@ -82,12 +83,12 @@ def new_mysql():
         time.sleep(1)
 
 
-def java(instance, action, *, packaged=True, expected=True, frozen=True, user="platform_migrator"):
+def java(instance, action, *, packaged=True, expected=True, frozen=True, user="platform_migrator", archive=None):
     url = "jdbc:mysql://127.0.0.1:" + instance[1] + "/iot_platform?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
     env = {**ENV, "D01_JDBC_URL": url, "D01_JDBC_USER": user, "D01_JDBC_PASSWORD": PASSWORD,
            "D01_WRITERS_FROZEN": str(frozen).lower(), "D01_UPGRADE_ISOLATED": "true"}
     if packaged:
-        args = [JAVA, "-Dloader.main=com.platform.tools.D01SchemaMigration", "-cp", str(JAR),
+        args = [JAVA, "-Dloader.main=com.platform.tools.D01SchemaMigration", "-cp", str(archive or JAR),
                 "org.springframework.boot.loader.launch.PropertiesLauncher", action]
     else:
         cp = os.pathsep.join((str(ROOT / "target/test-classes"), str(ROOT / "target/classes"),
@@ -132,6 +133,44 @@ def restore_new(backup, expected, tables, schema="85"):
     assert old_rows(instance, tables) == expected
     java(instance, "validate" + schema)
     return instance
+
+
+def database_image(instance):
+    # 包含所有 V88 表、正式参数、填报与审核行和完整 Flyway 历史，不能只比较 V85 旧表。
+    return {kind: hashlib.sha256(dump(instance, *flags, "--databases", "iot_platform", "iot_platform_archive")).hexdigest()
+            for kind, flags in (("schema", ("--no-data",)),
+                                ("rows", ("--no-create-info", "--skip-add-locks", "--skip-disable-keys", "--order-by-primary", "--hex-blob")))}
+
+
+def application_only(instance, legacy, tables):
+    sql(instance, "INSERT INTO iot_platform.biz_energy_reporting_scope VALUES ('SYNTHETIC_APP_ONLY',9); "
+        "INSERT INTO iot_platform.biz_energy_reporting_record VALUES ('app-only-keep','SYNTHETIC_APP_ONLY','BATCH','DRAFT',7,'2026-10-01','{\"retained\":true}'); "
+        "INSERT INTO iot_platform.biz_energy_parameter_package_import_receipt "
+        "(receipt_id,scope_key,idempotency_key,request_hash,actor_id,package_code,status,response_json,created_at) "
+        "VALUES ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','GLOBAL_PARAMETER_PACKAGES','app-only-keep','" + "a" * 64
+        + "',1,'B01','SUCCEEDED','{\"fixture\":true}','2026-10-01')")
+    before = database_image(instance)
+    backup88 = dump(instance, "--single-transaction", "--routines", "--events", "--triggers", "--databases", "iot_platform", "iot_platform_archive")
+    # 仅改新建隔离实例的测试账号，证明 validate88 不依赖写入或 DDL 权限。
+    for db in ("iot_platform", "iot_platform_archive"):
+        sql(instance, "REVOKE ALL PRIVILEGES ON " + db + ".* FROM 'platform_migrator'@'%'; "
+            "GRANT SELECT ON " + db + ".* TO 'platform_migrator'@'%'")
+    java(instance, "validate88")
+    java(instance, "validate88")
+    assert database_image(instance) == before
+    assert old_rows(instance, tables) == legacy
+    with tempfile.TemporaryDirectory(prefix="v88-application-only-") as directory:
+        altered = Path(directory) / "changed-migration.jar"
+        migration = "BOOT-INF/classes/db/migration/mysql/V88__mysql_default_electricity_factor_year.sql"
+        with zipfile.ZipFile(JAR) as source, zipfile.ZipFile(altered, "w") as target:
+            for item in source.infolist():
+                data = source.read(item.filename)
+                target.writestr(item, data + b"\nSELECT 1;\n" if item.filename == migration else data)
+        java(instance, "validate88", expected=False, archive=altered)
+    assert database_image(instance) == before
+    restored = restore_new(backup88, legacy, tables, "88")
+    assert database_image(restored) == before
+    emit("V88_APPLICATION_ONLY_SELECT_ONLY_VALIDATION_CHECKSUM_REJECTION_ALL_ROWS_HISTORY_AND_DUAL_DATABASE_RESTORE_VERIFIED")
 
 
 def main():
@@ -180,12 +219,14 @@ def main():
         java(source, "upgrade88", expected=False, frozen=False)
         java(source, "upgrade88", expected=False, user="platform_app")
         java(source, "validate87")
+        java(source, "validate88", expected=False)
         java(source, "upgrade88")
         java(source, "validate88")
         java(source, "upgrade88", expected=False)
         assert old_rows(source, tables) == before
         assert sql(source, "SELECT COUNT(*) FROM iot_platform.flyway_schema_history WHERE version='88' AND success=1") == "1"
         emit("V87_TO_V88_PACKAGED_MIGRATOR_EXACTLY_ONCE_UNFROZEN_AND_APP_DDL_REJECTED_ROWS_PRESERVED")
+        application_only(source, before, tables)
         failed88 = restore_new(backup87, before, tables, "87")
         sql(failed88, "ALTER TABLE iot_platform.biz_carbon_factor_version DROP CHECK chk_carbon_electricity_years")
         java(failed88, "upgrade88", expected=False)

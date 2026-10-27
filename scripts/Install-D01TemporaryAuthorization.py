@@ -149,7 +149,14 @@ def retry_baseline(state, prepared):
             'D01_OTHER_SITE_CHANGED')
 
 
-def retire_failed_prepare(*, online_backup=False, next_release=None, source_schema="83", target_schema="84"):
+def valid_schema_plan(source, target, mode="SCHEMA_UPGRADE"):
+    # 与发布状态机一致；未显式授权的同版本包不能被默认为“不需要迁移”。
+    return (mode == "APPLICATION_ONLY" and (source, target) == ("88", "88")) or (
+        mode == "SCHEMA_UPGRADE" and (source, target) in
+        (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88")))
+
+
+def retire_failed_prepare(*, online_backup=False, next_release=None, source_schema="83", target_schema="84", release_mode="SCHEMA_UPGRADE"):
     """Archive only an explicitly requested, revoked pre-freeze attempt."""
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
@@ -161,7 +168,8 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
     # 失败重授权只能重试同一个版本计划；不能先归档旧现场，再借新包扩大授权范围。
     old_target = config.get("target_schema", "84")
     require(old_target == target_schema
-            and config.get("source_schema", str(int(old_target) - 1)) == source_schema,
+            and config.get("source_schema", str(int(old_target) - 1)) == source_schema
+            and config.get("release_mode", "SCHEMA_UPGRADE") == release_mode,
             "D01_RETRY_SCHEMA_PLAN_MISMATCH")
     expected_events = ["PREPARED", "FAILED"] if online_backup else ["FAILED"]
     require(operation.get("phase") == "FAILED"
@@ -184,10 +192,12 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
         expected_keys = {'format', 'phase', 'release', 'previous_release', 'previous_jar_sha256', 'other_release',
                          'other_link', 'other_pid', 'other_reload', 'config_hashes', 'runtime_controls', 'backup_targets',
                          'backend_service', 'web_service', 'candidate_started', 'jar_sha256', 'web_sha256'}
-        require(set(state) in (expected_keys, expected_keys | {"source_schema", "target_schema"})
+        require(set(state) in (expected_keys, expected_keys | {"source_schema", "target_schema"},
+                                  expected_keys | {"source_schema", "target_schema", "release_mode"})
                 and state.get("target_schema", "84") in ("84", "85", "86", "87", "88")
-                and (state.get("source_schema", "83"), state.get("target_schema", "84")) in
-                    (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88")),
+                and valid_schema_plan(state.get("source_schema", "83"), state.get("target_schema", "84"),
+                                      state.get("release_mode", "SCHEMA_UPGRADE"))
+                and state.get("release_mode", "SCHEMA_UPGRADE") == release_mode,
                 "D01_OLD_PREPARED_FIELDS_INVALID")
         require(state.get("phase") == "PREPARED" and state.get("format") == "D01_PREPARED_V1"
                 and state.get("previous_release") == config["previous_release"]
@@ -265,7 +275,7 @@ def json_bytes(value):
 
 def retire_completed(next_release, source_schema="84"):
     """只归档与新源版本一致、已撤销且仍在运行的完成记录；不重置失败现场或删除备份。"""
-    require(source_schema in ("84", "85", "86", "87"), "D01_COMPLETED_SOURCE_REQUIRED")
+    require(source_schema in ("84", "85", "86", "87", "88"), "D01_COMPLETED_SOURCE_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
     paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
@@ -352,8 +362,8 @@ def package_manifest(raw):
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
         target = manifest["expectedMigration"]
         source = manifest.get("sourceMigration", str(int(target) - 1) if int(target) <= 85 else None)
-        require((source, target) in (("83", "84"), ("84", "85"), ("85", "86"),
-                                     ("85", "87"), ("86", "87"), ("87", "88")), "D01_PACKAGE_SCHEMA_PLAN_REQUIRED")
+        require(valid_schema_plan(source, target, manifest.get("releaseMode", "SCHEMA_UPGRADE")),
+                "D01_PACKAGE_SCHEMA_PLAN_REQUIRED")
         with zipfile.ZipFile(io.BytesIO(jar)) as packaged:
             versions = [int(match[1]) for name in packaged.namelist()
                         if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
@@ -369,13 +379,13 @@ def package_manifest(raw):
         return manifest, jar
 
 
-def credentials(jar, source, target_schema="84"):
+def credentials(jar, source, target_schema="84", release_mode="SCHEMA_UPGRADE"):
     print("复用服务器既有受保护管理员配置，执行只读登录及权限核查；无需输入数据库密码。")
     # The module is compiled from the already hashed bundle bytes, never
     # imported from the administrator's cwd or a user-writable upload path.
     module = types.ModuleType("d01_credentials")
     exec(compile(source, "verified-d01-credentials", "exec"), module.__dict__)
-    return module.discover(jar, target_schema)
+    return module.discover(jar, target_schema, release_mode)
 
 
 def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revoked_online_backup=False,
@@ -395,6 +405,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     manifest, jar = package_manifest(files["release.tar.gz"])
     target_schema = manifest.get("expectedMigration", "84")
     source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1))
+    release_mode = manifest.get("releaseMode", "SCHEMA_UPGRADE")
     require(sum((replace_revoked_prepare, replace_revoked_online_backup, replace_revoked_completed)) <= 1,
             "D01_ONE_REPLACEMENT_MODE_REQUIRED")
     require(target_schema == "84" or (isinstance(authorization_reference, str)
@@ -406,7 +417,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
             retire_completed("d01-" + manifest["commit"][:12], source_schema)
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
         retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release="d01-" + manifest["commit"][:12],
-                              source_schema=source_schema, target_schema=target_schema)
+                              source_schema=source_schema, target_schema=target_schema, release_mode=release_mode)
     for destination in (INSTALL, DATA, LAUNCHER, SUDOERS,
                         UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer")):
         trusted_parent(destination.parent)
@@ -416,7 +427,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
             "D01_EXPECTED_SERVICE_USER_REQUIRED")
     previous = str((BASE / "current").resolve())
     require(Path(previous).is_relative_to(BASE / "releases"), "D01_CURRENT_OUTSIDE_TEST_RELEASES")
-    schema, backup, credential_report = credentials(jar, files["d01_credentials.py"], target_schema)
+    schema, backup, credential_report = credentials(jar, files["d01_credentials.py"], target_schema, release_mode)
     expires = int(time.time()) + 24 * 3600
     release = "d01-" + manifest["commit"][:12]
     sudoers = "# One installed D01 operation; no wildcard arguments or SETENV.\n"
@@ -428,7 +439,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
               "archive_sha256": hashlib.sha256(files["release.tar.gz"]).hexdigest(),
               "jar_sha256": manifest["backendJarSha256"], "web_sha256": manifest["webIndexSha256"],
               "commit": manifest["commit"],
-              "source_schema": source_schema, "target_schema": target_schema,
+              "source_schema": source_schema, "target_schema": target_schema, "release_mode": release_mode,
               "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
               "authorization_reference": authorization_reference or "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}

@@ -95,7 +95,7 @@ class D01ReleaseTest(unittest.TestCase):
         response.status = 200
         return response
 
-    def prepare(self, migration="84", source=None):
+    def prepare(self, migration="84", source=None, mode=None):
         package = self.base / "package"
         with zipfile.ZipFile(package / release.JAR, "w") as jar:
             jar.writestr(release.V84, "V84 SQL")
@@ -104,7 +104,7 @@ class D01ReleaseTest(unittest.TestCase):
                     jar.writestr(path, "fixture SQL")
             jar.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", b"fixture")
         (package / "web/index.html").write_bytes(b"candidate")
-        (package / "MANIFEST.txt").write_text("commit=" + "a" * 40 + "\nexpectedMigration=" + migration + ("\nsourceMigration=" + source if source else "") +
+        (package / "MANIFEST.txt").write_text("commit=" + "a" * 40 + "\nexpectedMigration=" + migration + ("\nsourceMigration=" + source if source else "") + ("\nreleaseMode=" + mode if mode else "") +
                                              "\nbackendJarSha256=" + release.sha(package / release.JAR) +
                                              "\nwebIndexSha256=" + release.sha(package / "web/index.html") + "\n")
         archive = self.base / "incoming/candidate.tar.gz"
@@ -158,6 +158,70 @@ class D01ReleaseTest(unittest.TestCase):
         self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade88"])
         release.cutover(self.state, self.base, self.base)
         self.assertEqual(self.schema.call_args.args[0], "validate88")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_v88_application_only_validates_three_times_and_preserves_freeze_and_controls(self):
+        self.prepare("88", "88", "APPLICATION_ONLY")
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["validate88"])
+        self.assertEqual(self.events, [])
+        release.freeze(self.state, True, True)
+        frozen = self.state.read_bytes()
+        release.migrate(self.state, self.base, self.base)
+        self.assertEqual(self.state.read_bytes(), frozen)
+        release.cutover(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["validate88"] * 3)
+        self.assertEqual(release.protected_json(self.state)["phase"], "AWAITING_BUSINESS_ACCEPTANCE")
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertEqual(self.other.readlink(), self.base / "other-release")
+
+    def test_application_only_failed_baseline_cannot_stop_or_switch(self):
+        self.schema.side_effect = RuntimeError("D01_SCHEMA_CHECK_FAILED")
+        with self.assertRaisesRegex(RuntimeError, "SCHEMA_CHECK_FAILED"):
+            self.prepare("88", "88", "APPLICATION_ONLY")
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.current.resolve().name, "previous")
+        self.assertFalse(list((self.base / "backups").iterdir()))
+
+    def test_application_only_backup_restore_source_and_schema_gates_still_block_switch(self):
+        self.prepare("88", "88", "APPLICATION_ONLY")
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        for error, dependency in (("D01_BACKUP_FREEZE_MISMATCH", self.backup),
+                                  ("D01_RESTORE_EVIDENCE_REQUIRED", self.restore)):
+            dependency.side_effect = RuntimeError(error)
+            for action in (release.migrate, release.cutover):
+                with self.assertRaisesRegex(RuntimeError, error):
+                    action(self.state, self.base, self.base)
+            dependency.side_effect = self.manifest if dependency is self.backup else None
+        self.current_sources["mysql"]["container_id"] = "replacement"
+        for action in (release.migrate, release.cutover):
+            with self.assertRaisesRegex(RuntimeError, "BACKUP_SOURCE_CHANGED"):
+                action(self.state, self.base, self.base)
+        self.schema.assert_not_called()
+        self.current_sources = {key: dict(source) for key, source in self.sources.items()}
+        self.schema.side_effect = RuntimeError("D01_SCHEMA_CHECK_FAILED")
+        for action in (release.migrate, release.cutover):
+            with self.assertRaisesRegex(RuntimeError, "SCHEMA_CHECK_FAILED"):
+                action(self.state, self.base, self.base)
+        self.assertEqual(self.current.resolve().name, "previous")
+        self.assertFalse(any(event[1] == "start" for event in self.events))
+
+    def test_application_only_start_failure_keeps_candidate_stopped_and_preserves_previous(self):
+        self.prepare("88", "88", "APPLICATION_ONLY")
+        release.freeze(self.state, True, True)
+        previous = self.base / "releases/previous" / release.JAR
+        original = self.command
+        def fail(*args):
+            if args == ("systemctl", "start", release.BACKEND):
+                raise RuntimeError("fixture failure")
+            return original(*args)
+        with patch.object(release, "command", side_effect=fail), patch.object(release.subprocess, "run") as stopped:
+            stopped.side_effect = self.stopped
+            with self.assertRaisesRegex(RuntimeError, "NO_LEGACY_RESTART"):
+                release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.current.resolve().name, "d01-candidate")
+        self.assertEqual(release.protected_json(self.state)["phase"], "FAILED_STOPPED")
+        self.assertEqual(previous.read_bytes(), b"existing backend")
         self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_reporting_plans_preserve_controls_and_upgrade_one_version_at_a_time(self):
@@ -524,6 +588,14 @@ class SchemaPlanTest(unittest.TestCase):
             with self.subTest(source=source, target=target), self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
                 release.target_schema({"source_schema": source, "target_schema": target})
 
+    def test_application_only_requires_exact_v88_pair_and_explicit_mode(self):
+        state = {"source_schema": "88", "target_schema": "88", "release_mode": "APPLICATION_ONLY"}
+        self.assertEqual(release.target_schema(state), "88")
+        for changed in ({"release_mode": "SCHEMA_UPGRADE"}, {"release_mode": "unknown"},
+                        {"source_schema": "87"}, {"target_schema": "87"}, {"target_schema": "89"}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
+                release.target_schema({**state, **changed})
+
 
 class RestoreReportTest(unittest.TestCase):
     def setUp(self):
@@ -573,7 +645,7 @@ class RestoreReportTest(unittest.TestCase):
 class SchemaProcessTest(unittest.TestCase):
     def test_v85_requires_exact_success_marker_and_separate_account(self):
         values = {"url": "jdbc:mysql://127.0.0.1:13316/iot_platform", "user": "platform_migrator", "password": "fixture"}
-        state = {"release": "/root/trusted-tools", "runtime_controls": {
+        state = {"source_schema": "84", "target_schema": "85", "release": "/root/trusted-tools", "runtime_controls": {
             "MYSQL_HOST": "127.0.0.1", "MYSQL_PORT": "13316", "MYSQL_USER": "platform_app"}}
         with patch.object(release, "protected_json", return_value=values), patch.object(release.subprocess, "run") as command:
             command.return_value.returncode = 0
@@ -587,6 +659,15 @@ class SchemaProcessTest(unittest.TestCase):
             command.reset_mock()
             with self.assertRaisesRegex(RuntimeError, "SEPARATE_MIGRATION_ACCOUNT"):
                 release.schema("upgrade85", state, Path("/protected/schema.json"))
+            command.assert_not_called()
+
+    def test_application_only_cannot_launch_upgrade_repair_or_unpinned_action(self):
+        state = {"source_schema": "88", "target_schema": "88", "release_mode": "APPLICATION_ONLY"}
+        with patch.object(release, "protected_json") as credentials, patch.object(release.subprocess, "run") as command:
+            for action in ("upgrade88", "upgrade89", "validate87", "repair", "clean", "baseline"):
+                with self.subTest(action=action), self.assertRaisesRegex(RuntimeError, "ACTION_NOT_AUTHORIZED"):
+                    release.schema(action, state, Path("/protected/schema.json"))
+            credentials.assert_not_called()
             command.assert_not_called()
 
 
