@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tarfile
@@ -47,6 +48,12 @@ class D01ReleaseTest(unittest.TestCase):
                          "MYSQL_HOST": "127.0.0.1", "MYSQL_PORT": "13316"}
         self.states = {release.BACKEND: "active", release.WEB: "active"}
         self.events = []
+        self.sources = {engine: {"container": self.controls[engine.upper()+"_CONTAINER_NAME"],
+                                  "volume": self.controls[engine.upper()+"_VOLUME_NAME"],
+                                  "container_id": engine + "-original-id", "image": engine + ":fixture",
+                                  "volume_destination": destination}
+                        for engine, destination in (("mysql", "/var/lib/mysql"), ("tdengine", "/var/lib/taos"))}
+        self.current_sources = {engine: dict(source) for engine, source in self.sources.items()}
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         for key, value in (("BASE", self.base), ("OTHER", self.other)):
@@ -57,6 +64,9 @@ class D01ReleaseTest(unittest.TestCase):
         stack.enter_context(patch.object(release, "command", side_effect=self.command))
         self.schema = stack.enter_context(patch.object(release, "schema"))
         self.backup = stack.enter_context(patch.object(release, "validate_backup", side_effect=self.manifest))
+        self.inspect_source = stack.enter_context(patch.object(release, "inspect_backup_container",
+            side_effect=lambda docker, name, volume, destination, runner:
+                next(dict(source) for source in self.current_sources.values() if source["container"] == name)))
         self.restore = stack.enter_context(patch.object(release, "checked_restore"))
         stack.enter_context(patch.object(release.urllib.request, "urlopen", side_effect=self.http))
 
@@ -73,22 +83,28 @@ class D01ReleaseTest(unittest.TestCase):
     def manifest(self, directory):
         state = release.protected_json(self.state)
         return {"freeze_id": state["freeze_id"], "freeze_state_sha256": release.sha(self.state),
-                "backup_targets": state["backup_targets"]}
+                "backup_targets": state["backup_targets"], "sources": self.sources}
+
+    def stopped(self, *args, **kwargs):
+        self.assertEqual(kwargs["timeout"], 60)
+        self.states = {release.BACKEND: "inactive", release.WEB: "inactive"}
+        return subprocess.CompletedProcess(args, 0)
 
     def http(self, url, timeout):
         response = io.BytesIO(b"candidate")
         response.status = 200
         return response
 
-    def prepare(self, migration="84"):
+    def prepare(self, migration="84", source=None):
         package = self.base / "package"
         with zipfile.ZipFile(package / release.JAR, "w") as jar:
             jar.writestr(release.V84, "V84 SQL")
-            if migration == "85":
-                jar.writestr(release.V85, "V85 SQL")
+            for version, path in ((85, release.V85), (86, release.V86), (87, release.V87), (88, release.V88)):
+                if int(migration) >= version:
+                    jar.writestr(path, "fixture SQL")
             jar.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", b"fixture")
         (package / "web/index.html").write_bytes(b"candidate")
-        (package / "MANIFEST.txt").write_text("commit=" + "a" * 40 + "\nexpectedMigration=" + migration +
+        (package / "MANIFEST.txt").write_text("commit=" + "a" * 40 + "\nexpectedMigration=" + migration + ("\nsourceMigration=" + source if source else "") +
                                              "\nbackendJarSha256=" + release.sha(package / release.JAR) +
                                              "\nwebIndexSha256=" + release.sha(package / "web/index.html") + "\n")
         archive = self.base / "incoming/candidate.tar.gz"
@@ -110,7 +126,7 @@ class D01ReleaseTest(unittest.TestCase):
         self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_wrong_schema_package_never_switches_or_stops_services(self):
-        with self.assertRaisesRegex(RuntimeError, "D01_V84_OR_V85_PACKAGE_REQUIRED"):
+        with self.assertRaisesRegex(RuntimeError, "D01_SUPPORTED_PACKAGE_REQUIRED"):
             self.prepare("83")
         self.assertEqual(self.events, [])
 
@@ -128,6 +144,101 @@ class D01ReleaseTest(unittest.TestCase):
         release.cutover(self.state, self.base, self.base)
         self.assertEqual(self.schema.call_args.args[0], "validate85")
         self.assertEqual(release.protected_json(self.state)["phase"], "AWAITING_BUSINESS_ACCEPTANCE")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_v88_uses_only_v87_baseline_and_one_bound_upgrade(self):
+        self.prepare("88", "87")
+        self.assertEqual(self.schema.call_args.args[0], "validate87")
+        self.assertEqual(self.events, [])
+        state = release.protected_json(self.state)
+        self.assertEqual((state["source_schema"], state["target_schema"]), ("87", "88"))
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        release.migrate(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade88"])
+        release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.schema.call_args.args[0], "validate88")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_reporting_plans_preserve_controls_and_upgrade_one_version_at_a_time(self):
+        self.prepare("87", "85")
+        self.assertEqual(self.schema.call_args.args[0], "validate85")
+        self.assertEqual(self.events, [])
+        release.freeze(self.state, True, True)
+        frozen = self.state.read_bytes()
+        self.schema.reset_mock()
+        release.migrate(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade86", "upgrade87"])
+        self.assertEqual(self.state.read_bytes(), frozen)
+        release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.schema.call_args.args[0], "validate87")
+        self.assertEqual(self.config.read_bytes(), self.original)
+        self.assertEqual(self.other.readlink(), self.base / "other-release")
+
+    def test_reporting_package_requires_explicit_compatible_source_before_stop(self):
+        with self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
+            self.prepare("87")
+        self.assertEqual(self.events, [])
+
+    def test_reporting_second_migration_failure_blocks_cutover_and_keeps_first_evidence(self):
+        self.prepare("87", "85")
+        release.freeze(self.state, True, True)
+        frozen = self.state.read_bytes()
+        self.schema.reset_mock()
+        self.schema.side_effect = [None, RuntimeError("partial V87")]
+        with self.assertRaisesRegex(RuntimeError, "partial V87"):
+            release.migrate(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade86", "upgrade87"])
+        self.assertEqual(self.state.read_bytes(), frozen)
+        self.schema.side_effect = RuntimeError("D01_SCHEMA_CHECK_FAILED")
+        with self.assertRaisesRegex(RuntimeError, "SCHEMA_CHECK_FAILED"):
+            release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.current.resolve().name, "previous")
+        self.assertFalse(any(event[1] == "start" for event in self.events))
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_reporting_restore_gate_blocks_both_migration_and_cutover(self):
+        self.prepare("87", "85")
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        self.restore.side_effect = RuntimeError("D01_RESTORE_EVIDENCE_REQUIRED")
+        for action in (release.migrate, release.cutover):
+            with self.assertRaisesRegex(RuntimeError, "RESTORE_EVIDENCE_REQUIRED"):
+                action(self.state, self.base, self.base)
+        self.schema.assert_not_called()
+        self.assertEqual(self.current.resolve().name, "previous")
+        self.assertFalse(any(event[1] == "start" for event in self.events))
+
+    def test_reporting_route_drift_refuses_before_stop(self):
+        (self.base / "shared/nginx-user.conf").write_text("listen 80; proxy_pass http://127.0.0.1:8080;")
+        with self.assertRaisesRegex(RuntimeError, "TEST_ROUTE_REQUIRED"):
+            self.prepare("87", "85")
+        self.assertEqual(self.events, [])
+
+    def test_reporting_other_site_pid_drift_refuses_before_stop(self):
+        self.prepare("87", "85")
+        original = self.property
+        with patch.object(release, "service_property", side_effect=lambda service, key:
+                          "changed" if key == "MainPID" else original(service, key)):
+            with self.assertRaisesRegex(RuntimeError, "OTHER_SITE_RESTARTED"):
+                release.freeze(self.state, True, True)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_reporting_start_failure_keeps_candidate_and_no_legacy_restart(self):
+        self.prepare("87", "86")
+        release.freeze(self.state, True, True)
+        original = self.command
+        def fail(*args):
+            if args == ("systemctl", "start", release.BACKEND):
+                raise RuntimeError("fixture failure")
+            return original(*args)
+        with patch.object(release, "command", side_effect=fail), patch.object(release.subprocess, "run") as stopped:
+            stopped.side_effect = self.stopped
+            with self.assertRaisesRegex(RuntimeError, "NO_LEGACY_RESTART"):
+                release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.current.resolve().name, "d01-candidate")
+        self.assertEqual(release.protected_json(self.state)["phase"], "FAILED_STOPPED")
         self.assertEqual(self.config.read_bytes(), self.original)
 
     def test_mismatched_v85_baseline_cannot_stop_services(self):
@@ -159,7 +270,7 @@ class D01ReleaseTest(unittest.TestCase):
                 raise RuntimeError("fixture failure")
             return original(*args)
         with patch.object(release, "command", side_effect=fail), patch.object(release.subprocess, "run") as stopped:
-            stopped.return_value.returncode = 0
+            stopped.side_effect = self.stopped
             with self.assertRaisesRegex(RuntimeError, "NO_LEGACY_RESTART"):
                 release.cutover(self.state, self.base, self.base)
         self.assertEqual(self.current.resolve().name, "d01-candidate")
@@ -247,6 +358,33 @@ class D01ReleaseTest(unittest.TestCase):
             release.cutover(self.state, self.base, self.base)
         self.schema.assert_not_called()
 
+    def test_same_named_replacement_blocks_migration_and_cutover(self):
+        self.prepare("87", "85")
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        for engine in ("mysql", "tdengine"):
+            self.current_sources = {key: dict(source) for key, source in self.sources.items()}
+            self.current_sources[engine]["container_id"] = "replacement-id"
+            for action in (release.migrate, release.cutover):
+                with self.subTest(engine=engine, action=action.__name__), self.assertRaisesRegex(RuntimeError, "BACKUP_SOURCE_CHANGED"):
+                    action(self.state, self.base, self.base)
+        self.schema.assert_not_called()
+        self.assertEqual(self.current.resolve().name, "previous")
+
+    def test_source_replacement_between_v86_and_v87_keeps_v87_unexecuted(self):
+        self.prepare("87", "85")
+        release.freeze(self.state, True, True)
+        self.schema.reset_mock()
+        def replace_after_v86(*args):
+            self.assertEqual(args[0], "upgrade86")
+            self.current_sources["mysql"]["container_id"] = "replacement-id"
+        self.schema.side_effect = replace_after_v86
+        with self.assertRaisesRegex(RuntimeError, "BACKUP_SOURCE_CHANGED"):
+            release.migrate(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade86"])
+        self.assertEqual(release.protected_json(self.state)["phase"], "FROZEN")
+        self.assertEqual(self.current.resolve().name, "previous")
+
     def test_partial_migration_failure_remains_frozen(self):
         self.freeze()
         self.schema.side_effect = RuntimeError("partial DDL")
@@ -289,13 +427,51 @@ class D01ReleaseTest(unittest.TestCase):
                 raise RuntimeError("start failed")
             return original(*args)
         with patch.object(release, "command", side_effect=failing), patch.object(release.subprocess, "run") as stopped:
-            stopped.return_value.returncode = 0
+            stopped.side_effect = self.stopped
             with self.assertRaisesRegex(RuntimeError, "NO_LEGACY_RESTART"):
                 release.cutover(self.state, self.base, self.base)
         state = release.protected_json(self.state)
         self.assertTrue(state["candidate_started"])
         self.assertEqual(state["phase"], "FAILED_STOPPED")
         self.assertEqual(self.current.resolve().name, "d01-candidate")
+
+    def test_stop_returning_zero_with_active_service_cannot_claim_stopped(self):
+        self.freeze()
+        original = self.command
+        def failing(*args):
+            if args == ("systemctl", "start", release.WEB):
+                raise RuntimeError("fixture web start failure")
+            return original(*args)
+        with patch.object(release, "command", side_effect=failing), patch.object(release.subprocess, "run") as stop:
+            stop.return_value.returncode = 0
+            with self.assertRaisesRegex(RuntimeError, "D01_FAIL_STOP_FAILED"):
+                release.cutover(self.state, self.base, self.base)
+            self.assertEqual(stop.call_args.kwargs["timeout"], 60)
+        self.assertEqual(release.protected_json(self.state)["phase"], "FAILED_STOP_ERROR")
+        self.assertEqual(self.current.resolve().name, "d01-candidate")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_stop_timeout_or_os_failure_records_unknown_stop_result(self):
+        self.prepare("87", "85")
+        release.freeze(self.state, True, True)
+        frozen = self.state.read_bytes()
+        for error in (subprocess.TimeoutExpired("systemctl", 60), OSError("fixture unavailable")):
+            self.state.write_bytes(frozen)
+            self.states = {release.BACKEND: "inactive", release.WEB: "inactive"}
+            original = self.command
+            def failing(*args):
+                if args == ("systemctl", "start", release.WEB):
+                    raise RuntimeError("fixture web start failure")
+                return original(*args)
+            with patch.object(release, "command", side_effect=failing), patch.object(release.subprocess, "run", side_effect=error):
+                with self.assertRaisesRegex(RuntimeError, "D01_FAIL_STOP_FAILED"):
+                    release.cutover(self.state, self.base, self.base)
+            state = release.protected_json(self.state)
+            self.assertEqual(state["phase"], "FAILED_STOP_ERROR")
+            self.assertTrue(state["candidate_started"])
+            self.assertEqual(self.current.resolve().name, "d01-candidate")
+            self.current.unlink()
+            self.current.symlink_to(self.base / "releases/previous", target_is_directory=True)
 
     def test_candidate_started_state_cannot_be_reused_as_frozen(self):
         self.freeze()
@@ -314,10 +490,39 @@ class D01ReleaseTest(unittest.TestCase):
         with patch.object(release, "command", side_effect=no_web), \
                 patch.object(release.time, "monotonic", side_effect=[0, 999]), \
                 patch.object(release.subprocess, "run") as stopped:
-            stopped.return_value.returncode = 0
+            stopped.side_effect = self.stopped
             with self.assertRaisesRegex(RuntimeError, "NO_LEGACY_RESTART"):
                 release.cutover(self.state, self.base, self.base)
         self.assertEqual(release.protected_json(self.state)["phase"], "FAILED_STOPPED")
+
+
+class BackupSourceIdentityTest(unittest.TestCase):
+    def test_original_container_and_volume_are_checked_for_both_engines(self):
+        sources = {engine: {"container": engine, "container_id": engine + "-id", "volume": engine + "-volume",
+                             "image": engine + ":fixture", "volume_destination": destination}
+                   for engine, destination in (("mysql", "/var/lib/mysql"), ("tdengine", "/var/lib/taos"))}
+        with patch.object(release, "inspect_backup_container", side_effect=lambda docker, name, volume, destination, runner:
+                          sources[name]) as inspect:
+            release.check_backup_sources({"sources": sources})
+            self.assertEqual(inspect.call_count, 2)
+        for engine in sources:
+            changed = {key: dict(value) for key, value in sources.items()}
+            changed[engine]["container_id"] = "new-instance-id"
+            with patch.object(release, "inspect_backup_container", side_effect=lambda docker, name, volume, destination, runner:
+                              changed[name]):
+                with self.assertRaisesRegex(RuntimeError, "BACKUP_SOURCE_CHANGED"):
+                    release.check_backup_sources({"sources": sources})
+
+
+class SchemaPlanTest(unittest.TestCase):
+    def test_only_reviewed_paths_and_legacy_default_are_accepted(self):
+        self.assertEqual(release.target_schema({}), "84")
+        for source, target in (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88")):
+            self.assertEqual(release.target_schema({"source_schema": source, "target_schema": target}), target)
+        for source, target in (("84", "87"), ("83", "86"), ("87", "87"), ("87", "86"), (None, "87"),
+                               ("85", "88"), ("86", "88"), (None, "88")):
+            with self.subTest(source=source, target=target), self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
+                release.target_schema({"source_schema": source, "target_schema": target})
 
 
 class RestoreReportTest(unittest.TestCase):

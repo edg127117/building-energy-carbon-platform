@@ -60,12 +60,31 @@ public class CarbonCalculationCore {
         }
         int best = filtered.stream().mapToInt(value -> priority(category,
                 value.applicabilityLevel())).min().orElseThrow();
+        // 月中生效的同级或更优规则也构成跨版本，不能只筛整段规则后静默回退。
+        if (!locked) {
+            var from=local(activity.startInclusive(),activity.timezoneId());
+            var to=local(activity.endExclusive(),activity.timezoneId());
+            boolean partial=candidates.stream().anyMatch(v->v.category()==category
+                    &&v.energyItemCode().equals(activity.energyItemCode())&&v.status()==LifecycleStatus.ACTIVE
+                    &&v.usageNature()==usageNature(nature)&&priority(category,v.applicabilityLevel())<=best
+                    &&applicable(v,activity.buildingId(),provinceCode,gridRegionCode)
+                    &&(v.accountingYear()==null||v.accountingYear()==from.getYear())
+                    &&v.effectiveFrom().isBefore(to)&&(v.effectiveTo()==null||v.effectiveTo().isAfter(from))
+                    &&(v.effectiveFrom().isAfter(from)||v.effectiveTo()!=null&&v.effectiveTo().isBefore(to)));
+            if(partial)throw error(409,FACTOR_CONFLICT,"活动期间跨因子适用版本，须提供可分离用量，不按天估算");
+        }
         List<FactorVersion> selected = filtered.stream()
                 .filter(value -> priority(category, value.applicabilityLevel()) == best).toList();
         if (selected.size() != 1) {
             throw error(409, FACTOR_CONFLICT, "同一优先级匹配到多个排放因子版本");
         }
         FactorVersion factor = selected.getFirst();
+        if(activity.traceEvidence()!=null&&"ENERGY_BILL_CARBON_V1".equals(activity.traceEvidence().path("contractVersion").asText())
+                &&"NM3".equals(activity.unitCode())) {
+            String condition=activity.traceEvidence().path("standardConditionCode").asText();
+            if(condition.isBlank()||!condition.equals(factor.standardConditionCode()))
+                throw error(409,UNIT_INCOMPATIBLE,"账单标准体积与因子标准状态不一致，不隐式换算");
+        }
         BigDecimal converted = convert(activity.quantity(), activity.unitCode(),
                 factor.inputUnitCode());
         validateBundle(factor);
@@ -105,12 +124,15 @@ public class CarbonCalculationCore {
             gwpVersionId = gwp.gwpVersionId();
         } else {
             boolean co2Mass = "GAS_MASS".equals(factor.resultBasis());
-            if (co2Mass && (factor.category() != FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+            // 来源为CO2质量时保持原气体覆盖，不将其伪装成已含其他温室气体的CO2e直接因子。
+            boolean explicitCo2Coverage = factor.category() == FactorCategory.PURCHASED_ELECTRICITY_LOCATION
+                    && "CO2_ONLY_ELECTRICITY".equals(factor.gasCoverage())
+                    || factor.category() == FactorCategory.PURCHASED_HEAT && "CO2_ONLY_HEAT".equals(factor.gasCoverage());
+            if (co2Mass && (!explicitCo2Coverage
                     || !"CO2".equals(factor.gasCode())
-                    || !"CO2_ONLY_ELECTRICITY".equals(factor.gasCoverage())
                     || gwp == null || !"CO2".equals(gwp.gasCode())
                     || BigDecimal.ONE.compareTo(gwp.value()) != 0)) {
-                throw error(409, FACTOR_CONFLICT, "电力CO2质量因子必须使用可追溯的CO2 GWP=1版本");
+                throw error(409, FACTOR_CONFLICT, "电力或热力CO2质量因子必须保留明确气体覆盖并使用CO2 GWP=1版本");
             }
             if (!co2Mass && gwp != null) {
                 throw error(409, FACTOR_CONFLICT, "CO2e直接因子不得重复应用GWP");

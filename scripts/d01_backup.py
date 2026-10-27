@@ -548,7 +548,7 @@ def _validate(path: Path, *, permit_partial: bool) -> dict[str, Any]:
             raise _fail("CHECKSUM_MISMATCH")
     _payload(path)
     return {"backup_dir": str(path), "freeze_id": freeze_id, "freeze_state_sha256": freeze_hash,
-            "backup_targets": targets, "files_checked": len(actual),
+            "backup_targets": targets, "sources": sources, "files_checked": len(actual),
             "bytes_checked": sum(item.stat().st_size for item in actual.values())}
 
 

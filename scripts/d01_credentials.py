@@ -133,7 +133,7 @@ def check_containers():
 
 
 def mysql_rights(output, role, target_schema="84"):
-    require(target_schema in ("84", "85"), "D01_SCHEMA_TARGET_REQUIRED")
+    require(target_schema in ("84", "85", "86", "87", "88"), "D01_SCHEMA_TARGET_REQUIRED")
     lines = output.splitlines()
     require(lines and re.fullmatch(r"META\t[a-f0-9-]{36}\t[A-Z_]+\t[01]\t[01]\t[A-Za-z0-9+/=]+", lines[0]),
             "D01_MYSQL_PROBE_RESPONSE_INVALID")
@@ -165,6 +165,8 @@ def mysql_rights(output, role, target_schema="84"):
                 "D01_MYSQL_MIGRATION_PRIVILEGES_MISSING")
         require(target_schema != "85" or allows("iot_platform", {"REFERENCES"}),
                 "D01_MYSQL_V85_REFERENCES_PRIVILEGE_MISSING")
+        require(target_schema != "88" or allows("iot_platform", {"ALTER"}),
+                "D01_MYSQL_V88_ALTER_PRIVILEGE_MISSING")
     else:
         require(all(allows(db, {"SELECT", "SHOW VIEW", "TRIGGER", "EVENT"})
                     for db in ("iot_platform", "iot_platform_archive"))

@@ -96,6 +96,26 @@ class EnergyLoop7MysqlIntegrationTest {
         assertThat(jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE version<>'85' ORDER BY installed_rank"))
                 .isEqualTo(historyBeforeRetirement);
         assertThat(retirement.migrate().migrationsExecuted).as("V85重跑不得重复排除或改写资产").isZero();
+        var historyBeforeReporting = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
+        Flyway reporting = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").target("86").load();
+        assertThat(reporting.migrate().migrationsExecuted).as("V85到V86只创建独立账单与参数包治理表").isEqualTo(1);
+        reporting.validate();
+        assertThat(jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE version<>'86' ORDER BY installed_rank"))
+                .isEqualTo(historyBeforeReporting);
+        for (String table : List.of("biz_energy_reporting_scope", "biz_energy_reporting_record", "biz_energy_reporting_receipt",
+                "biz_energy_parameter_package_import_receipt")) {
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class)).isZero();
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_energy_parameter_package_import_lock", Integer.class)).isEqualTo(1);
+        var historyBeforeHeat = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
+        Flyway heat = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").target("87").load();
+        assertThat(heat.migrate().migrationsExecuted).as("V86到V87仅登记热力CO2公式，不新增生效因子").isEqualTo(1);
+        heat.validate();
+        assertThat(jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE version<>'87' ORDER BY installed_rank"))
+                .isEqualTo(historyBeforeHeat);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_formula_version WHERE formula_version_id='CFV_HEAT_CO2_V1' AND result_basis='GAS_MASS' AND gas_coverage='CO2_ONLY_HEAT'", Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history WHERE success=1 ORDER BY installed_rank DESC LIMIT 1", String.class)).isEqualTo("87");
+        assertThat(heat.migrate().migrationsExecuted).as("V87重跑不得重复创建记录或改写历史").isZero();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
         assertThat(jdbc.queryForObject("""

@@ -35,4 +35,23 @@ class CarbonClassificationReportServiceTest {
         var result=CarbonClassificationReportService.aggregate("BLD","BATCH","COMPLETED_COMPLETE",List.of(new CarbonClassificationReportService.Entry(e.item(),CarbonEvidence.object())));
         assertThat(result.classificationComplete()).isFalse();assertThat(result.nodes()).isEmpty();assertThat(result.totalKgCo2e()).isEqualByComparingTo("50");
     }
+    @Test void wholeBuildingBillHasExplicitUnallocatedNodeAndKeepsExclusionEvidence() {
+        var original=entry("BILL","900","513.27",true);
+        var evidence=CarbonEvidence.parse("""
+            {"activity":{"startInclusive":"2024-01-01T00:00:00Z"},"upstream":{
+            "contractVersion":"ENERGY_BILL_CARBON_V1","sourceId":"SOURCE",
+            "grossQuantity":"1000","excludedQuantity":"100","billSource":{"input":{"evidence":"bill"}}}}
+            """);
+        var result=CarbonClassificationReportService.aggregate("BLD","BATCH","COMPLETED_COMPLETE",
+                List.of(new CarbonClassificationReportService.Entry(original.item(),evidence)));
+        assertThat(result.classificationComplete()).isFalse();
+        assertThat(result.nodes()).singleElement().satisfies(node->{
+            assertThat(node.nodeCode()).isEqualTo("UNALLOCATED");
+            assertThat(node.activityQuantity()).isEqualByComparingTo("900");
+            assertThat(node.emissionKgCo2e()).isEqualByComparingTo("513.27");
+        });
+        assertThat(result.excludedSources()).singleElement().satisfies(e->assertThat(e.path("excludedQuantity").asText()).isEqualTo("100"));
+        assertThat(result.flows()).isEmpty();
+    }
+
 }

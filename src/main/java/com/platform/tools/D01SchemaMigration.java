@@ -73,12 +73,48 @@ public final class D01SchemaMigration {
                 throw new IllegalStateException("D01_SCHEMA_INCOMPLETE");
             }
         }
-        if (target.equals("85") && jdbc.queryForObject("""
+        if (Integer.parseInt(target) >= 85 && jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS
                 WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='biz_test_building_retirement'
                   AND REFERENCED_TABLE_NAME='building' AND DELETE_RULE='RESTRICT' AND UPDATE_RULE='RESTRICT'
                 """, Integer.class) != 1) {
             throw new IllegalStateException("D01_V85_REFERENCE_INCOMPLETE");
+        }
+        if (Integer.parseInt(target) >= 86) {
+            // 检查存储约束而非业务行数：已填报的正式库允许有数据，维护入口不发布楼宇参数。
+            if (jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()
+                    AND table_name IN ('biz_energy_reporting_scope','biz_energy_reporting_record',
+                    'biz_energy_reporting_receipt','biz_energy_parameter_package_import_lock',
+                    'biz_energy_parameter_package_import_receipt')
+                    AND engine='InnoDB' AND table_collation='utf8mb4_unicode_ci'
+                    """, Integer.class) != 5 || jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM biz_energy_parameter_package_import_lock
+                    WHERE scope_key='GLOBAL_PARAMETER_PACKAGES'
+                    """, Integer.class) != 1) {
+                throw new IllegalStateException("D01_V86_STORAGE_INCOMPLETE");
+            }
+        }
+        if (Integer.parseInt(target) >= 87 && jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_carbon_formula_version
+                WHERE formula_version_id='CFV_HEAT_CO2_V1' AND algorithm_code='PURCHASED_HEAT_CO2_V1'
+                  AND result_basis='GAS_MASS' AND gas_coverage='CO2_ONLY_HEAT'
+                """, Integer.class) != 1) {
+            throw new IllegalStateException("D01_V87_FORMULA_INCOMPLETE");
+        }
+        if (Integer.parseInt(target) >= 88) {
+            String clause = jdbc.queryForObject("""
+                    SELECT c.CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS c
+                    JOIN information_schema.TABLE_CONSTRAINTS t
+                      ON t.CONSTRAINT_SCHEMA=c.CONSTRAINT_SCHEMA AND t.CONSTRAINT_NAME=c.CONSTRAINT_NAME
+                    WHERE c.CONSTRAINT_SCHEMA=DATABASE() AND c.CONSTRAINT_NAME='chk_carbon_electricity_years'
+                      AND t.TABLE_NAME='biz_carbon_factor_version' AND t.ENFORCED='YES'
+                    """, String.class);
+            String normalized = clause == null ? "" : clause.toLowerCase(java.util.Locale.ROOT).replaceAll("\\s+", "");
+            if (!normalized.contains("2021,2022") || !normalized.contains("national")
+                    || !normalized.contains("input_unit_code") || !normalized.contains("effective_to")) {
+                throw new IllegalStateException("D01_V88_DEFAULT_YEAR_CONSTRAINT_INCOMPLETE");
+            }
         }
         System.out.println("D01_SCHEMA_VALIDATED=" + target);
     }
@@ -88,6 +124,9 @@ public final class D01SchemaMigration {
             case "validate83" -> "83";
             case "validate84", "upgrade84" -> "84";
             case "validate85", "upgrade85" -> "85";
+            case "validate86", "upgrade86" -> "86";
+            case "validate87", "upgrade87" -> "87";
+            case "validate88", "upgrade88" -> "88";
             default -> throw new IllegalArgumentException("D01_SCHEMA_ACTION_REQUIRED");
         };
     }

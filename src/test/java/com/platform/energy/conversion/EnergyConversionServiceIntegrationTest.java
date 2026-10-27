@@ -148,6 +148,31 @@ class EnergyConversionServiceIntegrationTest {
                 403, EnergyConversionErrors.FORBIDDEN);
     }
 
+    @Test
+    void formalRulesUseProductionVersionsAndRequireWholePeriodCoverage() {
+        approveCatalog("EIV_HEAT_1",false);
+        var formula=service.createFormulaVersion(USER,ENERGY,new CreateFormulaVersionRequest(
+                "FORMAL_TEST_HEAT","DIRECT_TCE_FACTOR","CALORIFIC_EQUIVALENT","DIRECT_TCE_FACTOR_V1",
+                "GJ","TCE","TCE_PER_INPUT_UNIT","MANUAL","隔离测试正式规则口径",AT,null));
+        service.approveFormula(USER,ENERGY,formula.versionId(),conversionApprove());
+        var parameter=service.createParameterVersion(USER,ENERGY,new CreateParameterVersionRequest(
+                "FORMAL_TEST_HEAT_PARAM","HEAT",formula.versionId(),new BigDecimal("0.5"),"TCE_PER_INPUT_UNIT",
+                null,"PURCHASED_HEAT","GLOBAL","PRODUCTION","MANUAL","隔离测试正式参数",AT,AT.plusMonths(1)));
+        service.approveParameter(USER,ENERGY,parameter.versionId(),conversionApprove());
+        var value=service.evaluateFormalRules(USER,ENERGY,heatDirectRequest(new BigDecimal("2")),AT.plusMonths(1));
+        assertThat(value.tce()).isEqualByComparingTo("1");
+        assertThat(value.parameterVersionId()).isEqualTo(parameter.versionId());
+        assertCode(()->service.simulate(USER,ENERGY,heatDirectRequest(new BigDecimal("2"))),409,EnergyConversionErrors.RULE_MISSING);
+        assertThatThrownBy(()->service.evaluateFormalRules(USER,ENERGY,heatDirectRequest(BigDecimal.ONE),AT.plusMonths(2)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("整个期间");
+        // 月中短暂生效的另一规则在月初、月末均查不到，也必须阻止整月匹配。
+        var conflict=service.createParameterVersion(USER,ENERGY,new CreateParameterVersionRequest(
+                "FORMAL_TEST_HEAT_OVERLAP","HEAT",formula.versionId(),new BigDecimal("0.6"),"TCE_PER_INPUT_UNIT",
+                null,"PURCHASED_HEAT","GLOBAL","PRODUCTION","MANUAL","隔离测试冲突参数",AT.plusDays(10),AT.plusDays(20)));
+        service.approveParameter(USER,ENERGY,conflict.versionId(),conversionApprove());
+        assertCode(()->service.evaluateFormalRules(USER,ENERGY,heatDirectRequest(BigDecimal.ONE),AT.plusMonths(1)),409,EnergyConversionErrors.RULE_CONFLICT);
+    }
+
     private void approveCore(String itemVersion, String formulaVersion,
                              String parameterVersion, boolean massUnits) {
         if (itemVersion != null) approveCatalog(itemVersion, massUnits);

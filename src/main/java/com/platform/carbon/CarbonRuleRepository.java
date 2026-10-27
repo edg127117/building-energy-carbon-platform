@@ -382,7 +382,7 @@ class CarbonRuleRepository {
             case PURCHASED_ELECTRICITY_LOCATION ->
                     "GAS_MASS".equals(resultBasis) ? "PURCHASED_ELECTRICITY_LOCATION_CO2_V1"
                             : "PURCHASED_ELECTRICITY_LOCATION_CO2E_V1";
-            case PURCHASED_HEAT -> "PURCHASED_HEAT_CO2E_V1";
+            case PURCHASED_HEAT -> "GAS_MASS".equals(resultBasis) ? "PURCHASED_HEAT_CO2_V1" : "PURCHASED_HEAT_CO2E_V1";
         };
         Integer count = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM biz_carbon_formula_version

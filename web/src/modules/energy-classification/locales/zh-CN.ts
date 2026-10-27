@@ -11,7 +11,7 @@ export default {
     copySource: '复制来源版本', emptySource: '留空创建空白版本',
     noSelected: '请先创建或选择一个分类版本。',
   },
-  actions: { restoreDraft: '还原未保存修改', create: '创建版本', save: '保存配置', submit: '提交审核', withdraw: '撤回为草稿', reject: '退回草稿', approve: '批准生效', refresh: '刷新', query: '查询', preview: '预览导入', import: '导入待审核读数', approveBatch: '审核导入批次', reviewReadingBatch: '审核该批次', downloadTemplate: '下载 CSV 模板', add: '新增', edit: '编辑', remove: '删除', loadReadings: '查询已入库读数' },
+  actions: { restoreDraft: '还原未保存修改', create: '创建版本', save: '保存配置', submit: '提交审核', withdraw: '撤回为草稿', reject: '退回草稿', approve: '批准生效', refresh: '刷新', query: '查询', preview: '预览导入', import: '导入待审核读数', approveBatch: '审核导入批次', reviewReadingBatch: '审核该批次', downloadTemplate: '下载 CSV 模板', add: '新增', edit: '编辑', remove: '删除', loadReadings: '查询已入库读数', openDailyWorkspace: '返回日常账单填报', openParameterPackages: '维护专业参数包' },
   fields: {
     reason: '变更说明', reasonPlaceholder: '请说明本次操作原因', relationVersionId: '关系版本标识', schemeCode: '分类方案编码', schemeName: '分类方案名称', dimension: '分类维度', mode: '分类模式',
     nodeCode: '分类节点编码', nodeName: '分类节点名称', parentCode: '父节点编码', objectType: '对象类型', objectId: '对象标识', meterPointId: '计量测点标识（可选）',
@@ -30,6 +30,7 @@ export default {
   relation: {
     title: '计量关系快照', description: '分类版本只引用曾正式生效的关系版本。计量边界和表计结构仅从所选快照读取。',
     selectVersion: '关系版本', noFormalVersion: '暂无可引用的正式关系版本。请先在关系治理页面完成草稿、审核和生效。',
+    modelUninitialized: '该建筑尚未建立关系模型。请由具备能源管理员职责的实施人员按关系治理流程完成首版初始化；本页面不会自动创建或修改关系配置。',
     boundaries: '可选计量边界', structures: '表计结构', noStructures: '所选关系版本暂无可读取的表计结构。',
     noBoundaries: '所选关系版本暂无可读取的计量边界。', noSelection: '请先选择正式关系版本。',
     edit: '维护关系结构', editHint: '下方关系治理区按原有草稿、审核和生效流程写入；服务端继续校验职责分离与修订号。',

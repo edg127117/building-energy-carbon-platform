@@ -8,6 +8,7 @@ export default {
     title: '发起正式碳核算',
     ariaLabel: '正式碳核算发起',
     description: '期间时间必须含 UTC 偏移或 Z；页面不会根据浏览器时区、历史批次或专业规则补全字段。',
+    reportingMonth: '已从月度填报带入月份 {month}。请由核算人员明确填写期间边界和时区后调用后端。',
     periodType: '核算周期类型',
     startInclusive: '期间起始（ISO 8601，含偏移）',
     endExclusive: '期间结束（ISO 8601，含偏移）',
