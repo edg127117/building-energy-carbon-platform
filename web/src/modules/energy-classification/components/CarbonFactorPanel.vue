@@ -96,6 +96,12 @@ const factorDraft = ref<FactorDraft>(emptyFactor())
 const reviewDraft = ref<ReviewDraft | null>(null)
 
 const definition = computed(() => factorDraft.value.factorCategory ? definitions[factorDraft.value.factorCategory] : null)
+const selectedDefinition = computed(() => {
+  const category = factorDraft.value.factorCategory
+  const formula = workspace.ruleOptions.value.formulas.find(item => item.versionId === factorDraft.value.formulaVersionId)
+  return category && formula ? supportedDefinitions(category)
+    .find(item => item.algorithmCode === formula.algorithmCode && item.resultBasis === formula.resultBasis) ?? null : null
+})
 const categoryOptions = computed(() => (Object.entries(definitions) as Array<[FactorCategory, FactorDefinition]>)
   .filter(([, item]) => !factorDraft.value.scopeType || item.scopeType === factorDraft.value.scopeType))
 const energyOptions = computed(() => {
@@ -130,7 +136,8 @@ const formulaOptions = computed(() => {
   return workspace.ruleOptions.value.formulas.filter(formula => {
     const formulaFrom = localDateTime(formula.effectiveFrom)
     const formulaTo = formula.effectiveTo ? localDateTime(formula.effectiveTo) : null
-    return formula.algorithmCode === current.algorithmCode && formula.resultBasis === current.resultBasis
+    return supportedDefinitions(factorDraft.value.factorCategory as FactorCategory)
+      .some(item => formula.algorithmCode === item.algorithmCode && formula.resultBasis === item.resultBasis)
       && (usageNature === 'DEVELOPMENT_REFERENCE' || formula.usageNature === 'FORMAL')
       && formulaFrom !== null && formulaFrom <= effectiveAt
       && (formulaTo === null || effectiveAt < formulaTo)
@@ -142,7 +149,7 @@ const canCreateSource = computed(() => !workspace.loading.value && !workspace.sa
   && !!sourceDraft.value.documentReference.trim() && !!sourceDraft.value.applicabilityNote.trim()
   && !!sourceDraft.value.evidenceReference.trim() && !!sourceDraft.value.usageNature)
 const canCreateFactor = computed(() => {
-  const current = definition.value
+  const current = selectedDefinition.value
   const draft = factorDraft.value
   const applicabilityReady = !!draft.applicabilityLevel
     && (!needsCurrentBuilding.value || !!props.buildingId.trim())
@@ -161,6 +168,14 @@ const dirty = computed(() => workspace.saving.value || hasSourceDraftInput(sourc
 
 watch(() => props.buildingId, () => {
   if (needsCurrentBuilding.value) factorDraft.value.applicabilityLevel = ''
+})
+watch(() => selectedDefinition.value?.resultBasis, (basis, previous) => {
+  if (!previous || basis === previous) return
+  // CO₂ 与 CO₂e 不能仅改标签复用同一参数；切换口径后重新填写数值和证据。
+  factorDraft.value.components.forEach(component => {
+    component.value = ''
+    component.evidenceReference = ''
+  })
 })
 watch(dirty, value => emit('dirty-change', value), { immediate: true })
 
@@ -191,17 +206,47 @@ function label(values: Record<string, string>, value: string): string {
   return values[value] ?? value
 }
 
-function codeLabel(name: string, code: string): string {
-  return [name, code].join(copy.separator)
-}
-
 function sourceLabel(source: FactorSource): string {
-  return [source.sourceName, source.sourceCode, `${copy.versionPrefix}${source.versionNo}`].join(copy.separator)
+  return [source.sourceName, `${copy.versionPrefix}${source.versionNo}`].join(copy.separator)
 }
 
 function sourceName(versionId: string): string {
   const source = workspace.sources.value.find(item => item.sourceVersionId === versionId)
-  return source ? sourceLabel(source) : versionId
+  return source ? sourceLabel(source) : copy.factor.unknownSource
+}
+
+function mappedLabel(values: Readonly<Record<string, string>>, value: string, fallback: string): string {
+  return values[value] ?? fallback
+}
+
+function energyItemName(itemCode: string): string {
+  return workspace.energyItems.value.find(item => item.itemCode === itemCode)?.itemName
+    ?? workspace.approvedEnergyItems.value.find(item => item.itemCode === itemCode)?.itemName
+    ?? copy.factor.unknownEnergyItem
+}
+
+function energyItemLabel(item: { itemName: string }): string {
+  return item.itemName
+}
+
+function unitOptionLabel(unit: { unitName: string, symbol: string }): string {
+  return unit.symbol ? `${unit.unitName}（${unit.symbol}）` : unit.unitName
+}
+
+function factorUnitLabel(unitCode: string): string {
+  return mappedLabel(copy.unitNames, unitCode, copy.factor.serverUnit)
+}
+
+function formulaName(formula: RuleFormulaOption): string {
+  return mappedLabel(copy.formulaNames, formula.algorithmCode, copy.factor.serverFormula)
+}
+
+function roundingModeName(roundingMode: string): string {
+  return mappedLabel(copy.roundingModeNames, roundingMode, copy.factor.serverRounding)
+}
+
+function factorTitle(factor: FactorVersion): string {
+  return [label(copy.categories, factor.factorCategory), energyItemName(factor.energyItemCode), `${copy.versionPrefix}${factor.versionNo}`].join(copy.separator)
 }
 
 function scopeChanged(): void {
@@ -236,12 +281,27 @@ function sourceChanged(): void {
   })
 }
 
-function componentUnit(componentType: FactorComponentType): string {
+function componentUnitCode(componentType: FactorComponentType): string {
   const inputUnit = factorDraft.value.inputUnitCode.trim()
   if (componentType === 'LOWER_HEATING_VALUE') return inputUnit ? `MJ/${inputUnit}` : ''
   if (componentType === 'CARBON_CONTENT_PER_HEAT') return 'KG_C_PER_MJ'
   if (componentType === 'OXIDATION_RATE') return 'RATIO'
-  return inputUnit ? `KG_CO2E/${inputUnit}` : ''
+  const selected = selectedDefinition.value
+  if (!selected || !inputUnit) return ''
+  return `${selected.resultBasis === 'GAS_MASS' ? 'KG_CO2' : 'KG_CO2E'}/${inputUnit}`
+}
+
+function supportedDefinitions(category: FactorCategory): FactorDefinition[] {
+  const legacy = definitions[category]
+  if (category !== 'PURCHASED_ELECTRICITY_LOCATION') return [legacy]
+  // 公告中的 CO₂ 因子与旧 CO₂e 直接因子共存，身份和参数单位随用户明确选中的服务端公式提交。
+  return [legacy, { ...legacy, algorithmCode: 'PURCHASED_ELECTRICITY_LOCATION_CO2_V1',
+    resultBasis: 'GAS_MASS', gasCode: 'CO2', gasCoverage: 'CO2_ONLY_ELECTRICITY' }]
+}
+
+function componentUnitLabel(componentType: FactorComponentType): string {
+  const unitCode = componentUnitCode(componentType)
+  return unitCode ? factorUnitLabel(unitCode) : copy.unavailable
 }
 
 function nullable(value: string): string | null {
@@ -260,7 +320,7 @@ function localDateTime(value: string): number | null {
 
 function formulaLabel(formula: RuleFormulaOption): string {
   const effectiveRange = formula.effectiveTo ? `${formula.effectiveFrom}${copy.rangeSeparator}${formula.effectiveTo}` : formula.effectiveFrom
-  return [formula.code, `${copy.versionPrefix}${formula.versionNo}`, effectiveRange].join(copy.separator)
+  return [formulaName(formula), mappedLabel(copy.resultBasisNames, formula.resultBasis, copy.factor.serverFormula), `${copy.versionPrefix}${formula.versionNo}`, effectiveRange].join(copy.separator)
 }
 
 function roundingLabel(policy: RuleRoundingPolicyOption): string {
@@ -269,7 +329,17 @@ function roundingLabel(policy: RuleRoundingPolicyOption): string {
     `${copy.factor.intensityScale}${policy.intensityScale}`,
     `${copy.factor.shareScale}${policy.shareScale}`,
   ].join(copy.scaleSeparator)
-  return [policy.code, `${copy.versionPrefix}${policy.versionNo}`, scales, policy.roundingMode].join(copy.separator)
+  return [copy.factor.serverRounding, `${copy.versionPrefix}${policy.versionNo}`, scales, roundingModeName(policy.roundingMode)].join(copy.separator)
+}
+
+function formulaNameByVersion(versionId: string): string {
+  const formula = workspace.ruleOptions.value.formulas.find(item => item.versionId === versionId)
+  return formula ? formulaName(formula) : copy.factor.serverFormula
+}
+
+function roundingNameByVersion(versionId: string): string {
+  const policy = workspace.ruleOptions.value.roundingPolicies.find(item => item.versionId === versionId)
+  return policy ? roundingLabel(policy) : copy.factor.serverRounding
 }
 
 async function submitSource(): Promise<void> {
@@ -286,7 +356,7 @@ async function submitSource(): Promise<void> {
 }
 
 async function submitFactor(): Promise<void> {
-  const current = definition.value
+  const current = selectedDefinition.value
   const draft = factorDraft.value
   if (!current || !canCreateFactor.value || !draft.scopeType || !draft.factorCategory || !draft.applicabilityLevel || !draft.usageNature) return
   const created = await workspace.createFactor({
@@ -298,7 +368,7 @@ async function submitFactor(): Promise<void> {
     standardConditionCode: nullable(draft.standardConditionCode), usageNature: draft.usageNature,
     effectiveFrom: draft.effectiveFrom, effectiveTo: nullable(draft.effectiveTo),
     formulaVersionId: draft.formulaVersionId.trim(), roundingPolicyVersionId: draft.roundingPolicyVersionId.trim(),
-    components: draft.components.map(component => ({ componentType: component.componentType, value: component.value.trim(), unit: componentUnit(component.componentType), sourceVersionId: component.sourceVersionId, evidenceReference: component.evidenceReference.trim() })),
+    components: draft.components.map(component => ({ componentType: component.componentType, value: component.value.trim(), unit: componentUnitCode(component.componentType), sourceVersionId: component.sourceVersionId, evidenceReference: component.evidenceReference.trim() })),
     dataYear: needsElectricityYears.value ? optionalYear(draft.dataYear) : null,
     accountingYear: needsElectricityYears.value ? optionalYear(draft.accountingYear) : null,
   })
@@ -369,8 +439,8 @@ function disable(factor: FactorVersion): void {
             <article v-for="source in workspace.sources.value" :key="source.sourceVersionId" class="source-row" :data-test="'source-' + source.sourceVersionId">
               <strong>{{ sourceLabel(source) }}</strong>
               <span>{{ source.publisher }}{{ copy.separator }}{{ source.documentReference }}</span>
-              <code>{{ source.sourceVersionId }}</code>
               <ElTag>{{ label(copy.usageNature, source.usageNature) }}</ElTag>
+              <details class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalSourceCode }}{{ copy.fieldSeparator }}<code>{{ source.sourceCode }}</code></div><div>{{ copy.factor.technicalSourceVersion }}{{ copy.fieldSeparator }}<code>{{ source.sourceVersionId }}</code></div></details>
             </article>
           </div>
         </section>
@@ -382,32 +452,33 @@ function disable(factor: FactorVersion): void {
             <ElFormItem :label="copy.factor.factorCode"><ElInput v-model="factorDraft.factorCode" data-test="factor-code" /></ElFormItem>
             <ElFormItem :label="copy.factor.scope"><ElSelect v-model="factorDraft.scopeType" data-test="factor-scope" clearable @change="scopeChanged"><ElOption v-for="value in Object.keys(copy.scopes)" :key="value" :value="value" :label="label(copy.scopes, value)" /></ElSelect></ElFormItem>
             <ElFormItem :label="copy.factor.category"><ElSelect v-model="factorDraft.factorCategory" data-test="factor-category" :disabled="!factorDraft.scopeType" clearable @change="categoryChanged"><ElOption v-for="[value] in categoryOptions" :key="value" :value="value" :label="label(copy.categories, value)" /></ElSelect></ElFormItem>
-            <ElFormItem :label="copy.factor.energyItem"><ElSelect v-model="factorDraft.energyItemCode" data-test="factor-energy" :disabled="!definition || !energyOptions.length" clearable filterable><ElOption v-for="item in energyOptions" :key="item.versionId" :value="item.itemCode" :label="codeLabel(item.itemName, item.itemCode)" /></ElSelect><small v-if="definition && !energyOptions.length">{{ copy.factor.noEnergyItems }}</small></ElFormItem>
-            <ElFormItem :label="copy.factor.sourceVersion"><ElSelect v-model="factorDraft.sourceVersionId" data-test="factor-source" :disabled="!workspace.sources.value.length" clearable filterable @change="sourceChanged"><ElOption v-for="source in workspace.sources.value" :key="source.sourceVersionId" :value="source.sourceVersionId" :label="sourceLabel(source)" /></ElSelect><small v-if="!workspace.sources.value.length">{{ copy.factor.noSources }}</small></ElFormItem>
+            <ElFormItem :label="copy.factor.energyItem"><ElSelect v-model="factorDraft.energyItemCode" data-test="factor-energy" :disabled="!definition || !energyOptions.length" clearable filterable><ElOption v-for="item in energyOptions" :key="item.versionId" :value="item.itemCode" :label="energyItemLabel(item)" /></ElSelect><small v-if="definition && !energyOptions.length">{{ copy.factor.noEnergyItems }}</small><details v-if="factorDraft.energyItemCode" class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalEnergyItem }}{{ copy.fieldSeparator }}<code>{{ factorDraft.energyItemCode }}</code></div></details></ElFormItem>
+            <ElFormItem :label="copy.factor.sourceVersion"><ElSelect v-model="factorDraft.sourceVersionId" data-test="factor-source" :disabled="!workspace.sources.value.length" clearable filterable @change="sourceChanged"><ElOption v-for="source in workspace.sources.value" :key="source.sourceVersionId" :value="source.sourceVersionId" :label="sourceLabel(source)" /></ElSelect><small v-if="!workspace.sources.value.length">{{ copy.factor.noSources }}</small><details v-if="factorDraft.sourceVersionId" class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalSourceVersion }}{{ copy.fieldSeparator }}<code>{{ factorDraft.sourceVersionId }}</code></div></details></ElFormItem>
             <ElFormItem :label="copy.factor.applicability"><ElSelect v-model="factorDraft.applicabilityLevel" data-test="factor-applicability" clearable><ElOption v-for="value in Object.keys(copy.applicability)" :key="value" :value="value" :label="label(copy.applicability, value)" /></ElSelect></ElFormItem>
             <ElFormItem v-if="needsCurrentBuilding" :label="copy.factor.building"><ElInput :model-value="buildingId" readonly data-test="factor-building" /><small v-if="!buildingId">{{ copy.factor.buildingRequired }}</small></ElFormItem>
             <ElFormItem v-if="needsRegion" :label="copy.factor.region"><ElInput v-model="factorDraft.regionCode" data-test="factor-region" /></ElFormItem>
-            <ElFormItem :label="copy.factor.inputUnit"><ElSelect v-model="factorDraft.inputUnitCode" data-test="factor-unit" :disabled="!unitOptions.length" clearable filterable><ElOption v-for="unit in unitOptions" :key="unit.versionId" :value="unit.unitCode" :label="codeLabel(unit.unitName, unit.unitCode)" /></ElSelect><small v-if="factorDraft.energyItemCode && !unitOptions.length">{{ copy.factor.noCompatibleUnits }}</small></ElFormItem>
+            <ElFormItem :label="copy.factor.inputUnit"><ElSelect v-model="factorDraft.inputUnitCode" data-test="factor-unit" :disabled="!unitOptions.length" clearable filterable><ElOption v-for="unit in unitOptions" :key="unit.versionId" :value="unit.unitCode" :label="unitOptionLabel(unit)" /></ElSelect><small v-if="factorDraft.energyItemCode && !unitOptions.length">{{ copy.factor.noCompatibleUnits }}</small><details v-if="factorDraft.inputUnitCode" class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalInputUnit }}{{ copy.fieldSeparator }}<code>{{ factorDraft.inputUnitCode }}</code></div></details></ElFormItem>
             <ElFormItem :label="copy.factor.standardCondition"><ElInput v-model="factorDraft.standardConditionCode" data-test="factor-standard-condition" /></ElFormItem>
             <ElFormItem :label="copy.factor.usageNature"><ElSelect v-model="factorDraft.usageNature" data-test="factor-usage" clearable><ElOption v-for="value in Object.keys(copy.usageNature)" :key="value" :value="value" :label="label(copy.usageNature, value)" /></ElSelect></ElFormItem>
             <ElFormItem :label="copy.factor.effectiveFrom"><input v-model="factorDraft.effectiveFrom" data-test="factor-effective-from" type="datetime-local" class="date-input"></ElFormItem>
             <ElFormItem :label="copy.factor.effectiveTo"><input v-model="factorDraft.effectiveTo" data-test="factor-effective-to" type="datetime-local" class="date-input"></ElFormItem>
-            <ElFormItem :label="copy.factor.formulaVersion"><ElSelect v-model="factorDraft.formulaVersionId" data-test="factor-formula" :disabled="!formulaOptions.length" clearable filterable><ElOption v-for="formula in formulaOptions" :key="formula.versionId" :value="formula.versionId" :label="formulaLabel(formula)" /></ElSelect><small v-if="factorDraft.factorCategory && factorDraft.usageNature && factorDraft.effectiveFrom && !formulaOptions.length">{{ copy.factor.noFormulaOptions }}</small></ElFormItem>
-            <ElFormItem :label="copy.factor.roundingPolicyVersion"><ElSelect v-model="factorDraft.roundingPolicyVersionId" data-test="factor-rounding" :disabled="!roundingOptions.length" clearable filterable><ElOption v-for="policy in roundingOptions" :key="policy.versionId" :value="policy.versionId" :label="roundingLabel(policy)" /></ElSelect><small v-if="!roundingOptions.length">{{ copy.factor.noRoundingOptions }}</small></ElFormItem>
+            <ElFormItem :label="copy.factor.formulaVersion"><ElSelect v-model="factorDraft.formulaVersionId" data-test="factor-formula" :disabled="!formulaOptions.length" clearable filterable><ElOption v-for="formula in formulaOptions" :key="formula.versionId" :value="formula.versionId" :label="formulaLabel(formula)" /></ElSelect><small v-if="factorDraft.factorCategory && factorDraft.usageNature && factorDraft.effectiveFrom && !formulaOptions.length">{{ copy.factor.noFormulaOptions }}</small><details v-if="factorDraft.formulaVersionId" class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalFormulaVersion }}{{ copy.fieldSeparator }}<code>{{ factorDraft.formulaVersionId }}</code></div></details></ElFormItem>
+            <ElFormItem :label="copy.factor.roundingPolicyVersion"><ElSelect v-model="factorDraft.roundingPolicyVersionId" data-test="factor-rounding" :disabled="!roundingOptions.length" clearable filterable><ElOption v-for="policy in roundingOptions" :key="policy.versionId" :value="policy.versionId" :label="roundingLabel(policy)" /></ElSelect><small v-if="!roundingOptions.length">{{ copy.factor.noRoundingOptions }}</small><details v-if="factorDraft.roundingPolicyVersionId" class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalRoundingVersion }}{{ copy.fieldSeparator }}<code>{{ factorDraft.roundingPolicyVersionId }}</code></div></details></ElFormItem>
             <ElFormItem v-if="needsElectricityYears" :label="copy.factor.dataYear"><ElInput v-model="factorDraft.dataYear" data-test="factor-data-year" inputmode="numeric" /></ElFormItem>
             <ElFormItem v-if="needsElectricityYears" :label="copy.factor.accountingYear"><ElInput v-model="factorDraft.accountingYear" data-test="factor-accounting-year" inputmode="numeric" /></ElFormItem>
           </div>
+          <ElAlert v-if="needsElectricityYears" data-test="electricity-year-guidance" type="info" :title="copy.factor.electricityYearGuidance" :closable="false" show-icon />
 
-          <div v-if="definition" class="identity-summary" data-test="factor-identity">
-            <span>{{ copy.factor.identity }}</span>
-            <code>{{ definition.resultBasis }}{{ copy.separator }}{{ definition.gasCode }}{{ copy.separator }}{{ definition.gasCoverage }}</code>
+          <div v-if="selectedDefinition" class="identity-summary" data-test="factor-identity">
+            <span>{{ copy.factor.identity }}{{ copy.fieldSeparator }}{{ mappedLabel(copy.resultBasisNames, selectedDefinition.resultBasis, copy.factor.serverFormula) }}</span>
+            <details class="technical-details"><summary>{{ copy.technicalDetails }}</summary><code>{{ selectedDefinition.resultBasis }}{{ copy.separator }}{{ selectedDefinition.gasCode }}{{ copy.separator }}{{ selectedDefinition.gasCoverage }}</code></details>
           </div>
           <div v-if="factorDraft.components.length" class="component-list">
             <h4>{{ copy.factor.components }}</h4>
             <article v-for="component in factorDraft.components" :key="component.componentType" class="component-row">
               <strong>{{ label(copy.componentTypes, component.componentType) }}</strong>
               <ElFormItem :label="copy.factor.componentValue"><ElInput v-model="component.value" :data-test="'component-value-' + component.componentType" inputmode="decimal" /></ElFormItem>
-              <ElFormItem :label="copy.factor.componentUnit"><code :data-test="'component-unit-' + component.componentType">{{ componentUnit(component.componentType) || copy.unavailable }}</code></ElFormItem>
+              <ElFormItem :label="copy.factor.componentUnit"><span :data-test="'component-unit-' + component.componentType">{{ componentUnitLabel(component.componentType) }}</span><details class="technical-details"><summary>{{ copy.technicalDetails }}</summary><code>{{ componentUnitCode(component.componentType) || copy.unavailable }}</code></details></ElFormItem>
               <ElFormItem :label="copy.factor.componentSource"><ElSelect v-model="component.sourceVersionId" :data-test="'component-source-' + component.componentType" clearable filterable><ElOption v-for="source in workspace.sources.value" :key="source.sourceVersionId" :value="source.sourceVersionId" :label="sourceLabel(source)" /></ElSelect></ElFormItem>
               <ElFormItem :label="copy.factor.componentEvidence"><ElInput v-model="component.evidenceReference" :data-test="'component-evidence-' + component.componentType" /></ElFormItem>
             </article>
@@ -421,26 +492,29 @@ function disable(factor: FactorVersion): void {
           <div v-else class="factor-list">
             <article v-for="factor in workspace.factors.value" :key="factor.factorVersionId" class="factor-row" :data-test="'factor-' + factor.factorVersionId">
               <div class="factor-row-heading">
-                <div><strong>{{ factor.factorCode }}{{ copy.separator }}{{ copy.versionPrefix }}{{ factor.versionNo }}</strong><code>{{ factor.factorVersionId }}</code></div>
+                <div><strong>{{ factorTitle(factor) }}</strong></div>
                 <ElTag>{{ label(copy.statuses, factor.status) }}</ElTag>
               </div>
               <dl>
                 <div><dt>{{ copy.factor.scope }}</dt><dd>{{ label(copy.scopes, factor.scopeType) }}</dd></div>
                 <div><dt>{{ copy.factor.category }}</dt><dd>{{ label(copy.categories, factor.factorCategory) }}</dd></div>
-                <div><dt>{{ copy.factor.energyItem }}</dt><dd>{{ factor.energyItemCode }}</dd></div>
+                <div><dt>{{ copy.factor.energyItem }}</dt><dd>{{ energyItemName(factor.energyItemCode) }}</dd></div>
                 <div><dt>{{ copy.factor.sourceVersion }}</dt><dd>{{ sourceName(factor.sourceVersionId) }}</dd></div>
-                <div><dt>{{ copy.factor.formula }}</dt><dd><code>{{ factor.formulaVersionId }}</code></dd></div>
-                <div><dt>{{ copy.factor.rounding }}</dt><dd><code>{{ factor.roundingPolicyVersionId }}</code></dd></div>
+                <div><dt>{{ copy.factor.formula }}</dt><dd>{{ formulaNameByVersion(factor.formulaVersionId) }}</dd></div>
+                <div><dt>{{ copy.factor.rounding }}</dt><dd>{{ roundingNameByVersion(factor.roundingPolicyVersionId) }}</dd></div>
                 <div><dt>{{ copy.factor.revision }}</dt><dd>{{ factor.configRevision }}</dd></div>
                 <div><dt>{{ copy.factor.effectiveRange }}</dt><dd>{{ factor.effectiveFrom }}{{ copy.rangeSeparator }}{{ factor.effectiveTo ?? copy.openEnded }}</dd></div>
+                <div v-if="factor.dataYear !== null"><dt>{{ copy.factor.dataYear }}</dt><dd>{{ factor.dataYear }}</dd></div>
+                <div v-if="factor.accountingYear !== null"><dt>{{ copy.factor.accountingYear }}</dt><dd>{{ factor.accountingYear }}</dd></div>
               </dl>
               <ul v-if="factor.components.length" class="factor-components">
                 <li v-for="component in factor.components" :key="component.componentId">
                   <strong>{{ label(copy.componentTypes, component.componentType) }}</strong>
-                  <span>{{ String(component.value) }} {{ component.unit }}</span>
-                  <code>{{ sourceName(component.sourceVersionId) }}</code>
+                  <span>{{ String(component.value) }} {{ factorUnitLabel(component.unit) }}</span>
+                  <span>{{ sourceName(component.sourceVersionId) }}</span>
                 </li>
               </ul>
+              <details class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalFactorCode }}{{ copy.fieldSeparator }}<code>{{ factor.factorCode }}</code></div><div>{{ copy.factor.technicalFactorVersion }}{{ copy.fieldSeparator }}<code>{{ factor.factorVersionId }}</code></div><div>{{ copy.factor.technicalEnergyItem }}{{ copy.fieldSeparator }}<code>{{ factor.energyItemCode }}</code></div><div>{{ copy.factor.technicalInputUnit }}{{ copy.fieldSeparator }}<code>{{ factor.inputUnitCode }}</code></div><div>{{ copy.factor.technicalFormulaVersion }}{{ copy.fieldSeparator }}<code>{{ factor.formulaVersionId }}</code></div><div>{{ copy.factor.technicalRoundingVersion }}{{ copy.fieldSeparator }}<code>{{ factor.roundingPolicyVersionId }}</code></div></details>
               <p v-if="factor.reviewComment" class="review-comment">{{ factor.reviewComment }}</p>
               <div class="factor-actions">
                 <ElButton v-if="factor.status === 'PENDING_REVIEW'" :data-test="'review-' + factor.factorVersionId" :disabled="workspace.saving.value" @click="openReview(factor)">{{ copy.factor.review }}</ElButton>
@@ -456,7 +530,8 @@ function disable(factor: FactorVersion): void {
     <ElDialog :model-value="reviewDraft !== null" :title="copy.review.title" width="min(100%, 520px)" @close="reviewDraft = null">
       <template v-if="reviewDraft">
         <ElAlert type="warning" :title="copy.review.notice" :closable="false" show-icon />
-        <p><code>{{ reviewDraft.factor.factorVersionId }}</code>{{ copy.separator }}{{ reviewDraft.factor.factorCode }}</p>
+        <p>{{ factorTitle(reviewDraft.factor) }}</p>
+        <details class="technical-details"><summary>{{ copy.technicalDetails }}</summary><div>{{ copy.factor.technicalFactorCode }}{{ copy.fieldSeparator }}<code>{{ reviewDraft.factor.factorCode }}</code></div><div>{{ copy.factor.technicalFactorVersion }}{{ copy.fieldSeparator }}<code>{{ reviewDraft.factor.factorVersionId }}</code></div></details>
         <ElRadioGroup v-model="reviewDraft.approved" data-test="review-decision">
           <ElRadio :label="true">{{ copy.review.approved }}</ElRadio>
           <ElRadio :label="false">{{ copy.review.rejected }}</ElRadio>
@@ -495,4 +570,7 @@ function disable(factor: FactorVersion): void {
 .factor-components { display: grid; gap: var(--bec-space-tight); padding-left: var(--bec-space-section); margin: 0; }
 .factor-components li { display: flex; flex-wrap: wrap; gap: var(--bec-space-tight); }
 .review-comment { margin: 0; }
+.technical-details { margin-top: var(--bec-space-tight); color: var(--bec-color-text-secondary); }
+.technical-details summary { cursor: pointer; }
+.technical-details div { margin-top: var(--bec-space-tight); overflow-wrap: anywhere; }
 </style>

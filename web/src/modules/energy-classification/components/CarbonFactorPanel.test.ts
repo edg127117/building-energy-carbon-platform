@@ -91,7 +91,7 @@ describe('排放因子维护面板', () => {
     wrapper.unmount()
   })
 
-  it('从已批准目录选择范围二直接因子，只提供与类别、使用性质和起始日期匹配的公式', async () => {
+  it('从已批准目录选择范围二直接因子，以中文业务名和规范单位展示，同时保留内码提交', async () => {
     const wrapper = mount(CarbonFactorPanel, { props: { buildingId: 'B-1' } })
     await setInput(wrapper, 'factor-code', 'ELEC-2026')
     await wrapper.find('[data-test="factor-scope"]').setValue('SCOPE_2')
@@ -102,14 +102,17 @@ describe('排放因子维护面板', () => {
     await wrapper.find('[data-test="factor-unit"]').setValue('KWH')
     await wrapper.find('[data-test="factor-usage"]').setValue('FORMAL')
     await setInput(wrapper, 'factor-effective-from', '2026-01-01T00:00')
-    expect(wrapper.find('[data-test="factor-formula"]').text()).toContain('ELECTRICITY_DIRECT')
+    expect(wrapper.find('[data-test="factor-formula"]').text()).toContain('外购电力位置法碳排放计算公式')
+    expect(wrapper.find('[data-test="factor-formula"]').text()).not.toContain('ELECTRICITY_DIRECT')
     expect(wrapper.find('[data-test="factor-formula"]').text()).not.toContain('ELECTRICITY_DEVELOPMENT')
     expect(wrapper.find('[data-test="factor-formula"]').text()).not.toContain('HEAT')
     expect(wrapper.find('[data-test="factor-formula"]').text()).not.toContain('FUTURE')
+    expect(wrapper.find('[data-test="electricity-year-guidance"]').text()).toContain('数据年对应因子资料年份')
     await wrapper.find('[data-test="factor-formula"]').setValue('CFV-1')
     await wrapper.find('[data-test="factor-rounding"]').setValue('CRP-1')
     await setInput(wrapper, 'component-value-DIRECT_EMISSION_FACTOR', '0.123456789')
     await setInput(wrapper, 'component-evidence-DIRECT_EMISSION_FACTOR', '参数归档')
+    expect(wrapper.find('[data-test="component-unit-DIRECT_EMISSION_FACTOR"]').text()).toContain('千克二氧化碳当量/千瓦时')
     await wrapper.find('[data-test="factor-create"]').trigger('click')
 
     expect(current.createFactor).toHaveBeenCalledWith(expect.objectContaining({
@@ -120,6 +123,57 @@ describe('排放因子维护面板', () => {
       components: [expect.objectContaining({ componentType: 'DIRECT_EMISSION_FACTOR', value: '0.123456789', unit: 'KG_CO2E/KWH', sourceVersionId: 'SV-1' })],
     }))
     expect(wrapper.text()).not.toContain('MOBILE_COMBUSTION')
+    wrapper.unmount()
+  })
+
+  it('明确选择 CO₂ 公式后按公告单位提交2026因子，切换口径不得沿用旧参数', async () => {
+    current.ruleOptions.value.formulas.push({
+      versionId: 'CFV-CO2', code: 'ELECTRICITY_CO2', versionNo: 1,
+      algorithmCode: 'PURCHASED_ELECTRICITY_LOCATION_CO2_V1', resultBasis: 'GAS_MASS',
+      usageNature: 'FORMAL', effectiveFrom: '2026-01-01T00:00:00', effectiveTo: '2027-01-01T00:00:00',
+    })
+    const wrapper = mount(CarbonFactorPanel, { props: { buildingId: 'B-1' } })
+    await setInput(wrapper, 'factor-code', 'PROJECT_JS_2026')
+    await setInput(wrapper, 'factor-scope', 'SCOPE_2')
+    await setInput(wrapper, 'factor-category', 'PURCHASED_ELECTRICITY_LOCATION')
+    await setInput(wrapper, 'factor-energy', 'ELEC')
+    await setInput(wrapper, 'factor-source', 'SV-1')
+    await setInput(wrapper, 'factor-applicability', 'PROVINCE')
+    await setInput(wrapper, 'factor-region', '320000')
+    await setInput(wrapper, 'factor-unit', 'KWH')
+    await setInput(wrapper, 'factor-usage', 'FORMAL')
+    await setInput(wrapper, 'factor-effective-from', '2026-01-01T00:00')
+    await setInput(wrapper, 'factor-effective-to', '2027-01-01T00:00')
+    await setInput(wrapper, 'factor-data-year', '2023')
+    await setInput(wrapper, 'factor-accounting-year', '2026')
+    await setInput(wrapper, 'factor-rounding', 'CRP-1')
+    expect(wrapper.find('[data-test="factor-formula"]').text()).toContain('仅二氧化碳（CO₂）')
+    expect(wrapper.find('[data-test="factor-formula"]').text()).toContain('二氧化碳当量（CO₂e）')
+    expect(wrapper.find('[data-test="factor-create"]').attributes('disabled')).toBeDefined()
+    await setInput(wrapper, 'factor-formula', 'CFV-1')
+    await setInput(wrapper, 'component-value-DIRECT_EMISSION_FACTOR', '1.234')
+    await setInput(wrapper, 'component-evidence-DIRECT_EMISSION_FACTOR', '旧CO₂e证据')
+    await setInput(wrapper, 'factor-formula', '')
+    expect((wrapper.find('[data-test="component-value-DIRECT_EMISSION_FACTOR"]').element as HTMLInputElement).value).toBe('')
+    await setInput(wrapper, 'factor-formula', 'CFV-CO2')
+    expect((wrapper.find('[data-test="component-value-DIRECT_EMISSION_FACTOR"]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('[data-test="component-evidence-DIRECT_EMISSION_FACTOR"]').element as HTMLInputElement).value).toBe('')
+    expect(wrapper.find('[data-test="factor-create"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="component-unit-DIRECT_EMISSION_FACTOR"]').text()).toContain('kgCO₂/kWh')
+    expect(wrapper.find('[data-test="component-unit-DIRECT_EMISSION_FACTOR"]').text()).not.toContain('kgCO₂e')
+    await setInput(wrapper, 'component-value-DIRECT_EMISSION_FACTOR', '0.5827')
+    await setInput(wrapper, 'component-evidence-DIRECT_EMISSION_FACTOR', '公告2025年第47号及明确项目选用规则')
+    await setInput(wrapper, 'factor-effective-from', '2027-01-01T00:00')
+    expect(wrapper.find('[data-test="factor-create"]').attributes('disabled')).toBeDefined()
+    await setInput(wrapper, 'factor-effective-from', '2026-01-01T00:00')
+    await wrapper.find('[data-test="factor-create"]').trigger('click')
+    expect(current.createFactor).toHaveBeenCalledTimes(1)
+    expect(current.createFactor).toHaveBeenCalledWith(expect.objectContaining({
+      resultBasis: 'GAS_MASS', gasCode: 'CO2', gasCoverage: 'CO2_ONLY_ELECTRICITY',
+      formulaVersionId: 'CFV-CO2', applicabilityLevel: 'PROVINCE', regionCode: '320000',
+      inputUnitCode: 'KWH', dataYear: 2023, accountingYear: 2026,
+      components: [expect.objectContaining({ value: '0.5827', unit: 'KG_CO2/KWH' })],
+    }))
     wrapper.unmount()
   })
 
@@ -137,6 +191,23 @@ describe('排放因子维护面板', () => {
       expectedRevision: 3, approved: true, reviewComment: '证据及适用范围已独立核验',
     })
     expect(current.factors.value[0]?.status).toBe('PENDING_REVIEW')
+    wrapper.unmount()
+  })
+
+  it('已返回的完整能源目录和正式 CO2 公式均显示中文业务名称', () => {
+    current.energyItems.value = [{
+      itemId: 'I-2', itemCode: 'ELEC', versionId: 'EV-2', versionNo: 2, itemName: '电力（历史目录项）',
+      compatibleCategory: 'ELECTRICITY', usageScopes: ['PURCHASED_ELECTRICITY'], status: 'DISABLED',
+    }]
+    current.ruleOptions.value.formulas = [{
+      versionId: 'CFV-1', code: 'ELECTRICITY_CO2', versionNo: 2, algorithmCode: 'PURCHASED_ELECTRICITY_LOCATION_CO2_V1',
+      resultBasis: 'GAS_MASS', usageNature: 'FORMAL', effectiveFrom: '2025-01-01T00:00:00', effectiveTo: null,
+    }]
+    const wrapper = mount(CarbonFactorPanel, { props: { buildingId: 'B-1' } })
+
+    expect(wrapper.text()).toContain('电力（历史目录项）')
+    expect(wrapper.text()).toContain('外购电力位置法碳排放计算公式')
+    expect(wrapper.text()).not.toContain('PURCHASED_ELECTRICITY_LOCATION_CO2_V1')
     wrapper.unmount()
   })
 

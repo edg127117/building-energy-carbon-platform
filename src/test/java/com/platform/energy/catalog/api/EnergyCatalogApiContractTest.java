@@ -79,6 +79,42 @@ class EnergyCatalogApiContractTest {
                 .andExpect(jsonPath("$.errorCode").value("ENERGY_CATALOG_VALIDATION_FAILED"));
     }
 
+    @Test
+    void createsTonneViaHttpAndPreservesPendingReview() throws Exception {
+        String token = login("admin", "123456");
+        jdbc.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by)
+                VALUES ('DUTY_TONNE_API',1,'ENERGY_CATALOG_MAINTAIN','ACTIVE',CURRENT_TIMESTAMP,1)
+                """);
+        jdbc.update("""
+                INSERT INTO sys_user_backend_duty
+                (assignment_id,user_id,duty_key,status,effective_at,created_by)
+                VALUES ('DUTY_TONNE_API_REVIEW',1,'ENERGY_CATALOG_REVIEW','ACTIVE',CURRENT_TIMESTAMP,1)
+                """);
+        mockMvc.perform(post("/v1/energy-catalog/unit-versions/EUV_KG_1/approve")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"expectedRevision\":0,\"reviewComment\":\"测试核对千克基准\"}"))
+                .andExpect(status().isOk());
+        String request = """
+                {"unitCode":"T","symbol":"t","unitName":"吨","dimensionCode":"MASS",
+                 "canonicalUnitCode":"KG","scaleFactor":1000,"conversionType":"FIXED_SCALE",
+                 "precision":6,"sourceType":"STANDARD","sourceReference":"受控吨单位接口回归",
+                 "effectiveFrom":"2026-01-01T00:00:00"}
+                """;
+        mockMvc.perform(post("/v1/energy-catalog/unit-versions")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON).content(request))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.unitCode").value("T"))
+                .andExpect(jsonPath("$.data.canonicalUnitCode").value("KG"))
+                .andExpect(jsonPath("$.data.status").value("PENDING_EXPERT"));
+        mockMvc.perform(post("/v1/energy-catalog/unit-versions")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON)
+                        .content(request.replace("1000", "999")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errorCode").value("ENERGY_CATALOG_VALIDATION_FAILED"));
+    }
+
     private String itemJson(String code) {
         return """
                 {"itemCode":"%s","itemName":"API测试燃料","compatibleCategory":"FUEL",

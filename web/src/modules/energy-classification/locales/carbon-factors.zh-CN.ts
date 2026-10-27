@@ -1,4 +1,6 @@
 export default {
+  fieldSeparator: '：',
+  conversionArrow: '→',
   title: '排放因子维护',
   description: '维护范围一固定燃烧和范围二因子来源、版本、独立审核与启停。因子匹配、碳值与舍入均由后端执行。',
   refresh: '刷新因子目录',
@@ -8,7 +10,9 @@ export default {
   separator: ' · ',
   rangeSeparator: ' ～ ',
   versionPrefix: 'v',
+  versionLabel: '第',
   scaleSeparator: ' / ',
+  technicalDetails: '技术详情',
   source: {
     title: '因子来源版本',
     description: '来源创建后形成不可覆盖版本；因子和参数必须从已返回的来源版本中选择。',
@@ -22,7 +26,8 @@ export default {
     create: '新增因子版本',
     empty: '暂无服务端返回的因子版本。',
     factorCode: '因子编码', scope: '核算范围', category: '因子类别', energyItem: '已批准能源品种', sourceVersion: '主来源版本', applicability: '适用层级', building: '建筑', region: '地区或电网编码', inputUnit: '输入单位', standardCondition: '标准状态编码（可选）', usageNature: '使用性质', effectiveFrom: '有效起始（本地时间）', effectiveTo: '有效截止（可选，本地时间）', formulaVersion: '碳公式版本', roundingPolicyVersion: '舍入策略版本', dataYear: '数据年度（可选）', accountingYear: '核算年度（可选）', identity: '服务端固定口径', components: '因子参数与证据', componentValue: '参数值', componentUnit: '服务端要求单位', componentSource: '参数来源版本', componentEvidence: '参数证据参考',
-    ruleOptionsDescription: '公式和舍入策略只显示服务端返回的有效版本。请按适用条件明确选择；系统不会自动套用。',
+    ruleOptionsDescription: '公式和舍入策略只显示服务端返回的有效版本。请按适用条件明确选择；系统不会自动套用。电力公告的二氧化碳因子请选择“仅二氧化碳（CO₂）”，不要与二氧化碳当量因子混用。',
+    electricityYearGuidance: '数据年对应因子资料年份，核算年度对应本次核算归属的年份。请分别根据来源资料填写，并在项目规则中记录选用依据；页面不会按当前年份、有效期或地区自动选择因子或填入系数。',
     buildingRequired: '建筑专用因子只能使用当前已选择建筑。',
     noEnergyItems: '当前没有与所选类别匹配的已批准能源品种。',
     noCompatibleUnits: '当前能源品种没有已批准且允许的兼容单位。',
@@ -30,6 +35,8 @@ export default {
     noRoundingOptions: '服务端没有返回可用的舍入策略版本。',
     noSources: '当前没有可选择的来源版本。',
     lifecycle: '生命周期', revision: '修订号', resultBasis: '结果口径', gasCoverage: '气体覆盖', formula: '公式版本', rounding: '舍入策略版本', effectiveRange: '有效期', componentsView: '参数', review: '独立审核', activate: '启用', disable: '停用', totalScale: '总量位数 ', intensityScale: '强度位数 ', shareScale: '占比位数 ',
+    unknownEnergyItem: '未命名能源品种', unknownSource: '未返回来源版本', serverFormula: '服务端计算公式', serverRounding: '服务端舍入规则', serverUnit: '服务端规范单位',
+    technicalSourceCode: '来源编码', technicalSourceVersion: '来源版本标识', technicalFactorCode: '因子编码', technicalFactorVersion: '因子版本标识', technicalEnergyItem: '能源品种编码', technicalInputUnit: '输入单位编码', technicalFormulaVersion: '公式版本标识', technicalRoundingVersion: '舍入策略版本标识',
   },
   review: {
     title: '独立审核因子版本',
@@ -42,4 +49,27 @@ export default {
   usageNature: { DEVELOPMENT_REFERENCE: '研发参考', FORMAL: '正式' },
   statuses: { PENDING_REVIEW: '待独立审核', APPROVED: '已审核，待启用', ACTIVE: '已启用', DISABLED: '已停用', REJECTED: '已拒绝' },
   componentTypes: { LOWER_HEATING_VALUE: '低位热值', CARBON_CONTENT_PER_HEAT: '单位热值含碳量', OXIDATION_RATE: '氧化率', DIRECT_EMISSION_FACTOR: '直接排放因子' },
+  resultBasisNames: { GAS_MASS: '仅二氧化碳（CO₂）', CO2E_DIRECT: '二氧化碳当量（CO₂e）' } as Record<string, string>,
+  formulaNames: {
+    STATIONARY_COMBUSTION_CO2_V1: '固定燃烧碳排放计算公式',
+    PURCHASED_ELECTRICITY_LOCATION_CO2_V1: '外购电力位置法碳排放计算公式',
+    PURCHASED_ELECTRICITY_LOCATION_CO2E_V1: '外购电力位置法碳排放计算公式',
+    PURCHASED_HEAT_CO2_V1: '外购热力碳排放计算公式',
+    PURCHASED_HEAT_CO2E_V1: '外购热力碳排放计算公式',
+  } as Record<string, string>,
+  roundingModeNames: {
+    HALF_UP: '四舍五入',
+  } as Record<string, string>,
+  unitNames: {
+    'KG_CO2E/KWH': '千克二氧化碳当量/千瓦时（kgCO₂e/kWh）',
+    'KG_CO2/KWH': '千克二氧化碳/千瓦时（kgCO₂/kWh）',
+    'KG_CO2/MWH': '千克二氧化碳/兆瓦时（kgCO₂/MWh）',
+    'KG_CO2E/MWH': '千克二氧化碳当量/兆瓦时（kgCO₂e/MWh）',
+    'KG_CO2E/GJ': '千克二氧化碳当量/吉焦（kgCO₂e/GJ）',
+    'KG_CO2/GJ': '千克二氧化碳/吉焦（kgCO₂/GJ）',
+    'MJ/KWH': '兆焦/千瓦时（MJ/kWh）',
+    'MJ/NM3': '兆焦/标准立方米（MJ/Nm³）',
+    KG_C_PER_MJ: '千克碳/兆焦（kgC/MJ）',
+    RATIO: '比例（无量纲）',
+  } as Record<string, string>,
 } as const

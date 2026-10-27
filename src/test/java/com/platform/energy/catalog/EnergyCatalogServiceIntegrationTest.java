@@ -33,6 +33,7 @@ class EnergyCatalogServiceIntegrationTest {
     private static final LocalDateTime EFFECTIVE = LocalDateTime.of(2026, 1, 1, 0, 0);
 
     @Autowired private EnergyCatalogService service;
+    @Autowired private EnergyCatalogLookup lookup;
     @Autowired private EnergyPointProfileService profileService;
     @Autowired private JdbcTemplate jdbc;
 
@@ -123,6 +124,49 @@ class EnergyCatalogServiceIntegrationTest {
         assertCode(() -> service.createCompatibilityVersion(USER, ENERGY,
                         compatibility("ELECTRICITY", "TCE", "CUMULATIVE", "NONE")),
                 400, EnergyCatalogErrors.UNIT_INCOMPATIBLE);
+    }
+
+    @Test
+    void acceptsControlledTonneIdentityWithoutRelaxingScaleDimensionOrReview() {
+        service.approveUnit(USER, ENERGY, "EUV_KG_1", approve(0));
+        var tonne = service.createUnitVersion(USER, ENERGY,
+                new CreateUnitVersionRequest(" t ", "t", "吨", "MASS", "KG",
+                        new BigDecimal("1000"), "FIXED_SCALE", null, 6,
+                        "STANDARD", "受控吨单位回归", EFFECTIVE, null));
+        assertThat(tonne.unitCode()).isEqualTo("T");
+        assertThat(tonne.status()).isEqualTo("PENDING_EXPERT");
+        assertThat(lookup.convert(BigDecimal.ONE, "T", "KG", EFFECTIVE)).isEmpty();
+        service.approveUnit(USER, ENERGY, tonne.versionId(), approve(0));
+        assertThat(lookup.convert(BigDecimal.ONE, "T", "KG", EFFECTIVE).orElseThrow().convertedQuantity())
+                .isEqualByComparingTo("1000");
+        assertThat(lookup.convert(new BigDecimal("1000"), "KG", "T", EFFECTIVE).orElseThrow().convertedQuantity())
+                .isEqualByComparingTo("1");
+        service.approveItem(USER, ENERGY, "EIV_DIESEL_1", approve(0));
+        var compatibility = service.createCompatibilityVersion(USER, ENERGY,
+                compatibility("DIESEL", "T", "CUMULATIVE", "NONE"));
+        assertThat(compatibility.status()).isEqualTo("PENDING_EXPERT");
+        for (String invalid : List.of("X", "TONNE")) {
+            assertCode(() -> service.createUnitVersion(USER, ENERGY,
+                    new CreateUnitVersionRequest(invalid, "t", "吨", "MASS", "KG",
+                            new BigDecimal("1000"), "FIXED_SCALE", null, 6,
+                            "STANDARD", "错误身份", EFFECTIVE, null)), 400, EnergyCatalogErrors.VALIDATION_FAILED);
+        }
+        assertCode(() -> service.createUnitVersion(USER, ENERGY,
+                new CreateUnitVersionRequest("T", "t", "吨", "MASS", "KG", new BigDecimal("999"),
+                        "FIXED_SCALE", null, 6, "STANDARD", "错误比例", EFFECTIVE, null)),
+                400, EnergyCatalogErrors.VALIDATION_FAILED);
+        assertCode(() -> service.createUnitVersion(USER, ENERGY,
+                new CreateUnitVersionRequest("T", "t", "吨", "ENERGY", "KG", new BigDecimal("1000"),
+                        "FIXED_SCALE", null, 6, "STANDARD", "错误量纲", EFFECTIVE, null)),
+                400, EnergyCatalogErrors.VALIDATION_FAILED);
+        assertCode(() -> service.createUnitVersion(USER, ENERGY,
+                new CreateUnitVersionRequest("T", "t", "吨", "MASS", "T", BigDecimal.ONE,
+                        "IDENTITY", null, 6, "STANDARD", "不能绕开千克基准", EFFECTIVE, null)),
+                400, EnergyCatalogErrors.VALIDATION_FAILED);
+        assertCode(() -> service.createItemVersion(USER, ENERGY,
+                new CreateItemVersionRequest("T", "错误能源编码", "FUEL", List.of("STATIONARY_COMBUSTION"),
+                        "STANDARD", "单位兼容不放宽能源身份", EFFECTIVE, null)),
+                400, EnergyCatalogErrors.VALIDATION_FAILED);
     }
 
     @Test

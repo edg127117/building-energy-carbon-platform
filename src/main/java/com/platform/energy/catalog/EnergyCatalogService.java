@@ -133,8 +133,8 @@ public class EnergyCatalogService {
     public UnitVersionView createUnitVersion(long userId, Collection<String> roles,
                                              CreateUnitVersionRequest request) {
         authorization.requireMaintainer(userId, roles);
-        String unitCode = code(request.unitCode(), "单位编码无效");
-        String canonicalCode = code(request.canonicalUnitCode(), "基准单位编码无效");
+        String unitCode = unitCode(request.unitCode(), "单位编码无效");
+        String canonicalCode = unitCode(request.canonicalUnitCode(), "基准单位编码无效");
         DimensionCode dimension = parse(DimensionCode.class, request.dimensionCode(), "单位量纲无效");
         ConversionType conversion = parse(ConversionType.class, request.conversionType(), "换算类型无效");
         SourceType sourceType = parse(SourceType.class, request.sourceType(), "来源类型无效");
@@ -176,7 +176,7 @@ public class EnergyCatalogService {
         ItemVersionRow item = repository.findApprovedItem(code(request.energyItemCode(), "能源品种编码无效"),
                 range.from());
         if (item == null) notFound("兼容矩阵只能引用已审核能源品种版本");
-        UnitVersionRow unit = repository.findApprovedUnitByCode(code(request.unitCode(), "单位编码无效"),
+        UnitVersionRow unit = repository.findApprovedUnitByCode(unitCode(request.unitCode(), "单位编码无效"),
                 range.from());
         if (unit == null) notFound("兼容矩阵只能引用已审核单位版本");
         if (OUTPUT_ONLY_UNITS.contains(unit.unitCode())) {
@@ -402,6 +402,8 @@ public class EnergyCatalogService {
                                         String standardConditionCode, LocalDateTime effectiveFrom) {
         if (factor == null || factor.signum() <= 0) validation("单位换算比例必须大于0");
         if (type == ConversionType.IDENTITY) {
+            // 接受单字符身份后，吨仍须沿用既有 T→KG 固定换算，不能另建吨基准绕开比例约束。
+            if ("T".equals(unitCode)) validation("吨单位必须使用到千克的1000倍固定换算");
             if (!unitCode.equals(canonicalCode) || factor.compareTo(BigDecimal.ONE) != 0) {
                 validation("同一单位的基准编码必须等于自身且比例为1");
             }
@@ -509,6 +511,12 @@ public class EnergyCatalogService {
     private static LocalDateTime requiredTime(LocalDateTime value) {
         if (value == null) validation("业务生效时间不能为空");
         return value;
+    }
+
+    private static String unitCode(String value, String message) {
+        String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+        // 吨的既有受控身份是单字符 T；仅单位入口兼容它，不放宽能源品种编码。
+        return "T".equals(normalized) ? normalized : code(value, message);
     }
 
     private static String code(String value, String message) {
