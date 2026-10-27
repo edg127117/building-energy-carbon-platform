@@ -45,8 +45,9 @@ def owned(kind, name):
 
 def sql(instance, statement):
     owned("container", instance[0])
-    return docker("exec", "-i", "-e", "MYSQL_PWD", instance[0], "mysql", "-uroot", "-N", "-B",
-                  data=statement.encode()).decode().strip()
+    payload = statement.encode("utf-8") if isinstance(statement, str) else statement
+    return docker("exec", "-i", "-e", "MYSQL_PWD", instance[0], "mysql", "--default-character-set=utf8mb4", "-uroot", "-N", "-B",
+                  data=b"SET SESSION time_zone='+00:00';\n" + payload).decode("utf-8").strip()
 
 
 def new_mysql():
@@ -112,7 +113,7 @@ def accounts(instance):
 def dump(instance, *args):
     owned("container", instance[0])
     return docker("exec", "-e", "MYSQL_PWD", instance[0], "mysqldump", "-uroot", "--set-gtid-purged=OFF",
-                  "--no-tablespaces", "--skip-comments", *args)
+                  "--no-tablespaces", "--skip-comments", "--default-character-set=utf8mb4", "--hex-blob", *args)
 
 
 def old_rows(instance, tables):
@@ -134,7 +135,7 @@ def restore_new(backup, expected, tables, schema="85"):
     emit("RESTORE_NEW_EMPTY_DATABASE_DEFAULTS=" + sql(instance,
          "SELECT SCHEMA_NAME,DEFAULT_COLLATION_NAME FROM information_schema.schemata WHERE schema_name IN ('iot_platform','iot_platform_archive') ORDER BY SCHEMA_NAME"))
     sql(instance, "DROP DATABASE IF EXISTS iot_platform; DROP DATABASE IF EXISTS iot_platform_archive")
-    sql(instance, backup.decode())
+    sql(instance, backup)
     accounts(instance)
     assert old_rows(instance, tables) == expected
     java(instance, "validate" + schema)
@@ -176,6 +177,9 @@ def assert_database_image(instance, expected, stage):
 
 
 def application_only(instance, legacy, tables):
+    # 合成二进制与重复/空行仅存在新建隔离实例，覆盖天气等 BLOB 证据的备份保真。
+    sql(instance, "CREATE TABLE iot_platform.application_only_binary_fixture (payload MEDIUMBLOB, marker VARBINARY(16)); "
+        "INSERT INTO iot_platform.application_only_binary_fixture VALUES (0x00FF80C328,0x0001),(0x00FF80C328,0x0001),(NULL,NULL)")
     sql(instance, "INSERT INTO iot_platform.biz_energy_reporting_scope VALUES ('SYNTHETIC_APP_ONLY',9); "
         "INSERT INTO iot_platform.biz_energy_reporting_record VALUES ('app-only-keep','SYNTHETIC_APP_ONLY','BATCH','DRAFT',7,'2026-10-01','{\"retained\":true}'); "
         "INSERT INTO iot_platform.biz_energy_parameter_package_import_receipt "
