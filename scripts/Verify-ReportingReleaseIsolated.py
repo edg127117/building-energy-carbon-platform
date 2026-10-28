@@ -46,7 +46,8 @@ def owned(kind, name):
 def sql(instance, statement):
     owned("container", instance[0])
     payload = statement.encode("utf-8") if isinstance(statement, str) else statement
-    return docker("exec", "-i", "-e", "MYSQL_PWD", instance[0], "mysql", "--default-character-set=utf8mb4", "-uroot", "-N", "-B",
+    # 初始化临时服务只开放 socket；使用 TCP，避免把临时服务误判为最终就绪后立即遇到重启。
+    return docker("exec", "-i", "-e", "MYSQL_PWD", instance[0], "mysql", "-h127.0.0.1", "--default-character-set=utf8mb4", "-uroot", "-N", "-B",
                   data=b"SET SESSION time_zone='+00:00';\n" + payload).decode("utf-8").strip()
 
 
