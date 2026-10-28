@@ -198,8 +198,10 @@ public class ReportingService {
                 var unit=lookup.findApprovedUnit(c.unitCode(),start).orElseThrow(()->conflict("单位未审核"));
                 // 来源最初审核时的目录不能代替实际账期目录，后续路径或标准状态变化也须重新校验。
                 validateCatalog(c,item,unit,true);
-                if(lookup.findApprovedItem(c.energyItemCode(),end.minusNanos(1)).filter(i->i.versionId().equals(item.versionId())).isEmpty()
-                    ||lookup.findApprovedUnit(c.unitCode(),end.minusNanos(1)).filter(i->i.versionId().equals(unit.versionId())).isEmpty())
+                // 与表计审核使用相同毫秒边界，避免 JDBC 将纳秒月末舍入到下月目录版本。
+                var last=end.minusNanos(1_000_000);
+                if(lookup.findApprovedItem(c.energyItemCode(),last).filter(i->i.versionId().equals(item.versionId())).isEmpty()
+                    ||lookup.findApprovedUnit(c.unitCode(),last).filter(i->i.versionId().equals(unit.versionId())).isEmpty())
                     throw conflict("期间跨能源或单位版本，不能按天猜分");
                 if("PRIMARY".equals(c.purpose())){hasPrimary=true;if(!primaryEnergies.add(c.energyItemCode()))throw conflict("同一能源存在多个总量来源，须明确唯一主来源");}
                 BigDecimal tce=null;Object conversionEvidence=null;String tceStatus="NOT_CALCULATED";

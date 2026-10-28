@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 /** 关系治理 HTTP 契约；不直接暴露数据库实体。 */
@@ -86,6 +87,21 @@ public final class RelationContracts {
     public record ActivationRequest(
             @NotNull @Min(0) Long expectedModelRevision,
             @NotBlank @Size(max = 500) String reason) {}
+
+    public record HistoricalMeteringScopeRequest(
+            @NotNull Instant startInclusive, @NotNull Instant endExclusive,
+            @NotBlank @Size(max = 500) String evidenceReference,
+            @NotBlank @Size(max = 500) String reason) {}
+
+    public record HistoricalMeteringScopeDecision(
+            @NotNull Boolean approved, @NotBlank @Size(max = 500) String reason) {}
+
+    /** 历史计量适用范围独立审核，不改变关系版本的实际激活时间或当前资产投影。 */
+    public record HistoricalMeteringScopeView(
+            String scopeId, String buildingId, String relationVersionId,
+            Instant startInclusive, Instant endExclusive, String snapshotSha256,
+            String evidenceReference, String reason, String status, Long submittedBy,
+            Long reviewedBy, String reviewReason, LocalDateTime submittedAt, LocalDateTime reviewedAt) {}
 
     public record ModelView(
             String modelId, String buildingId, String scopeType, String governanceMode,

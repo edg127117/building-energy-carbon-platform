@@ -203,7 +203,8 @@ public class ClassificationService {
         final String relationId=config.relationVersionId();
         RelationData relation=loadRelations(user,roles,building,config.relationVersionId());
         if(relation.nextEffectiveAt()!=null&&request.endExclusive().isAfter(relation.nextEffectiveAt())) throw error(409,"统计期间超过所引用计量关系的有效范围，请按关系生效时间分段");
-        if(relation.metadata().effectiveAt()!=null&&relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(request.startInclusive())) return pending(building,version,request,"关系生效前的历史计量范围尚未确认");
+        String historicalScopeId=historicalScope(user,roles,building,config.relationVersionId(),relation,request.startInclusive(),request.endExclusive());
+        if(relation.metadata().effectiveAt()!=null&&relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(request.startInclusive())&&historicalScopeId==null) return pending(building,version,request,"关系生效前的历史计量范围尚未确认");
         List<PeriodSnapshot> periods=snapshots.listVisibleSnapshots(building,request.periodType(),request.startInclusive(),request.endExclusive(),5001);limit(periods.size());
         Map<String,List<Piece>> grouped=new HashMap<>();
         for(PeriodSnapshot snapshot:periods) if(request.energyItemCode().equals(snapshot.energyItemCode())&&request.unit().equals(snapshot.nativeUnitCode())) {
@@ -222,6 +223,7 @@ public class ClassificationService {
             grouped.computeIfAbsent(r.pointId(),k->new ArrayList<>()).add(new Piece(r.startInclusive(),r.endExclusive(),value.quantity(),value.id(),"REVIEWED_MANUAL",true));
         }
         List<Fact> facts=new ArrayList<>();List<String> sourceEvidence=new ArrayList<>();
+        if(historicalScopeId!=null)sourceEvidence.add("HISTORICAL_METERING_SCOPE:"+historicalScopeId);
         for(var entry:grouped.entrySet()) {
             List<Piece> pieces=entry.getValue().stream().sorted(Comparator.comparing(Piece::from)).toList();
             Instant cursor=request.startInclusive();BigDecimal quantity=BigDecimal.ZERO;boolean complete=true;
@@ -260,7 +262,14 @@ public class ClassificationService {
 
     public record SealedProjection(String classificationVersionId,String relationVersionId,
                                    BigDecimal total,List<ClassificationCore.SourceSlice> slices,
-                                   Configuration configuration) {}
+                                   Configuration configuration,
+                                   @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                                   String historicalMeteringScopeId) {
+        public SealedProjection(String classificationVersionId,String relationVersionId,BigDecimal total,
+                                List<ClassificationCore.SourceSlice> slices,Configuration configuration) {
+            this(classificationVersionId,relationVersionId,total,slices,configuration,null);
+        }
+    }
 
     /** 仅消费调用方固定的封账快照，不读取人工分类来源；权威总量仍由能源汇总端校验。 */
     public SealedProjection projectSealed(long user,Collection<String> roles,String building,String versionId,
@@ -275,7 +284,9 @@ public class ClassificationService {
         if(rules.isEmpty()||rules.stream().anyMatch(r->"SUBMETER_SUM".equals(r.mode()))) throw error(409,"碳核算要求已确认建筑边界总量，不能使用部分分表小计");
         Configuration config=new Configuration(original.relationVersionId(),original.schemes(),original.nodes(),original.bindings(),rules);
         RelationData relation=loadRelations(user,roles,building,config.relationVersionId());
-        if(relation.metadata().effectiveAt()==null||relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(from)
+        String historicalScopeId=historicalScope(user,roles,building,config.relationVersionId(),relation,from,to);
+        if(relation.metadata().effectiveAt()==null||(relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(from)
+                &&historicalScopeId==null)
                 ||(relation.nextEffectiveAt()!=null&&to.isAfter(relation.nextEffectiveAt()))) throw error(409,"计量关系未覆盖完整封账期间");
         limit(periods.size());List<Fact> facts=new ArrayList<>();
         for(PeriodSnapshot s:periods) {
@@ -303,7 +314,14 @@ public class ClassificationService {
                 new Input(meters,facts,resolve(config,relation.assignments(),ancestors)));
         if(!"CALCULABLE".equals(result.status())||result.total()==null
                 ||result.sourceSlices().stream().anyMatch(s->s.quantity().signum()<0)) throw error(409,"计量分解不完整，不能用于正式碳核算");
-        return new SealedProjection(version.id(),config.relationVersionId(),result.total(),result.sourceSlices(),config);
+        return new SealedProjection(version.id(),config.relationVersionId(),result.total(),result.sourceSlices(),config,historicalScopeId);
+    }
+
+    private String historicalScope(long user,Collection<String> roles,String building,String id,
+                                   RelationData relation,Instant from,Instant to) {
+        if(relation.metadata().effectiveAt()==null||!relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(from))return null;
+        var scope=relations.historicalMeteringScope(user,roles,building,id,from,to);
+        return scope==null?null:scope.scopeId();
     }
 
     private RelationData loadRelations(long user,Collection<String> roles,String building,String id) {

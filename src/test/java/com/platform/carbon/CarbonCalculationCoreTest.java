@@ -114,6 +114,41 @@ class CarbonCalculationCoreTest {
     }
 
     @Test
+    void monthlyAreaIntensityHasSeparateCodeAndPreservesTheSelectedAreaVersion() {
+        var area=denominator(DenominatorType.BUILDING_AREA,"100","M2");
+        var metric=core.monthlyAreaIntensity(List.of(calculated("ELECTRICITY",ScopeType.SCOPE_2,"700")),
+                CarbonCalculationCore.DenominatorSelection.available(area));
+        assertThat(metric.metricCode()).isEqualTo("MONTH_AREA_INTENSITY");
+        assertThat(metric.finalValue()).isEqualByComparingTo("7.000000");
+        assertThat(metric.denominatorVersionId()).isEqualTo(area.denominatorVersionId());
+        assertThat(core.monthlyAreaIntensity(List.of(),CarbonCalculationCore.DenominatorSelection.available(null))
+                .unavailableReason()).contains("核算月份");
+    }
+
+    @Test
+    void sharedUpstreamProducesTheSameFullEvidenceHashWithoutRepeatingTheTreeInEachItem() {
+        var common=CarbonEvidence.object();common.put("contractVersion","ENERGY_SUMMARY_CARBON_V1");
+        common.putArray("compositionSnapshots").addObject().put("snapshotId","ROOT");
+        var shared=new CarbonEvidence.SharedUpstream(common);
+        var unique=CarbonEvidence.object();unique.putObject("sourceSlice").put("pointId","P1");
+        var full=shared.copy();full.setAll(unique);
+        var base=activity("ELECTRICITY",new BigDecimal("1000"),"KWH");
+        var input=new ActivitySegment(base.snapshotId(),base.buildingId(),base.periodType(),base.startInclusive(),
+                base.endExclusive(),base.timezoneId(),base.energyItemCode(),base.quantity(),base.unitCode(),
+                base.lockStatus(),base.completeness(),base.resultNature(),
+                CarbonCalculationCore.sha256(CarbonEvidence.canonical(full)),unique,shared);
+        var factor=direct("EF-PROVINCE","ELECTRICITY",FactorCategory.PURCHASED_ELECTRICITY_LOCATION,
+                ApplicabilityLevel.PROVINCE,"310000","0.4");
+        var result=core.calculate(input,core.match(input,"310000",ResultNature.DEVELOPMENT_SIMULATION,List.of(factor)),null);
+        assertThat(result.evidenceJson()).doesNotContain("compositionSnapshots");
+        var dictionary=CarbonEvidence.object();dictionary.set(shared.hash(),shared.copy());
+        var evidence=CarbonEvidence.stored(result.evidenceJson(),result.evidenceHash(),CarbonEvidence.canonical(dictionary));
+        assertThat(evidence.path("upstream")).isEqualTo(full);
+        assertThat(evidence.path("activity").has("sharedUpstream")).isFalse();
+        assertThat(result.exactEmissionKgCo2e()).isEqualByComparingTo("400");
+    }
+
+    @Test
     void denominatorConflictLeavesOnlyThatIntensityUnavailable() {
         List<SummaryMetric> summaries = core.summarizeWithDenominatorSelections(List.of(
                         calculated("DIESEL", ScopeType.SCOPE_1, "300"),

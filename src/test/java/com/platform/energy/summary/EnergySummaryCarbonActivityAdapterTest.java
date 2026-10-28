@@ -128,6 +128,33 @@ class EnergySummaryCarbonActivityAdapterTest {
         assertThat(values).containsExactly(bill);
         org.mockito.Mockito.verify(summaryService,org.mockito.Mockito.never()).query(org.mockito.ArgumentMatchers.anyLong(),any(),any());
     }
+
+    @Test void manySlicesShareTheTreeInsteadOfMultiplyingItsBytesAgainstTheLimit() {
+        String hash="e".repeat(64);
+        when(summaryService.query(org.mockito.ArgumentMatchers.eq(0L),any(),any()))
+                .thenReturn(summary(Map.of("KWH",new BigDecimal("64")),hash));
+        var root=snapshot(hash,"{\"fixedSource\":\""+"x".repeat(300_000)+"\"}");
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,END,501)).thenReturn(List.of(root));
+        var projects=mock(CarbonProjectService.class);
+        var slices=java.util.stream.IntStream.range(0,64).mapToObj(i->new SourceSlice("P"+i,
+                BigDecimal.ONE,java.util.Set.of("ROOT","P"+i),false,List.of("S"+i),Map.<String,java.util.Set<String>>of())).toList();
+        var config=new CarbonProjectContracts.Configuration("CLASS",List.of(
+                new CarbonProjectContracts.Energy("ELECTRICITY","PURCHASED_ELECTRICITY","ENABLED")),List.of());
+        var version=new CarbonProjectContracts.Version("PROJECT","BLD001",1,3,"ACTIVE",START,null,1,2L,config);
+        var source=new ClassificationService.SealedProjection("CLASS","REL-V1",new BigDecimal("64"),slices,null);
+        when(projects.project(any(),any(),any(),any(),any(),any())).thenReturn(new CarbonProjectService.Projection(
+                version,source,new CarbonProjectCore.Applied(new BigDecimal("64"),BigDecimal.ZERO,slices,List.of())));
+        var values=new EnergySummaryCarbonActivityAdapter(summaryService,snapshotReader,projects)
+                .read("BLD001",PeriodType.YEAR,START,END,500);
+        assertThat(values).hasSize(64);
+        var shared=values.getFirst().sharedUpstream();
+        assertThat(values).allSatisfy(value->{
+            assertThat(value.sharedUpstream()).isSameAs(shared);
+            assertThat(CarbonEvidence.canonical(value.compactTraceEvidence())).doesNotContain("fixedSource");
+        });
+        assertThat(CarbonCalculationCore.sha256(CarbonEvidence.canonical(values.getFirst().traceEvidence())))
+                .isEqualTo(values.getFirst().evidenceHash());
+    }
     @Test void noMeterAssertionConflictingWithRealSealedMeterFailsClosed() {
         var reporting=mock(com.platform.energy.reporting.ReportingCarbonInput.class);
         when(reporting.read("BLD001",START,END,500)).thenReturn(new com.platform.energy.reporting.ReportingCarbonInput.Input(
@@ -164,11 +191,15 @@ class EnergySummaryCarbonActivityAdapterTest {
     }
 
     private static PeriodSnapshot snapshot(String evidence) {
+        return snapshot(evidence,"{\"qualityPolicyVersions\":[\"QUALITY-V1\"]}");
+    }
+
+    private static PeriodSnapshot snapshot(String evidence,String json) {
         return new PeriodSnapshot("SNAP001", "r".repeat(64), "PROJ001", "BLD001",
                 "POINT001", "MONTH", START, MONTH_END, "Asia/Shanghai", "PERIOD-V1", 1,
                 "LOCKED_COMPLETE", "FORMAL", "ELECTRICITY", new BigDecimal("1200"),
                 "KWH", BigDecimal.ZERO, "TCE", BigDecimal.ONE, "", "",
-                "{\"qualityPolicyVersions\":[\"QUALITY-V1\"]}", evidence,
+                json, evidence,
                 "{}", END, null, null, 1L, LocalDateTime.of(2027, 1, 2, 0, 0));
     }
 }

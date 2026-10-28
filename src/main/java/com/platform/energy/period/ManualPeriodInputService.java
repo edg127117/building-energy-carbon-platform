@@ -28,7 +28,9 @@ public class ManualPeriodInputService {
                           @NotBlank @Size(max=500) String reason) { }
     public record Evidence(String inputKind, Request request, List<String> readingJson,
                            List<String> batchIds, String pointBindingVersionId, String relationVersionId,
-                           String periodPolicyVersionId, String timezoneId, String energyItemVersionId) { }
+                           String periodPolicyVersionId, String timezoneId, String energyItemVersionId,
+                           @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+                           String historicalMeteringScopeId) { }
     private final EnergyPeriodAuthorization authorization;
     private final ClassificationRepository manual;
     private final EnergyCatalogService catalog;
@@ -59,7 +61,12 @@ public class ManualPeriodInputService {
         // 关系域旧 DATETIME 契约沿用平台 +08:00，不能按楼宇周期时区重解释历史。
         Instant relationStart=relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8));
         var current=relations.model(user,roles,building);
-        if(relationStart.isAfter(window.startInclusive()))throw invalid("关系生效时间未覆盖完整月份");
+        String historicalScopeId=null;
+        if(relationStart.isAfter(window.startInclusive())) {
+            var scope=relations.historicalMeteringScope(user,roles,building,request.relationVersionId(),window.startInclusive(),window.endExclusive());
+            if(scope==null)throw invalid("关系生效时间未覆盖完整月份，且没有已审核的历史计量适用范围");
+            historicalScopeId=scope.scopeId();
+        }
         if(!request.relationVersionId().equals(current.activeVersionId())) {
             var next=relations.versions(user,roles,building).stream().filter(v->v.effectiveAt()!=null
                     &&v.effectiveAt().isAfter(relation.metadata().effectiveAt())).map(v->v.effectiveAt().toInstant(ZoneOffset.ofHours(8))).min(Comparator.naturalOrder());
@@ -84,12 +91,13 @@ public class ManualPeriodInputService {
         }
         if(!cursor.equals(window.endExclusive())||quantity.precision()>38||quantity.scale()>12)throw invalid("月来源不完整或用量超出精度");
         var binding=catalog.effectiveBinding(user,roles,building,request.pointId(),from);
-        var last=catalog.effectiveBinding(user,roles,building,request.pointId(),end.minusNanos(1));
+        // 与人工读数审核保持毫秒边界，避免 JDBC 把纳秒月末舍入到下月而误判绑定失效。
+        var last=catalog.effectiveBinding(user,roles,building,request.pointId(),end.minusNanos(1_000_000));
         if(!binding.bindingVersionId().equals(last.bindingVersionId())||!Objects.equals(energy,binding.energyItemCode())
                 ||!Objects.equals(unit,binding.rawUnit())||!"CONFIRMED".equals(binding.confirmationStatus()))throw invalid("测点能源绑定、单位或有效期尚未确认");
         var evidence=new Evidence("REVIEWED_MANUAL_MONTH",request,selected.stream().map(ClassificationRepository.StoredReading::json).sorted().toList(),
                 selected.stream().map(ClassificationRepository.StoredReading::batchId).distinct().sorted().toList(),binding.bindingVersionId(),request.relationVersionId(),
-                policy.versionId(),policy.timezoneId(),binding.energyItemVersionId());
+                policy.versionId(),policy.timezoneId(),binding.energyItemVersionId(),historicalScopeId);
         String json=encode(evidence);
         // 完整性针对原生月量；tce 未计算保持 null，绝不把它补为0或推导碳排放。
         return new ProjectionCalculation("FORMAL",building,request.pointId(),window,policy.versionId(),energy,quantity,unit,

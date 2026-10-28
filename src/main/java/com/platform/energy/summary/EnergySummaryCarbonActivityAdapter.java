@@ -128,19 +128,25 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
                     trace.put("grossQuantity",quantity.getValue().toPlainString());
                     trace.put("excludedQuantity",projection.applied().excluded().toPlainString());
                     trace.put("projectEnergyPathway",projection.version().configuration().energies().stream().filter(e->"ENABLED".equals(e.capability())&&e.energyItemCode().equals(itemCode)).findFirst().orElseThrow().pathway());
-                    // 每个活动段独立固定证据，展开前限制总字节，避免大分类表乘以组成数耗尽内存。
-                    long traceBytes=CarbonEvidence.canonical(trace).getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
-                    long copies=Math.max(1,projection.applied().includedSlices().size());
-                    if(traceBytes>(MAX_PROJECT_EVIDENCE_BYTES-projectEvidenceBytes)/copies)
+                    // 计量树和分类配置在批次内共享一次；每段仍对完整事实取摘要，限额按实际保留内容计数。
+                    var common=new CarbonEvidence.SharedUpstream(trace);
+                    long traceBytes=common.utf8Size();
+                    if(traceBytes>MAX_PROJECT_EVIDENCE_BYTES-projectEvidenceBytes)
                         throw error(409,LIMIT_EXCEEDED,"本次项目组成证据超过16MiB上限，请缩小计算范围或分类配置");
                     long sliceBytes=projection.applied().includedSlices().stream()
                             .mapToLong(s->CarbonEvidence.canonical(CarbonEvidence.tree(s)).getBytes(java.nio.charset.StandardCharsets.UTF_8).length).sum();
-                    if(sliceBytes>MAX_PROJECT_EVIDENCE_BYTES-projectEvidenceBytes-traceBytes*copies)
+                    if(sliceBytes>MAX_PROJECT_EVIDENCE_BYTES-projectEvidenceBytes-traceBytes)
                         throw error(409,LIMIT_EXCEEDED,"本次项目组成证据超过16MiB上限，请缩小计算范围或分类配置");
-                    projectEvidenceBytes+=traceBytes*copies+sliceBytes;
+                    projectEvidenceBytes+=traceBytes+sliceBytes;
                     for(var slice:projection.applied().includedSlices()) {
-                        ObjectNode sourceTrace=trace.deepCopy();sourceTrace.set("sourceSlice",CarbonEvidence.tree(slice));
-                        add(result,sourceTrace,buildingId,period,timezone,itemCode,slice.quantity(),quantity.getKey(),group);
+                        ObjectNode unique=CarbonEvidence.object();unique.set("sourceSlice",CarbonEvidence.tree(slice));
+                        ObjectNode full=common.copy();full.setAll(unique);
+                        String hash=CarbonCalculationCore.sha256(CarbonEvidence.canonical(full));
+                        result.add(new ActivitySegment(hash.substring(0,32),buildingId,PeriodType.MONTH,
+                                period[0],period[1],timezone,itemCode,slice.quantity(),quantity.getKey(),
+                                group.lockStatus(),group.resultCompleteness(),
+                                "FORMAL".equals(group.resultNature())?ResultNature.FORMAL:ResultNature.DEVELOPMENT_SIMULATION,
+                                hash,unique,common));
                     }
                     if(projection.applied().includedSlices().isEmpty()) {
                         trace.put("activityStatus","EXCLUDED");

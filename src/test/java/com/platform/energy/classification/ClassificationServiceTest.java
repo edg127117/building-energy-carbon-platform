@@ -10,6 +10,7 @@ import com.platform.framework.exception.BusinessException;
 import com.platform.relation.RelationGovernanceService;
 import com.platform.relation.RelationGovernanceProperties;
 import com.platform.relation.api.RelationContracts.QueryMetadata;
+import com.platform.relation.api.RelationContracts.HistoricalMeteringScopeView;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentView;
 import com.platform.relation.api.RelationContracts.MeteringAssignmentsView;
 import com.platform.relation.api.RelationContracts.MeterStructureView;
@@ -118,6 +119,28 @@ class ClassificationServiceTest {
         assertThat(result.slices().stream().map(ClassificationCore.SourceSlice::quantity).reduce(BigDecimal.ZERO,BigDecimal::add)).isEqualByComparingTo("1000");
         assertThatThrownBy(()->service.projectSealed(1,ROLES,BUILDING,version.versionId(),FROM,TO,"ELECTRICITY","kWh",List.of())).hasMessageContaining("不完整");
         assertThatThrownBy(()->service.projectSealed(1,ROLES,"OTHER",version.versionId(),FROM,TO,"ELECTRICITY","kWh",snapshots)).isInstanceOf(BusinessException.class);
+    }
+
+    @Test void historicalScopeIsRequiredForPastClassificationAndSealedProjection() {
+        var version=approved("R1");
+        QueryMetadata late=new QueryMetadata(BUILDING,"R1",1,LocalDateTime.of(2026,10,28,0,0),1,0,false,0,0,0,0);
+        var assignments=relations.historicalMeteringAssignments(1L,ROLES,BUILDING,"R1",1,100);
+        var structures=relations.effectiveMeterStructures(1L,ROLES,BUILDING,1,100);
+        when(relations.historicalMeteringAssignments(anyLong(),anyCollection(),eq(BUILDING),eq("R1"),eq(1),eq(100)))
+                .thenReturn(new MeteringAssignmentsView(late,1,100,4,assignments.items()));
+        when(relations.effectiveMeterStructures(anyLong(),anyCollection(),eq(BUILDING),eq(1),eq(100)))
+                .thenReturn(new MeterStructuresView(late,1,100,4,structures.items()));
+        importApproved("history-month",reading("A","1000",null),reading("B","600",null),reading("C","200",null),reading("D","300",null));
+        assertThat(service.query(1,ROLES,BUILDING,query(version.versionId())).status()).isEqualTo("PENDING_EXPERT");
+        var scope=new HistoricalMeteringScopeView("HS1",BUILDING,"R1",FROM,TO,"hash","依据","原因","APPROVED",1L,2L,"审核",LocalDateTime.now(),LocalDateTime.now());
+        when(relations.historicalMeteringScope(anyLong(),anyCollection(),eq(BUILDING),eq("R1"),eq(FROM),eq(TO))).thenReturn(scope);
+        var result=service.query(1,ROLES,BUILDING,query(version.versionId()));
+        assertThat(result.total()).isEqualByComparingTo("1000");
+        assertThat(result.evidenceIds()).contains("HISTORICAL_METERING_SCOPE:HS1");
+        var projection=service.projectSealed(1,ROLES,BUILDING,version.versionId(),FROM,TO,"ELECTRICITY","kWh",
+                List.of(sealed("A","1000"),sealed("B","600"),sealed("C","200"),sealed("D","300")));
+        assertThat(projection.total()).isEqualByComparingTo("1000");
+        assertThat(projection.historicalMeteringScopeId()).isEqualTo("HS1");
     }
 
     private com.platform.energy.period.EnergyPeriodModels.PeriodSnapshot sealed(String point,String quantity) {

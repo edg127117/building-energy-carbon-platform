@@ -108,7 +108,8 @@ class FlywayMigrationConfigurationTest {
                 "V85__mysql_d01_test_building_retirement.sql",
                 "V86__mysql_energy_reporting.sql",
                 "V87__mysql_heat_co2_factor_formula.sql",
-                "V88__mysql_default_electricity_factor_year.sql");
+                "V88__mysql_default_electricity_factor_year.sql",
+                "V93__mysql_historical_metering_scope.sql");
 
 
         Set<String> versions = migrations.stream()

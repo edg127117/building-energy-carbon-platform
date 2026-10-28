@@ -333,7 +333,86 @@ class RelationGovernanceServiceIntegrationTest {
                 """, String.class, buildingId, nodeType);
     }
 
+    @Test
+    void reviewedHistoricalScopePreservesActivationAndCurrentProjection() {
+        var version = activatedHistoricalTestVersion();
+        var from = java.time.Instant.parse("2025-08-31T16:00:00Z");
+        var to = java.time.Instant.parse("2026-09-30T16:00:00Z");
+        var request = new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeRequest(
+                from, to, "测试计量关系及原始台账", "确认历史适用范围");
+        var model = service.model(101L, ENERGY, "BLD001");
+        var scope = service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), "scope-submit", request);
+        assertThat(service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), "scope-submit", request).scopeId()).isEqualTo(scope.scopeId());
+        assertThat(service.historicalMeteringScope(101, ENERGY, "BLD001", version.versionId(), from, to)).isNull();
+        assertThatThrownBy(() -> service.reviewHistoricalMeteringScope(101, ENERGY_ADMIN, "BLD001", scope.scopeId(), "scope-self",
+                new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeDecision(true, "自审")))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("禁止提交人");
+        var decision = new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeDecision(true, "已核对历史范围");
+        service.reviewHistoricalMeteringScope(202, ADMIN, "BLD001", scope.scopeId(), "scope-review", decision);
+        assertThat(service.reviewHistoricalMeteringScope(202, ADMIN, "BLD001", scope.scopeId(), "scope-review", decision).status()).isEqualTo("APPROVED");
+        assertThat(service.historicalMeteringScope(101, ENERGY, "BLD001", version.versionId(), from, to).scopeId()).isEqualTo(scope.scopeId());
+        assertThat(service.historicalMeteringScope(101, ENERGY, "BLD001", version.versionId(), from.minusMillis(1), to)).isNull();
+        assertThat(service.model(101L, ENERGY, "BLD001")).isEqualTo(model);
+        assertThat(service.versionDetail(101L, ENERGY, "BLD001", version.versionId()).metadata().effectiveAt()).isEqualTo(version.effectiveAt());
+        assertThatThrownBy(() -> service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), "scope-overlap", request))
+                .hasMessageContaining("重叠");
+        assertThatThrownBy(() -> service.submitHistoricalMeteringScope(101, ENERGY, "BLD002", version.versionId(), "scope-cross", request))
+                .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void rejectedHistoricalScopeCanBeResubmittedButCannotCoverLivePeriod() {
+        var version = activatedHistoricalTestVersion();
+        var from = java.time.Instant.parse("2025-08-31T16:00:00Z");
+        var to = java.time.Instant.parse("2026-09-30T16:00:00Z");
+        var request = new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeRequest(from, to, "测试依据", "提交");
+        var scope = service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), "reject-submit", request);
+        service.reviewHistoricalMeteringScope(202, ADMIN, "BLD001", scope.scopeId(), "reject-scope",
+                new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeDecision(false, "更正依据后重提"));
+        var resubmitted = service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), "resubmit-scope", request);
+        assertThat(resubmitted.status()).isEqualTo("PENDING_REVIEW");
+        properties.setSelfApprovalEnabled(true);
+        service.reviewHistoricalMeteringScope(101, ENERGY_ADMIN, "BLD001", resubmitted.scopeId(), "self-approved-scope",
+                new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeDecision(true, "测试自审"));
+        assertThat(jdbc.queryForObject("SELECT self_approval_dev_mode FROM biz_relation_audit_log WHERE object_id=? AND action_type='SELF_APPROVAL_DEV_MODE'", Boolean.class, resubmitted.scopeId())).isTrue();
+        assertThatThrownBy(() -> service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), "live-period",
+                new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeRequest(from, java.time.Instant.now().plusSeconds(60).truncatedTo(java.time.temporal.ChronoUnit.MILLIS), "依据", "不能改写当前期间")))
+                .hasMessageContaining("不得覆盖");
+    }
+
+    private VersionView activatedHistoricalTestVersion() {
+        var draft = service.initialize(101L, ENERGY, "BLD001", "history-init", "初始化测试建筑");
+        var review = service.submit(101L, ENERGY, draft.versionId(), "history-submit", new RevisionReasonRequest(draft.revision(), "提交"));
+        service.approve(202L, ADMIN, review.requestId(), "history-approve", new ReviewDecisionRequest("审核"));
+        return service.activate(202L, ADMIN, draft.versionId(), "history-activate",
+                new ActivationRequest(service.model(202L, ADMIN, "BLD001").modelRevision(), "激活"));
+    }
+
+    @Test
+    void concurrentHistoricalRequestsCannotReserveTheSamePeriod() throws Exception {
+        var version = activatedHistoricalTestVersion();
+        var request = new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeRequest(
+                java.time.Instant.parse("2025-08-31T16:00:00Z"), java.time.Instant.parse("2026-09-30T16:00:00Z"), "计量依据", "历史确认");
+        var gate = new java.util.concurrent.CyclicBarrier(2);
+        java.util.function.Function<String, java.util.concurrent.Callable<String>> task = key -> () -> {
+            gate.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            try {
+                return service.submitHistoricalMeteringScope(101, ENERGY, "BLD001", version.versionId(), key, request).status();
+            } catch (BusinessException e) {
+                assertThat(e.getMessage()).contains("重叠");
+                return "CONFLICT";
+            }
+        };
+        try (var pool = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            var first = pool.submit(task.apply("historical-parallel-a"));
+            var second = pool.submit(task.apply("historical-parallel-b"));
+            assertThat(java.util.List.of(first.get(10, java.util.concurrent.TimeUnit.SECONDS),
+                    second.get(10, java.util.concurrent.TimeUnit.SECONDS))).containsExactlyInAnyOrder("PENDING_REVIEW", "CONFLICT");
+        }
+    }
+
     private void cleanRelationData() {
+        jdbc.update("DELETE FROM biz_historical_metering_scope");
         jdbc.update("DELETE FROM biz_relation_validation_issue");
         jdbc.update("DELETE FROM biz_relation_review_request");
         jdbc.update("DELETE FROM biz_relation_audit_log");

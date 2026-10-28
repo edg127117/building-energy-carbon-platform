@@ -98,7 +98,7 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 | `com.platform.iot.temporal` | TDengine 时序访问边界 |
 | `com.platform.energy.activity` | 多能源原始活动数据的有界读取和质量门禁 |
 | `com.platform.energy.catalog`、`conversion` | 能源品种、单位量纲、折标公式和参数版本；研发模拟结果不得冒充正式结算 |
-| `com.platform.energy.aggregation`、`period`、`summary` | 活动量聚合、计量事件与修正、周期投影与封账、历史关系和计量边界汇总 |
+| `com.platform.energy.aggregation`、`period`、`summary` | 活动量聚合、计量事件与修正、周期投影与封账、历史关系和计量边界汇总；接管前历史的计量适用确认见[决策与接口](docs/adr/0003-historical-metering-applicability.md) |
 | `com.platform.energy.classification` | 版本化分类树、对象归属、计量树分解与原生分类统计、标准Excel预检；向碳模块提供正式封账组成，人工来源须经正式月量候选与独立封账，不能直接进入碳核算 |
 | `com.platform.energy.efficiency` | 电驱动水冷冷站原生周期、年度 EERp 和研发评价 |
 | `com.platform.carbon` | 因子与分母版本、范围一固定源/范围二计算、项目能源版本与碳排除、依赖指纹工作单、冻结分类报表、追溯、月季年重算替代审批；水与绿色能源仅预留，移动源未纳入 |
@@ -309,6 +309,8 @@ V58 将旧 HVAC 设备、19 测点、别名、指标、采集与质量治理策�
 ```
 
 表计路径的正式碳输入要求原生封账快照和独立审核的边界汇总口径同时标记为 `FORMAL`；`SIMULATION` 汇总口径保持研发性质。原生量与折标完整性分别判断，`LOCKED_NATIVE_COMPLETE` 可提供完整原生量，折标未计算继续保留空值。周期当前值及快照的数值副本写入 TDengine 成功后才提交 MySQL 可见索引；跨库失败不发布成功，确定性结果键支持重试。
+
+月度碳结果在原 `/v1/carbon-management/calculations` 契约的 `summaries` 中提供 `MONTH_AREA_INTENSITY`：本月排放量除以覆盖该月的已激活建筑面积，单位 `kgCO2e/m²`，面积版本与数值随结果固定。缺少或冲突的面积只使该指标不可用。年度 `AREA_INTENSITY`、`POPULATION_INTENSITY` 保留原口径。分类计量树、来源快照和配置在批次内按内容摘要共享，明细读取时还原完整证据并验证原摘要，16MiB 项目组成证据限额继续有效。
 
 “分项与能碳配置”的默认入口为能源账单月度填报，按建筑和月份读取后端来源、原生单位及审核状态；实施人员通过来源页维护独立账单/统计来源，专业参数页提供B01/B02资料目录、预检与待审核导入。`mode=professional` 保留原专业工作区，区域分析入口保留正式计算、固定批次及证据读取、重算候选独立审批能力，跳转显式携带建筑和月份。表计人工批次与账单批次是不同来源，不伪造测点或复用表计身份。
 

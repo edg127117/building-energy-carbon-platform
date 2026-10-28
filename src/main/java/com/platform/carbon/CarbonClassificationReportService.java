@@ -32,6 +32,7 @@ public class CarbonClassificationReportService {
         if(detail.items().size()>5000)throw error(409,LIMIT_EXCEEDED,"分类碳报表超过5000条明细上限");
         // 批次授权通过后有界读取证据，避免每个原子组成重复鉴权与访问数据库。
         String shared=repository.sharedEvidence(batchId);
+        JsonNode dictionary=shared==null?CarbonEvidence.object():CarbonEvidence.parse(shared);
         Map<String,CarbonCalculationRepository.StoredEvidence> evidence=new HashMap<>();
         for(var stored:repository.listEvidence(batchId)) {
             if(evidence.put(stored.itemId(),stored)!=null)throw error(409,DEPENDENCY_UNAVAILABLE,"批次明细证据重复");
@@ -41,7 +42,7 @@ public class CarbonClassificationReportService {
         for(var item:detail.items()) {
             var stored=evidence.get(item.calculationItemId());
             if(stored==null)throw error(409,DEPENDENCY_UNAVAILABLE,"批次明细证据缺失");
-            entries.add(new Entry(item,CarbonEvidence.stored(stored.json(),stored.hash(),shared)));
+            entries.add(new Entry(item,CarbonEvidence.storedWithDictionary(stored.json(),stored.hash(),dictionary)));
         }
         Report result=aggregate(detail.batch().buildingId(),batchId,detail.batch().status(),entries);
         if(shared==null)return result;

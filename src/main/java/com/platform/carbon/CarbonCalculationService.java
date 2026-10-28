@@ -304,7 +304,8 @@ public class CarbonCalculationService {
                         "正式计算要求全部活动快照正式且完整");
             }
             if (incompleteActivity) incomplete.add(activity.snapshotId() + ":活动数据不完整");
-            if(activity.traceEvidence()!=null&&"EXCLUDED".equals(activity.traceEvidence().path("activityStatus").asText())) {
+            var activityStatus=activity.traceField("activityStatus");
+            if(activityStatus!=null&&"EXCLUDED".equals(activityStatus.asText())) {
                 if(activity.quantity().signum()!=0)throw error(409,ACTIVITY_INCOMPLETE,"完全排除活动不得产生纳入用量");
                 if(!CarbonCalculationCore.sha256(CarbonEvidence.canonical(activity.traceEvidence())).equals(activity.evidenceHash()))
                     throw error(409,ACTIVITY_INCOMPLETE,"完全排除活动的来源证据摘要不一致");
@@ -339,21 +340,28 @@ public class CarbonCalculationService {
         }
         DenominatorSelection area = DenominatorSelection.available(null);
         DenominatorSelection population = DenominatorSelection.available(null);
-        if (batch.periodType() == PeriodType.YEAR) {
-            LocalDate yearStart = LocalDateTime.ofInstant(window.start(),
+        if (batch.periodType() == PeriodType.YEAR || batch.periodType() == PeriodType.MONTH) {
+            LocalDate periodStart = LocalDateTime.ofInstant(window.start(),
                     ZoneId.of(window.timezoneId())).toLocalDate();
-            LocalDate yearEnd = LocalDateTime.ofInstant(window.end(),
+            LocalDate periodEnd = LocalDateTime.ofInstant(window.end(),
                     ZoneId.of(window.timezoneId())).toLocalDate();
             UsageNature nature = batch.resultNature() == ResultNature.FORMAL
                     ? UsageNature.FORMAL : UsageNature.DEVELOPMENT_REFERENCE;
             area = denominator(batch.buildingId(), DenominatorType.BUILDING_AREA,
-                    nature, yearStart, yearEnd, deadline);
-            population = denominator(batch.buildingId(), DenominatorType.RESIDENT_POPULATION,
-                    nature, yearStart, yearEnd, deadline);
+                    nature, periodStart, periodEnd, deadline);
+            if (batch.periodType() == PeriodType.YEAR) {
+                population = denominator(batch.buildingId(), DenominatorType.RESIDENT_POPULATION,
+                        nature, periodStart, periodEnd, deadline);
+            }
         }
-        List<SummaryMetric> summaries = core.summarizeWithDenominatorSelections(
-                items, batch.periodType(), area, population);
+        List<SummaryMetric> summaries = new ArrayList<>(core.summarizeWithDenominatorSelections(
+                items, batch.periodType(), area, population));
+        if (batch.periodType() == PeriodType.MONTH) summaries.add(core.monthlyAreaIntensity(items, area));
         ObjectNode shared = CarbonEvidence.object();
+        for (var activity : activities) {
+            var upstream = activity.sharedUpstream();
+            if (upstream != null && !shared.has(upstream.hash())) shared.set(upstream.hash(), upstream.copy());
+        }
         shared.set("excludedActivities",CarbonEvidence.tree(excludedActivities));
         List<CalculatedItem> traced = captureEvidence(items, batch, area, population, deadline, shared);
         return new CalculationResult(traced, failures, summaries,
@@ -361,9 +369,9 @@ public class CarbonCalculationService {
     }
 
     private static boolean electricityActivity(ActivitySegment activity) {
-        var trace=activity.traceEvidence();
-        return trace!=null&&trace.has("projectEnergyPathway")
-                ? "PURCHASED_ELECTRICITY".equals(trace.path("projectEnergyPathway").asText())
+        var pathway=activity.traceField("projectEnergyPathway");
+        return pathway!=null
+                ? "PURCHASED_ELECTRICITY".equals(pathway.asText())
                 : "ELECTRICITY".equals(activity.energyItemCode());
     }
 
@@ -394,7 +402,8 @@ public class CarbonCalculationService {
         List<CalculatedItem> result = new ArrayList<>();
         for (CalculatedItem item : items) {
             deadline.requireRemaining();
-            ObjectNode trace = (ObjectNode) CarbonEvidence.parse(item.evidenceJson());
+            ObjectNode trace = (ObjectNode) CarbonEvidence.storedWithDictionary(
+                    item.evidenceJson(), item.evidenceHash(), shared);
             var ids = new LinkedHashSet<String>();
             ids.add(item.factor().sourceVersionId());
             item.factor().components().forEach(component -> ids.add(component.sourceVersionId()));
@@ -419,6 +428,7 @@ public class CarbonCalculationService {
             context.put("supersedesBatchId", batch.supersedesBatchId());
             context.put("roundingPolicyVersionId", batch.roundingPolicyVersionId());
             String json = CarbonEvidence.canonical(trace);
+            if (item.activity().sharedUpstream() != null) trace.set("upstream", item.activity().compactTraceEvidence());
             result.add(new CalculatedItem(item.activity(), item.factor(), item.convertedActivity(),
                     item.formulaVersionId(), item.gwpVersionId(), item.exactEmissionKgCo2e(),
                     item.persistedEmissionKgCo2e(), item.matchReason(), CarbonEvidence.compact(trace, shared),

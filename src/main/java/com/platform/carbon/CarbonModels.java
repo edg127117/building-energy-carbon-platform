@@ -34,9 +34,20 @@ public final class CarbonModels {
             Instant startInclusive, Instant endExclusive, String timezoneId,
             String energyItemCode, BigDecimal quantity, String unitCode,
             String lockStatus, String completeness, ResultNature resultNature,
-            String evidenceHash, JsonNode traceEvidence) {
+            String evidenceHash, JsonNode traceEvidence,
+            @com.fasterxml.jackson.annotation.JsonIgnore CarbonEvidence.SharedUpstream sharedUpstream) {
         public ActivitySegment {
             traceEvidence = traceEvidence == null ? null : traceEvidence.deepCopy();
+        }
+
+        public ActivitySegment(String snapshotId, String buildingId, PeriodType periodType,
+                               Instant startInclusive, Instant endExclusive, String timezoneId,
+                               String energyItemCode, BigDecimal quantity, String unitCode,
+                               String lockStatus, String completeness, ResultNature resultNature,
+                               String evidenceHash, JsonNode traceEvidence) {
+            this(snapshotId, buildingId, periodType, startInclusive, endExclusive, timezoneId,
+                    energyItemCode, quantity, unitCode, lockStatus, completeness, resultNature,
+                    evidenceHash, traceEvidence, null);
         }
 
         /** 兼容不提供结构化追溯的既有输入；结果会显式标记为部分证据。 */
@@ -51,7 +62,32 @@ public final class CarbonModels {
         }
 
         @Override public JsonNode traceEvidence() {
-            return traceEvidence == null ? null : traceEvidence.deepCopy();
+            if (sharedUpstream == null) return traceEvidence == null ? null : traceEvidence.deepCopy();
+            var result = sharedUpstream.copy();
+            if (traceEvidence != null) result.setAll((com.fasterxml.jackson.databind.node.ObjectNode) traceEvidence.deepCopy());
+            return result;
+        }
+
+        public boolean hasTraceEvidence() { return traceEvidence != null || sharedUpstream != null; }
+
+        public JsonNode traceField(String name) {
+            JsonNode value = traceEvidence == null ? null : traceEvidence.get(name);
+            return value != null ? value.deepCopy() : sharedUpstream == null ? null : sharedUpstream.field(name);
+        }
+
+        /** 仅在批次字典已保存公共证据后使用；完整证据摘要仍针对展开后的内容。 */
+        public JsonNode compactTraceEvidence() {
+            if (sharedUpstream == null) return traceEvidence();
+            var result = CarbonEvidence.object();
+            result.put("sharedUpstreamReference", sharedUpstream.hash());
+            if (traceEvidence != null) result.setAll((com.fasterxml.jackson.databind.node.ObjectNode) traceEvidence.deepCopy());
+            return result;
+        }
+
+        public ActivitySegment withoutTraceEvidence() {
+            return new ActivitySegment(snapshotId, buildingId, periodType, startInclusive, endExclusive,
+                    timezoneId, energyItemCode, quantity, unitCode, lockStatus, completeness, resultNature,
+                    evidenceHash, null);
         }
     }
 

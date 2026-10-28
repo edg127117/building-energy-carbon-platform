@@ -82,6 +82,7 @@ class ManualPeriodInputServiceTest {
         assertThat(first.evidenceJson()).isEqualTo(second.evidenceJson());
         assertThat(first.evidenceHash()).isEqualTo(second.evidenceHash());
         var evidence = mapper.readTree(first.evidenceJson());
+        assertThat(evidence.has("historicalMeteringScopeId")).isFalse();
         assertThat(evidence.path("inputKind").asText()).isEqualTo("REVIEWED_MANUAL_MONTH");
         assertThat(evidence.path("batchIds").get(0).asText()).isEqualTo("IMPORT-A");
         assertThat(evidence.path("batchIds").get(1).asText()).isEqualTo("IMPORT-B");
@@ -107,6 +108,22 @@ class ManualPeriodInputServiceTest {
         verify(manualRepository).lock(BUILDING);
         verify(manualRepository, never()).readings(anyString(), any(), any(), eq(true));
         verifyNoInteractions(relations, catalog);
+    }
+
+    @Test
+    void approvedHistoricalScopeAllowsPastMonthAndFreezesItsEvidence() throws Exception {
+        var readings = validShanghaiReadings();
+        arrangeFormalShanghai(readings);
+        arrangeConfirmedShanghaiBinding();
+        arrangeRelation(LocalDateTime.of(2026, 10, 28, 0, 0), "REL-1");
+        var scope = new com.platform.relation.api.RelationContracts.HistoricalMeteringScopeView(
+                "HISTORY-1", BUILDING, "REL-1", SHANGHAI_START, SHANGHAI_END, "hash", "依据", "原因",
+                "APPROVED", 1L, 2L, "审核", LocalDateTime.now(), LocalDateTime.now());
+        when(relations.historicalMeteringScope(USER, ROLES, BUILDING, "REL-1", SHANGHAI_START, SHANGHAI_END)).thenReturn(scope);
+        var result = service.prepare(USER, ROLES, BUILDING, request());
+        assertThat(result.nativeQuantity()).isEqualByComparingTo("300");
+        assertThat(mapper.readTree(result.evidenceJson()).path("historicalMeteringScopeId").asText()).isEqualTo("HISTORY-1");
+        service.verifyStored(USER, ROLES, current(result));
     }
 
     @Test
@@ -175,7 +192,7 @@ class ManualPeriodInputServiceTest {
         when(catalog.effectiveBinding(USER, ROLES, BUILDING, POINT, LocalDateTime.of(2020, 1, 1, 0, 0)))
                 .thenReturn(binding("BINDING-1"));
         when(catalog.effectiveBinding(USER, ROLES, BUILDING, POINT,
-                LocalDateTime.of(2020, 1, 31, 23, 59, 59, 999_999_999)))
+                LocalDateTime.of(2020, 1, 31, 23, 59, 59, 999_000_000)))
                 .thenReturn(binding("BINDING-2"));
 
         assertThatThrownBy(() -> service.prepare(USER, ROLES, BUILDING, request()))
@@ -254,7 +271,7 @@ class ManualPeriodInputServiceTest {
         when(catalog.effectiveBinding(USER, ROLES, BUILDING, POINT,
                 LocalDateTime.of(2020, 1, 1, 0, 0))).thenReturn(binding);
         when(catalog.effectiveBinding(USER, ROLES, BUILDING, POINT,
-                LocalDateTime.of(2020, 1, 31, 23, 59, 59, 999_999_999))).thenReturn(binding);
+                LocalDateTime.of(2020, 1, 31, 23, 59, 59, 999_000_000))).thenReturn(binding);
     }
 
     private void arrangeRelation(LocalDateTime effectiveAt, String activeVersionId) {

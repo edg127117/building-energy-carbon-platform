@@ -19,7 +19,7 @@ import java.util.Map;
 import static com.platform.carbon.CarbonErrors.*;
 
 @Component
-/** 执行不访问数据库的因子匹配、CO2e 计算、汇总、占比和年度唯一两项强度。 */
+/** 执行不访问数据库的因子匹配、CO2e 计算、汇总、占比及按周期区分的强度。 */
 public class CarbonCalculationCore {
     static final MathContext MC = MathContext.DECIMAL128;
     private static final BigDecimal CO2_CARBON_MASS_RATIO = new BigDecimal("44")
@@ -79,9 +79,11 @@ public class CarbonCalculationCore {
             throw error(409, FACTOR_CONFLICT, "同一优先级匹配到多个排放因子版本");
         }
         FactorVersion factor = selected.getFirst();
-        if(activity.traceEvidence()!=null&&"ENERGY_BILL_CARBON_V1".equals(activity.traceEvidence().path("contractVersion").asText())
+        var contract=activity.traceField("contractVersion");
+        if(contract!=null&&"ENERGY_BILL_CARBON_V1".equals(contract.asText())
                 &&"NM3".equals(activity.unitCode())) {
-            String condition=activity.traceEvidence().path("standardConditionCode").asText();
+            var standard=activity.traceField("standardConditionCode");
+            String condition=standard==null?"":standard.asText();
             if(condition.isBlank()||!condition.equals(factor.standardConditionCode()))
                 throw error(409,UNIT_INCOMPATIBLE,"账单标准体积与因子标准状态不一致，不隐式换算");
         }
@@ -146,10 +148,10 @@ public class CarbonCalculationCore {
         }
         ObjectNode trace = CarbonEvidence.object();
         trace.put("schemaVersion", 1);
-        trace.put("traceStatus", activity.traceEvidence() == null ? "UPSTREAM_PARTIAL" : "CAPTURED");
+        trace.put("traceStatus", activity.hasTraceEvidence() ? "CAPTURED" : "UPSTREAM_PARTIAL");
         trace.put("snapshotId", activity.snapshotId());
         trace.put("activityEvidenceHash", activity.evidenceHash());
-        ObjectNode activityValue = (ObjectNode) CarbonEvidence.tree(activity);
+        ObjectNode activityValue = (ObjectNode) CarbonEvidence.tree(activity.withoutTraceEvidence());
         activityValue.remove("traceEvidence");
         trace.set("activity", activityValue);
         trace.set("upstream", activity.traceEvidence());
@@ -180,10 +182,16 @@ public class CarbonCalculationCore {
         trace.put("detailScale", 18);
         trace.put("roundingMode", "HALF_UP");
         String evidence = CarbonEvidence.canonical(trace);
+        String evidenceHash = sha256(evidence);
+        if (activity.sharedUpstream() != null) {
+            // 先对完整事实取摘要，再保留批次内引用，避免每个原子组成持有整棵计量树。
+            trace.set("upstream", activity.compactTraceEvidence());
+            evidence = CarbonEvidence.canonical(trace);
+        }
         return new CalculatedItem(activity, factor, match.convertedActivity(),
                 factor.formulaVersionId(), gwpVersionId, exact,
                 exact.setScale(18, RoundingMode.HALF_UP),
-                match.matchReason(), evidence, sha256(evidence));
+                match.matchReason(), evidence, evidenceHash);
     }
 
     public List<SummaryMetric> summarize(List<CalculatedItem> items, PeriodType periodType,
@@ -222,6 +230,12 @@ public class CarbonCalculationCore {
         return List.copyOf(result);
     }
 
+    /** 月度展示指标使用独立编码，不能替代年度 AREA_INTENSITY 的核算口径。 */
+    public SummaryMetric monthlyAreaIntensity(List<CalculatedItem> items, DenominatorSelection area) {
+        return intensity("MONTH_AREA_INTENSITY", "TOTAL", sum(items), area,
+                "kgCO2e/m²", "缺少覆盖核算月份的已激活建筑面积版本");
+    }
+
     private static SummaryMetric emission(String metric, String dimension, BigDecimal kg) {
         BigDecimal tonnes = kg.divide(new BigDecimal("1000"), MC);
         return metric(metric, dimension, tonnes, tonnes.setScale(6, RoundingMode.HALF_UP),
@@ -253,7 +267,7 @@ public class CarbonCalculationCore {
                 unit, denominator.denominatorVersionId(), null);
     }
 
-    /** 年度强度的分母选择；冲突只使对应强度不可用，不能影响已完成的排放量汇总。 */
+    /** 强度分母选择；冲突只使对应强度不可用，不能影响已完成的排放量汇总。 */
     public record DenominatorSelection(DenominatorVersion value, String unavailableReason) {
         public DenominatorSelection {
             if (value != null && unavailableReason != null) {
@@ -364,8 +378,8 @@ public class CarbonCalculationCore {
     }
 
     private static FactorCategory category(ActivitySegment activity) {
-        var trace=activity.traceEvidence();
-        String pathway=trace==null?"":trace.path("projectEnergyPathway").asText();
+        var field=activity.traceField("projectEnergyPathway");
+        String pathway=field==null?"":field.asText();
         if(!pathway.isEmpty())return switch(pathway) {
             case "PURCHASED_ELECTRICITY" -> FactorCategory.PURCHASED_ELECTRICITY_LOCATION;
             case "PURCHASED_HEAT" -> FactorCategory.PURCHASED_HEAT;
