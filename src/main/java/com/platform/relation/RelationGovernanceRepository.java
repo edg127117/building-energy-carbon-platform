@@ -2,6 +2,7 @@ package com.platform.relation;
 
 import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.TraceContext;
+import com.platform.relation.api.RelationContracts.HistoricalMeteringScopeView;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,6 +12,7 @@ import java.sql.Timestamp;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +37,42 @@ public class RelationGovernanceRepository {
                 "SELECT COUNT(*) FROM building WHERE building_id=? AND del_flag=0",
                 Long.class, buildingId);
         return count != null && count > 0;
+    }
+
+    public List<HistoricalMeteringScopeView> historicalMeteringScopes(String buildingId) {
+        return jdbc.query("""
+                SELECT * FROM biz_historical_metering_scope WHERE building_id=?
+                ORDER BY start_epoch_ms, scope_id
+                """, (rs, n) -> historicalMeteringScope(rs), buildingId);
+    }
+
+    public void insertHistoricalMeteringScope(String id, String building, String version,
+            long from, long to, String snapshot, String evidence, String reason, long user) {
+        jdbc.update("""
+                INSERT INTO biz_historical_metering_scope
+                  (scope_id,building_id,relation_version_id,start_epoch_ms,end_epoch_ms,
+                   snapshot_sha256,evidence_reference,reason,status,submitted_by)
+                VALUES (?,?,?,?,?,?,?,?,'PENDING_REVIEW',?)
+                """, id, building, version, from, to, snapshot, evidence, reason, user);
+    }
+
+    public int reviewHistoricalMeteringScope(String id, boolean approved, long user, String reason) {
+        return jdbc.update("""
+                UPDATE biz_historical_metering_scope
+                SET status=?,reviewed_by=?,review_reason=?,reviewed_at=CURRENT_TIMESTAMP
+                WHERE scope_id=? AND status='PENDING_REVIEW'
+                """, approved ? "APPROVED" : "REJECTED", user, reason, id);
+    }
+
+    private HistoricalMeteringScopeView historicalMeteringScope(ResultSet rs) throws SQLException {
+        Timestamp reviewed = rs.getTimestamp("reviewed_at");
+        return new HistoricalMeteringScopeView(rs.getString("scope_id"), rs.getString("building_id"),
+                rs.getString("relation_version_id"), Instant.ofEpochMilli(rs.getLong("start_epoch_ms")),
+                Instant.ofEpochMilli(rs.getLong("end_epoch_ms")), rs.getString("snapshot_sha256"),
+                rs.getString("evidence_reference"), rs.getString("reason"), rs.getString("status"),
+                rs.getObject("submitted_by", Long.class), rs.getObject("reviewed_by", Long.class),
+                rs.getString("review_reason"), rs.getTimestamp("submitted_at").toLocalDateTime(),
+                reviewed == null ? null : reviewed.toLocalDateTime());
     }
 
     public boolean isGoverned(String buildingId) {

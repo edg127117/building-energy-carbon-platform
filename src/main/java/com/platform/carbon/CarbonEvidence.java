@@ -42,6 +42,28 @@ public final class CarbonEvidence {
         }
     }
 
+    /** 同一计量分解的公共证据只保留一份，访问时返回副本，避免各明细互相修改。 */
+    public static final class SharedUpstream {
+        private final ObjectNode content;
+        private final String hash;
+        private final int utf8Size;
+
+        public SharedUpstream(ObjectNode content) {
+            this.content = content.deepCopy();
+            String json = canonical(this.content);
+            this.hash = CarbonCalculationCore.sha256(json);
+            this.utf8Size = json.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        }
+
+        public String hash() { return hash; }
+        public int utf8Size() { return utf8Size; }
+        public ObjectNode copy() { return content.deepCopy(); }
+        public JsonNode field(String name) {
+            JsonNode value = content.get(name);
+            return value == null ? null : value.deepCopy();
+        }
+    }
+
     /** 历史记录仅标明证据边界，不以当前上游或规则填补当时未保存的事实。 */
     public static JsonNode stored(String json, String hash) {
         return stored(json, hash, null);
@@ -49,9 +71,13 @@ public final class CarbonEvidence {
 
     /** 共享内容是同批次提交的固定事实，不从当前规则表补齐；完整明细仍使用原始摘要校验。 */
     public static JsonNode stored(String json, String hash, String sharedJson) {
+        return storedWithDictionary(json, hash, sharedJson == null ? object() : parse(sharedJson));
+    }
+
+    // 批次内只解析一次字典；调用方只读使用共享节点，公开单条查询仍持有自己的字典。
+    static JsonNode storedWithDictionary(String json, String hash, JsonNode shared) {
         JsonNode value = parse(json);
         if (value.has("sharedReferences")) {
-            JsonNode shared = sharedJson == null ? object() : parse(sharedJson);
             JsonNode references = ((ObjectNode) value).remove("sharedReferences");
             references.fields().forEachRemaining(entry -> {
                 JsonNode content = shared.get(entry.getValue().asText());
@@ -60,6 +86,19 @@ public final class CarbonEvidence {
                 }
                 ((ObjectNode) value).set(entry.getKey(), content);
             });
+        }
+        JsonNode upstream = value.path("upstream");
+        if (upstream.has("sharedUpstreamReference")) {
+            JsonNode common = shared.get(upstream.path("sharedUpstreamReference").asText());
+            if (common == null || !common.isObject()) {
+                throw new IllegalStateException("碳追溯共享证据缺失或引用无效");
+            }
+            ObjectNode restored = object();
+            restored.setAll((ObjectNode) common);
+            upstream.fields().forEachRemaining(entry -> {
+                if (!"sharedUpstreamReference".equals(entry.getKey())) restored.set(entry.getKey(), entry.getValue());
+            });
+            ((ObjectNode) value).set("upstream", restored);
         }
         if (!value.has("schemaVersion")) {
             ObjectNode legacy = object();

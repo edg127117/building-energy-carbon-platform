@@ -95,14 +95,16 @@ class D01ReleaseTest(unittest.TestCase):
         response.status = 200
         return response
 
-    def prepare(self, migration="84", source=None, mode=None):
+    def prepare(self, migration="84", source=None, mode=None, extra_migration=None):
         package = self.base / "package"
         with zipfile.ZipFile(package / release.JAR, "w") as jar:
             jar.writestr(release.V84, "V84 SQL")
-            for version, path in ((85, release.V85), (86, release.V86), (87, release.V87), (88, release.V88)):
+            for version, path in ((85, release.V85), (86, release.V86), (87, release.V87), (88, release.V88), (93, release.V93)):
                 if int(migration) >= version:
                     jar.writestr(path, "fixture SQL")
             jar.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", b"fixture")
+            if extra_migration is not None:
+                jar.writestr("BOOT-INF/classes/db/migration/mysql/V" + str(extra_migration) + "__unexpected.sql", "fixture")
         (package / "web/index.html").write_bytes(b"candidate")
         (package / "MANIFEST.txt").write_text("commit=" + "a" * 40 + "\nexpectedMigration=" + migration + ("\nsourceMigration=" + source if source else "") + ("\nreleaseMode=" + mode if mode else "") +
                                              "\nbackendJarSha256=" + release.sha(package / release.JAR) +
@@ -173,6 +175,30 @@ class D01ReleaseTest(unittest.TestCase):
         self.assertEqual(release.protected_json(self.state)["phase"], "AWAITING_BUSINESS_ACCEPTANCE")
         self.assertEqual(self.config.read_bytes(), self.original)
         self.assertEqual(self.other.readlink(), self.base / "other-release")
+
+    def test_v93_from_v88_runs_only_its_single_migration_and_preserves_controls(self):
+        self.prepare("93", "88")
+        self.assertEqual(self.schema.call_args.args[0], "validate88")
+        self.assertEqual(self.events, [])
+        release.freeze(self.state, True, True)
+        frozen = self.state.read_bytes()
+        self.schema.reset_mock()
+        release.migrate(self.state, self.base, self.base)
+        self.assertEqual([call.args[0] for call in self.schema.call_args_list], ["upgrade93"])
+        self.assertEqual(self.state.read_bytes(), frozen)
+        release.cutover(self.state, self.base, self.base)
+        self.assertEqual(self.schema.call_args.args[0], "validate93")
+        self.assertEqual(self.config.read_bytes(), self.original)
+
+    def test_v93_refuses_an_unapproved_source_schema(self):
+        with self.assertRaisesRegex(RuntimeError, "D01_STATE_SCHEMA_MISMATCH"):
+            self.prepare("93", "87")
+        self.assertEqual(self.events, [])
+
+    def test_v93_refuses_other_pending_migrations_before_stopping_services(self):
+        with self.assertRaisesRegex(RuntimeError, "D01_V93_SINGLE_MIGRATION_REQUIRED"):
+            self.prepare("93", "88", extra_migration=89)
+        self.assertEqual(self.events, [])
 
     def test_application_only_failed_baseline_cannot_stop_or_switch(self):
         self.schema.side_effect = RuntimeError("D01_SCHEMA_CHECK_FAILED")

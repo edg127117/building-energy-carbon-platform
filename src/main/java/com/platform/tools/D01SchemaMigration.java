@@ -26,7 +26,8 @@ public final class D01SchemaMigration {
     static void run(String action, Map<String, String> environment) {
         String target = target(action);
         boolean upgrade = action.startsWith("upgrade");
-        String expected = upgrade ? String.valueOf(Integer.parseInt(target) - 1) : target;
+        // V89–V92 未进入本包；V93 从已发布 V88 单独增加历史计量表，仍只允许一条迁移。
+        String expected = upgrade ? ("93".equals(target) ? "88" : String.valueOf(Integer.parseInt(target) - 1)) : target;
         String url = required(environment, "D01_JDBC_URL");
         if (!url.startsWith("jdbc:mysql://") || url.matches("(?is).*[?&](user|password)=.*")) {
             throw new IllegalArgumentException("D01_JDBC_URL_WITHOUT_CREDENTIALS_REQUIRED");
@@ -50,9 +51,13 @@ public final class D01SchemaMigration {
             if (!"true".equals(environment.get("D01_WRITERS_FROZEN"))) {
                 throw new IllegalStateException("D01_WRITERS_MUST_BE_FROZEN");
             }
-            // 先验证相邻旧版本；目标迁移由独立进程执行，不允许跨版、repair 或重复升级。
+            // 先验证计划的源版本；独立进程只执行该计划的一条迁移，不允许 repair 或重复升级。
             Flyway.configure().dataSource(source).locations("classpath:db/migration/mysql")
                     .target(expected).baselineOnMigrate(false).cleanDisabled(true).load().validate();
+            var pending = flyway.info().pending();
+            if ("93".equals(target) && (pending.length != 1 || !"93".equals(pending[0].getVersion().getVersion()))) {
+                throw new IllegalStateException("D01_V93_SINGLE_MIGRATION_REQUIRED");
+            }
             if (flyway.migrate().migrationsExecuted != 1) {
                 throw new IllegalStateException("D01_EXACTLY_ONE_MIGRATION_REQUIRED");
             }
@@ -116,6 +121,13 @@ public final class D01SchemaMigration {
                 throw new IllegalStateException("D01_V88_DEFAULT_YEAR_CONSTRAINT_INCOMPLETE");
             }
         }
+        if ("93".equals(target) && jdbc.queryForObject("""
+                SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()
+                AND table_name='biz_historical_metering_scope' AND engine='InnoDB'
+                AND table_collation='utf8mb4_unicode_ci'
+                """, Integer.class) != 1) {
+            throw new IllegalStateException("D01_V93_HISTORICAL_METERING_TABLE_INCOMPLETE");
+        }
         System.out.println("D01_SCHEMA_VALIDATED=" + target);
     }
 
@@ -127,6 +139,7 @@ public final class D01SchemaMigration {
             case "validate86", "upgrade86" -> "86";
             case "validate87", "upgrade87" -> "87";
             case "validate88", "upgrade88" -> "88";
+            case "validate93", "upgrade93" -> "93";
             default -> throw new IllegalArgumentException("D01_SCHEMA_ACTION_REQUIRED");
         };
     }

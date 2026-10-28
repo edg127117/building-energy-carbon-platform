@@ -25,6 +25,8 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -63,6 +65,120 @@ public class RelationGovernanceService {
     private final MeteringDomainValidator meteringValidator;
     private final RelationStagingRepository staging;
     private final com.platform.iot.quality.MySqlDataPointConfigProvider pointConfig;
+
+    public List<HistoricalMeteringScopeView> historicalMeteringScopes(
+            long user, Collection<String> roles, String building) {
+        requireHistoryReader(roles);
+        checkBuilding(user, roles, building);
+        return repository.historicalMeteringScopes(building);
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public HistoricalMeteringScopeView submitHistoricalMeteringScope(long user, Collection<String> roles,
+            String building, String versionId, String idempotencyKey, HistoricalMeteringScopeRequest request) {
+        requireEnergyManager(roles);
+        checkBuilding(user, roles, building);
+        requireModel(building, true);
+        VersionRow version = requireHistoricalMeteringVersion(building, versionId);
+        requireText(request.reason(), "历史适用原因不能为空");
+        requireText(request.evidenceReference(), "历史计量依据不能为空");
+        if (request.reason().length() > 500 || request.evidenceReference().length() > 500
+                || request.startInclusive() == null || request.endExclusive() == null
+                || !request.startInclusive().isBefore(request.endExclusive())
+                || request.startInclusive().getNano() % 1_000_000 != 0
+                || request.endExclusive().getNano() % 1_000_000 != 0) {
+            throw error(400, VALIDATION_FAILED, "历史期间须为毫秒精度的有效半开区间，原因和依据最多500字");
+        }
+        String key = requireKey(idempotencyKey);
+        String hash = digest("HISTORICAL_SCOPE|" + user + "|" + building + "|" + versionId + "|"
+                + request.startInclusive() + "|" + request.endExclusive() + "|"
+                + request.evidenceReference().trim() + "|" + request.reason().trim());
+        AuditRow replay = replay(key, hash);
+        if (replay != null) return requireHistoricalMeteringScope(building, replay.objectId());
+        // 只补接管前的历史空白，不允许覆盖平台已经按实际激活时间治理的期间。
+        Instant firstActivation = repository.listVersions(building).stream().filter(v -> v.effectiveAt() != null)
+                .map(v -> v.effectiveAt().toInstant(ZoneOffset.ofHours(8))).min(Instant::compareTo).orElseThrow();
+        if (request.endExclusive().isAfter(firstActivation)) {
+            throw error(409, VERSION_CONFLICT, "历史适用期间不得覆盖已有关系激活后的期间");
+        }
+        boolean overlaps = repository.historicalMeteringScopes(building).stream()
+                .filter(s -> !"REJECTED".equals(s.status()))
+                .anyMatch(s -> s.startInclusive().isBefore(request.endExclusive())
+                        && request.startInclusive().isBefore(s.endExclusive()));
+        if (overlaps) throw error(409, VERSION_CONFLICT, "历史适用期间与已有确认或待审核申请重叠");
+        String id = UUID.randomUUID().toString().replace("-", "");
+        repository.insertHistoricalMeteringScope(id, building, versionId, request.startInclusive().toEpochMilli(),
+                request.endExclusive().toEpochMilli(), version.snapshotSha256(), request.evidenceReference().trim(),
+                request.reason().trim(), user);
+        repository.insertAudit(building, user, "SUBMIT_HISTORICAL_METERING_SCOPE", "HISTORICAL_METERING_SCOPE",
+                id, versionId, null, null, "PENDING_REVIEW", request.reason().trim(),
+                request.startInclusive() + "/" + request.endExclusive(), key, hash);
+        return requireHistoricalMeteringScope(building, id);
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public HistoricalMeteringScopeView reviewHistoricalMeteringScope(long user, Collection<String> roles,
+            String building, String scopeId, String idempotencyKey, HistoricalMeteringScopeDecision request) {
+        requirePlatformAdmin(roles);
+        checkBuilding(user, roles, building);
+        requireModel(building, true);
+        HistoricalMeteringScopeView scope = requireHistoricalMeteringScope(building, scopeId);
+        requireText(request.reason(), "审核原因不能为空");
+        if (request.reason().length() > 500) throw error(400, VALIDATION_FAILED, "审核原因最多500字");
+        String key = requireKey(idempotencyKey);
+        String hash = digest("REVIEW_HISTORICAL_SCOPE|" + user + "|" + scopeId + "|"
+                + request.approved() + "|" + request.reason().trim());
+        if (replay(key, hash) != null) return scope;
+        requireState(scope.status(), "PENDING_REVIEW", "历史适用申请已审核");
+        boolean selfApproval = request.approved() && Objects.equals(scope.submittedBy(), user);
+        if (request.approved()) {
+            VersionRow version = requireHistoricalMeteringVersion(building, scope.relationVersionId());
+            if (!Objects.equals(version.snapshotSha256(), scope.snapshotSha256())) {
+                throw error(409, REVIEW_CONFLICT, "历史适用申请的关系快照已变化");
+            }
+            if (selfApproval && !properties.isSelfApprovalEnabled()) {
+                throw error(403, FORBIDDEN, "禁止提交人审核自己的历史适用申请");
+            }
+        }
+        if (repository.reviewHistoricalMeteringScope(scopeId, request.approved(), user, request.reason().trim()) != 1) {
+            throw error(409, REVIEW_CONFLICT, "历史适用申请状态已变化");
+        }
+        repository.insertAudit(building, user, selfApproval ? "SELF_APPROVAL_DEV_MODE"
+                : request.approved() ? "APPROVE_HISTORICAL_METERING_SCOPE" : "REJECT_HISTORICAL_METERING_SCOPE", "HISTORICAL_METERING_SCOPE", scopeId,
+                scope.relationVersionId(), null, scope.status(), request.approved() ? "APPROVED" : "REJECTED",
+                request.reason().trim(), "snapshot=" + scope.snapshotSha256(), key, hash);
+        return requireHistoricalMeteringScope(building, scopeId);
+    }
+
+    /** 返回覆盖激活前历史部分的已审核证据；激活后的版本边界仍由原有计算路径校验。 */
+    public HistoricalMeteringScopeView historicalMeteringScope(long user, Collection<String> roles,
+            String building, String versionId, Instant from, Instant to) {
+        requireReader(roles);
+        checkBuilding(user, roles, building);
+        VersionRow version = requireHistoricalMeteringVersion(building, versionId);
+        Instant activation = version.effectiveAt().toInstant(ZoneOffset.ofHours(8));
+        if (!from.isBefore(activation)) return null;
+        Instant historicalEnd = to.isBefore(activation) ? to : activation;
+        return repository.historicalMeteringScopes(building).stream()
+                .filter(s -> "APPROVED".equals(s.status()) && versionId.equals(s.relationVersionId())
+                        && Objects.equals(version.snapshotSha256(), s.snapshotSha256())
+                        && !s.startInclusive().isAfter(from) && !s.endExclusive().isBefore(historicalEnd))
+                .findFirst().orElse(null);
+    }
+
+    private VersionRow requireHistoricalMeteringVersion(String building, String versionId) {
+        VersionRow version = requireVersion(versionId, false);
+        requireSameBuilding(building, version.buildingId());
+        if (!Set.of("EFFECTIVE", "SUPERSEDED").contains(version.status()) || version.effectiveAt() == null) {
+            throw error(409, VERSION_CONFLICT, "历史计量只能引用已审核激活的关系版本");
+        }
+        return version;
+    }
+
+    private HistoricalMeteringScopeView requireHistoricalMeteringScope(String building, String id) {
+        return repository.historicalMeteringScopes(building).stream().filter(s -> s.scopeId().equals(id))
+                .findFirst().orElseThrow(() -> error(404, NOT_FOUND, "历史计量适用申请不存在"));
+    }
 
     public ModelView model(Long userId, Collection<String> roles, String buildingId) {
         requireReader(roles);

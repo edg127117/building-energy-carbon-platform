@@ -52,6 +52,32 @@ import static com.platform.relation.api.RelationContracts.*;
 public class RelationGovernanceController {
     private final RelationGovernanceService service;
 
+    @GetMapping("/v1/relation-models/{buildingId}/historical-metering-scopes")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<List<HistoricalMeteringScopeView>> historicalMeteringScopes(
+            Authentication authentication, @PathVariable String buildingId) {
+        return Result.success(service.historicalMeteringScopes(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId));
+    }
+
+    @PostMapping("/v1/relation-models/{buildingId}/versions/{versionId}/historical-metering-scopes")
+    @PreAuthorize("hasRole('ENERGY_MANAGER')")
+    public Result<HistoricalMeteringScopeView> submitHistoricalMeteringScope(
+            Authentication authentication, @PathVariable String buildingId, @PathVariable String versionId,
+            @RequestHeader("Idempotency-Key") String key, @Valid @RequestBody HistoricalMeteringScopeRequest request) {
+        return Result.success(service.submitHistoricalMeteringScope(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, versionId, key, request));
+    }
+
+    @PostMapping("/v1/relation-models/{buildingId}/historical-metering-scopes/{scopeId}/review")
+    @PreAuthorize("hasRole('PLATFORM_ADMIN')")
+    public Result<HistoricalMeteringScopeView> reviewHistoricalMeteringScope(
+            Authentication authentication, @PathVariable String buildingId, @PathVariable String scopeId,
+            @RequestHeader("Idempotency-Key") String key, @Valid @RequestBody HistoricalMeteringScopeDecision request) {
+        return Result.success(service.reviewHistoricalMeteringScope(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, scopeId, key, request));
+    }
+
     @GetMapping("/v1/relation-models")
     public Result<ModelView> model(
             Authentication authentication, @RequestParam String buildingId) {

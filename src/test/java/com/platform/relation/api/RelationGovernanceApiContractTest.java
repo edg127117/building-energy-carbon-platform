@@ -56,6 +56,9 @@ class RelationGovernanceApiContractTest {
                 .andReturn());
 
         JsonNode paths = openApi.path("paths");
+        assertThat(paths.path("/v1/relation-models/{buildingId}/historical-metering-scopes").has("get")).isTrue();
+        assertThat(paths.path("/v1/relation-models/{buildingId}/versions/{versionId}/historical-metering-scopes").has("post")).isTrue();
+        assertThat(paths.path("/v1/relation-models/{buildingId}/historical-metering-scopes/{scopeId}/review").has("post")).isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/initialize")).isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/versions/{versionId}")).isTrue();
         assertThat(paths.has("/v1/relation-models/{buildingId}/versions/{versionId}/diff")).isTrue();
@@ -103,6 +106,16 @@ class RelationGovernanceApiContractTest {
         assertThat(paths.has("/v1/relation-models/metering-import/preflight")).isTrue();
         assertThat(paths.has("/v1/relation-models/metering-import/confirm")).isTrue();
         assertThat(openApi.path("components").path("schemas").has("RelationApiError")).isTrue();
+    }
+
+    @Test
+    void historicalScopeListingUsesExistingManagementRoles() throws Exception {
+        mockMvc.perform(get("/v1/relation-models/{buildingId}/historical-metering-scopes", BUILDING_ID)
+                        .header("Authorization", bearer(adminToken)))
+                .andExpect(status().isOk());
+        mockMvc.perform(get("/v1/relation-models/{buildingId}/historical-metering-scopes", BUILDING_ID)
+                        .header("Authorization", bearer(ownerToken)))
+                .andExpect(status().isForbidden());
     }
 
     @Test

@@ -1518,6 +1518,16 @@ DROP TABLE IF EXISTS biz_metering_boundary;
 DROP TABLE IF EXISTS biz_relation_version;
 DROP TABLE IF EXISTS biz_relation_model;
 
+DROP TABLE IF EXISTS biz_historical_metering_scope;
+CREATE TABLE biz_historical_metering_scope (
+  scope_id VARCHAR(32) PRIMARY KEY, building_id VARCHAR(32) NOT NULL,
+  relation_version_id VARCHAR(32) NOT NULL, start_epoch_ms BIGINT NOT NULL, end_epoch_ms BIGINT NOT NULL,
+  snapshot_sha256 CHAR(64) NOT NULL, evidence_reference VARCHAR(500) NOT NULL, reason VARCHAR(500) NOT NULL,
+  status VARCHAR(24) NOT NULL, submitted_by BIGINT NOT NULL, reviewed_by BIGINT, review_reason VARCHAR(500),
+  submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL, reviewed_at TIMESTAMP,
+  CHECK (start_epoch_ms < end_epoch_ms), CHECK (status IN ('PENDING_REVIEW','APPROVED','REJECTED'))
+);
+
 CREATE TABLE biz_relation_model (
   model_id VARCHAR(32) PRIMARY KEY,
   scope_type VARCHAR(20) NOT NULL,

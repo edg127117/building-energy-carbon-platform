@@ -153,7 +153,7 @@ def valid_schema_plan(source, target, mode="SCHEMA_UPGRADE"):
     # 与发布状态机一致；未显式授权的同版本包不能被默认为“不需要迁移”。
     return (mode == "APPLICATION_ONLY" and (source, target) == ("88", "88")) or (
         mode == "SCHEMA_UPGRADE" and (source, target) in
-        (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88")))
+        (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93")))
 
 
 def retire_failed_prepare(*, online_backup=False, next_release=None, source_schema="83", target_schema="84", release_mode="SCHEMA_UPGRADE"):
@@ -194,7 +194,7 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
                          'backend_service', 'web_service', 'candidate_started', 'jar_sha256', 'web_sha256'}
         require(set(state) in (expected_keys, expected_keys | {"source_schema", "target_schema"},
                                   expected_keys | {"source_schema", "target_schema", "release_mode"})
-                and state.get("target_schema", "84") in ("84", "85", "86", "87", "88")
+                and state.get("target_schema", "84") in ("84", "85", "86", "87", "88", "93")
                 and valid_schema_plan(state.get("source_schema", "83"), state.get("target_schema", "84"),
                                       state.get("release_mode", "SCHEMA_UPGRADE"))
                 and state.get("release_mode", "SCHEMA_UPGRADE") == release_mode,
@@ -356,7 +356,7 @@ def package_manifest(raw):
         manifest = dict(line.split("=", 1) for line in archive.extractfile("MANIFEST.txt").read().decode().splitlines() if "=" in line)
         jar = archive.extractfile("building-energy-carbon-platform.jar").read()
         index = archive.extractfile("web/index.html").read()
-        require(manifest.get("expectedMigration") in ("84", "85", "86", "87", "88")
+        require(manifest.get("expectedMigration") in ("84", "85", "86", "87", "88", "93")
                 and re.fullmatch("[a-f0-9]{40}", manifest.get("commit", ""))
                 and hashlib.sha256(jar).hexdigest() == manifest.get("backendJarSha256")
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
@@ -368,11 +368,14 @@ def package_manifest(raw):
             versions = [int(match[1]) for name in packaged.namelist()
                         if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
             require(versions and max(versions) == int(manifest["expectedMigration"]), "D01_PACKAGE_SCHEMA_MISMATCH")
+            if target == "93":
+                require({v for v in versions if 88 < v <= 93} == {93}, "D01_V93_SINGLE_MIGRATION_REQUIRED")
             packaged.read("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql")
             for version, filename in ((85, "V85__mysql_d01_test_building_retirement.sql"),
                                       (86, "V86__mysql_energy_reporting.sql"),
                                       (87, "V87__mysql_heat_co2_factor_formula.sql"),
-                                      (88, "V88__mysql_default_electricity_factor_year.sql")):
+                                      (88, "V88__mysql_default_electricity_factor_year.sql"),
+                                      (93, "V93__mysql_historical_metering_scope.sql")):
                 if int(target) >= version:
                     packaged.read("BOOT-INF/classes/db/migration/mysql/" + filename)
             packaged.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
@@ -412,7 +415,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
             and 0 < len(authorization_reference.strip()) <= 512
             and not any(c in authorization_reference for c in "\0\r\n")), "D01_NEW_MAINTENANCE_REFERENCE_REQUIRED")
     if replace_revoked_completed:
-        require(target_schema in ("85", "86", "87", "88"), "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
+        require(target_schema in ("85", "86", "87", "88", "93"), "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
         if INSTALL.exists() or INSTALL.is_symlink():
             retire_completed("d01-" + manifest["commit"][:12], source_schema)
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):

@@ -70,6 +70,21 @@ class ReportingWorkflowTest {
         verify(changes).sealed(BUILDING,null,sealed.batchId(),MONTH,3);
         assertThatThrownBy(()->save(sealed,row(source,"2",null))).isInstanceOf(BusinessException.class);
     }
+    @Test void monthEndingAtCatalogExpiryStaysInsideThePeriodAtJdbcPrecision() {
+        var source=approved("last-catalog-month","NO_METER");
+        var lookup=(EnergyCatalogLookup)org.springframework.test.util.ReflectionTestUtils.getField(service,"lookup");
+        var item=lookup.findApprovedItem("ELECTRICITY",MONTH.atStartOfDay());
+        var end=MONTH.plusMonths(1).atStartOfDay();
+        // MySQL Connector/J 对纳秒参数按微秒舍入；目录在下月起点结束时，月末仍属于当前版本。
+        when(lookup.findApprovedItem(eq("ELECTRICITY"),any())).thenAnswer(call->{
+            LocalDateTime at=call.getArgument(1);
+            var jdbcTime=at.plusNanos(500).truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+            return jdbcTime.isBefore(end)?item:Optional.empty();
+        });
+        var saved=save(create("last-catalog-month"),row(source,"1000",null));
+        assertThat(service.preview(1,OWNER,BUILDING,saved.batchId()).ready()).isTrue();
+        assertThat(seal(saved).snapshot().nativeStatus()).isEqualTo("COMPLETE");
+    }
     @Test void missingAnnualEstimatedPendingAndDuplicateRowsNeverBecomeFormal() {
         var source=approved("bill","NO_METER");var draft=create("batch");
         assertThat(service.preview(1,OWNER,BUILDING,draft.batchId()).ready()).isFalse();
