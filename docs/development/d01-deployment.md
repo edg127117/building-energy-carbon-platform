@@ -1,6 +1,6 @@
 # D01 升级与恢复操作边界
 
-本文说明 D01 及后续填报迁移的维护流程：兼容 V83→V84、V84→V85、V85→V86、V86→V87 和 V85→V86→V87，并支持 V87→V88。V86/V87 的包格式、版本授权及验收以第 8 节为准，V88 见第 9 节；第 6、7 节的 V85 候选和现场安排保留用于追溯。隔离演练通过不代表已在运行测试系统执行；实际停写、备份、迁移、切换只在批准的维护窗口运行。测试发布仍固定在 `18080→18081`，不操作 80 端口、其 Nginx 或 `/var/www/iot-platform/current`。
+本文说明 D01 及后续填报迁移的维护流程：兼容 V83→V84、V84→V85、V85→V86、V86→V87 和 V85→V86→V87，并支持 V87→V88 和 V88→V93。V86/V87 的包格式、版本授权及验收以第 8 节为准，V88 见第 9、10 节，V93 单表升级见第 11 节；第 6、7 节的 V85 候选和现场安排保留用于追溯。隔离演练通过不代表已在运行测试系统执行；实际停写、备份、迁移、切换只在批准的维护窗口运行。测试发布仍固定在 `18080→18081`，不操作 80 端口、其 Nginx 或 `/var/www/iot-platform/current`。
 
 ## 1. 前置核验
 
@@ -17,14 +17,14 @@
 
 脚本要求 Linux、Python 3.10+、Java 21、Docker CLI 和 systemd，维护入口使用 sudo/root。把 `d01_release.py`、`d01_backup.py`、`daikin_test_deployment_config.py` 放在同一受控目录；维护期间禁止其他发布流程或人工改动配置及 `current`。
 
-发布包根目录包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`，清单填写 `commit`、`backendJarSha256`、`webIndexSha256`、`expectedMigration=84`、`85`、`86`、`87` 或 `88`（V86及以上还必须填写 `sourceMigration`），必须与 JAR 的最大 MySQL 迁移版本一致。通用 `Deploy-BuildingEnergyCarbonTest.sh` 拒绝 D01 包，避免绕过冻结及独立迁移。
+发布包根目录包含 `building-energy-carbon-platform.jar`、`web/index.html` 和 `MANIFEST.txt`，清单填写 `commit`、`backendJarSha256`、`webIndexSha256`、`expectedMigration=84`、`85`、`86`、`87`、`88` 或 `93`（V86及以上还必须填写 `sourceMigration`），必须与 JAR 的最大 MySQL 迁移版本一致。V93 只允许第 11 节的单表计划。通用 `Deploy-BuildingEnergyCarbonTest.sh` 拒绝 D01 包，避免绕过冻结及独立迁移。
 
 通过受保护渠道创建 root 所有的普通 0600 JSON 文件（须与 sudo 后的实际执行用户一致），不把密码写进命令行、日志、Git 或清单：
 
 - schema 凭据：`{"url":"jdbc:mysql://127.0.0.1:<端口>/iot_platform?...","user":"<独立迁移账号>","password":"<秘密>"}`。URL 不得携带 user/password 参数。
 - backup 凭据：`{"mysql":{"user":"<备份账号>","password":"<秘密>"},"tdengine":{"user":"<备份账号>","password":"<秘密>"}}`。必须使用核实有效的账号，不从容器初始化环境推断当前密码；MySQL 账号需具有双库、routines/events/triggers 所需备份权限。
 
-凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83` 及 V84 至 V88 的 `upgrade<版本>`、`validate<版本>`；不提供 baseline、repair、clean 或降级操作。
+凭据经独立进程环境或 stdin 使用；迁移不会启动 Spring 应用。独立入口是打包后的 `com.platform.tools.D01SchemaMigration`，由 PropertiesLauncher 加载，支持 `validate83`，V84 至 V88 及 V93 的 `upgrade<版本>`、`validate<版本>`；不提供 V89～V92、baseline、repair、clean 或降级操作。
 
 ### 一次维护的临时授权
 
