@@ -83,6 +83,15 @@ class CredentialReuseTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "BACKUP_PRIVILEGES_MISSING"):
             credential_source.mysql_rights(self.metadata + "GRANT SELECT ON *.* TO 'root'@'localhost'", "backup", "88", "APPLICATION_ONLY")
 
+    def test_v93_requires_create_on_both_databases_without_granting_rights(self):
+        dml = "".join("GRANT SELECT, INSERT, UPDATE, DELETE ON `" + db + "`.* TO 'platform_migrator'@'%'\n"
+                      for db in ("iot_platform", "iot_platform_archive"))
+        with self.assertRaisesRegex(RuntimeError, "MIGRATION_PRIVILEGES_MISSING"):
+            credential_source.mysql_rights(self.migration_metadata + dml, "migration", "93")
+        create = "".join("GRANT CREATE ON `" + db + "`.* TO 'platform_migrator'@'%'\n"
+                         for db in ("iot_platform", "iot_platform_archive"))
+        credential_source.mysql_rights(self.migration_metadata + dml + create, "migration", "93")
+
     def test_partial_revokes_and_unresolved_roles_never_become_global_permission(self):
         with self.assertRaisesRegex(RuntimeError, "PARTIAL_REVOKE"):
             credential_source.mysql_rights(self.complete + "REVOKE SELECT ON `iot_platform_archive`.* FROM 'root'@'localhost'", "backup")
@@ -304,6 +313,13 @@ class PrivilegeBoundaryTest(unittest.TestCase):
                 for action in ("upgrade87", "upgrade89", "validate86"):
                     with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
                         operation.schema(action, default_year, operation.schema_credentials)
+                operation.config.update(source_schema="88", target_schema="93")
+                historical = {**state, "source_schema": "88", "target_schema": "93"}
+                for action in ("validate88", "upgrade93", "validate93"):
+                    operation.schema(action, historical, operation.schema_credentials)
+                for action in ("upgrade89", "upgrade90", "upgrade91", "upgrade92", "upgrade88", "validate87"):
+                    with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                        operation.schema(action, historical, operation.schema_credentials)
 
     def test_application_only_schema_wrapper_binds_mode_and_has_no_upgrade_action(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -574,15 +590,18 @@ class InstallerTest(unittest.TestCase):
                                                 ("88", "88", "89", "APPLICATION_ONLY", False),
                                                 ("88", "89", "88", "APPLICATION_ONLY", False),
                                                 ("88", "88", "88", "unknown", False),
-                                                ("87", "87", "87", "APPLICATION_ONLY", False)):
+                                                ("87", "87", "87", "APPLICATION_ONLY", False),
+                                                ("93", "93", "88", None, True),
+                                                ("93", "93", "87", None, False),
+                                                ("93", "93", "88", "APPLICATION_ONLY", False)):
             jar = io.BytesIO()
             with zipfile.ZipFile(jar, "w") as packaged:
                 packaged.writestr("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql", "fixture")
-                for version in (85, 86, 87, 88):
+                for version in (85, 86, 87, 88, 93):
                     if int(actual) >= version:
                         filename = next((SCRIPTS.parent / "src/env/init").glob("V" + str(version) + "__*.sql")).name
                         packaged.writestr("BOOT-INF/classes/db/migration/mysql/" + filename, "fixture")
-                if int(actual) > 88:
+                if int(actual) > 88 and actual != "93":
                     packaged.writestr("BOOT-INF/classes/db/migration/mysql/V" + actual + "__unreviewed_fixture.sql", "fixture")
                 packaged.writestr("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class", "fixture")
             jar_bytes = jar.getvalue()

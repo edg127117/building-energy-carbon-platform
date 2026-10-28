@@ -191,8 +191,9 @@ class Maintenance:
                 and state["web_sha256"] == self.config["web_sha256"], "D01_TRUSTED_JAR_REQUIRED")
         target = self.config.get("target_schema", "84")
         source = self.config.get("source_schema", str(int(target) - 1))
+        versions = [93] if (source, target) == ("88", "93") else range(int(source) + 1, int(target) + 1)
         actions = ("validate" + source, "validate" + target,
-                   *("upgrade" + str(v) for v in range(int(source) + 1, int(target) + 1)))
+                   *("upgrade" + str(v) for v in versions))
         require(self.release.target_schema(state) == target
                 and state.get("source_schema", "83") == source
                 and state.get("release_mode", "SCHEMA_UPGRADE") == self.config.get("release_mode", "SCHEMA_UPGRADE")

@@ -31,6 +31,7 @@ V85 = "BOOT-INF/classes/db/migration/mysql/V85__mysql_d01_test_building_retireme
 V86 = "BOOT-INF/classes/db/migration/mysql/V86__mysql_energy_reporting.sql"
 V87 = "BOOT-INF/classes/db/migration/mysql/V87__mysql_heat_co2_factor_formula.sql"
 V88 = "BOOT-INF/classes/db/migration/mysql/V88__mysql_default_electricity_factor_year.sql"
+V93 = "BOOT-INF/classes/db/migration/mysql/V93__mysql_historical_metering_scope.sql"
 CONTROL = Path("/etc/building-energy-carbon-test/daikin-control-disabled.env")
 RUNTIME_KEYS = ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_FLYWAY_ENABLED", "TDENGINE_INITIALIZATION_ENABLED",
                 "MQTT_ENABLED", "MQTT_CLIENT_ID", "MYSQL_CONTAINER_NAME", "MYSQL_VOLUME_NAME",
@@ -186,7 +187,7 @@ def prepare(name, archive, expected_sha, credentials):
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
-        require(target_schema in ("84", "85", "86", "87", "88"), "D01_SUPPORTED_PACKAGE_REQUIRED")
+        require(target_schema in ("84", "85", "86", "87", "88", "93"), "D01_SUPPORTED_PACKAGE_REQUIRED")
         # 同版本换包必须显式声明，仅核验现有 V88，不能借空迁移区间跳过数据库校验。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
@@ -201,7 +202,9 @@ def prepare(name, archive, expected_sha, credentials):
             versions = [int(match[1]) for name in jar.namelist()
                         if (match := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
             require(max(versions) == int(target_schema), "D01_PACKAGE_SCHEMA_MISMATCH")
-            for version, migration in ((85, V85), (86, V86), (87, V87), (88, V88)):
+            if target_schema == "93":
+                require({v for v in versions if 88 < v <= 93} == {93}, "D01_V93_SINGLE_MIGRATION_REQUIRED")
+            for version, migration in ((85, V85), (86, V86), (87, V87), (88, V88), (93, V93)):
                 if int(target_schema) >= version:
                     jar.read(migration)
             jar.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
@@ -322,7 +325,7 @@ def validate_schema_plan(state):
     mode = state.get("release_mode", "SCHEMA_UPGRADE")
     require((mode == "APPLICATION_ONLY" and (source, target) == ("88", "88"))
             or (mode == "SCHEMA_UPGRADE" and (source, target) in
-                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"))),
+                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"))),
             "D01_STATE_SCHEMA_MISMATCH")
     return target
 
@@ -342,8 +345,9 @@ def migrate(state_path, backup_dir, credentials, restore_report=None):
         schema("validate" + target, state, credentials)
         return
     # 每个独立进程只执行一条迁移；任一步失败保留冻结现场，不自动重试、repair 或启动旧应用。
-    for version in range(int(state.get("source_schema", "83")) + 1, int(target) + 1):
-        if version > int(state.get("source_schema", "83")) + 1:
+    versions = [93] if target == "93" else range(int(state.get("source_schema", "83")) + 1, int(target) + 1)
+    for index, version in enumerate(versions):
+        if index:
             inactive()
             check_unchanged(state)
             check_backup_sources(backup)
