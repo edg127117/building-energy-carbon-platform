@@ -124,7 +124,7 @@ def retry_configuration():
     return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in sorted(set(paths))}
 
 
-def retry_baseline(state, prepared):
+def retry_baseline(state, prepared, *, allow_other_restart=False):
     runtime = state["runtime_controls"]
     require(isinstance(runtime, dict) and set(runtime) == RUNTIME_REQUIRED
             and runtime.get('AUDIT_ENVIRONMENT_MODE') == 'TEST' and runtime.get('SERVER_PORT') == '18081'
@@ -143,8 +143,9 @@ def retry_baseline(state, prepared):
               for key, value in [entry.split('=', 1)] if key in runtime}
     require(actual == runtime and runtime.get('AUDIT_ENVIRONMENT_MODE') == 'TEST', "D01_OLD_RUNTIME_CHANGED")
     other = Path('/var/www/iot-platform/current')
+    other_pid = run('/usr/bin/systemctl', 'show', 'nginx.service', '-p', 'MainPID', '--value')
     require(str(other.resolve()) == state['other_release'] and os.readlink(other) == state['other_link']
-            and run('/usr/bin/systemctl', 'show', 'nginx.service', '-p', 'MainPID', '--value') == state['other_pid']
+            and (other_pid == state['other_pid'] or allow_other_restart and other_pid.isdecimal() and int(other_pid) > 1)
             and run('/usr/bin/systemctl', 'show', 'nginx.service', '-p', 'ExecReload', '--value') == state['other_reload'],
             'D01_OTHER_SITE_CHANGED')
 
@@ -306,7 +307,8 @@ def retire_completed(next_release, source_schema="84"):
             and state.get("release") == str(candidate) and current.is_relative_to(BASE / "releases"),
             "D01_OLD_BASELINE_CHANGED")
     # 后续前端发布可以更换目录，但不能替换已核验的后端。完成维护后允许服务正常重启。
-    retry_baseline(state, int(time.time()))
+    # 已完成且撤销的窗口不再固定其他站点的历史 PID；新 prepare 会重新固定本轮进程。
+    retry_baseline(state, int(time.time()), allow_other_restart=True)
     require(state.get("config_hashes") == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
     require(hashlib.sha256((candidate / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
             == state.get("jar_sha256") == config.get("jar_sha256")

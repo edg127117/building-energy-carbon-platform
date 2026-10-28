@@ -546,6 +546,7 @@ class InstallerTest(unittest.TestCase):
                 stack.enter_context(patch.object(installer, "run", side_effect=run))
                 if scenario in ("success", "frontend_successor", "completed85", "completed86", "completed87", "completed88", "completed88_application"):
                     installer.retire_completed("d01-" + "b" * 12, source)
+                    self.assertTrue(baseline.call_args.kwargs["allow_other_restart"])
                     archives = list(installer.HISTORY.iterdir())
                     self.assertEqual(len(archives), 1)
                     self.assertEqual((archives[0] / "data/private/backup-evidence").read_bytes(), b"old complete backup retained")
@@ -794,7 +795,7 @@ class InstallerTest(unittest.TestCase):
         runtime.update(AUDIT_ENVIRONMENT_MODE='TEST',SERVER_PORT='18081',MYSQL_FLYWAY_ENABLED='false',TDENGINE_INITIALIZATION_ENABLED='false')
         state = {'runtime_controls': runtime, 'other_release':'/old',
                  'other_link':'/old','other_pid':'77','other_reload':'unchanged'}
-        for scenario in ('valid','backend_restart','web_restart','runtime','other_pid','other_reload','missing_runtime_key'):
+        for scenario in ('valid','backend_restart','web_restart','runtime','other_pid','other_pid_zero','other_link','other_reload','missing_runtime_key'):
             state['runtime_controls'] = dict(runtime)
             if scenario == 'missing_runtime_key': del state['runtime_controls']['SERVER_PORT']
             def run(*args):
@@ -804,14 +805,17 @@ class InstallerTest(unittest.TestCase):
                                or scenario == 'web_restart' and 'building-energy-carbon-test-nginx.service' in args)
                     return '99000000' if changed else '10000000'
                 if 'ExecReload' in args: return 'changed' if scenario == 'other_reload' else 'unchanged'
+                if scenario == 'other_pid_zero' and 'nginx.service' in args: return '0'
                 return '88' if scenario == 'other_pid' and 'nginx.service' in args else '77'
             with self.subTest(scenario=scenario), patch.object(installer,'run',side_effect=run), \
                     patch.object(installer.time,'time',return_value=1000), patch.object(installer.time,'monotonic',return_value=100), \
                     patch.object(Path,'read_bytes',return_value='\0'.join(k+'='+('PROD' if scenario=='runtime' and k=='AUDIT_ENVIRONMENT_MODE' else v) for k,v in runtime.items()).encode()), \
-                    patch.object(Path,'resolve',return_value=Path('/old')), patch.object(installer.os,'readlink',return_value='/old'):
-                if scenario == 'valid': installer.retry_baseline(state,950)
-                else:
-                    with self.assertRaises(RuntimeError): installer.retry_baseline(state,950)
+                    patch.object(Path,'resolve',return_value=Path('/old')), patch.object(installer.os,'readlink',return_value='/changed' if scenario=='other_link' else '/old'):
+                for completed in (False, True):
+                    if scenario == 'valid' or completed and scenario == 'other_pid':
+                        installer.retry_baseline(state,950,allow_other_restart=completed)
+                    else:
+                        with self.assertRaises(RuntimeError): installer.retry_baseline(state,950,allow_other_restart=completed)
 
     def test_retry_configuration_includes_current_environment_units_and_added_dropins(self):
         control = '/etc/building-energy-carbon-test/daikin-control-disabled.env'
