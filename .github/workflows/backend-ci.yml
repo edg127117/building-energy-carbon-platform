@@ -27,6 +27,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p test_tdengine_exclusive.py -v
       - name: Verify offline D01 deployment failure guard
         run: python3 -m unittest discover -s scripts/tests -p 'test_*deployment*.py' -v
+      - name: Verify local monthly test environment isolation offline
+        run: python3 -m unittest discover -s scripts/tests -p 'test_cxg_monthly_env.py' -v
       - name: Verify D01 frozen backup and staged cutover
         run: python3 -m unittest scripts/tests/test_d01_backup.py scripts/tests/test_d01_release.py scripts/tests/test_d01_maintenance.py -v
       - name: Verify real Redis ACL, Broker authentication and TDengine instance isolation
