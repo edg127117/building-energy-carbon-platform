@@ -39,7 +39,7 @@
 - 一个任务、分支和 PR 只处理一个明确问题，禁止混入无关格式化、重构、配置或生成文件。
 - 新模块、API、数据库结构、权限、并发、数据流或跨系统变化，先确认设计、专业输入、外部依赖和验收边界；普通纠错不增加设计审批。
 - PR 标题使用 `type(scope): 中文动宾短语`；类型与实际差异一致。
-- 局域网测试环境的本项目页面只经 `18080` 发布，API 使用 `18081`；测试部署只能切换 `/home/user1/deployments/building-energy-carbon-test/current`。`80` 端口及 `/var/www/iot-platform/current` 属于其他入口，不得作为本项目测试部署目标；使用 `scripts/Deploy-BuildingEnergyCarbonTest.sh` 前先检查测试路由。
+- 局域网共享测试环境页面经 `18080` 发布，API 使用 `18081`；共享测试部署只能切换 `/home/user1/deployments/building-energy-carbon-test/current`。独立月度演示测试实例获准使用 `19080` 和 `/home/user1/deployments/building-energy-carbon-demo`，必须使用独立容器、网络、数据卷及凭据，数据库不发布宿主机端口。两套入口和部署操作不得混用。`80` 端口及 `/var/www/iot-platform/current` 属于其他入口，不得作为本项目测试部署目标；使用 `scripts/Deploy-BuildingEnergyCarbonTest.sh` 前先检查共享测试路由，该脚本不负责独立演示实例。
 - 修改前确认分支、远程和工作区，并在干净任务分支运行：
 
 ```powershell

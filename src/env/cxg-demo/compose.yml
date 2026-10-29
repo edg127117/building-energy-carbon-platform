@@ -1,0 +1,119 @@
+name: building-energy-carbon-demo
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: '3'
+  labels:
+    bec.environment: cxg-monthly-demo
+    bec.dataset: CXG_MONTHLY_V2
+
+services:
+  mysql:
+    <<: *common
+    image: ${MYSQL_IMAGE:?pinned image required}
+    container_name: building-energy-carbon-demo-mysql
+    command: [--lower-case-table-names=1, --character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci, --default-time-zone=+08:00, --innodb-buffer-pool-size=256M]
+    env_file: ../../private/mysql.env
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks: [data]
+    mem_limit: 1536m
+    cpus: 0.5
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysql -uroot --protocol=tcp -h127.0.0.1 -N -e "SELECT 1" >/dev/null 2>&1']
+      interval: 10s
+      timeout: 5s
+      retries: 18
+
+  tdengine:
+    <<: *common
+    image: ${TDENGINE_IMAGE:?pinned image required}
+    container_name: building-energy-carbon-demo-tdengine
+    hostname: cxg-demo-tdengine
+    environment:
+      TZ: Asia/Shanghai
+      TAOS_FQDN: cxg-demo-tdengine
+      TAOS_FIRST_EP: cxg-demo-tdengine:6030
+    volumes:
+      - tdengine-data:/var/lib/taos
+      - tdengine-logs:/var/log/taos
+      - tdengine-core:/corefile
+    networks: [data]
+    mem_limit: 1536m
+    cpus: 0.5
+
+  redis:
+    <<: *common
+    image: ${REDIS_IMAGE:?pinned image required}
+    container_name: building-energy-carbon-demo-redis
+    env_file: ../../private/redis.env
+    command: [sh, -c, 'exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --maxmemory 64mb --maxmemory-policy noeviction']
+    volumes:
+      - redis-data:/data
+    networks: [data]
+    mem_limit: 128m
+    cpus: 0.1
+
+  app:
+    <<: *common
+    image: ${JAVA_IMAGE:?pinned image required}
+    container_name: building-energy-carbon-demo-app
+    user: '1000:1000'
+    working_dir: /app
+    environment:
+      TZ: Asia/Shanghai
+    command: [java, -Xms128m, -Xmx512m, -XX:ActiveProcessorCount=2, -jar, /app/application.jar, '--spring.config.additional-location=file:/config/test-base.yml,file:/config/backend.yml', --spring.profiles.active=cxg-monthly-acceptance]
+    volumes:
+      - ./application.jar:/app/application.jar:ro
+      - ../../private/backend.yml:/config/backend.yml:ro
+      - ./test-base.yml:/config/test-base.yml:ro
+    networks: [application, data]
+    depends_on:
+      mysql:
+        condition: service_healthy
+      tdengine:
+        condition: service_started
+      redis:
+        condition: service_started
+    mem_limit: 1024m
+    cpus: 0.75
+
+  web:
+    <<: *common
+    image: ${NGINX_IMAGE:?pinned image required}
+    container_name: building-energy-carbon-demo-web
+    ports: ['19080:8080']
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks: [edge, application]
+    depends_on: [app]
+    mem_limit: 128m
+    cpus: 0.15
+
+networks:
+  edge:
+    name: building-energy-carbon-demo-edge
+  application:
+    name: building-energy-carbon-demo-application
+    internal: true
+  data:
+    name: building-energy-carbon-demo-data
+    internal: true
+
+volumes:
+  mysql-data:
+    name: building-energy-carbon-demo-mysql-data
+  tdengine-data:
+    name: building-energy-carbon-demo-tdengine-data
+  tdengine-logs:
+    name: building-energy-carbon-demo-tdengine-logs
+  tdengine-core:
+    name: building-energy-carbon-demo-tdengine-core
+  redis-data:
+    name: building-energy-carbon-demo-redis-data
