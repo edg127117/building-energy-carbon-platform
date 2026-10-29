@@ -144,6 +144,7 @@ export type SensitiveChangeOperation =
   | 'ACTIVATE_DEVICE_IDENTITY'
   | 'DEACTIVATE_DEVICE_IDENTITY'
   | 'PUBLISH_PROTOCOL_CONFIGURATION'
+  | 'GRANT_BACKEND_DUTY'
 
 export type SensitiveChange = {
   requestId: string
