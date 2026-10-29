@@ -8,6 +8,7 @@
 - 具体实现：直接相关的代码、测试和专题文档；
 - 监控大屏的内容、布局、交互、下钻及后续复用：[设计与复用规范](docs/designs/monitoring-screen-design-reference.md)；该文档区分独立原型与正式业务能力；
 - 独立本机月度测试实例的固定目录、启停、账号和隔离：[运行说明](docs/development/cxg-monthly-test-environment.md)；该实例不作为局域网或正式业务发布入口；
+- 独立服务器月度演示测试实例的目录、19080 入口及数据隔离：[运行说明](docs/development/cxg-server-demo-environment.md)；使用独立数据库，不复用共享实例的部署入口；
 - 天气候选的来源分工、任务、日量边界与启用配置：[天气后端设计](docs/designs/2026-09-26-weather-energy-research-design.md#11-本次后端落地与启用边界)；三个前端入口、权限及展示边界见[天气前端设计](docs/designs/2026-09-29-weather-frontend-design.md)，验收状态以项目状态文档为准；
 - Git、Hook、PR 和 CI：[`repository-guardrails.md`](docs/development/repository-guardrails.md)。
 

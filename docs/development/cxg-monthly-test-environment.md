@@ -2,6 +2,8 @@
 
 本入口管理已准备好的 Windows 本机独立实例，供电力月度历史数据和模拟数据测试使用。它不创建数据库、不重新导入数据、不执行迁移，也不连接共享服务器。图表接口和大屏 UI 不在本步骤范围。
 
+月度测试数据现已迁入[服务器独立实例](cxg-server-demo-environment.md)，后续测试使用服务器 19080 入口。本机实例停止并作为迁移前副本保留；下文命令保留用于按需检查源副本，不应同时在两端继续日常写入。
+
 ## 固定目录与入口
 
 实例位于 `$env:USERPROFILE\.building-energy-carbon\cxg-monthly-test`，与 Git 工作树分开。当前已安装的 Python、Java 21、MySQL、Redis 路径记录在私有实例清单；TDengine 继续使用该实例专属容器和数据卷。运行前先启动 Docker Desktop。
