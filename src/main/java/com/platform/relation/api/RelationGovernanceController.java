@@ -3,6 +3,7 @@ package com.platform.relation.api;
 import com.platform.framework.common.Result;
 import com.platform.relation.RelationGovernanceService;
 import com.platform.security.SecurityUser;
+import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -50,6 +51,10 @@ import static com.platform.relation.api.RelationContracts.*;
 })
 /** HTTP 层只适配 DTO 和角色入口；真实建筑范围、状态机、快照和事务由 Service 强制执行。 */
 public class RelationGovernanceController {
+    private static final String PAGE_SIZE_DESCRIPTION =
+            "每页条数：取值范围为 1-500，且不得超过当前 relation-governance.max-page-size 配置；"
+                    + "默认配置为 100，实际有效上限见响应 metadata.maxPageSize，配置硬上限为 500。";
+
     private final RelationGovernanceService service;
 
     @GetMapping("/v1/relation-models/{buildingId}/historical-metering-scopes")
@@ -367,6 +372,7 @@ public class RelationGovernanceController {
             @PathVariable String nodeType, @PathVariable String nodeId,
             @RequestParam(defaultValue = "1") @Min(1) int depth,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size) {
         return Result.success(service.nodeContext(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, nodeType, nodeId, depth, page, size));
@@ -380,6 +386,7 @@ public class RelationGovernanceController {
             @PathVariable String nodeId,
             @RequestParam(defaultValue = "1") @Min(1) int depth,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size) {
         return Result.success(service.historicalNodeContext(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, versionId,
@@ -392,6 +399,7 @@ public class RelationGovernanceController {
             Authentication authentication, @PathVariable String buildingId,
             @RequestParam(required = false) String versionId,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size,
             @RequestParam(required = false) String spaceId,
             @RequestParam(required = false) String keyword,
@@ -405,6 +413,7 @@ public class RelationGovernanceController {
     public Result<MeteringBoundariesView> effectiveBoundaries(
             Authentication authentication, @PathVariable String buildingId,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "20") @Min(1) @Max(500) int size) {
         return Result.success(service.effectiveBoundaries(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, page, size));
@@ -412,14 +421,19 @@ public class RelationGovernanceController {
     @GetMapping("/v1/relation-models/{buildingId}/versions/{versionId}/metering/boundaries")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<BoundaryCatalogueView> boundaryCatalogue(Authentication a,@PathVariable String buildingId,
-            @PathVariable String versionId,@RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="100") int size) {
+            @PathVariable String versionId,
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
         return Result.success(service.boundaryCatalogue(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,versionId,page,size));
     }
     @GetMapping("/v1/relation-models/{buildingId}/versions/{versionId}/nodes")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<NodeCatalogueView> nodeCatalogue(Authentication a,@PathVariable String buildingId,
             @PathVariable String versionId,@RequestParam(required=false) String nodeType,
-            @RequestParam(defaultValue="1") int page,@RequestParam(defaultValue="100") int size) {
+            @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
+            @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
         return Result.success(service.nodeCatalogue(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,versionId,nodeType,page,size));
     }
 
@@ -427,6 +441,7 @@ public class RelationGovernanceController {
     public Result<MeteringAssignmentsView> effectiveMeteringAssignments(
             Authentication authentication, @PathVariable String buildingId,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
         return Result.success(service.effectiveMeteringAssignments(
                 SecurityUser.userId(authentication), SecurityUser.roles(authentication),
@@ -438,6 +453,7 @@ public class RelationGovernanceController {
             Authentication authentication, @PathVariable String buildingId,
             @PathVariable String versionId,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
         return Result.success(service.historicalMeteringAssignments(
                 SecurityUser.userId(authentication), SecurityUser.roles(authentication),
@@ -448,6 +464,7 @@ public class RelationGovernanceController {
     public Result<MeterStructuresView> effectiveMeterStructures(
             Authentication authentication, @PathVariable String buildingId,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
         return Result.success(service.effectiveMeterStructures(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, page, size));
@@ -459,6 +476,7 @@ public class RelationGovernanceController {
             Authentication authentication, @PathVariable String buildingId,
             @PathVariable String versionId,
             @RequestParam(defaultValue = "1") @Min(1) int page,
+            @Parameter(description = PAGE_SIZE_DESCRIPTION)
             @RequestParam(defaultValue = "100") @Min(1) @Max(500) int size) {
         return Result.success(service.historicalMeterStructures(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), buildingId, versionId, page, size));

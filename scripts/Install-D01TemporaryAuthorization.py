@@ -152,7 +152,7 @@ def retry_baseline(state, prepared, *, allow_other_restart=False):
 
 def valid_schema_plan(source, target, mode="SCHEMA_UPGRADE"):
     # 与发布状态机一致；未显式授权的同版本包不能被默认为“不需要迁移”。
-    return (mode == "APPLICATION_ONLY" and (source, target) == ("88", "88")) or (
+    return (mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93"))) or (
         mode == "SCHEMA_UPGRADE" and (source, target) in
         (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93")))
 
@@ -276,7 +276,7 @@ def json_bytes(value):
 
 def retire_completed(next_release, source_schema="84"):
     """只归档与新源版本一致、已撤销且仍在运行的完成记录；不重置失败现场或删除备份。"""
-    require(source_schema in ("84", "85", "86", "87", "88"), "D01_COMPLETED_SOURCE_REQUIRED")
+    require(source_schema in ("84", "85", "86", "87", "88", "93"), "D01_COMPLETED_SOURCE_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
     paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))

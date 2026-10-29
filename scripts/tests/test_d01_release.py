@@ -622,6 +622,14 @@ class SchemaPlanTest(unittest.TestCase):
             with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
                 release.target_schema({**state, **changed})
 
+    def test_application_only_accepts_exact_v93_pair_but_no_cross_version_shortcut(self):
+        state = {"source_schema": "93", "target_schema": "93", "release_mode": "APPLICATION_ONLY"}
+        self.assertEqual(release.target_schema(state), "93")
+        for source, target, mode in (("88", "93", "APPLICATION_ONLY"), ("93", "88", "APPLICATION_ONLY"),
+                                     ("93", "93", "SCHEMA_UPGRADE"), ("93", "94", "APPLICATION_ONLY")):
+            with self.subTest(source=source, target=target, mode=mode), self.assertRaisesRegex(RuntimeError, "SCHEMA_MISMATCH"):
+                release.target_schema({"source_schema": source, "target_schema": target, "release_mode": mode})
+
 
 class RestoreReportTest(unittest.TestCase):
     def setUp(self):

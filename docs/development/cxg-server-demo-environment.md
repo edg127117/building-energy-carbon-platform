@@ -10,7 +10,7 @@
 | 根目录 | `/home/user1/deployments/building-energy-carbon-test` | `/home/user1/deployments/building-energy-carbon-demo` |
 | 后端入口 | 宿主机回环 18081 | 容器内部 18081，无宿主机映射 |
 | 数据存储 | 现有实例 | 独立 MySQL、TDengine、Redis 容器和持久化卷 |
-| 发布入口 | `Deploy-BuildingEnergyCarbonTest.sh` | 本文限定目录的 Docker Compose |
+| 发布入口 | V93 使用 [D01 分阶段发布](d01-deployment.md)，普通包使用 `Deploy-BuildingEnergyCarbonTest.sh` | 本文限定目录的 Docker Compose |
 
 `80`、`/var/www/iot-platform/current` 及共享实例的配置、服务、网络和卷不属于本入口。两个实例共用服务器硬件；容器资源配额降低相互争用，不能提供物理故障隔离。
 
@@ -60,3 +60,25 @@ Windows MySQL 通过逻辑备份迁移到 Linux 新实例；新卷首次初始�
 环境隔离验收包括镜像和 JAR 摘要、所有网络及卷、唯一宿主机端口、运行配置关闭项、账号令牌跨实例拒绝，以及共享环境路径、进程、容器、数据卷和路由保持。集成验收独立执行；离线配置检查使用 `python -m unittest discover -s scripts/tests -p test_cxg_demo_compose.py -v`，不启动容器。
 
 本机源副本和备份保留；服务器成为后续测试入口后，本机后端不再继续日常写入。需要回退时只停止独立服务器实例，保存其新增数据后再决定恢复源副本；不得覆盖共享库或丢弃已经产生的测试增量。正式生产环境将来使用独立部署和真实配置，不能把本实例数据库直接改名升级为生产库。
+
+## 月度对比查询契约
+
+`GET /api/v1/energy-reporting/buildings/{buildingId}/monthly-comparison?month=2026-09-01&timezoneId=Asia%2FShanghai`
+
+`month` 必须是 2000～2200 年内的月首日期；`timezoneId` 默认为 `Asia/Shanghai`。沿用建筑负责人、能源管理员、平台管理员及建筑范围鉴权。接口只查询已封账统计和有效发布的完整碳核算结果，不创建、审核、重算或补零。
+
+| 字段 | 含义 |
+| --- | --- |
+| `current` / `previousMonth` / `sameMonthLastYear` | 本月、上月、去年同月；包含月份、时区换算后的左闭右开时间范围及 `metrics` |
+| `metrics[].metricCode` / `unit` / `value` | 指标编码、单位及十进制字符串；缺失时 `value=null` |
+| `metrics[].status` | `AVAILABLE` 可用；其他状态说明缺少封账、缺少完整碳结果、来源冲突、时区或单位证据不匹配等原因 |
+| `sourceBatchId` / `evidenceHash` / `referenceVersionId` | 原封账或核算批次、冻结证据摘要及适用的单位、舍入或面积版本；无对应版本时为 null |
+| `comparisons[].monthOnMonth` / `yearOnYear` | 环比、同比；包含 `currentValue`、`baseValue`、`absoluteChange`、`percentageChange` 和 `status` |
+
+四个指标为 `ELECTRICITY_KWH`（kWh）、`ELECTRICITY_TCE`（tce）、`TOTAL_EMISSION`（tCO2e）、`MONTH_AREA_INTENSITY`（kgCO2e/m²）。前两项来自全楼电力主统计来源；后两项来自已有碳核算边界的月度汇总，当前数据集仅含电力。接口不把未来其他能源的碳汇总重命名为电力碳排放。
+
+百分比为 `(本期-基期)/基期×100`，保留六位小数，单位为百分数（如 `23.791834` 表示 23.791834%）。状态 `OK` 表示可比；`BASE_ZERO` 保留绝对变化、百分比为 null；`CURRENT_UNAVAILABLE` / `BASE_UNAVAILABLE` 表示对应期间缺少可用指标，差值和百分比为 null。空期间仍返回四项指标，不能将 null 当作零。
+
+查询直接定位指定月份，不依赖最近 100 个碳批次，也不依赖交接包内固定批次索引。替换为真实数据时，使用相同的来源配置、封账和核算发布流程；单位换算使用封账时冻结的证据，碳排放和面积强度读取原核算结果，不用当前因子或当前面积改写历史。仅接收到原始表底还不等于已具备可比较的月度结果。
+
+关系治理分页保留每个环境的 `relation-governance.max-page-size` 配置（默认 100，硬上限 500）。各分页路由文档统一说明该约束，查询响应 `metadata.maxPageSize` 返回实际配置上限；超出时返回 400 和包含实际范围的错误信息。碳批次列表保留原有返回契约及最近 100 批限制，列表查询不再携带大体积公共证据 JSON；完整证据继续从既有详情入口读取。

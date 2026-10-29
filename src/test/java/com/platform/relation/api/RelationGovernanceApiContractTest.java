@@ -106,6 +106,14 @@ class RelationGovernanceApiContractTest {
         assertThat(paths.has("/v1/relation-models/metering-import/preflight")).isTrue();
         assertThat(paths.has("/v1/relation-models/metering-import/confirm")).isTrue();
         assertThat(openApi.path("components").path("schemas").has("RelationApiError")).isTrue();
+
+        JsonNode size = parameter(paths.path("/v1/relation-models/{buildingId}/effective/metering-boundaries")
+                .path("get"), "size");
+        assertThat(size.path("schema").path("minimum").asInt()).isEqualTo(1);
+        assertThat(size.path("schema").path("maximum").asInt()).isEqualTo(500);
+        assertThat(size.path("description").asText())
+                .contains("不得超过当前 relation-governance.max-page-size 配置")
+                .contains("metadata.maxPageSize");
     }
 
     @Test
@@ -194,6 +202,25 @@ class RelationGovernanceApiContractTest {
                 .andExpect(jsonPath("$.errorCode").value("RELATION_FORBIDDEN"));
     }
 
+    @Test
+    void pageSizeUsesTheCurrentDefaultLimitAndReturnsItsDynamicValidationError() throws Exception {
+        mockMvc.perform(get("/v1/relation-models/{buildingId}/equipment-associations", BUILDING_ID)
+                        .header("Authorization", bearer(managerToken))
+                        .param("page", "1").param("size", "100"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.size").value(100));
+
+        MvcResult rejected = mockMvc.perform(
+                        get("/v1/relation-models/{buildingId}/equipment-associations", BUILDING_ID)
+                                .header("Authorization", bearer(managerToken))
+                                .param("page", "1").param("size", "101"))
+                .andExpect(status().isBadRequest())
+                .andReturn();
+        JsonNode error = json(rejected);
+        assertThat(error.path("errorCode").asText()).isEqualTo("RELATION_VALIDATION_FAILED");
+        assertThat(error.path("msg").asText()).contains("size 必须在 1 至 100 之间");
+    }
+
     private String createAndLogin(String username, String role) throws Exception {
         userFixture.createActiveUser(username, "123456", role, BUILDING_ID);
         return login(username, "123456");
@@ -216,7 +243,16 @@ class RelationGovernanceApiContractTest {
         return "Bearer " + token;
     }
 
+    private JsonNode parameter(JsonNode operation, String name) {
+        for (JsonNode parameter : operation.path("parameters")) {
+            if (name.equals(parameter.path("name").asText())) {
+                return parameter;
+            }
+        }
+        throw new AssertionError("OpenAPI 缺少参数: " + name);
+    }
+
     private JsonNode json(MvcResult result) throws Exception {
-        return objectMapper.readTree(result.getResponse().getContentAsString());
+        return objectMapper.readTree(result.getResponse().getContentAsByteArray());
     }
 }

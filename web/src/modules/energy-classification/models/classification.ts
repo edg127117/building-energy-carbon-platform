@@ -255,6 +255,7 @@ export interface RelationQueryMetadata {
   versionNo: number
   effectiveAt: string | null
   modelRevision: number
+  maxPageSize?: number
 }
 
 export interface RelationMeteringBoundary {

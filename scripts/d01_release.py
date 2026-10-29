@@ -188,7 +188,7 @@ def prepare(name, archive, expected_sha, credentials):
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
         require(target_schema in ("84", "85", "86", "87", "88", "93"), "D01_SUPPORTED_PACKAGE_REQUIRED")
-        # 同版本换包必须显式声明，仅核验现有 V88，不能借空迁移区间跳过数据库校验。
+        # 同版本换包必须显式声明并核验原结构，不能借空迁移区间跳过数据库校验。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
         if "releaseMode" in manifest:
@@ -323,7 +323,7 @@ def validate_schema_plan(state):
     target = state.get("target_schema", "84")
     source = state.get("source_schema", "83")
     mode = state.get("release_mode", "SCHEMA_UPGRADE")
-    require((mode == "APPLICATION_ONLY" and (source, target) == ("88", "88"))
+    require((mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93")))
             or (mode == "SCHEMA_UPGRADE" and (source, target) in
                 (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"))),
             "D01_STATE_SCHEMA_MISMATCH")

@@ -235,6 +235,11 @@ public class ReportingService {
     /** 仅供碳输入适配器读取已封账载荷；无用户查询借此绕过建筑授权。 */
     public List<Source> primarySources(String building) {return sources(building).stream().filter(s->"APPROVED".equals(s.status())&&"PRIMARY".equals(s.configuration().purpose())).toList();}
     public List<Batch> sealed(String building) {return batches(building).stream().filter(b->"SEALED".equals(b.status())).toList();}
+    /** 读取指定月份已封账结果，复用角色、建筑存在性与范围校验，不重新评估当前专业参数。 */
+    public List<Batch> sealedMonth(long user,Collection<String> roles,String building,LocalDate month) {
+        read(user,roles,building);
+        return repository.sealedMonth(building,month).stream().map(r->decode(r.payload(),Batch.class)).toList();
+    }
     private void validateSource(SourceConfig c,boolean formal) {
         if(c==null||blank(c.name())||c.name().length()>100||blank(c.evidence())||c.evidence().length()>1000)throw invalid("来源名称与配置依据必填");
         reason(c.reason());if(formal&&(c.effectiveFrom()==null||c.effectiveFrom().getDayOfMonth()!=1||c.effectiveTo()!=null&&c.effectiveTo().getDayOfMonth()!=1))throw conflict("账单来源生效边界须在自然月边界，月内切换待独立处理");

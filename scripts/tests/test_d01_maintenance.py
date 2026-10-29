@@ -77,6 +77,7 @@ class CredentialReuseTest(unittest.TestCase):
         grants = "".join("GRANT SELECT ON `" + db + "`.* TO 'platform_migrator'@'%'\n"
                          for db in ("iot_platform", "iot_platform_archive"))
         credential_source.mysql_rights(self.migration_metadata + grants, "migration", "88", "APPLICATION_ONLY")
+        credential_source.mysql_rights(self.migration_metadata + grants, "migration", "93", "APPLICATION_ONLY")
         for mode, target in (("SCHEMA_UPGRADE", "88"), ("APPLICATION_ONLY", "87"), ("unknown", "88")):
             with self.subTest(mode=mode, target=target), self.assertRaises(RuntimeError):
                 credential_source.mysql_rights(self.migration_metadata + grants, "migration", target, mode)
@@ -476,7 +477,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 class InstallerTest(unittest.TestCase):
     def test_completed_record_is_archived_only_after_revocation_and_baseline_checks(self):
         for scenario in ("success", "frontend_successor", "backend_changed", "foreign_current",
-                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config", "source_mismatch", "completed85", "completed86", "completed87", "completed88", "completed88_application"):
+                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config", "source_mismatch", "completed85", "completed86", "completed87", "completed88", "completed88_application", "completed93", "completed93_application"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
                 root = Path(directory)
                 for name, path in (("INSTALL", root / "tools"), ("DATA", root / "data"), ("BASE", root / "test"),
@@ -506,11 +507,11 @@ class InstallerTest(unittest.TestCase):
                                           if name.endswith(".py") or name == "taosdump-d01"}}
                 for name in config["code_sha256"]:
                     (installer.INSTALL / name).write_bytes(b"pinned")
-                source = "85" if scenario in ("source_mismatch", "completed85") else "86" if scenario == "completed86" else "87" if scenario == "completed87" else "88" if scenario in ("completed88", "completed88_application") else "84"
-                if scenario in ("completed85", "completed86", "completed87", "completed88", "completed88_application"):
+                source = "85" if scenario in ("source_mismatch", "completed85") else "86" if scenario == "completed86" else "87" if scenario == "completed87" else "88" if scenario in ("completed88", "completed88_application") else "93" if scenario in ("completed93", "completed93_application") else "84"
+                if scenario.startswith("completed"):
                     config["target_schema"] = source
-                if scenario == "completed88_application":
-                    config.update(source_schema="88", release_mode="APPLICATION_ONLY")
+                if scenario.endswith("_application"):
+                    config.update(source_schema=source, release_mode="APPLICATION_ONLY")
                 (installer.INSTALL / "config.json").write_text(json.dumps(config))
                 phase = "FAILED" if scenario == "failed" else "AWAITING_BUSINESS_ACCEPTANCE"
                 (private / "operation.json").write_text(json.dumps({"phase": phase, "events": [{"phase": phase}],
@@ -519,10 +520,10 @@ class InstallerTest(unittest.TestCase):
                 (private / "backup-evidence").write_bytes(b"old complete backup retained")
                 state = {"phase": "AWAITING_BUSINESS_ACCEPTANCE", "candidate_started": True,
                          "release": str(candidate), "jar_sha256": config["jar_sha256"], "config_hashes": {"config": "hash"}}
-                if scenario in ("completed85", "completed86", "completed87", "completed88", "completed88_application"):
+                if scenario.startswith("completed"):
                     state["target_schema"] = source
-                if scenario == "completed88_application":
-                    state.update(source_schema="88", release_mode="APPLICATION_ONLY")
+                if scenario.endswith("_application"):
+                    state.update(source_schema=source, release_mode="APPLICATION_ONLY")
                 (private / ("d01-" + old_release + ".json")).write_text(json.dumps(state))
                 for path in (installer.LAUNCHER, installer.UNITS / (installer.TIMER + ".service"),
                              installer.UNITS / (installer.TIMER + ".timer")):
@@ -544,7 +545,7 @@ class InstallerTest(unittest.TestCase):
                     calls.append(args)
                     return "active" if scenario == "timer" else "inactive" if "ActiveState" in args else "disabled"
                 stack.enter_context(patch.object(installer, "run", side_effect=run))
-                if scenario in ("success", "frontend_successor", "completed85", "completed86", "completed87", "completed88", "completed88_application"):
+                if scenario in ("success", "frontend_successor") or scenario.startswith("completed"):
                     installer.retire_completed("d01-" + "b" * 12, source)
                     self.assertTrue(baseline.call_args.kwargs["allow_other_restart"])
                     archives = list(installer.HISTORY.iterdir())
