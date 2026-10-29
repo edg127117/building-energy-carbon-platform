@@ -16,6 +16,14 @@ import java.util.UUID;
 @Repository
 /** 保存计算批次、明细、失败段和汇总；计算过程本身不持有数据库事务。 */
 class CarbonCalculationRepository {
+    // 批次证据可能包含整栋楼的组成快照；元数据查询不装载它，避免排序缓冲被大 JSON 占满。
+    private static final String BATCH_COLUMNS = """
+            calculation_batch_id,building_id,period_type,period_start,period_end,timezone_id,
+            result_nature,publication_status,status,idempotency_key,request_hash,active_lock_key,
+            rounding_policy_version_id,supersedes_calculation_batch_id,started_at,deadline_at,
+            completed_at,duration_ms,snapshot_count,detail_count,slow_calculation,
+            safe_error_code,safe_error_message,created_by,created_at
+            """;
     private final JdbcTemplate jdbc;
 
     CarbonCalculationRepository(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc) {
@@ -23,27 +31,33 @@ class CarbonCalculationRepository {
     }
 
     CalculationBatch findBatch(String batchId) {
-        return one("SELECT * FROM biz_carbon_calculation_batch WHERE calculation_batch_id=?",
+        return one("SELECT " + BATCH_COLUMNS + " FROM biz_carbon_calculation_batch WHERE calculation_batch_id=?",
                 CarbonCalculationRepository::batch, batchId);
     }
 
     List<CalculationBatch> listBatches(String buildingId) {
-        return jdbc.query("SELECT * FROM biz_carbon_calculation_batch WHERE building_id=? ORDER BY created_at DESC LIMIT 100",
+        return jdbc.query("SELECT " + BATCH_COLUMNS + " FROM biz_carbon_calculation_batch WHERE building_id=? ORDER BY created_at DESC,calculation_batch_id DESC LIMIT 100",
                 CarbonCalculationRepository::batch,buildingId);
     }
 
     CalculationBatch findByIdempotency(String buildingId, String idempotencyKey) {
-        return one("""
-                SELECT * FROM biz_carbon_calculation_batch
+        return one("SELECT " + BATCH_COLUMNS + """
+                 FROM biz_carbon_calculation_batch
                 WHERE building_id=? AND idempotency_key=?
                 """, CarbonCalculationRepository::batch, buildingId, idempotencyKey);
     }
 
     CalculationBatch findCurrentFormal(String buildingId, PeriodType periodType,
                                        Instant start, Instant end) {
-        return one("""
-                SELECT b.* FROM biz_carbon_calculation_batch b
+        return findCurrentFormal(buildingId, periodType, start, end, null);
+    }
+
+    CalculationBatch findCurrentFormal(String buildingId, PeriodType periodType,
+                                       Instant start, Instant end, String timezoneId) {
+        return one("SELECT " + BATCH_COLUMNS + """
+                 FROM biz_carbon_calculation_batch b
                 WHERE b.building_id=? AND b.period_type=? AND b.period_start=? AND b.period_end=?
+                  AND (? IS NULL OR b.timezone_id=?)
                   AND b.result_nature='FORMAL' AND b.publication_status IN ('DIRECT','PUBLISHED')
                   AND b.status='COMPLETED_COMPLETE'
                   AND NOT EXISTS (
@@ -54,9 +68,9 @@ class CarbonCalculationRepository {
                     SELECT 1 FROM biz_carbon_result_relation candidate
                     WHERE candidate.new_calculation_batch_id=b.calculation_batch_id
                       AND candidate.relation_status='CANDIDATE')
-                ORDER BY b.completed_at DESC LIMIT 1
+                ORDER BY b.completed_at DESC,b.created_at DESC,b.calculation_batch_id DESC LIMIT 1
                 """, CarbonCalculationRepository::batch, buildingId, periodType.name(),
-                timestamp(start), timestamp(end));
+                timestamp(start), timestamp(end), timezoneId, timezoneId);
     }
 
     void insertBatch(CalculationBatch value) {

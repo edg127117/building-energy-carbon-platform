@@ -28,6 +28,17 @@ public class ReportingRepository {
             (r,n)->new Stored(r.getString("record_id"),r.getString("building_id"),r.getString("record_kind"),r.getString("status"),
                 r.getLong("revision"),r.getString("month_date"),r.getString("payload_json")),building,id).stream().findFirst().orElse(null);
     }
+    public List<Stored> sealedMonth(String building, java.time.LocalDate month) {
+        // 只读目标月份，不受建筑全部历史记录的501条读取边界影响；两条已足以识别冲突。
+        return jdbc.query("""
+                SELECT record_id,building_id,record_kind,status,revision,month_date,payload_json
+                FROM biz_energy_reporting_record
+                WHERE building_id=? AND record_kind='BATCH' AND status='SEALED' AND month_date=?
+                LIMIT 2
+                """, (r,n)->new Stored(r.getString("record_id"),r.getString("building_id"),
+                r.getString("record_kind"),r.getString("status"),r.getLong("revision"),
+                r.getString("month_date"),r.getString("payload_json")),building,month.toString());
+    }
     public void insert(Stored r) {
         jdbc.update("INSERT INTO biz_energy_reporting_record(record_id,building_id,record_kind,status,revision,month_date,payload_json) VALUES (?,?,?,?,?,?,?)",
             r.id(),r.building(),r.kind(),r.status(),r.revision(),r.month(),r.payload());

@@ -43,10 +43,12 @@ class RelationGovernanceServiceIntegrationTest {
     @MockBean private BuildingScopeService buildingScopeService;
 
     private boolean originalSelfApproval;
+    private int originalMaxPageSize;
 
     @BeforeEach
     void setUp() {
         originalSelfApproval = properties.isSelfApprovalEnabled();
+        originalMaxPageSize = properties.getMaxPageSize();
         when(buildingScopeService.canAccess(anyLong(), any(Collection.class), any())).thenReturn(true);
         cleanRelationData();
     }
@@ -54,6 +56,7 @@ class RelationGovernanceServiceIntegrationTest {
     @AfterEach
     void restoreProperties() {
         properties.setSelfApprovalEnabled(originalSelfApproval);
+        properties.setMaxPageSize(originalMaxPageSize);
         cleanRelationData();
     }
 
@@ -324,6 +327,32 @@ class RelationGovernanceServiceIntegrationTest {
                 "BLD001", null, 1, 20, null, null, false))
                 .isInstanceOfSatisfying(BusinessException.class,
                         exception -> assertThat(exception.getErrorCode()).isEqualTo(RelationErrors.FORBIDDEN));
+    }
+
+    @Test
+    void paginationUsesConfiguredEffectiveMaximumAndPublishesItInMetadata() {
+        assertThat(properties.getMaxPageSize()).isEqualTo(100);
+        VersionView draft = service.initialize(101L, ENERGY, "BLD001", "pagination-init", "初始化分页验证");
+        var review = service.submit(101L, ENERGY, draft.versionId(), "pagination-submit",
+                new RevisionReasonRequest(draft.revision(), "提交分页验证"));
+        service.approve(202L, ADMIN, review.requestId(), "pagination-approve",
+                new ReviewDecisionRequest("审核分页验证"));
+        service.activate(202L, ADMIN, draft.versionId(), "pagination-activate",
+                new ActivationRequest(service.model(202L, ADMIN, "BLD001").modelRevision(), "激活分页验证"));
+
+        var defaultLimit = service.effectiveBoundaries(101L, ENERGY, "BLD001", 1, 100);
+        assertThat(defaultLimit.size()).isEqualTo(100);
+        assertThat(defaultLimit.metadata().maxPageSize()).isEqualTo(100);
+        assertThatThrownBy(() -> service.effectiveBoundaries(101L, ENERGY, "BLD001", 1, 101))
+                .isInstanceOfSatisfying(BusinessException.class, exception -> {
+                    assertThat(exception.getErrorCode()).isEqualTo(RelationErrors.VALIDATION_FAILED);
+                    assertThat(exception.getMessage()).contains("size 必须在 1 至 100 之间");
+                });
+
+        properties.setMaxPageSize(500);
+        var configuredLimit = service.effectiveBoundaries(101L, ENERGY, "BLD001", 1, 101);
+        assertThat(configuredLimit.size()).isEqualTo(101);
+        assertThat(configuredLimit.metadata().maxPageSize()).isEqualTo(500);
     }
 
     private String nodeId(String buildingId, String nodeType) {

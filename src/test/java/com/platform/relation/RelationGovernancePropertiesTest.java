@@ -20,7 +20,7 @@ class RelationGovernancePropertiesTest {
                             "relation-governance.deployment-environment=" + environment,
                             "relation-governance.self-approval-enabled=true",
                             "relation-governance.max-context-depth=4",
-                            "relation-governance.max-page-size=99")
+                            "relation-governance.max-page-size=500")
                     .run(context -> {
                         assertThat(context).hasSingleBean(RelationGovernanceProperties.class);
                         RelationGovernanceProperties properties =
@@ -29,7 +29,7 @@ class RelationGovernancePropertiesTest {
                         assertThat(properties.getDeploymentEnvironment()).isEqualTo(environment);
                         assertThat(properties.isSelfApprovalEnabled()).isTrue();
                         assertThat(properties.getMaxContextDepth()).isEqualTo(4);
-                        assertThat(properties.getMaxPageSize()).isEqualTo(99);
+                        assertThat(properties.getMaxPageSize()).isEqualTo(500);
                     });
         }
     }

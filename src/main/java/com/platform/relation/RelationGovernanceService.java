@@ -1341,7 +1341,8 @@ public class RelationGovernanceService {
                 .filter(v -> "UNASSIGNED".equals(v.allocationStatus())).count();
         return new QueryMetadata(model.buildingId(), version.versionId(), version.versionNo(),
                 version.effectiveAt(), model.configRevision(), depth, truncated, unassigned,
-                count(issues, "PENDING_EXPERT"), count(issues, "ERROR"), count(issues, "WARNING"));
+                count(issues, "PENDING_EXPERT"), count(issues, "ERROR"), count(issues, "WARNING"),
+                properties.getMaxPageSize());
     }
 
     private static void validateSemanticRequest(
@@ -1527,8 +1528,10 @@ public class RelationGovernanceService {
     }
 
     private void requirePage(int page, int size) {
-        if (page < 1 || size < 1 || size > properties.getMaxPageSize()) {
-            throw error(400, VALIDATION_FAILED, "分页参数不合法");
+        int maxPageSize = properties.getMaxPageSize();
+        if (page < 1 || size < 1 || size > maxPageSize) {
+            throw error(400, VALIDATION_FAILED,
+                    "分页参数不合法：page 必须大于等于 1，size 必须在 1 至 " + maxPageSize + " 之间");
         }
     }
 

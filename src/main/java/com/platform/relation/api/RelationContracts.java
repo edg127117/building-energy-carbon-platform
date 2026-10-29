@@ -153,7 +153,19 @@ public final class RelationContracts {
     public record QueryMetadata(
             String buildingId, String versionId, int versionNo, LocalDateTime effectiveAt,
             long modelRevision, int requestedDepth, boolean truncated,
-            int unassignedCount, int pendingExpertCount, int errorCount, int warningCount) {}
+            int unassignedCount, int pendingExpertCount, int errorCount, int warningCount,
+            int maxPageSize) {
+        private static final int DEFAULT_MAX_PAGE_SIZE = 100;
+
+        /** 保留未持有运行时配置的既有调用方，按历史默认值 100 补齐；HTTP 查询元数据由 Service 传入当前环境上限。 */
+        public QueryMetadata(
+                String buildingId, String versionId, int versionNo, LocalDateTime effectiveAt,
+                long modelRevision, int requestedDepth, boolean truncated,
+                int unassignedCount, int pendingExpertCount, int errorCount, int warningCount) {
+            this(buildingId, versionId, versionNo, effectiveAt, modelRevision, requestedDepth, truncated,
+                    unassignedCount, pendingExpertCount, errorCount, warningCount, DEFAULT_MAX_PAGE_SIZE);
+        }
+    }
 
     public record SpaceTreeView(QueryMetadata metadata, List<SpaceNodeView> roots) {}
 
