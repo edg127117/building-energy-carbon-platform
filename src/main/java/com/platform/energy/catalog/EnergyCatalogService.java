@@ -7,6 +7,7 @@ import com.platform.audit.AuditGovernanceProperties;
 import com.platform.audit.TraceContext;
 import com.platform.energy.catalog.EnergyCatalogRepository.BindingVersionRow;
 import com.platform.energy.catalog.EnergyCatalogRepository.CompatibilityVersionRow;
+import com.platform.energy.catalog.EnergyCatalogRepository.EffectiveInterval;
 import com.platform.energy.catalog.EnergyCatalogRepository.ItemVersionRow;
 import com.platform.energy.catalog.EnergyCatalogRepository.UnitVersionRow;
 import com.platform.energy.catalog.api.EnergyCatalogContracts.ApproveRequest;
@@ -90,6 +91,33 @@ public class EnergyCatalogService {
         requireBuilding(buildingId, point.getBuildingId());
         BindingVersionRow value = repository.findEffectiveBinding(pointId, requiredTime(effectiveAt));
         if (value == null) notFound("指定业务时间没有已确认能源品种绑定");
+        return bindingView(value);
+    }
+
+    /** 在闭合历史区间内要求恰有一个绑定，并验证其引用的品种、单位与兼容规则连续覆盖。 */
+    @Transactional(readOnly = true)
+    public BindingVersionView effectiveBindingForPeriod(long userId, Collection<String> roles,
+                                                        String buildingId, String pointId,
+                                                        LocalDateTime effectiveFrom,
+                                                        LocalDateTime effectiveTo) {
+        authorization.requireReader(roles);
+        authorization.checkBuilding(userId, roles, buildingId);
+        TimeRange range = requiredEndedRange(effectiveFrom, effectiveTo);
+        BizDataPoint point = requirePoint(pointId);
+        requireBuilding(buildingId, point.getBuildingId());
+        List<BindingVersionRow> overlapping = repository.findConfirmedBindingsIntersecting(
+                pointId, range.from(), range.to());
+        if (overlapping.size() != 1) historicalDependencyGap();
+        BindingVersionRow value = overlapping.getFirst();
+        if (value.effectiveFrom().isAfter(range.from())
+                || (value.effectiveTo() != null && value.effectiveTo().isBefore(range.to()))) {
+            historicalDependencyGap();
+        }
+        ValidatedBinding dependencies = validateBinding(point, value.itemCode(), range.from());
+        if (!Objects.equals(dependencies.item().versionId(), value.energyItemVersionId())) {
+            historicalDependencyGap();
+        }
+        requireBindingDependenciesCover(range, dependencies);
         return bindingView(value);
     }
 
@@ -244,12 +272,13 @@ public class EnergyCatalogService {
                                        ApproveRequest request) {
         authorization.requireReviewer(userId, roles);
         ItemVersionRow value = requireItem(versionId);
+        lockItemIdentity(value);
         requirePending(value.status());
         authorization.requireSeparation(value.createdBy(), userId);
         ItemVersionRow previous = repository.findLatestApprovedItem(value.itemId());
         closePrevious(previous == null ? null : previous.versionId(),
                 previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeItemVersion);
+                previous == null ? null : previous.effectiveTo(), repository::closeItemVersion);
         if (repository.approveItem(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
             versionConflict();
         }
@@ -262,10 +291,33 @@ public class EnergyCatalogService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public ItemVersionView approveItemHistorical(long userId, Collection<String> roles, String versionId,
+                                                 ApproveRequest request) {
+        authorization.requireReviewer(userId, roles);
+        ItemVersionRow value = requireItem(versionId);
+        lockItemIdentity(value);
+        requirePending(value.status());
+        authorization.requireSeparation(value.createdBy(), userId);
+        requireEndedRange(value.effectiveFrom(), value.effectiveTo());
+        if (repository.hasApprovedItemOverlap(value.itemId(), versionId,
+                value.effectiveFrom(), value.effectiveTo())) historicalOverlap();
+        if (repository.approveItem(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
+            versionConflict();
+        }
+        ItemVersionRow approved = requireItem(versionId);
+        audit(userId, "APPROVE_HISTORICAL_ITEM_VERSION", "ENERGY_ITEM", approved.itemId(),
+                approved.versionId(), itemSummary(value, repository.itemScopes(versionId)),
+                reviewed(itemSummary(approved, repository.itemScopes(versionId)), request),
+                selfApproval(value.createdBy(), userId), null);
+        return itemView(approved);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public UnitVersionView approveUnit(long userId, Collection<String> roles, String versionId,
                                        ApproveRequest request) {
         authorization.requireReviewer(userId, roles);
         UnitVersionRow value = requireUnit(versionId);
+        lockUnitIdentity(value);
         requirePending(value.status());
         authorization.requireSeparation(value.createdBy(), userId);
         validateUnitDefinition(value.unitCode(), value.canonicalUnitCode(),
@@ -275,7 +327,7 @@ public class EnergyCatalogService {
         UnitVersionRow previous = repository.findLatestApprovedUnit(value.unitId());
         closePrevious(previous == null ? null : previous.versionId(),
                 previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeUnitVersion);
+                previous == null ? null : previous.effectiveTo(), repository::closeUnitVersion);
         if (repository.approveUnit(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
             versionConflict();
         }
@@ -287,22 +339,88 @@ public class EnergyCatalogService {
     }
 
     @Transactional(rollbackFor = Exception.class)
+    public UnitVersionView approveUnitHistorical(long userId, Collection<String> roles, String versionId,
+                                                 ApproveRequest request) {
+        authorization.requireReviewer(userId, roles);
+        UnitVersionRow value = requireUnit(versionId);
+        lockUnitIdentity(value);
+        requirePending(value.status());
+        authorization.requireSeparation(value.createdBy(), userId);
+        requireEndedRange(value.effectiveFrom(), value.effectiveTo());
+        validateUnitDefinition(value.unitCode(), value.canonicalUnitCode(),
+                parse(DimensionCode.class, value.dimensionCode(), "单位量纲无效"), value.scaleFactor(),
+                parse(ConversionType.class, value.conversionType(), "换算类型无效"),
+                value.standardConditionCode(), value.effectiveFrom());
+        if (!value.unitCode().equals(value.canonicalUnitCode())
+                && !coversRange(repository.approvedUnitCodeIntervals(value.canonicalUnitCode()),
+                value.effectiveFrom(), value.effectiveTo())) {
+            historicalDependencyGap();
+        }
+        if (repository.hasApprovedUnitOverlap(value.unitId(), versionId,
+                value.effectiveFrom(), value.effectiveTo())) historicalOverlap();
+        if (repository.approveUnit(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
+            versionConflict();
+        }
+        UnitVersionRow approved = requireUnit(versionId);
+        audit(userId, "APPROVE_HISTORICAL_UNIT_VERSION", "MEASUREMENT_UNIT", approved.unitId(),
+                approved.versionId(), unitSummary(value), reviewed(unitSummary(approved), request),
+                selfApproval(value.createdBy(), userId), null);
+        return unitView(approved);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
     public CompatibilityVersionView approveCompatibility(long userId, Collection<String> roles,
                                                           String versionId, ApproveRequest request) {
         authorization.requireReviewer(userId, roles);
         CompatibilityVersionRow value = requireCompatibility(versionId);
+        repository.lockCompatibilityIdentity(value.compatibilityId());
         requirePending(value.status());
         authorization.requireSeparation(value.createdBy(), userId);
         CompatibilityVersionRow previous = repository.findLatestApprovedCompatibility(value.compatibilityId());
         closePrevious(previous == null ? null : previous.versionId(),
                 previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeCompatibilityVersion);
+                previous == null ? null : previous.effectiveTo(), repository::closeCompatibilityVersion);
         if (repository.approveCompatibility(versionId, request.expectedRevision(), userId,
                 LocalDateTime.now()) != 1) {
             versionConflict();
         }
         CompatibilityVersionRow approved = requireCompatibility(versionId);
         audit(userId, "APPROVE_COMPATIBILITY_VERSION", "ENERGY_ITEM_UNIT_COMPATIBILITY",
+                approved.compatibilityId(), approved.versionId(), compatibilitySummary(value),
+                reviewed(compatibilitySummary(approved), request),
+                selfApproval(value.createdBy(), userId), null);
+        return compatibilityView(approved);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public CompatibilityVersionView approveCompatibilityHistorical(long userId, Collection<String> roles,
+                                                                   String versionId, ApproveRequest request) {
+        authorization.requireReviewer(userId, roles);
+        CompatibilityVersionRow value = requireCompatibility(versionId);
+        repository.lockCompatibilityIdentity(value.compatibilityId());
+        requirePending(value.status());
+        authorization.requireSeparation(value.createdBy(), userId);
+        requireEndedRange(value.effectiveFrom(), value.effectiveTo());
+        ItemVersionRow item = repository.findApprovedItem(value.itemCode(), value.effectiveFrom());
+        UnitVersionRow unit = repository.findApprovedUnitByCode(value.unitCode(), value.effectiveFrom());
+        if (item == null || unit == null || OUTPUT_ONLY_UNITS.contains(unit.unitCode())) {
+            historicalDependencyGap();
+        }
+        validateCompatibility(unit, parse(ValueSemantics.class, value.valueSemantics(), "活动数据语义无效").name(),
+                parse(ConversionRequirement.class, value.conversionRequirement(), "兼容换算要求无效"));
+        if (!coversRange(repository.approvedItemIntervals(value.itemCode()), value.effectiveFrom(), value.effectiveTo())
+                || !coversRange(repository.approvedUnitCodeIntervals(value.unitCode()),
+                value.effectiveFrom(), value.effectiveTo())) {
+            historicalDependencyGap();
+        }
+        if (repository.hasApprovedCompatibilityOverlap(value.compatibilityId(), versionId,
+                value.effectiveFrom(), value.effectiveTo())) historicalOverlap();
+        if (repository.approveCompatibility(versionId, request.expectedRevision(), userId,
+                LocalDateTime.now()) != 1) {
+            versionConflict();
+        }
+        CompatibilityVersionRow approved = requireCompatibility(versionId);
+        audit(userId, "APPROVE_HISTORICAL_COMPATIBILITY_VERSION", "ENERGY_ITEM_UNIT_COMPATIBILITY",
                 approved.compatibilityId(), approved.versionId(), compatibilitySummary(value),
                 reviewed(compatibilitySummary(approved), request),
                 selfApproval(value.createdBy(), userId), null);
@@ -320,6 +438,7 @@ public class EnergyCatalogService {
         BizDataPoint point = pointMapper.selectByIdForUpdate(value.pointId());
         if (point == null) notFound("标准测点不存在");
         requireBuilding(value.buildingId(), point.getBuildingId());
+        lockBindingIdentity(value);
         ValidatedBinding validated = validateBinding(point, value.itemCode(), value.effectiveFrom());
         if (!Objects.equals(validated.item().versionId(), value.energyItemVersionId())) {
             throw EnergyCatalogErrors.error(409, EnergyCatalogErrors.VERSION_CONFLICT,
@@ -328,13 +447,46 @@ public class EnergyCatalogService {
         BindingVersionRow previous = repository.findLatestConfirmedBinding(value.bindingId());
         closePrevious(previous == null ? null : previous.bindingVersionId(),
                 previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeBindingVersion);
+                previous == null ? null : previous.effectiveTo(), repository::closeBindingVersion);
         if (repository.approveBinding(versionId, request.expectedRevision(), userId,
                 LocalDateTime.now()) != 1) {
             versionConflict();
         }
         BindingVersionRow approved = requireBinding(versionId);
         audit(userId, "APPROVE_POINT_ITEM_BINDING", "ENERGY_POINT_ITEM_BINDING",
+                approved.bindingId(), approved.bindingVersionId(), bindingSummary(value),
+                reviewed(bindingSummary(approved), request), selfApproval(value.createdBy(), userId),
+                approved.buildingId());
+        return bindingView(approved);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public BindingVersionView approveBindingHistorical(long userId, Collection<String> roles, String versionId,
+                                                       ApproveRequest request) {
+        authorization.requireReviewer(userId, roles);
+        BindingVersionRow value = requireBinding(versionId);
+        authorization.checkBuilding(userId, roles, value.buildingId());
+        requirePending(value.confirmationStatus());
+        authorization.requireSeparation(value.createdBy(), userId);
+        requireEndedRange(value.effectiveFrom(), value.effectiveTo());
+        BizDataPoint point = pointMapper.selectByIdForUpdate(value.pointId());
+        if (point == null) notFound("标准测点不存在");
+        requireBuilding(value.buildingId(), point.getBuildingId());
+        lockBindingIdentity(value);
+        ValidatedBinding validated = validateBinding(point, value.itemCode(), value.effectiveFrom());
+        if (!Objects.equals(validated.item().versionId(), value.energyItemVersionId())) {
+            throw EnergyCatalogErrors.error(409, EnergyCatalogErrors.VERSION_CONFLICT,
+                    "待审核绑定引用的能源品种版本已不再有效");
+        }
+        requireBindingDependenciesCover(new TimeRange(value.effectiveFrom(), value.effectiveTo()), validated);
+        if (repository.hasConfirmedBindingOverlap(value.bindingId(), versionId,
+                value.effectiveFrom(), value.effectiveTo())) historicalOverlap();
+        if (repository.approveBinding(versionId, request.expectedRevision(), userId,
+                LocalDateTime.now()) != 1) {
+            versionConflict();
+        }
+        BindingVersionRow approved = requireBinding(versionId);
+        audit(userId, "APPROVE_HISTORICAL_POINT_ITEM_BINDING", "ENERGY_POINT_ITEM_BINDING",
                 approved.bindingId(), approved.bindingVersionId(), bindingSummary(value),
                 reviewed(bindingSummary(approved), request), selfApproval(value.createdBy(), userId),
                 approved.buildingId());
@@ -378,6 +530,31 @@ public class EnergyCatalogService {
                     "能源品种、原始单位和活动语义没有已审核兼容规则");
         }
         return new ValidatedBinding(item, unit, compatibility);
+    }
+
+    private void requireBindingDependenciesCover(TimeRange range, ValidatedBinding dependencies) {
+        if (dependencies.item().effectiveFrom().isAfter(range.from())
+                || (dependencies.item().effectiveTo() != null
+                && dependencies.item().effectiveTo().isBefore(range.to()))
+                || !coversRange(repository.approvedUnitSymbolIntervals(
+                dependencies.unit().unitId(), dependencies.unit().symbol()),
+                range.from(), range.to())
+                || !coversRange(repository.approvedCompatibilityIntervals(
+                dependencies.compatibility().compatibilityId()), range.from(), range.to())) {
+            historicalDependencyGap();
+        }
+    }
+
+    private static boolean coversRange(List<EffectiveInterval> intervals, LocalDateTime from,
+                                       LocalDateTime to) {
+        LocalDateTime coveredTo = from;
+        for (EffectiveInterval interval : intervals) {
+            if (interval.to() != null && !interval.to().isAfter(coveredTo)) continue;
+            if (interval.from().isAfter(coveredTo)) return false;
+            if (interval.to() == null || !interval.to().isBefore(to)) return true;
+            if (interval.to().isAfter(coveredTo)) coveredTo = interval.to();
+        }
+        return false;
     }
 
     private void validateCompatibility(UnitVersionRow unit, String semantics,
@@ -493,13 +670,50 @@ public class EnergyCatalogService {
     }
 
     private static void closePrevious(String previousVersionId, LocalDateTime previousFrom,
-                                      LocalDateTime nextFrom, VersionCloser closer) {
+                                      LocalDateTime nextFrom, LocalDateTime previousTo,
+                                      VersionCloser closer) {
         if (previousVersionId == null) return;
         if (!nextFrom.isAfter(previousFrom)) {
             throw EnergyCatalogErrors.error(409, EnergyCatalogErrors.EFFECTIVE_TIME_CONFLICT,
                     "新审核版本的生效时间必须晚于当前已审核版本");
         }
-        closer.close(previousVersionId, nextFrom);
+        if (previousTo == null || previousTo.isAfter(nextFrom)) closer.close(previousVersionId, nextFrom);
+    }
+
+    private void lockItemIdentity(ItemVersionRow value) {
+        if (!Objects.equals(repository.findItemIdForUpdate(value.itemCode()), value.itemId())) versionConflict();
+    }
+
+    private void lockUnitIdentity(UnitVersionRow value) {
+        if (!Objects.equals(repository.findUnitIdForUpdate(value.unitCode()), value.unitId())) versionConflict();
+    }
+
+    private void lockBindingIdentity(BindingVersionRow value) {
+        if (!Objects.equals(repository.findBindingIdForUpdate(value.pointId()), value.bindingId())) {
+            versionConflict();
+        }
+    }
+
+    private static TimeRange requiredEndedRange(LocalDateTime from, LocalDateTime to) {
+        TimeRange range = range(from, to);
+        if (range.to() == null || range.to().isAfter(LocalDateTime.now())) {
+            validation("历史配置必须是已结束的闭合有效区间");
+        }
+        return range;
+    }
+
+    private static void requireEndedRange(LocalDateTime from, LocalDateTime to) {
+        requiredEndedRange(from, to);
+    }
+
+    private static void historicalOverlap() {
+        throw EnergyCatalogErrors.error(409, EnergyCatalogErrors.EFFECTIVE_TIME_CONFLICT,
+                "历史有效区间与同一身份的已审核配置重叠");
+    }
+
+    private static void historicalDependencyGap() {
+        throw EnergyCatalogErrors.error(409, EnergyCatalogErrors.UNIT_INCOMPATIBLE,
+                "历史区间的能源品种、单位或兼容规则未完整覆盖");
     }
 
     private static TimeRange range(LocalDateTime from, LocalDateTime to) {

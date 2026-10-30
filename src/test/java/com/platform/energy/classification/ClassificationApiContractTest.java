@@ -23,14 +23,18 @@ class ClassificationApiContractTest {
     @Autowired private ClassificationRepository repository;
     @Autowired private javax.sql.DataSource dataSource;
 
+    @org.junit.jupiter.api.BeforeEach
+    void prepareManualReadingTables() throws Exception {
+        var charset = java.nio.charset.StandardCharsets.UTF_8;
+        String ddl = new org.springframework.core.io.ClassPathResource("db/migration/mysql/V75__mysql_energy_classification.sql")
+                .getContentAsString(charset).replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ");
+        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new org.springframework.core.io.ByteArrayResource(ddl.getBytes(charset)),
+                new org.springframework.core.io.ClassPathResource("energy-reporting-carbon-schema-test.sql")).execute(dataSource);
+    }
+
     @Test
     void readingHistoryKeepsPreciseReadOnlyHintsBehindExistingAuthenticationAndBuildingScope() throws Exception {
-        // 测试基表已含分类版本；复用DDL补齐专用内存库的人工读数表，此处不作为迁移验收。
-        var charset=java.nio.charset.StandardCharsets.UTF_8;
-        String ddl=new org.springframework.core.io.ClassPathResource("db/migration/mysql/V75__mysql_energy_classification.sql")
-                .getContentAsString(charset).replace("CREATE TABLE ","CREATE TABLE IF NOT EXISTS ");
-        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
-                new org.springframework.core.io.ByteArrayResource(ddl.getBytes(charset))).execute(dataSource);
         var from=java.time.Instant.parse("2026-01-01T00:00:01Z");
         var to=from.plusSeconds(3600);
         var value=new java.math.BigDecimal("9007199254740993.00000001");
@@ -66,6 +70,33 @@ class ClassificationApiContractTest {
         assertThat(repository.batch("BLD001","diagnostic-batch",false).status()).isEqualTo("APPROVED");
     }
 
+    @Test void configurationCoveragePreservesValidRawPreviewWithoutCreatingBusinessRecords() throws Exception {
+        var login = mvc.perform(post("/auth/login").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"username\":\"admin\",\"password\":\"123456\"}"))
+                .andExpect(status().isOk()).andReturn();
+        String bearer = "Bearer " + json.readTree(login.getResponse().getContentAsString()).path("data").path("token").asText();
+        var from = java.time.Instant.parse("2024-12-31T16:00:00Z");
+        var to = java.time.Instant.parse("2025-01-31T16:00:00Z");
+        var reading = new ClassificationContracts.Reading("POINT004", from, to, "ELECTRICITY", "kWh",
+                "PERIOD_TOTAL", null, null, java.math.BigDecimal.TEN, java.math.BigDecimal.ONE, true,
+                "CONFIRMED", "隔离历史数据夹具", "EXACT", null);
+        var data = new ClassificationContracts.ImportRequest("coverage-only", java.util.List.of(reading), "只读检查");
+        var request = new com.platform.energy.history.HistoricalConfigurationContracts.Request(data, null,
+                "Asia/Shanghai", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "PURCHASED_ELECTRICITY", "GLOBAL");
+        mvc.perform(post("/v1/energy-classification/buildings/BLD001/readings/preview")
+                .header("Authorization", bearer).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(data)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("PREVIEW"));
+        mvc.perform(post("/v1/energy-history/buildings/BLD001/configuration-coverage")
+                .header("Authorization", bearer).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(request)))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.formatStatus").value("PREVIEW"))
+                .andExpect(jsonPath("$.data.configurationStatus").value("BLOCKED"))
+                .andExpect(jsonPath("$.data.executionStatus").value("NOT_RUN"));
+        assertThat(repository.batch("BLD001", "coverage-only", true)).isNull();
+        mvc.perform(post("/v1/energy-history/buildings/NO_SUCH_BUILDING/configuration-coverage")
+                .header("Authorization", bearer).contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(request)))
+                .andExpect(status().is4xxClientError());
+    }
+
     @Test void authenticationValidationAndOpenApiUseActualHttpContracts() throws Exception {
         String base="/v1/energy-classification/buildings/BLD001";
         mvc.perform(post(base+"/query").contentType(MediaType.APPLICATION_JSON).content("{}"))
@@ -79,9 +110,26 @@ class ClassificationApiContractTest {
                 .andExpect(status().isBadRequest());
         var docs=mvc.perform(get("/v3/api-docs").header("Authorization","Bearer "+token))
                 .andExpect(status().isOk()).andReturn();
-        var paths=json.readTree(docs.getResponse().getContentAsString()).path("paths");
+        var specification=json.readTree(docs.getResponse().getContentAsString());
+        var paths=specification.path("paths");
         assertThat(paths.has("/v1/energy-classification/buildings/{buildingId}/query")).isTrue();
         assertThat(paths.has("/v1/energy-classification/buildings/{buildingId}/readings/batches/{id}/approve")).isTrue();
         assertThat(paths.has("/v1/energy-classification/buildings/{buildingId}/versions/{id}/withdraw")).isTrue();
+        assertThat(paths.has("/v1/energy-classification/buildings/{buildingId}/versions/{id}/approve-historical")).isTrue();
+        assertThat(paths.has("/v1/energy-history/buildings/{buildingId}/configuration-coverage")).isTrue();
+        assertThat(paths.has("/v1/carbon-projects/buildings/{buildingId}/versions/{id}/activate-historical")).isTrue();
+        String coverageReference=paths.path("/v1/energy-history/buildings/{buildingId}/configuration-coverage")
+                .path("post").path("requestBody").path("content").path("application/json").path("schema").path("$ref").asText();
+        var coverageProperties=specification.path("components").path("schemas")
+                .path(coverageReference.substring(coverageReference.lastIndexOf('/')+1)).path("properties");
+        assertThat(coverageProperties.has("data")).isTrue();
+        assertThat(coverageProperties.has("timezoneId")).isTrue();
+        assertThat(coverageProperties.has("method")).isTrue();
+        mvc.perform(post("/v1/energy-history/buildings/BLD001/configuration-coverage")
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isUnauthorized());
+        mvc.perform(post("/v1/energy-history/buildings/BLD001/configuration-coverage")
+                        .header("Authorization", "Bearer " + token).contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isBadRequest());
     }
 }

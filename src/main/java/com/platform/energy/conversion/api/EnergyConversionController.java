@@ -64,6 +64,15 @@ public class EnergyConversionController {
                 SecurityUser.roles(authentication), versionId, request));
     }
 
+    @PostMapping("/v1/energy-conversion/standard-coal-lhv-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<StandardCoalVersionView> approveStandardCoalHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveStandardCoalHistorical(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
     @GetMapping("/v1/energy-conversion/formula-versions")
     public Result<List<FormulaVersionView>> formulaVersions(Authentication authentication) {
         return Result.success(service.listFormulaVersions(SecurityUser.roles(authentication)));
@@ -86,6 +95,15 @@ public class EnergyConversionController {
                 SecurityUser.roles(authentication), versionId, request));
     }
 
+    @PostMapping("/v1/energy-conversion/formula-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<FormulaVersionView> approveFormulaHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveFormulaHistorical(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
     @GetMapping("/v1/energy-conversion/parameter-versions")
     public Result<List<ParameterVersionView>> parameterVersions(Authentication authentication) {
         return Result.success(service.listParameterVersions(SecurityUser.roles(authentication)));
@@ -105,6 +123,15 @@ public class EnergyConversionController {
             Authentication authentication, @PathVariable String versionId,
             @Valid @RequestBody ApproveRequest request) {
         return Result.success(service.approveParameter(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
+    @PostMapping("/v1/energy-conversion/parameter-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<ParameterVersionView> approveParameterHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveParameterHistorical(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), versionId, request));
     }
 

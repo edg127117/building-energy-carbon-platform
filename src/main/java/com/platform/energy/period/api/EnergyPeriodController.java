@@ -64,6 +64,16 @@ public class EnergyPeriodController {
                 versionId, request)));
     }
 
+    @PostMapping("/policies/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<PeriodPolicyView> approvePolicyHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveRequest request) {
+        return Result.success(periodPolicy(governanceService.approvePeriodPolicyHistorical(
+                SecurityUser.userId(authentication), SecurityUser.roles(authentication),
+                versionId, request)));
+    }
+
     @PostMapping("/exception-policies")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<ExceptionPolicyView> createExceptionPolicy(

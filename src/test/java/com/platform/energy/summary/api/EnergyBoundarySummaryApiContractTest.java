@@ -45,6 +45,7 @@ class EnergyBoundarySummaryApiContractTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn());
         assertThat(openApi.path("paths").has("/v1/energy-boundary-summaries/query")).isTrue();
+        assertThat(openApi.path("paths").has("/v1/energy-boundary-summaries/policies/{versionId}/approve-historical")).isTrue();
         assertThat(openApi.path("paths").has(
                 "/v1/relation-models/{buildingId}/versions/{versionId}/query/metering-assignments"))
                 .isTrue();

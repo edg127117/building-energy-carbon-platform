@@ -40,6 +40,10 @@ public final class ClassificationContracts {
     @Schema(name="EnergyClassificationTransitionRequest")
     public record TransitionRequest(@NotNull Long expectedRevision,
                                     @NotBlank @Size(max = 500) String reason, Instant effectiveFrom) {}
+    @Schema(name="EnergyClassificationHistoricalApprovalRequest")
+    public record HistoricalApprovalRequest(@NotNull Long expectedRevision,
+            @NotBlank @Size(max = 500) String reason, @NotNull Instant effectiveFrom,
+            @NotNull Instant effectiveTo) {}
     @Schema(name="EnergyClassificationVersionView")
     public record VersionView(String versionId, String buildingId, int versionNo, long revision,
                               String status, Instant effectiveFrom, Instant effectiveTo,

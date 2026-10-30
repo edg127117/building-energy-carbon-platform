@@ -189,21 +189,46 @@ public class EnergyConversionService {
     @Transactional(rollbackFor = Exception.class)
     public StandardCoalVersionView approveStandardCoal(
             long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approveStandardCoal(userId, roles, versionId, request, false);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public StandardCoalVersionView approveStandardCoalHistorical(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approveStandardCoal(userId, roles, versionId, request, true);
+    }
+
+    private StandardCoalVersionView approveStandardCoal(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request,
+            boolean historical) {
         authorization.requireReviewer(userId, roles);
         StandardCoalRow value = requireStandardCoal(versionId);
+        repository.findStandardCoalIdForUpdate(value.lhvCode());
+        value = requireStandardCoal(versionId);
         requirePending(value.status());
         authorization.requireSeparation(value.createdBy(), userId);
         requireUnitReference("GJ", value.energyUnitVersionId(), value.effectiveFrom());
         requireUnitReference("TCE", value.coalUnitVersionId(), value.effectiveFrom());
-        StandardCoalRow previous = repository.findLatestApprovedStandardCoal(value.lhvId());
-        closePrevious(previous == null ? null : previous.versionId(),
-                previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeStandardCoalVersion);
+        if (historical) {
+            requireUnitRange("GJ", value.energyUnitVersionId(), new TimeRange(value.effectiveFrom(), value.effectiveTo()));
+            requireUnitRange("TCE", value.coalUnitVersionId(), new TimeRange(value.effectiveFrom(), value.effectiveTo()));
+            requireHistoricalRange(value.effectiveFrom(), value.effectiveTo());
+            if (repository.overlapsStandardCoal(value.lhvId(), value.effectiveFrom(), value.effectiveTo())) {
+                throw EnergyConversionErrors.error(409, EnergyConversionErrors.RULE_CONFLICT,
+                        "历史配置区间与已有审核版本重叠，请走修订流程");
+            }
+        } else {
+            StandardCoalRow previous = repository.findLatestApprovedStandardCoal(value.lhvId());
+            closePrevious(previous == null ? null : previous.versionId(),
+                    previous == null ? null : previous.effectiveFrom(),
+                    previous == null ? null : previous.effectiveTo(), value.effectiveFrom(),
+                    repository::closeStandardCoalVersion);
+        }
         if (repository.approveStandardCoal(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
             versionConflict();
         }
         StandardCoalRow approved = requireStandardCoal(versionId);
-        audit(userId, "APPROVE_STANDARD_COAL_LHV_VERSION", "STANDARD_COAL_LHV", approved.lhvId(),
+        audit(userId, historical ? "APPROVE_HISTORICAL_STANDARD_COAL_LHV_VERSION" : "APPROVE_STANDARD_COAL_LHV_VERSION", "STANDARD_COAL_LHV", approved.lhvId(),
                 approved.versionId(), standardSummary(value), reviewed(standardSummary(approved), request),
                 selfApproval(value.createdBy(), userId), null);
         return standardView(approved);
@@ -212,8 +237,22 @@ public class EnergyConversionService {
     @Transactional(rollbackFor = Exception.class)
     public FormulaVersionView approveFormula(
             long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approveFormula(userId, roles, versionId, request, false);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public FormulaVersionView approveFormulaHistorical(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approveFormula(userId, roles, versionId, request, true);
+    }
+
+    private FormulaVersionView approveFormula(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request,
+            boolean historical) {
         authorization.requireReviewer(userId, roles);
         FormulaRow value = requireFormula(versionId);
+        repository.findFormulaIdForUpdate(value.formulaCode());
+        value = requireFormula(versionId);
         requirePending(value.status());
         authorization.requireSeparation(value.createdBy(), userId);
         ApprovedUnit input = requireUnitReference(value.inputUnitCode(), value.inputUnitVersionId(), value.effectiveFrom());
@@ -222,15 +261,26 @@ public class EnergyConversionService {
                 parse(ConversionPerspective.class, value.perspective(), "折标口径无效"),
                 parse(FormulaAlgorithm.class, value.algorithmCode(), "公式算法无效"),
                 parse(ParameterUnit.class, value.parameterUnit(), "参数单位无效"), input, result);
-        FormulaRow previous = repository.findLatestApprovedFormula(value.formulaId());
-        closePrevious(previous == null ? null : previous.versionId(),
-                previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeFormulaVersion);
+        if (historical) {
+            requireUnitRange(value.inputUnitCode(), value.inputUnitVersionId(), new TimeRange(value.effectiveFrom(), value.effectiveTo()));
+            requireUnitRange(value.resultUnitCode(), value.resultUnitVersionId(), new TimeRange(value.effectiveFrom(), value.effectiveTo()));
+            requireHistoricalRange(value.effectiveFrom(), value.effectiveTo());
+            if (repository.overlapsFormula(value.formulaId(), value.effectiveFrom(), value.effectiveTo())) {
+                throw EnergyConversionErrors.error(409, EnergyConversionErrors.RULE_CONFLICT,
+                        "历史配置区间与已有审核版本重叠，请走修订流程");
+            }
+        } else {
+            FormulaRow previous = repository.findLatestApprovedFormula(value.formulaId());
+            closePrevious(previous == null ? null : previous.versionId(),
+                    previous == null ? null : previous.effectiveFrom(),
+                    previous == null ? null : previous.effectiveTo(), value.effectiveFrom(),
+                    repository::closeFormulaVersion);
+        }
         if (repository.approveFormula(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
             versionConflict();
         }
         FormulaRow approved = requireFormula(versionId);
-        audit(userId, "APPROVE_TCE_FORMULA_VERSION", "ENERGY_CONVERSION_FORMULA",
+        audit(userId, historical ? "APPROVE_HISTORICAL_TCE_FORMULA_VERSION" : "APPROVE_TCE_FORMULA_VERSION", "ENERGY_CONVERSION_FORMULA",
                 approved.formulaId(), approved.versionId(), formulaSummary(value),
                 reviewed(formulaSummary(approved), request), selfApproval(value.createdBy(), userId), null);
         return formulaView(approved);
@@ -239,20 +289,48 @@ public class EnergyConversionService {
     @Transactional(rollbackFor = Exception.class)
     public ParameterVersionView approveParameter(
             long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approveParameter(userId, roles, versionId, request, false);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public ParameterVersionView approveParameterHistorical(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approveParameter(userId, roles, versionId, request, true);
+    }
+
+    private ParameterVersionView approveParameter(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request,
+            boolean historical) {
         authorization.requireReviewer(userId, roles);
         ParameterRow value = requireParameter(versionId);
+        repository.findParameterIdForUpdate(value.parameterCode());
+        value = requireParameter(versionId);
         requirePending(value.status());
         authorization.requireSeparation(value.createdBy(), userId);
         validateParameterReferences(value, new TimeRange(value.effectiveFrom(), value.effectiveTo()));
-        ParameterRow previous = repository.findLatestApprovedParameter(value.parameterId());
-        closePrevious(previous == null ? null : previous.versionId(),
-                previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closeParameterVersion);
+        if (historical) {
+            requireHistoricalRange(value.effectiveFrom(), value.effectiveTo());
+            var interval = new TimeRange(value.effectiveFrom(), value.effectiveTo());
+            var item = approvedItem(value.itemCode(), interval.from());
+            requireRange(item.effectiveFrom(), item.effectiveTo(), interval, "能源品种版本未覆盖整个参数期间");
+            requireUnitRange(value.inputUnitCode(), value.inputUnitVersionId(), interval);
+            requireUnitRange(value.resultUnitCode(), value.resultUnitVersionId(), interval);
+            if (repository.overlapsParameter(value.parameterId(), value.effectiveFrom(), value.effectiveTo())) {
+                throw EnergyConversionErrors.error(409, EnergyConversionErrors.RULE_CONFLICT,
+                        "历史配置区间与已有审核版本重叠，请走修订流程");
+            }
+        } else {
+            ParameterRow previous = repository.findLatestApprovedParameter(value.parameterId());
+            closePrevious(previous == null ? null : previous.versionId(),
+                    previous == null ? null : previous.effectiveFrom(),
+                    previous == null ? null : previous.effectiveTo(), value.effectiveFrom(),
+                    repository::closeParameterVersion);
+        }
         if (repository.approveParameter(versionId, request.expectedRevision(), userId, LocalDateTime.now()) != 1) {
             versionConflict();
         }
         ParameterRow approved = requireParameter(versionId);
-        audit(userId, "APPROVE_TCE_PARAMETER_VERSION", "ENERGY_CONVERSION_PARAMETER",
+        audit(userId, historical ? "APPROVE_HISTORICAL_TCE_PARAMETER_VERSION" : "APPROVE_TCE_PARAMETER_VERSION", "ENERGY_CONVERSION_PARAMETER",
                 approved.parameterId(), approved.versionId(), parameterSummary(value),
                 reviewed(parameterSummary(approved), request), selfApproval(value.createdBy(), userId), null);
         return parameterView(approved);
@@ -499,13 +577,26 @@ public class EnergyConversionService {
     }
 
     private static void closePrevious(String previousVersionId, LocalDateTime previousFrom,
-                                      LocalDateTime nextFrom, VersionCloser closer) {
+                                      LocalDateTime previousTo, LocalDateTime nextFrom, VersionCloser closer) {
         if (previousVersionId == null) return;
         if (!nextFrom.isAfter(previousFrom)) {
             throw EnergyConversionErrors.error(409, EnergyConversionErrors.VERSION_CONFLICT,
                     "新审核版本的生效时间必须晚于当前已审核版本");
         }
-        closer.close(previousVersionId, nextFrom);
+        // 已结束的历史区间不能被向前审核延长，以免填平未审核的时间缺口。
+        if (previousTo == null || previousTo.isAfter(nextFrom)) closer.close(previousVersionId, nextFrom);
+    }
+
+    /** 补录业务适用期，审核时间仍由当前事务生成；不允许覆盖现有版本。 */
+    private static void requireHistoricalRange(LocalDateTime from, LocalDateTime to) {
+        if (to == null || !to.isAfter(from) || to.isAfter(LocalDateTime.now())) {
+            validation("历史补录必须使用已经结束的闭合非空区间");
+        }
+    }
+
+    private void requireUnitRange(String code, String versionId, TimeRange range) {
+        ApprovedUnit unit = requireUnitReference(code, versionId, range.from());
+        requireRange(unit.effectiveFrom(), unit.effectiveTo(), range, "单位版本未覆盖整个配置期间");
     }
 
     private static void requireRange(LocalDateTime referenceFrom, LocalDateTime referenceTo,

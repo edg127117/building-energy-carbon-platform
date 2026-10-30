@@ -214,6 +214,59 @@ class EnergyConversionServiceIntegrationTest {
                 .isInstanceOf(BusinessException.class).hasMessageContaining("折标输入单位版本未覆盖整个期间");
     }
 
+    @Test
+    void historicalFormulaAndParameterPreserveCurrentRulesAndForwardReplacement() {
+        approveCatalog("EIV_HEAT_1", false);
+        var from = AT.minusMonths(1);
+        var current = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "HISTORY_HEAT", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "当前规则", AT, null));
+        service.approveFormula(USER, ENERGY, current.versionId(), conversionApprove());
+        var history = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "HISTORY_HEAT", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "历史依据", from, AT));
+        var approved = service.approveFormulaHistorical(USER, ENERGY, history.versionId(), conversionApprove());
+        assertThat(approved.approvedAt()).isAfter(AT);
+        var oldParameter = service.createParameterVersion(USER, ENERGY, new CreateParameterVersionRequest(
+                "HISTORY_HEAT_PARAM", "HEAT", history.versionId(), new BigDecimal("0.5"), "TCE_PER_INPUT_UNIT",
+                null, "PURCHASED_HEAT", "GLOBAL", "PRODUCTION", "MANUAL", "历史依据", from, AT));
+        service.approveParameterHistorical(USER, ENERGY, oldParameter.versionId(), conversionApprove());
+        var request = new SimulationRequest("BLD001", "HEAT", new BigDecimal("2"), "GJ", "DIRECT_TCE_FACTOR",
+                "CALORIFIC_EQUIVALENT", "PURCHASED_HEAT", "GLOBAL", from);
+        assertThat(service.evaluateFormalRules(USER, ENERGY, request, AT).tce()).isEqualByComparingTo("1");
+        var overlap = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "HISTORY_HEAT", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "重叠申请", from.plusDays(1), AT));
+        assertThatThrownBy(() -> service.approveFormulaHistorical(USER, ENERGY, overlap.versionId(), conversionApprove()))
+                .hasMessageContaining("重叠");
+        var next = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "HISTORY_HEAT", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "向前换版", AT.plusMonths(1), null));
+        service.approveFormula(USER, ENERGY, next.versionId(), conversionApprove());
+        assertThat(jdbc.queryForObject("SELECT effective_to FROM biz_energy_conversion_formula_version WHERE version_id=?",
+                LocalDateTime.class, current.versionId())).isEqualTo(AT.plusMonths(1));
+        assertThat(jdbc.queryForObject("SELECT effective_to FROM biz_energy_conversion_formula_version WHERE version_id=?",
+                LocalDateTime.class, history.versionId())).isEqualTo(AT);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_security_audit_event WHERE action_type='APPROVE_HISTORICAL_TCE_FORMULA_VERSION'", Integer.class)).isEqualTo(1);
+    }
+
+    @Test
+    void historicalRulesRejectOpenWindowsAndUncoveredDependencies() {
+        approveCatalog("EIV_HEAT_1", false);
+        var history = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "HISTORY_RANGE", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "历史依据", AT.minusMonths(1), AT));
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to=? WHERE version_id='EUV_GJ_1'", AT.minusDays(1));
+        assertThatThrownBy(() -> service.approveFormulaHistorical(USER, ENERGY, history.versionId(), conversionApprove()))
+                .hasMessageContaining("整个配置期间");
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to=NULL WHERE version_id='EUV_GJ_1'");
+        var open = service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "HISTORY_OPEN", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "历史依据", AT, null));
+        assertThatThrownBy(() -> service.approveFormulaHistorical(USER, ENERGY, open.versionId(), conversionApprove()))
+                .hasMessageContaining("闭合");
+    }
+
     private void approveCore(String itemVersion, String formulaVersion,
                              String parameterVersion, boolean massUnits) {
         if (itemVersion != null) approveCatalog(itemVersion, massUnits);

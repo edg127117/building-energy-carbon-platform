@@ -29,6 +29,11 @@ public class ClassificationController {
     public Result<VersionView> submit(Authentication a,@PathVariable String buildingId,@PathVariable String id,@Valid @RequestBody TransitionRequest r){return Result.success(service.submit(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,id,r));}
     @PostMapping("/versions/{id}/approve")
     public Result<VersionView> approve(Authentication a,@PathVariable String buildingId,@PathVariable String id,@Valid @RequestBody TransitionRequest r){return Result.success(service.approve(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,id,r));}
+    @PostMapping("/versions/{id}/approve-historical")
+    public Result<VersionView> approveHistorical(Authentication a, @PathVariable String buildingId,
+            @PathVariable String id, @Valid @RequestBody HistoricalApprovalRequest r) {
+        return Result.success(service.approveHistorical(SecurityUser.userId(a), SecurityUser.roles(a), buildingId, id, r));
+    }
     @PostMapping("/versions/{id}/withdraw")
     public Result<VersionView> withdraw(Authentication a,@PathVariable String buildingId,@PathVariable String id,@Valid @RequestBody TransitionRequest r){return Result.success(service.reopen(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,id,r,false));}
     @PostMapping("/versions/{id}/reject")

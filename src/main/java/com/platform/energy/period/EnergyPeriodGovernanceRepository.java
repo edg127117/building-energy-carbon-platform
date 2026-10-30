@@ -72,10 +72,30 @@ public class EnergyPeriodGovernanceRepository {
                 """, this::periodPolicy, buildingId, timestamp(effectiveAt), timestamp(effectiveAt));
     }
 
+    public List<PeriodPolicyVersion> findOverlappingPeriodPolicies(String building, LocalDateTime from, LocalDateTime to) {
+        return jdbc.query(periodPolicySelect() + """
+                 WHERE p.building_id=? AND v.status='APPROVED' AND v.effective_from<?
+                   AND (v.effective_to IS NULL OR v.effective_to>?)
+                """, this::periodPolicy, building, timestamp(to), timestamp(from));
+    }
+
     public PeriodPolicyVersion findLatestApprovedPeriodPolicy(String policyId) {
         return one(periodPolicySelect() + """
-                 WHERE p.policy_id=? AND v.status='APPROVED' ORDER BY v.version_no DESC LIMIT 1
+                 WHERE p.policy_id=? AND v.status='APPROVED' ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE
                 """, this::periodPolicy, policyId);
+    }
+
+    public void lockPeriodPolicy(String policyId) {
+        jdbc.queryForObject("SELECT policy_id FROM biz_energy_period_policy WHERE policy_id=? FOR UPDATE",
+                String.class, policyId);
+    }
+
+    public boolean overlapsPeriodPolicy(String policyId, LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_energy_period_policy_version
+                WHERE policy_id=? AND status='APPROVED' AND effective_from<?
+                  AND (effective_to IS NULL OR effective_to>?) FOR UPDATE
+                """, String.class, policyId, timestamp(to), timestamp(from)).isEmpty();
     }
 
     public int approvePeriodPolicy(
@@ -89,10 +109,11 @@ public class EnergyPeriodGovernanceRepository {
                 """, reviewerId, timestamp(now), reviewComment, versionId, revision);
     }
 
+    /** 正常换版只结束适用期，仍保留历史可用性；不会恢复已被显式停用的旧记录。 */
     public void closePeriodPolicy(String versionId, LocalDateTime effectiveTo) {
         jdbc.update("""
                 UPDATE biz_energy_period_policy_version
-                SET status='DISABLED',effective_to=?,config_revision=config_revision+1
+                SET effective_to=?,config_revision=config_revision+1
                 WHERE version_id=? AND status='APPROVED'
                 """, timestamp(effectiveTo), versionId);
     }

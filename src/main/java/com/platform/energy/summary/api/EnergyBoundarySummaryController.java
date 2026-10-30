@@ -74,6 +74,15 @@ public class EnergyBoundarySummaryController {
                 SecurityUser.roles(authentication), versionId, request));
     }
 
+    @PostMapping("/policies/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<BoundaryPolicyView> approvePolicyHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveBoundaryPolicyRequest request) {
+        return Result.success(service.approvePolicyHistorical(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
     @PostMapping("/query")
     public Result<SummaryQueryView> query(
             Authentication authentication,

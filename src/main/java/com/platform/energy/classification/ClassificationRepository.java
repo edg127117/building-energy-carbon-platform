@@ -65,8 +65,22 @@ public class ClassificationRepository {
         return jdbc.update("UPDATE biz_energy_classification_version SET status='DRAFT',reason=?,revision=revision+1 WHERE version_id=? AND revision=? AND status='PENDING_REVIEW'",reason,v.id(),revision);
     }
     public int approve(Version v, long revision, Instant from, long reviewer, String reason) {
-        jdbc.update("UPDATE biz_energy_classification_version SET effective_to=? WHERE building_id=? AND status='APPROVED' AND effective_to IS NULL",from.toEpochMilli(),v.buildingId());
+        // 普通换版只结束跨越新起点的区间，不延长已结束的历史版本。
+        jdbc.update("UPDATE biz_energy_classification_version SET effective_to=? WHERE building_id=? AND status='APPROVED' AND (effective_to IS NULL OR effective_to>?)",
+                from.toEpochMilli(), v.buildingId(), from.toEpochMilli());
         return jdbc.update("UPDATE biz_energy_classification_version SET status='APPROVED',effective_from=?,reviewed_by=?,reason=?,revision=revision+1 WHERE version_id=? AND revision=? AND status='PENDING_REVIEW'",from.toEpochMilli(),reviewer,reason,v.id(),revision);
+    }
+    public boolean overlapsApproved(String building, Instant from, Instant to) {
+        return !jdbc.queryForList("SELECT version_id FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' AND effective_from<? AND (effective_to IS NULL OR effective_to>?) FOR UPDATE",
+                String.class, building, to.toEpochMilli(), from.toEpochMilli()).isEmpty();
+    }
+    public boolean approvedStartsAtOrAfter(String building, Instant from) {
+        return !jdbc.queryForList("SELECT version_id FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' AND effective_from>=? FOR UPDATE",
+                String.class, building, from.toEpochMilli()).isEmpty();
+    }
+    public int approveHistorical(Version v, long revision, Instant from, Instant to, long reviewer, String reason) {
+        return jdbc.update("UPDATE biz_energy_classification_version SET status='APPROVED',effective_from=?,effective_to=?,reviewed_by=?,reason=?,revision=revision+1 WHERE version_id=? AND revision=? AND status='PENDING_REVIEW'",
+                from.toEpochMilli(), to.toEpochMilli(), reviewer, reason, v.id(), revision);
     }
     public List<Version> effective(String building, Instant from, Instant to) {
         return jdbc.query("SELECT * FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' AND effective_from<=? AND (effective_to IS NULL OR effective_to>=?)", (r,n)->new Version(r.getString("version_id"),r.getString("building_id"),r.getInt("version_no"),r.getLong("revision"),r.getString("status"),(Long)r.getObject("effective_from"),(Long)r.getObject("effective_to"),r.getString("configuration_json"),r.getLong("created_by"),(Long)r.getObject("reviewed_by")),building,from.toEpochMilli(),to.toEpochMilli());

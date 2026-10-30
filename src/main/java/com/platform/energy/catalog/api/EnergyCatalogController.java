@@ -66,6 +66,15 @@ public class EnergyCatalogController {
                 SecurityUser.roles(authentication), versionId, request));
     }
 
+    @PostMapping("/v1/energy-catalog/item-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<ItemVersionView> approveItemHistorical(Authentication authentication,
+                                                          @PathVariable String versionId,
+                                                          @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveItemHistorical(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
     @GetMapping("/v1/energy-catalog/units")
     public Result<List<UnitVersionView>> units(Authentication authentication) {
         return Result.success(service.listUnits(SecurityUser.roles(authentication)));
@@ -85,6 +94,15 @@ public class EnergyCatalogController {
                                                @PathVariable String versionId,
                                                @Valid @RequestBody ApproveRequest request) {
         return Result.success(service.approveUnit(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
+    @PostMapping("/v1/energy-catalog/unit-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<UnitVersionView> approveUnitHistorical(Authentication authentication,
+                                                         @PathVariable String versionId,
+                                                         @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveUnitHistorical(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), versionId, request));
     }
 
@@ -111,6 +129,15 @@ public class EnergyCatalogController {
                 SecurityUser.roles(authentication), versionId, request));
     }
 
+    @PostMapping("/v1/energy-catalog/compatibility-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<CompatibilityVersionView> approveCompatibilityHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveCompatibilityHistorical(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
     @GetMapping("/v1/energy-catalog/point-bindings")
     public Result<List<BindingVersionView>> bindings(
             Authentication authentication,
@@ -130,6 +157,17 @@ public class EnergyCatalogController {
                 SecurityUser.roles(authentication), buildingId, pointId, effectiveAt));
     }
 
+    @GetMapping("/v1/energy-catalog/point-bindings/effective-period")
+    public Result<BindingVersionView> effectiveBindingForPeriod(
+            Authentication authentication,
+            @RequestParam String buildingId,
+            @RequestParam String pointId,
+            @RequestParam LocalDateTime effectiveFrom,
+            @RequestParam LocalDateTime effectiveTo) {
+        return Result.success(service.effectiveBindingForPeriod(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, pointId, effectiveFrom, effectiveTo));
+    }
+
     @PostMapping("/v1/energy-catalog/point-binding-versions")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
     public Result<BindingVersionView> createBinding(
@@ -145,6 +183,15 @@ public class EnergyCatalogController {
             Authentication authentication, @PathVariable String versionId,
             @Valid @RequestBody ApproveRequest request) {
         return Result.success(service.approveBinding(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), versionId, request));
+    }
+
+    @PostMapping("/v1/energy-catalog/point-binding-versions/{versionId}/approve-historical")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<BindingVersionView> approveBindingHistorical(
+            Authentication authentication, @PathVariable String versionId,
+            @Valid @RequestBody ApproveRequest request) {
+        return Result.success(service.approveBindingHistorical(SecurityUser.userId(authentication),
                 SecurityUser.roles(authentication), versionId, request));
     }
 

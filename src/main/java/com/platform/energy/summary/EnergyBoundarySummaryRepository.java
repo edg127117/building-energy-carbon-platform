@@ -104,6 +104,41 @@ public class EnergyBoundarySummaryRepository {
         return values.isEmpty() ? null : values.getFirst();
     }
 
+    public BoundaryPolicyVersion latestApprovedForUpdate(String policyId) {
+        return one("""
+                SELECT v.*,p.building_id,p.metering_boundary_id,p.energy_item_code
+                FROM biz_energy_boundary_summary_policy_version v
+                JOIN biz_energy_boundary_summary_policy p ON p.policy_id=v.policy_id
+                WHERE p.policy_id=? AND v.status='APPROVED'
+                ORDER BY v.effective_from DESC LIMIT 1 FOR UPDATE
+                """, policyId);
+    }
+
+    public boolean overlapsApprovedForUpdate(String policyId, LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_energy_boundary_summary_policy_version
+                WHERE policy_id=? AND status='APPROVED' AND effective_from<?
+                  AND (effective_to IS NULL OR effective_to>?) FOR UPDATE
+                """, String.class, policyId, timestamp(to), timestamp(from)).isEmpty();
+    }
+
+    public List<BoundaryPolicyVersion> overlappingApproved(String building, String boundary,
+            String energy, LocalDateTime from, LocalDateTime to) {
+        return jdbc.query("""
+                SELECT v.*,p.building_id,p.metering_boundary_id,p.energy_item_code
+                FROM biz_energy_boundary_summary_policy_version v
+                JOIN biz_energy_boundary_summary_policy p ON p.policy_id=v.policy_id
+                WHERE p.building_id=? AND p.metering_boundary_id=? AND p.energy_item_code=?
+                  AND v.status='APPROVED' AND v.effective_from<?
+                  AND (v.effective_to IS NULL OR v.effective_to>?)
+                """, this::row, building, boundary, energy, timestamp(to), timestamp(from));
+    }
+
+    public void closeVersion(String versionId, LocalDateTime to) {
+        jdbc.update("UPDATE biz_energy_boundary_summary_policy_version SET effective_to=? WHERE version_id=? AND status='APPROVED'",
+                timestamp(to), versionId);
+    }
+
     public void closeApproved(String policyId, String excludedVersionId, LocalDateTime effectiveTo) {
         jdbc.update("""
                 UPDATE biz_energy_boundary_summary_policy_version
