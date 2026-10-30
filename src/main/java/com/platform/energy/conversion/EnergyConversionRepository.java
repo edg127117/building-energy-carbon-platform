@@ -65,7 +65,7 @@ class EnergyConversionRepository {
                 SELECT i.lhv_id,i.lhv_code,v.* FROM biz_standard_coal_lhv i
                 JOIN biz_standard_coal_lhv_version v ON v.lhv_id=i.lhv_id
                 WHERE i.lhv_id=? AND v.status='APPROVED'
-                ORDER BY v.version_no DESC LIMIT 1
+                ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE
                 """, EnergyConversionRepository::standardCoalRow, id);
     }
 
@@ -121,7 +121,7 @@ class EnergyConversionRepository {
 
     FormulaRow findLatestApprovedFormula(String id) {
         return optional(formulaSelect() + " WHERE i.formula_id=? AND v.status='APPROVED'"
-                        + " ORDER BY v.version_no DESC LIMIT 1",
+                        + " ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE",
                 EnergyConversionRepository::formulaRow, id);
     }
 
@@ -185,7 +185,7 @@ class EnergyConversionRepository {
 
     ParameterRow findLatestApprovedParameter(String id) {
         return optional(parameterSelect() + " WHERE p.parameter_id=? AND v.status='APPROVED'"
-                        + " ORDER BY v.version_no DESC LIMIT 1",
+                        + " ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE",
                 EnergyConversionRepository::parameterRow, id);
     }
 
@@ -225,6 +225,30 @@ class EnergyConversionRepository {
     void closeParameterVersion(String versionId, LocalDateTime effectiveTo) {
         jdbc.update("UPDATE biz_energy_conversion_parameter_version SET effective_to=? WHERE version_id=?",
                 timestamp(effectiveTo), versionId);
+    }
+
+    boolean overlapsStandardCoal(String id, LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_standard_coal_lhv_version
+                WHERE lhv_id=? AND status='APPROVED' AND effective_from<?
+                  AND (effective_to IS NULL OR effective_to>?) FOR UPDATE
+                """, String.class, id, timestamp(to), timestamp(from)).isEmpty();
+    }
+
+    boolean overlapsFormula(String id, LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_energy_conversion_formula_version
+                WHERE formula_id=? AND status='APPROVED' AND effective_from<?
+                  AND (effective_to IS NULL OR effective_to>?) FOR UPDATE
+                """, String.class, id, timestamp(to), timestamp(from)).isEmpty();
+    }
+
+    boolean overlapsParameter(String id, LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_energy_conversion_parameter_version
+                WHERE parameter_id=? AND status='APPROVED' AND effective_from<?
+                  AND (effective_to IS NULL OR effective_to>?) FOR UPDATE
+                """, String.class, id, timestamp(to), timestamp(from)).isEmpty();
     }
 
     private int next(String table, String idColumn, String id) {

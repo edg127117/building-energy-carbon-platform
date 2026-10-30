@@ -30,4 +30,10 @@ public class CarbonProjectController {
     public Result<Version> transition(Authentication a,@PathVariable String buildingId,@PathVariable String id,@PathVariable String action,@Valid @RequestBody Transition r){return Result.success(service.transition(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,id,action,r));}
     @PostMapping("/versions/{id}/activate")
     public Result<Version> activate(Authentication a,@PathVariable String buildingId,@PathVariable String id,@Valid @RequestBody Transition r){return Result.success(service.activate(SecurityUser.userId(a),SecurityUser.roles(a),buildingId,id,r));}
+    @PostMapping("/versions/{id}/activate-historical")
+    public Result<Version> activateHistorical(Authentication a, @PathVariable String buildingId,
+            @PathVariable String id, @Valid @RequestBody HistoricalActivation r) {
+        return Result.success(service.activateHistorical(SecurityUser.userId(a), SecurityUser.roles(a), buildingId, id, r));
+    }
+
 }

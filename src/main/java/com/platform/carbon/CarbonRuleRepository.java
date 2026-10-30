@@ -182,6 +182,13 @@ class CarbonRuleRepository {
                 .map(this::withComponents).toList();
     }
 
+    List<FactorVersion> findOverlappingActiveFactors(String energy, LocalDateTime from, LocalDateTime to) {
+        return jdbc.query(factorSelect() + """
+                 WHERE f.energy_item_code=? AND v.status='ACTIVE' AND v.effective_from<?
+                   AND (v.effective_to IS NULL OR v.effective_to>?)
+                """, this::factor, energy, timestamp(to), timestamp(from)).stream().map(this::withComponents).toList();
+    }
+
     List<GwpVersion> findActiveGwp(String gasCode, UsageNature nature,
                                    LocalDateTime start, LocalDateTime end) {
         return jdbc.query("""

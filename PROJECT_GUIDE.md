@@ -326,6 +326,18 @@ V58 将旧 HVAC 设备、19 测点、别名、指标、采集与质量治理策�
 
 原专业工作区继续提供人工批次独立审核、汇总口径独立审核、正式计算、固定批次及证据读取、重算候选独立审批入口。人工批次详情返回服务端真实修订号；`GET /v1/energy-boundary-summaries/policies?buildingId=...` 与 `GET /v1/carbon-management/recalculations?buildingId=...` 分别提供有界版本和重算队列查询。后者只返回调用人有权读取全部成员建筑的批次；两者均不以菜单可见性代替后端职责、建筑范围或独立审核校验，超限明确拒绝而非静默截断。
 
+历史配置补录使用原版本表与原专业职责，显式调用历史审核入口，不倒签创建或审核时间：
+
+- 能源字典的 `item-versions`、`unit-versions`、`compatibility-versions`、`point-binding-versions` 在 `/v1/energy-catalog` 下提供 `/{versionId}/approve-historical`；折标的 `standard-coal-lhv-versions`、`formula-versions`、`parameter-versions` 在 `/v1/energy-conversion` 下提供同名动作；周期口径为 `/v1/energy-periods/policies/{versionId}/approve-historical`。请求沿用 `{expectedRevision, reviewComment}`，业务区间与依据在创建版本时填写。
+- 分类为 `/v1/energy-classification/buildings/{buildingId}/versions/{id}/approve-historical`，请求 `{expectedRevision, reason, effectiveFrom, effectiveTo}`，时间为带时区、精度最多毫秒的 Instant。分类仍先创建、保存并提交审核。
+- 边界汇总为 `/v1/energy-boundary-summaries/policies/{versionId}/approve-historical`，请求沿用 `{expectedRevision, reviewComment}`；碳项目在完成原独立审核后，用 `/v1/carbon-projects/buildings/{buildingId}/versions/{id}/activate-historical` 登记 `{expectedRevision, reason, effectiveFrom, effectiveTo}`。历史项目保存为 `RETIRED`，仅在其已结束期间参与匹配，不替代当前 `ACTIVE` 项目，不触发旧报告重算。
+- 历史动作只审核已经结束的闭合半开区间 `[from,to)`，与同身份已审核期间重叠时拒绝。先补品种与单位，再补兼容规则、测点绑定、折标公式与参数；周期口径、分类和历史计量范围分别复核。配置来源及建筑专业事实不能从其他建筑直接套用。
+- 普通向前审核按业务生效时间确定前一版本，不能用版本号代替时间顺序，也不延长已结束的历史区间。正常周期换版保留前版审核状态并结束其适用期；已经 `DISABLED` 的旧记录不自动恢复。
+
+`POST /v1/energy-history/buildings/{buildingId}/configuration-coverage` 单独检查历史导入配置，请求包含原 `data: {idempotencyKey, readings, reason}`，以及 `timezoneId`、`method`、`perspective`、`consumptionScope`、`regionCode` 和可选的 `classificationVersionId`。一批最多500条，按整月检查，不按日摊分。返回 `formatStatus`、`configurationStatus`、`executionStatus: NOT_RUN` 和逐行逐域的版本/缺口。原读数 `preview` 继续只做格式及来源校验；配置覆盖检查不等于来源已审核、已封账或已生成碳结果。碳因子检查针对当前有效规则，已有报告的锁定因子继续由原报告链处理。后续依次使用既有导入、独立审核、人工月量、封账和核算入口；任何预检结果都不替代执行时复核。补录不会重写旧读数、快照或已冻结核算证据。面积与历史计量范围继续使用各域原有审核入口。
+
+配置覆盖包括测点依赖、周期口径、分类及历史计量范围、各计量边界汇总口径、关联同一分类的碳项目、正式折标规则、当前碳因子及建筑面积。此检查针对保留分类组成的完整表计核算链，不能仅凭存在原始读数或面积就返回全链路覆盖。
+
 V2 可靠链只把“全部原始测点已进入 TDengine 且轻量 MySQL 回执已持久化”称为 `PLATFORM_PERSISTED`。Broker `PUBACK`、适配器发布确认、平台消费确认和应用 ACK 发布确认语义不同；成功回执默认只作为热证据，聚合、质量、公式和页面处理不属于该回执语义。
 
 ## 6. 空间与语义模型

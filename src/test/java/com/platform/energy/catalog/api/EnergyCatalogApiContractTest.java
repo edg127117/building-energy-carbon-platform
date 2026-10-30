@@ -65,6 +65,16 @@ class EnergyCatalogApiContractTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn());
         assertThat(openApi.path("paths").has("/v1/energy-catalog/point-bindings/effective")).isTrue();
+        assertThat(openApi.path("paths").path("/v1/energy-catalog/item-versions/{versionId}/approve-historical")
+                .has("post")).isTrue();
+        assertThat(openApi.path("paths").path("/v1/energy-catalog/unit-versions/{versionId}/approve-historical")
+                .has("post")).isTrue();
+        assertThat(openApi.path("paths").path("/v1/energy-catalog/compatibility-versions/{versionId}/approve-historical")
+                .has("post")).isTrue();
+        assertThat(openApi.path("paths").path("/v1/energy-catalog/point-binding-versions/{versionId}/approve-historical")
+                .has("post")).isTrue();
+        assertThat(openApi.path("paths").path("/v1/energy-catalog/point-bindings/effective-period")
+                .has("get")).isTrue();
         assertThat(openApi.path("components").path("schemas").has("EnergyCatalogApiError")).isTrue();
     }
 

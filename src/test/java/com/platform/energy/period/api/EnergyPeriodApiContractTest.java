@@ -44,6 +44,7 @@ class EnergyPeriodApiContractTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn());
         assertThat(openApi.path("paths").has("/v1/energy-periods/current/refresh")).isTrue();
+        assertThat(openApi.path("paths").has("/v1/energy-periods/policies/{versionId}/approve-historical")).isTrue();
         assertThat(openApi.path("paths").has(
                 "/v1/energy-periods/recalculation-batches/{batchId}/execute")).isTrue();
         assertThat(openApi.path("components").path("schemas").has("EnergyPeriodApiError")).isTrue();

@@ -84,12 +84,42 @@ public class ClassificationService {
         read(user,roles,building);authorization.requirePolicyReviewer(user,roles);text(request.reason(),500);repository.lock(building);
         var version=requireVersion(building,id);authorization.requireSeparation(version.author(),user);
         if(request.effectiveFrom()==null || request.effectiveFrom().isAfter(Instant.now())) fail("生效时间必须明确且不能晚于当前时间");
-        if(repository.versions(building).stream().anyMatch(v->"APPROVED".equals(v.status())&&v.from()>=request.effectiveFrom().toEpochMilli())) throw error(409,"新版本生效时间必须晚于已有版本");
+        if(repository.approvedStartsAtOrAfter(building,request.effectiveFrom())) throw error(409,"新版本生效时间必须晚于已有版本");
         Configuration config=decode(version.json(),Configuration.class);core.validate(config);validateObjects(building,config);
         // 未确认条目可以随配置发布，但计算时保持待确认；正式计量关系仍须走原治理流程。
         if(!blank(config.relationVersionId())) loadRelations(user,roles,building,config.relationVersionId());
         if(repository.approve(version,request.expectedRevision(),request.effectiveFrom(),user,request.reason())!=1) throw error(409,"分类版本已变化或不可审核");
         log(user,building,"APPROVE_CLASSIFICATION_VERSION",id,request.reason());return view(requireVersion(building,id));
+    }
+    /** 审核闭合历史适用期，不倒签登记时间，也不结束当前版本。 */
+    @Transactional(rollbackFor = Exception.class)
+    public VersionView approveHistorical(long user, Collection<String> roles, String building,
+                                         String id, HistoricalApprovalRequest request) {
+        read(user, roles, building);
+        authorization.requirePolicyReviewer(user, roles);
+        text(request.reason(), 500);
+        repository.lock(building);
+        var version = requireVersion(building, id);
+        authorization.requireSeparation(version.author(), user);
+        if (request.effectiveFrom() == null || request.effectiveTo() == null
+                || !request.effectiveTo().isAfter(request.effectiveFrom())
+                || request.effectiveTo().isAfter(Instant.now())) fail("历史补录必须使用已经结束的闭合非空区间");
+        if (!request.effectiveFrom().equals(Instant.ofEpochMilli(request.effectiveFrom().toEpochMilli()))
+                || !request.effectiveTo().equals(Instant.ofEpochMilli(request.effectiveTo().toEpochMilli()))) {
+            fail("历史分类适用期的时间精度最多毫秒");
+        }
+        if (repository.overlapsApproved(building, request.effectiveFrom(), request.effectiveTo())) {
+            throw error(409, "历史分类区间与已有审核版本重叠，请走修订流程");
+        }
+        Configuration config = decode(version.json(), Configuration.class);
+        core.validate(config);
+        validateObjects(building, config);
+        if (!blank(config.relationVersionId())) loadRelations(user, roles, building, config.relationVersionId());
+        if (repository.approveHistorical(version, request.expectedRevision(), request.effectiveFrom(),
+                request.effectiveTo(), user, request.reason()) != 1) throw error(409, "分类版本已变化或不可审核");
+        log(user, building, "APPROVE_HISTORICAL_CLASSIFICATION_VERSION", id,
+                request.reason() + ";effectiveFrom=" + request.effectiveFrom() + ";effectiveTo=" + request.effectiveTo());
+        return view(requireVersion(building, id));
     }
     @Transactional(rollbackFor=Exception.class)
     public VersionView reopen(long user,Collection<String> roles,String building,String id,TransitionRequest request,boolean reject) {
@@ -99,6 +129,41 @@ public class ClassificationService {
         else {authorization.requirePolicyMaintainer(user,roles);if(version.author()!=user) throw error(403,"只能撤回本人提交的版本");}
         if(repository.reopen(version,request.expectedRevision(),request.reason())!=1) throw error(409,"版本不可退回或已变化");
         log(user,building,reject?"REJECT_CLASSIFICATION_VERSION":"WITHDRAW_CLASSIFICATION_VERSION",id,request.reason());return view(requireVersion(building,id));
+    }
+
+    /** 只读配置覆盖检查不读取、生成或封存用量，正式执行仍由原流程复核。 */
+    public VersionView configurationForPeriod(long user, Collection<String> roles, String building,
+            String versionId, Instant from, Instant to, String energyItem, String unit) {
+        read(user, roles, building);
+        window(from, to);
+        ClassificationRepository.Version version;
+        if (blank(versionId)) {
+            var effective = repository.effective(building, from, to);
+            if (effective.size() != 1) throw error(409, "统计期间跨配置版本或没有完整有效配置，请分段查询");
+            version = effective.getFirst();
+        } else version = requireVersion(building, versionId);
+        if (!"APPROVED".equals(version.status()) || version.from() > from.toEpochMilli()
+                || version.to() != null && version.to() < to.toEpochMilli()) {
+            throw error(409, "指定配置未覆盖完整统计期间");
+        }
+        Configuration config = decode(version.json(), Configuration.class);
+        core.validate(config);
+        if (blank(config.relationVersionId())) throw error(409, "尚未关联正式计量关系版本");
+        var rules = config.boundaryRules().stream().filter(r -> energyItem.equals(r.energyItemCode())
+                && unit.equals(r.unit())).toList();
+        if (rules.isEmpty() || rules.stream().anyMatch(r -> !"CONFIRMED".equals(r.status()))) {
+            throw error(409, "该能源品种和单位的计量口径尚未确认");
+        }
+        RelationData relation = loadRelations(user, roles, building, config.relationVersionId());
+        if (relation.nextEffectiveAt() != null && to.isAfter(relation.nextEffectiveAt())) {
+            throw error(409, "统计期间超过所引用计量关系的有效范围");
+        }
+        String historical = historicalScope(user, roles, building, config.relationVersionId(), relation, from, to);
+        if (relation.metadata().effectiveAt() == null || relation.metadata().effectiveAt()
+                .toInstant(ZoneOffset.ofHours(8)).isAfter(from) && historical == null) {
+            throw error(409, "关系生效前的历史计量范围尚未确认");
+        }
+        return view(version);
     }
 
     public ImportView preview(long user,Collection<String> roles,String building,ImportRequest request) {

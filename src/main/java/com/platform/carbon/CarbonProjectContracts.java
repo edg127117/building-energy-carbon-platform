@@ -21,6 +21,9 @@ public final class CarbonProjectContracts {
                        @NotBlank @Size(max=500) String reason) { }
     public record Transition(@NotNull @Min(0) Long expectedRevision, @NotBlank @Size(max=500) String reason,
                              Instant effectiveFrom) { }
+    public record HistoricalActivation(@NotNull @Min(0) Long expectedRevision,
+            @NotBlank @Size(max=500) String reason, @NotNull Instant effectiveFrom,
+            @NotNull Instant effectiveTo) { }
     public record Version(String versionId, String buildingId, int versionNo, long revision,
                           String status, Instant effectiveFrom, Instant effectiveTo,
                           long createdBy, Long reviewedBy, Configuration configuration) { }

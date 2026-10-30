@@ -30,7 +30,7 @@ import static com.platform.energy.period.EnergyPeriodErrors.*;
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
-/** 治理版本化研发周期口径和封账例外白名单，不发布生产规则。 */
+/** 治理版本化周期口径和研发封账例外；历史补录不修改既有封账证据。 */
 public class EnergyPeriodGovernanceService {
     private static final Pattern CODE = Pattern.compile("[A-Z][A-Z0-9_]{1,63}");
 
@@ -67,6 +67,7 @@ public class EnergyPeriodGovernanceService {
                 versionConflict();
             }
         }
+        repository.lockPeriodPolicy(policyId);
         PeriodPolicyVersion value = new PeriodPolicyVersion(policyId, id(),
                 repository.nextPeriodPolicyVersion(policyId), buildingId, timezoneId,
                 request.closingDelayHours(), "REVIEW_REQUIRED", "PENDING_REVIEW", normalize(request.sourceType()),
@@ -81,21 +82,50 @@ public class EnergyPeriodGovernanceService {
     @Transactional(rollbackFor = Exception.class)
     public PeriodPolicyVersion approvePeriodPolicy(
             long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approvePeriodPolicy(userId, roles, versionId, request, false);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public PeriodPolicyVersion approvePeriodPolicyHistorical(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request) {
+        return approvePeriodPolicy(userId, roles, versionId, request, true);
+    }
+
+    private PeriodPolicyVersion approvePeriodPolicy(
+            long userId, Collection<String> roles, String versionId, ApproveRequest request,
+            boolean historical) {
         authorization.requirePolicyReviewer(userId, roles);
         PeriodPolicyVersion value = requirePeriodPolicy(versionId);
         authorization.checkBuilding(userId, roles, value.buildingId());
+        repository.lockPeriodPolicy(value.policyId());
+        value = requirePeriodPolicy(versionId);
         authorization.requireSeparation(value.createdBy(), userId);
         requirePending(value.status());
-        PeriodPolicyVersion previous = repository.findLatestApprovedPeriodPolicy(value.policyId());
-        closePrevious(previous == null ? null : previous.versionId(),
-                previous == null ? null : previous.effectiveFrom(), value.effectiveFrom(),
-                repository::closePeriodPolicy);
+        if (historical) {
+            if (value.effectiveTo() == null || !value.effectiveTo().isAfter(value.effectiveFrom())
+                    || value.effectiveTo().isAfter(LocalDateTime.now())) {
+                validation("历史补录必须使用已经结束的闭合非空区间");
+            }
+            if (repository.overlapsPeriodPolicy(value.policyId(), value.effectiveFrom(), value.effectiveTo())) {
+                throw error(409, HISTORICAL_RULE_CONFLICT, "历史周期口径与已有审核期间重叠，请走修订流程");
+            }
+        } else {
+            PeriodPolicyVersion previous = repository.findLatestApprovedPeriodPolicy(value.policyId());
+            if (previous != null) {
+                if (!value.effectiveFrom().isAfter(previous.effectiveFrom())) {
+                    validation("新审核版本必须晚于当前已审核版本生效");
+                }
+                if (previous.effectiveTo() == null || previous.effectiveTo().isAfter(value.effectiveFrom())) {
+                    repository.closePeriodPolicy(previous.versionId(), value.effectiveFrom());
+                }
+            }
+        }
         if (repository.approvePeriodPolicy(value.versionId(), request.expectedRevision(), userId,
                 LocalDateTime.now(), text(request.reviewComment(), 500, "审核意见无效")) != 1) {
             versionConflict();
         }
         PeriodPolicyVersion approved = requirePeriodPolicy(versionId);
-        audit(userId, approved.buildingId(), "APPROVE_PERIOD_POLICY_VERSION",
+        audit(userId, approved.buildingId(), historical ? "APPROVE_HISTORICAL_PERIOD_POLICY_VERSION" : "APPROVE_PERIOD_POLICY_VERSION",
                 "ENERGY_PERIOD_POLICY", approved.policyId(), approved.versionId(), summary(value),
                 summary(approved), selfApproval(value.createdBy(), userId));
         return approved;
@@ -175,6 +205,18 @@ public class EnergyPeriodGovernanceService {
         return value;
     }
 
+    public PeriodPolicyVersion policyForPeriod(String building, LocalDateTime from, LocalDateTime to) {
+        range(from, to);
+        if (to == null) validation("覆盖检查必须指定完整期间");
+        var values = repository.findOverlappingPeriodPolicies(building, from, to);
+        if (values.size() != 1) throw error(409, POLICY_REQUIRED, "期间缺少唯一已审核周期口径");
+        var value = values.getFirst();
+        if (value.effectiveFrom().isAfter(from) || value.effectiveTo() != null && value.effectiveTo().isBefore(to)) {
+            throw error(409, POLICY_REQUIRED, "周期口径未覆盖整个期间");
+        }
+        return value;
+    }
+
     public PeriodPolicyVersion periodPolicyVersion(String versionId) {
         return requirePeriodPolicy(versionId);
     }
@@ -207,7 +249,8 @@ public class EnergyPeriodGovernanceService {
 
     private static String summary(PeriodPolicyVersion value) {
         return "version=" + value.versionNo() + ";timezone=" + value.timezoneId()
-                + ";closingDelayHours=" + value.closingDelayHours() + ";status=" + value.status();
+                + ";closingDelayHours=" + value.closingDelayHours() + ";status=" + value.status()
+                + ";effectiveFrom=" + value.effectiveFrom() + ";effectiveTo=" + value.effectiveTo();
     }
 
     private static String summary(ExceptionPolicyVersion value) {

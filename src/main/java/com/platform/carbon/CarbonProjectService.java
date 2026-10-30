@@ -12,7 +12,7 @@ import java.util.*;
 import static com.platform.carbon.CarbonErrors.*;
 import static com.platform.carbon.CarbonProjectContracts.*;
 
-/** 项目能源与碳边界使用独立职责和版本；生效只触发重算候选，不覆盖旧报告。 */
+/** 项目边界使用独立职责和版本；普通生效触发重算候选，历史补录仅登记适用期，均不覆盖旧报告。 */
 @Service
 @Transactional(readOnly=true)
 public class CarbonProjectService {
@@ -97,8 +97,11 @@ public class CarbonProjectService {
         read(user,roles,building);authorization.requireRuleActivator(user,roles,building);reason(request.reason());repository.lock(building);
         var row=require(building,id);Instant from=request.effectiveFrom();
         if(from==null||from.isAfter(Instant.now())||!from.equals(Instant.ofEpochMilli(from.toEpochMilli())))throw error(400,VALIDATION_FAILED,"生效时间必须明确且不晚于当前时间，精度最多毫秒");
-        var old=rows(building).stream().filter(r->"ACTIVE".equals(r.status())).findFirst().orElse(null);
+        var effective=repository.effectiveForUpdate(building);
+        var old=effective.stream().filter(r->"ACTIVE".equals(r.status())).findFirst().orElse(null);
         if(old!=null&&!from.isAfter(Instant.ofEpochMilli(old.from())))conflict();
+        // 没有当前项目时，普通生效也不能覆盖已登记的闭合历史区间。
+        if(effective.stream().anyMatch(r->"RETIRED".equals(r.status())&&(r.to()==null||r.to()>from.toEpochMilli())))conflict();
         requireReady(user,roles,building,id);
         Configuration configuration=decode(row.json());
         if(configuration.classificationVersionId()!=null) {
@@ -114,6 +117,51 @@ public class CarbonProjectService {
                 building,null,LocalDateTime.ofInstant(from,ZoneId.of("Asia/Shanghai")),null,user,LocalDateTime.now());
         log(user,building,"ACTIVATE_CARBON_PROJECT",id,request.reason());return view(require(building,id));
     }
+    /** 已审核项目补入过去的空白区间；不替代当前项目，也不触发旧报告重算。 */
+    @Transactional(rollbackFor = Exception.class)
+    public Version activateHistorical(long user, Collection<String> roles, String building,
+            String id, HistoricalActivation request) {
+        read(user, roles, building);
+        authorization.requireRuleActivator(user, roles, building);
+        reason(request.reason());
+        repository.lock(building);
+        var row = require(building, id);
+        Instant from = request.effectiveFrom(), to = request.effectiveTo();
+        if (from == null || to == null || !to.isAfter(from) || to.isAfter(Instant.now())
+                || !from.equals(Instant.ofEpochMilli(from.toEpochMilli()))
+                || !to.equals(Instant.ofEpochMilli(to.toEpochMilli()))) {
+            throw error(400, VALIDATION_FAILED, "历史项目适用期须为已结束的闭合区间，精度最多毫秒");
+        }
+        if (repository.overlapsEffective(building, from, to)) throw error(409, VERSION_CONFLICT, "历史项目适用期与已有项目重叠");
+        requireReady(user, roles, building, id);
+        var configuration = decode(row.json());
+        if (configuration.classificationVersionId() != null) {
+            var classification = classifications.version(user, roles, building, configuration.classificationVersionId());
+            if (classification.effectiveFrom() == null || classification.effectiveFrom().isAfter(from)
+                    || classification.effectiveTo() != null && classification.effectiveTo().isBefore(to)) {
+                throw error(409, DEPENDENCY_UNAVAILABLE, "分类版本未覆盖整个历史项目期间");
+            }
+        }
+        // RETIRED 表示仅在已结束的业务期间有效，避免被普通换版误当作当前 ACTIVE 项目。
+        if (repository.activateHistorical(row, request.expectedRevision(), from, to, user, request.reason()) != 1) conflict();
+        log(user, building, "ACTIVATE_HISTORICAL_CARBON_PROJECT", id,
+                request.reason() + ";effectiveFrom=" + from + ";effectiveTo=" + to);
+        return view(require(building, id));
+    }
+
+    public Version configurationForPeriod(long user, Collection<String> roles, String building,
+            Instant from, Instant to, String classificationId, String energy) {
+        read(user, roles, building);
+        var version = effective(building, from, to);
+        if (version == null) throw error(409, DEPENDENCY_UNAVAILABLE, "历史月份尚未配置碳项目适用版本");
+        if (!Objects.equals(classificationId, version.configuration().classificationVersionId())
+                || version.configuration().energies().stream().noneMatch(e -> energy.equals(e.energyItemCode())
+                && "ENABLED".equals(e.capability()))) {
+            throw error(409, DEPENDENCY_UNAVAILABLE, "历史碳项目未关联本期分类或尚未启用该能源");
+        }
+        return version;
+    }
+
     /** 返回覆盖整个来源期间的冻结版本；启用后出现月内切换时拒绝按天摊分。 */
     public Version effective(String building,Instant from,Instant to) {
         var active=rows(building).stream().filter(r->r.from()!=null).toList();

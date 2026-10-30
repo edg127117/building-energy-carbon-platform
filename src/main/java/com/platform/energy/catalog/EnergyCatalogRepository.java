@@ -69,7 +69,7 @@ class EnergyCatalogRepository {
                 JOIN biz_energy_item_version v ON v.item_id=i.item_id
                 WHERE i.item_code=? AND v.status='APPROVED' AND v.effective_from<=?
                   AND (v.effective_to IS NULL OR v.effective_to>?)
-                ORDER BY v.version_no DESC LIMIT 1
+                ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1
                 """, EnergyCatalogRepository::itemRow, itemCode, timestamp(at), timestamp(at));
     }
 
@@ -78,8 +78,36 @@ class EnergyCatalogRepository {
                 SELECT i.item_id,i.item_code,v.* FROM biz_energy_item i
                 JOIN biz_energy_item_version v ON v.item_id=i.item_id
                 WHERE i.item_id=? AND v.status='APPROVED'
-                ORDER BY v.version_no DESC LIMIT 1
+                ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE
                 """, EnergyCatalogRepository::itemRow, itemId);
+    }
+
+    public boolean hasApprovedItemOverlap(String itemId, String exceptVersionId,
+                                          LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_energy_item_version
+                WHERE item_id=? AND version_id<>? AND status='APPROVED'
+                  AND effective_from<? AND (effective_to IS NULL OR effective_to>?)
+                FOR UPDATE
+                """, String.class, itemId, exceptVersionId, timestamp(to), timestamp(from)).isEmpty();
+    }
+
+    public List<EffectiveInterval> approvedItemIntervals(String itemCode) {
+        return jdbc.query("""
+                SELECT v.effective_from,v.effective_to FROM biz_energy_item i
+                JOIN biz_energy_item_version v ON v.item_id=i.item_id
+                WHERE i.item_code=? AND v.status='APPROVED' ORDER BY v.effective_from
+                """, (rs, rowNum) -> new EffectiveInterval(time(rs, "effective_from"),
+                time(rs, "effective_to")), itemCode);
+    }
+
+    public List<EffectiveInterval> approvedUnitCodeIntervals(String unitCode) {
+        return jdbc.query("""
+                SELECT v.effective_from,v.effective_to FROM biz_measurement_unit u
+                JOIN biz_measurement_unit_version v ON v.unit_id=u.unit_id
+                WHERE u.unit_code=? AND v.status='APPROVED' ORDER BY v.effective_from
+                """, (rs, rowNum) -> new EffectiveInterval(time(rs, "effective_from"),
+                time(rs, "effective_to")), unitCode);
     }
 
     public void closeItemVersion(String versionId, LocalDateTime effectiveTo) {
@@ -152,7 +180,7 @@ class EnergyCatalogRepository {
                 JOIN biz_measurement_unit_version v ON v.unit_id=u.unit_id
                 WHERE u.unit_code=? AND v.status='APPROVED' AND v.effective_from<=?
                   AND (v.effective_to IS NULL OR v.effective_to>?)
-                ORDER BY v.version_no DESC LIMIT 1
+                ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1
                 """, EnergyCatalogRepository::unitRow, unitCode, timestamp(at), timestamp(at));
     }
 
@@ -162,7 +190,7 @@ class EnergyCatalogRepository {
                 JOIN biz_measurement_unit_version v ON v.unit_id=u.unit_id
                 WHERE v.symbol=? AND v.status='APPROVED' AND v.effective_from<=?
                   AND (v.effective_to IS NULL OR v.effective_to>?)
-                ORDER BY v.version_no DESC LIMIT 1
+                ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1
                 """, EnergyCatalogRepository::unitRow, symbol, timestamp(at), timestamp(at));
     }
 
@@ -171,8 +199,18 @@ class EnergyCatalogRepository {
                 SELECT u.unit_id,u.unit_code,v.* FROM biz_measurement_unit u
                 JOIN biz_measurement_unit_version v ON v.unit_id=u.unit_id
                 WHERE u.unit_id=? AND v.status='APPROVED'
-                ORDER BY v.version_no DESC LIMIT 1
+                ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE
                 """, EnergyCatalogRepository::unitRow, unitId);
+    }
+
+    public boolean hasApprovedUnitOverlap(String unitId, String exceptVersionId,
+                                          LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_measurement_unit_version
+                WHERE unit_id=? AND version_id<>? AND status='APPROVED'
+                  AND effective_from<? AND (effective_to IS NULL OR effective_to>?)
+                FOR UPDATE
+                """, String.class, unitId, exceptVersionId, timestamp(to), timestamp(from)).isEmpty();
     }
 
     public void closeUnitVersion(String versionId, LocalDateTime effectiveTo) {
@@ -240,7 +278,7 @@ class EnergyCatalogRepository {
                  WHERE c.item_id=? AND c.unit_id=? AND c.value_semantics=?
                    AND v.status='APPROVED' AND v.effective_from<=?
                    AND (v.effective_to IS NULL OR v.effective_to>?)
-                 ORDER BY v.version_no DESC LIMIT 1
+                 ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1
                 """, EnergyCatalogRepository::compatibilityRow, itemId, unitId, semantics,
                 timestamp(at), timestamp(at));
     }
@@ -248,8 +286,18 @@ class EnergyCatalogRepository {
     public CompatibilityVersionRow findLatestApprovedCompatibility(String compatibilityId) {
         return optional(compatibilitySelect() + """
                  WHERE c.compatibility_id=? AND v.status='APPROVED'
-                 ORDER BY v.version_no DESC LIMIT 1
+                 ORDER BY v.effective_from DESC,v.version_no DESC LIMIT 1 FOR UPDATE
                 """, EnergyCatalogRepository::compatibilityRow, compatibilityId);
+    }
+
+    public boolean hasApprovedCompatibilityOverlap(String compatibilityId, String exceptVersionId,
+                                                   LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT version_id FROM biz_energy_item_unit_compatibility_version
+                WHERE compatibility_id=? AND version_id<>? AND status='APPROVED'
+                  AND effective_from<? AND (effective_to IS NULL OR effective_to>?)
+                FOR UPDATE
+                """, String.class, compatibilityId, exceptVersionId, timestamp(to), timestamp(from)).isEmpty();
     }
 
     public void closeCompatibilityVersion(String versionId, LocalDateTime effectiveTo) {
@@ -271,6 +319,28 @@ class EnergyCatalogRepository {
     public String findBindingIdForUpdate(String pointId) {
         return optionalString("SELECT binding_id FROM biz_energy_point_item_binding WHERE point_id=? FOR UPDATE",
                 pointId);
+    }
+
+    public void lockCompatibilityIdentity(String compatibilityId) {
+        jdbc.queryForObject("SELECT compatibility_id FROM biz_energy_item_unit_compatibility " +
+                "WHERE compatibility_id=? FOR UPDATE", String.class, compatibilityId);
+    }
+
+    public List<EffectiveInterval> approvedUnitSymbolIntervals(String unitId, String symbol) {
+        return jdbc.query("""
+                SELECT effective_from,effective_to FROM biz_measurement_unit_version
+                WHERE unit_id=? AND symbol=? AND status='APPROVED' ORDER BY effective_from
+                """, (rs, rowNum) -> new EffectiveInterval(time(rs, "effective_from"),
+                time(rs, "effective_to")), unitId, symbol);
+    }
+
+    public List<EffectiveInterval> approvedCompatibilityIntervals(String compatibilityId) {
+        return jdbc.query("SELECT effective_from,effective_to " +
+                        "FROM biz_energy_item_unit_compatibility_version " +
+                        "WHERE compatibility_id=? AND status='APPROVED' AND allowed=TRUE " +
+                        "ORDER BY effective_from",
+                (rs, rowNum) -> new EffectiveInterval(time(rs, "effective_from"),
+                        time(rs, "effective_to")), compatibilityId);
     }
 
     public void insertBinding(String id, String buildingId, String pointId, long userId,
@@ -309,6 +379,16 @@ class EnergyCatalogRepository {
                 EnergyCatalogRepository::bindingRow, buildingId, pointId.trim());
     }
 
+    public List<BindingVersionRow> findConfirmedBindingsIntersecting(String pointId,
+                                                                      LocalDateTime from,
+                                                                      LocalDateTime to) {
+        return jdbc.query(bindingSelect() + """
+                 WHERE b.point_id=? AND v.confirmation_status='CONFIRMED'
+                   AND v.effective_from<? AND (v.effective_to IS NULL OR v.effective_to>?)
+                 ORDER BY v.effective_from
+                """, EnergyCatalogRepository::bindingRow, pointId, timestamp(to), timestamp(from));
+    }
+
     public BindingVersionRow findBindingVersion(String versionId) {
         return optional(bindingSelect() + " WHERE v.binding_version_id=?",
                 EnergyCatalogRepository::bindingRow, versionId);
@@ -318,15 +398,25 @@ class EnergyCatalogRepository {
         return optional(bindingSelect() + """
                  WHERE b.point_id=? AND v.confirmation_status='CONFIRMED'
                    AND v.effective_from<=? AND (v.effective_to IS NULL OR v.effective_to>?)
-                 ORDER BY v.binding_version DESC LIMIT 1
+                 ORDER BY v.effective_from DESC,v.binding_version DESC LIMIT 1
                 """, EnergyCatalogRepository::bindingRow, pointId, timestamp(at), timestamp(at));
     }
 
     public BindingVersionRow findLatestConfirmedBinding(String bindingId) {
         return optional(bindingSelect() + """
                  WHERE b.binding_id=? AND v.confirmation_status='CONFIRMED'
-                 ORDER BY v.binding_version DESC LIMIT 1
+                 ORDER BY v.effective_from DESC,v.binding_version DESC LIMIT 1 FOR UPDATE
                 """, EnergyCatalogRepository::bindingRow, bindingId);
+    }
+
+    public boolean hasConfirmedBindingOverlap(String bindingId, String exceptVersionId,
+                                              LocalDateTime from, LocalDateTime to) {
+        return !jdbc.queryForList("""
+                SELECT binding_version_id FROM biz_energy_point_item_binding_version
+                WHERE binding_id=? AND binding_version_id<>? AND confirmation_status='CONFIRMED'
+                  AND effective_from<? AND (effective_to IS NULL OR effective_to>?)
+                FOR UPDATE
+                """, String.class, bindingId, exceptVersionId, timestamp(to), timestamp(from)).isEmpty();
     }
 
     public void closeBindingVersion(String versionId, LocalDateTime effectiveTo) {
@@ -470,5 +560,8 @@ class EnergyCatalogRepository {
             String energyItemVersionId, LocalDateTime effectiveFrom, LocalDateTime effectiveTo,
             String confirmationStatus, String evidenceReference, int configRevision,
             Long createdBy, LocalDateTime createdAt, Long approvedBy, LocalDateTime approvedAt) {
+    }
+
+    record EffectiveInterval(LocalDateTime from, LocalDateTime to) {
     }
 }

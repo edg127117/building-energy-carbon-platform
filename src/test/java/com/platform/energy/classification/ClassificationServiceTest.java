@@ -92,6 +92,70 @@ class ClassificationServiceTest {
     private ImportView importApproved(String key,Reading... r){var imported=service.importReadings(1,ROLES,BUILDING,request(key,r));return service.approveReadings(2,ROLES,BUILDING,imported.batchId(),new TransitionRequest(0L,"reviewed",null));}
     private QueryRequest query(String version){return new QueryRequest(FROM,TO,"MONTH","ELECTRICITY","kWh","use",version,List.of());}
 
+    @Test void historicalClassificationFillsGapWithoutChangingCurrentOrFutureVersion() {
+        var current = approved("R1");
+        var past = draft("R1");
+        past = service.submit(1, ROLES, BUILDING, past.versionId(), new TransitionRequest(past.revision(), "历史提交", null));
+        Instant start = FROM.minus(Duration.ofDays(31));
+        var history = service.approveHistorical(2, ROLES, BUILDING, past.versionId(),
+                new HistoricalApprovalRequest(past.revision(), "历史依据复核", start, FROM));
+        assertThat(history.effectiveTo()).isEqualTo(FROM);
+        assertThat(service.version(2, ROLES, BUILDING, current.versionId()).effectiveTo()).isNull();
+        assertThat(repository.effective(BUILDING, start, FROM)).extracting(ClassificationRepository.Version::id).containsExactly(history.versionId());
+        assertThat(service.configurationForPeriod(2, ROLES, BUILDING, null, FROM, TO, "ELECTRICITY", "kWh").versionId()).isEqualTo(current.versionId());
+        var next = draft("R1");
+        next = service.submit(1, ROLES, BUILDING, next.versionId(), new TransitionRequest(next.revision(), "向前提交", null));
+        service.approve(2, ROLES, BUILDING, next.versionId(), new TransitionRequest(next.revision(), "向前审核", TO));
+        assertThat(service.version(2, ROLES, BUILDING, current.versionId()).effectiveTo()).isEqualTo(TO);
+        assertThat(service.version(2, ROLES, BUILDING, history.versionId()).effectiveTo()).isEqualTo(FROM);
+    }
+
+    @Test void forwardApprovalClosesFiniteHistoricalVersionWithoutCreatingOverlap() {
+        var past = draft(null);
+        past = service.submit(1, ROLES, BUILDING, past.versionId(), new TransitionRequest(past.revision(), "提交历史", null));
+        Instant start = FROM.minus(Duration.ofDays(31));
+        var history = service.approveHistorical(2, ROLES, BUILDING, past.versionId(),
+                new HistoricalApprovalRequest(past.revision(), "历史依据", start, TO));
+        var next = draft(null);
+        next = service.submit(1, ROLES, BUILDING, next.versionId(), new TransitionRequest(next.revision(), "普通换版", null));
+        var current = service.approve(2, ROLES, BUILDING, next.versionId(), new TransitionRequest(next.revision(), "向前审核", FROM));
+        assertThat(repository.effective(BUILDING, FROM, TO)).extracting(ClassificationRepository.Version::id)
+                .containsExactly(current.versionId());
+        assertThat(repository.version(BUILDING, history.versionId()).to()).isEqualTo(FROM.toEpochMilli());
+        assertThat(repository.effective(BUILDING, start, FROM)).extracting(ClassificationRepository.Version::id)
+                .containsExactly(history.versionId());
+    }
+
+    @Test void historicalClassificationRejectsSubMillisecondWindowBeforeItCanCollapseInStorage() {
+        var past = draft(null);
+        past = service.submit(1, ROLES, BUILDING, past.versionId(), new TransitionRequest(past.revision(), "提交历史", null));
+        String id = past.versionId(); long revision = past.revision();
+        assertThatThrownBy(() -> service.approveHistorical(2, ROLES, BUILDING, id,
+                new HistoricalApprovalRequest(revision, "精度校验", FROM, FROM.plusNanos(1))))
+                .hasMessageContaining("最多毫秒");
+        assertThat(repository.version(BUILDING, id).status()).isEqualTo("PENDING_REVIEW");
+        assertThat(repository.version(BUILDING, id).from()).isNull();
+    }
+
+    @Test void historicalClassificationRejectsOverlapAndAuditFailureRollsBack() {
+        var current = approved(null);
+        var past = draft(null);
+        past = service.submit(1, ROLES, BUILDING, past.versionId(), new TransitionRequest(past.revision(), "提交", null));
+        String id = past.versionId(); long revision = past.revision();
+        assertThatThrownBy(() -> service.approveHistorical(2, ROLES, BUILDING, id,
+                new HistoricalApprovalRequest(revision, "重叠", FROM.minusSeconds(1), FROM.plusSeconds(1))))
+                .hasMessageContaining("重叠");
+        assertThatThrownBy(() -> service.approveHistorical(1, ROLES, BUILDING, id,
+                new HistoricalApprovalRequest(revision, "本人", FROM.minusSeconds(1), FROM)))
+                .hasMessageContaining("职责分离");
+        doThrow(new IllegalStateException("audit unavailable")).when(audit).append(any());
+        assertThatThrownBy(() -> service.approveHistorical(2, ROLES, BUILDING, id,
+                new HistoricalApprovalRequest(revision, "历史依据", FROM.minusSeconds(1), FROM)))
+                .hasMessageContaining("audit unavailable");
+        assertThat(repository.version(BUILDING, id).status()).isEqualTo("PENDING_REVIEW");
+        assertThat(repository.version(BUILDING, current.versionId()).to()).isNull();
+    }
+
     @Test void batchDetailReturnsAuthoritativeRevisionAndKeepsBuildingBoundary() {
         var imported = service.importReadings(1, ROLES, BUILDING,
                 request("review-detail", reading("B", "10", null)));

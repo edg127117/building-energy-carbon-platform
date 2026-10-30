@@ -64,6 +64,9 @@ class EnergyConversionApiContractTest {
                         .header("Authorization", "Bearer " + token))
                 .andExpect(status().isOk()).andReturn());
         assertThat(openApi.path("paths").has("/v1/energy-conversion/simulations")).isTrue();
+        for (String resource : java.util.List.of("formula-versions", "parameter-versions", "standard-coal-lhv-versions")) {
+            assertThat(openApi.path("paths").has("/v1/energy-conversion/" + resource + "/{versionId}/approve-historical")).isTrue();
+        }
         assertThat(openApi.path("components").path("schemas").has("EnergyConversionApiError")).isTrue();
     }
 

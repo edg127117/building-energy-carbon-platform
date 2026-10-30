@@ -53,6 +53,55 @@ class CarbonProjectServiceTest {
         assertThat(service.effective("B",Instant.parse("2025-01-01T00:00:00Z"),first)).isNull();
         assertThatThrownBy(()->service.effective("B",first,Instant.parse("2026-03-01T00:00:00Z"))).hasMessageContaining("完整期间");
     }
+    @Test void historicalProjectKeepsCurrentAndDoesNotScheduleOldReportRecalculation() {
+        Version current = save(draft()); current = transition(1, current, "submit"); current = transition(2, current, "approve");
+        Instant january = Instant.parse("2026-01-01T00:00:00Z");
+        current = activate(current, january);
+        Version past = save(draft()); past = transition(1, past, "submit"); past = transition(2, past, "approve");
+        Instant start = Instant.parse("2025-01-01T00:00:00Z");
+        var history = service.activateHistorical(3, roles, "B", past.versionId(), new HistoricalActivation(past.revision(), "历史适用依据", start, january));
+        assertThat(history.status()).isEqualTo("RETIRED");
+        assertThat(service.effective("B", start, january).versionId()).isEqualTo(history.versionId());
+        assertThat(service.effective("B", january, january.plusSeconds(3600)).versionId()).isEqualTo(current.versionId());
+        verify(rules, times(1)).insertDependencyChange(any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any(),any());
+        Version next = save(draft()); next = transition(1, next, "submit"); next = transition(2, next, "approve");
+        activate(next, Instant.parse("2026-02-01T00:00:00Z"));
+        assertThat(service.effective("B", start, january).effectiveTo()).isEqualTo(january);
+    }
+
+    @Test void firstCurrentProjectCannotOverlapAlreadyRegisteredHistory() {
+        Instant start = Instant.parse("2025-01-01T00:00:00Z"), end = Instant.parse("2025-09-01T00:00:00Z");
+        Version past = save(draft()); past = transition(1, past, "submit"); past = transition(2, past, "approve");
+        var history = service.activateHistorical(3, roles, "B", past.versionId(),
+                new HistoricalActivation(past.revision(), "历史适用依据", start, end));
+        Version next = save(draft()); next = transition(1, next, "submit"); next = transition(2, next, "approve");
+        Version approved = next;
+        assertThatThrownBy(() -> activate(approved, end.minusSeconds(1))).hasMessageContaining("修订");
+        assertThat(service.effective("B", start, end).versionId()).isEqualTo(history.versionId());
+        assertThat(activate(approved, end).status()).isEqualTo("ACTIVE");
+        assertThat(service.effective("B", start, end).effectiveTo()).isEqualTo(end);
+    }
+
+    @Test void historicalProjectRejectsOverlapAndIncompleteClassificationCoverage() {
+        Version current = save(draft()); current = transition(1, current, "submit"); current = transition(2, current, "approve");
+        Instant january = Instant.parse("2026-01-01T00:00:00Z"); activate(current, january);
+        Version past = save(draft()); past = transition(1, past, "submit"); past = transition(2, past, "approve");
+        Version approved = past;
+        assertThatThrownBy(() -> service.activateHistorical(3, roles, "B", approved.versionId(),
+                new HistoricalActivation(approved.revision(), "重叠", january.minusSeconds(1), january.plusSeconds(1))))
+                .hasMessageContaining("重叠");
+        jdbc.update("UPDATE biz_carbon_project_version SET configuration_json=? WHERE version_id=?",
+                "{\"classificationVersionId\":\"CLASS\",\"energies\":[{\"energyItemCode\":\"WATER\",\"pathway\":\"WATER\",\"capability\":\"RESERVED\"}],\"exclusions\":[]}", past.versionId());
+        var start = Instant.parse("2025-01-01T00:00:00Z");
+        when(classifications.version(anyLong(), anyCollection(), eq("B"), eq("CLASS"))).thenReturn(
+                new com.platform.energy.classification.ClassificationContracts.VersionView("CLASS", "B", 2, 1,
+                        "APPROVED", start, january.minusSeconds(1), 1, 2L, null, List.of()));
+        assertThatThrownBy(() -> service.activateHistorical(3, roles, "B", approved.versionId(),
+                new HistoricalActivation(approved.revision(), "分类范围不足", start, january)))
+                .hasMessageContaining("整个历史项目期间");
+        assertThat(service.versions(1, roles, "B").getFirst().status()).isEqualTo("APPROVED");
+    }
+
     @Test void revisionWrongAuthorAndCrossBuildingAreRejected() {
         Version v=draft();
         assertThatThrownBy(()->service.save(2,roles,"B",v.versionId(),new Save(v.revision(),new Configuration(null,List.of(),List.of()),"修改"))).hasMessageContaining("本人草稿");

@@ -124,18 +124,42 @@ public class EnergyBoundarySummaryService {
     public BoundaryPolicyView approvePolicy(
             long userId, Collection<String> roles, String versionId,
             ApproveBoundaryPolicyRequest request) {
+        return approvePolicy(userId, roles, versionId, request, false);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public BoundaryPolicyView approvePolicyHistorical(long userId, Collection<String> roles,
+            String versionId, ApproveBoundaryPolicyRequest request) {
+        return approvePolicy(userId, roles, versionId, request, true);
+    }
+
+    private BoundaryPolicyView approvePolicy(long userId, Collection<String> roles, String versionId,
+            ApproveBoundaryPolicyRequest request, boolean historical) {
         authorization.requirePolicyReviewer(userId, roles);
         BoundaryPolicyVersion value = requirePolicy(versionId);
         authorization.checkBuilding(userId, roles, value.buildingId());
         authorization.requireSeparation(value.createdBy(), userId);
         if (!"PENDING_EXPERT".equals(value.status())) versionConflict();
-        BoundaryPolicyVersion previous = repository.findApproved(value.buildingId(),
-                value.meteringBoundaryId(), value.energyItemCode(), value.effectiveFrom());
-        if (previous != null) {
-            if (!value.effectiveFrom().isAfter(previous.effectiveFrom())) {
-                validation("新审核版本必须晚于当前已审核版本生效");
+        repository.findPolicyIdForUpdate(value.buildingId(), value.meteringBoundaryId(), value.energyItemCode());
+        if (historical) {
+            if (value.effectiveTo() == null || !value.effectiveTo().isAfter(value.effectiveFrom())
+                    || value.effectiveTo().isAfter(LocalDateTime.now())) validation("历史汇总口径须为已结束的闭合区间");
+            if (repository.overlapsApprovedForUpdate(value.policyId(), value.effectiveFrom(), value.effectiveTo())) {
+                throw error(409, POLICY_REQUIRED, "历史汇总口径与已审核区间重叠");
             }
-            repository.closeApproved(value.policyId(), value.versionId(), value.effectiveFrom());
+            var item = catalogLookup.findApprovedItem(value.energyItemCode(), value.effectiveFrom()).orElseThrow(() ->
+                    error(409, POLICY_REQUIRED, "历史期间能源品种尚未审核"));
+            if (item.effectiveTo() != null && item.effectiveTo().isBefore(value.effectiveTo())) {
+                throw error(409, POLICY_REQUIRED, "能源品种未覆盖整个历史汇总期间");
+            }
+        } else {
+            BoundaryPolicyVersion previous = repository.latestApprovedForUpdate(value.policyId());
+            if (previous != null) {
+                if (!value.effectiveFrom().isAfter(previous.effectiveFrom())) validation("新审核版本必须晚于当前已审核版本生效");
+                if (previous.effectiveTo() == null || previous.effectiveTo().isAfter(value.effectiveFrom())) {
+                    repository.closeVersion(previous.versionId(), value.effectiveFrom());
+                }
+            }
         }
         LocalDateTime now = LocalDateTime.now();
         if (repository.approve(value.versionId(), request.expectedRevision(), userId, now,
@@ -143,10 +167,26 @@ public class EnergyBoundarySummaryService {
             versionConflict();
         }
         BoundaryPolicyVersion approved = requirePolicy(versionId);
-        audit(userId, approved.buildingId(), "APPROVE_ENERGY_BOUNDARY_SUMMARY_POLICY",
+        audit(userId, approved.buildingId(), historical ? "APPROVE_HISTORICAL_BOUNDARY_SUMMARY_POLICY" : "APPROVE_ENERGY_BOUNDARY_SUMMARY_POLICY",
                 approved.policyId(), approved.versionId(), summary(value), summary(approved),
                 value.createdBy() == userId && auditProperties.isAllowSelfApproval());
         return view(approved);
+    }
+
+    public BoundaryPolicyView policyForPeriod(long user, Collection<String> roles, String building,
+            String boundary, String energy, LocalDateTime from, LocalDateTime to) {
+        authorization.requireReader(roles);
+        authorization.checkBuilding(user, roles, building);
+        range(from, to);
+        if (to == null) validation("覆盖检查必须指定完整期间");
+        var values = repository.overlappingApproved(building, boundary, energy, from, to);
+        if (values.size() != 1) throw error(409, POLICY_REQUIRED, "历史期间缺少唯一已审核边界汇总口径");
+        var value = values.getFirst();
+        if (!"FORMAL".equals(value.sourceType()) || value.effectiveFrom().isAfter(from)
+                || value.effectiveTo() != null && value.effectiveTo().isBefore(to)) {
+            throw error(409, POLICY_REQUIRED, "FORMAL边界汇总口径未覆盖整个历史期间");
+        }
+        return view(value);
     }
 
     public SummaryQueryView query(
