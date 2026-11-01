@@ -1,4 +1,4 @@
-import { screens } from '@/modules/large-screen/public'
+import { screens, retiredScreenPaths } from '@/modules/large-screen/public'
 import type { GrantedMenu } from '@/modules/auth/public'
 export type WorkspaceId = 'monitor' | 'operations' | 'configuration'
 export interface Workspace { id: WorkspaceId; titleKey: string; hintKey: string }
@@ -46,6 +46,7 @@ export function authorizedPages(menus: GrantedMenu[], testOpenControls = false):
         && new RegExp(`^/${currentWorkspace}/[^/]+$`).test(node.path ?? '')
       const currentGroupPath = root ? node.path! : directory ? node.path! : groupPath
       if (node.menuType === 'C' && node.path) {
+        if (retiredScreenPaths.includes(node.path)) continue
         if (grantedPaths.has(node.path)) throw new Error('DUPLICATE_MENU_PATH')
         const page = registry.get(node.path)
         if (!page) {

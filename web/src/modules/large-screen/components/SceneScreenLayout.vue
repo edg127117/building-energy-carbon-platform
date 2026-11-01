@@ -2,6 +2,7 @@
 import { ref, useId } from 'vue'
 import { ElButton, ArrowLeft, ArrowRight } from '@/shared/ui'
 import { t } from '@/locales'
+withDefaults(defineProps<{ panelsVisible?: boolean }>(), { panelsVisible: true })
 const leftOpen = ref(true)
 const rightOpen = ref(true)
 const id = useId()
@@ -10,7 +11,7 @@ const id = useId()
 <template>
   <section class="scene-layout" :class="{ 'has-summary': !!$slots.top }">
     <div class="scene-layer" :aria-label="t('largeScreen.scene')"><slot name="scene" /></div>
-    <div class="information-layer">
+    <div v-show="panelsVisible" class="information-layer">
       <section v-if="$slots.top" class="scene-summary surface" :aria-label="t('largeScreen.summary')"><slot name="top" /></section>
       <div v-if="$slots.left" class="side-anchor left-anchor" :class="{ collapsed: !leftOpen }">
         <aside v-show="leftOpen" :id="id + '-left'" class="side-panel surface" :aria-label="t('largeScreen.leftPanel')"><slot name="left" /></aside>
@@ -20,7 +21,9 @@ const id = useId()
         <aside v-show="rightOpen" :id="id + '-right'" class="side-panel surface" :aria-label="t('largeScreen.rightPanel')"><slot name="right" /></aside>
         <ElButton class="panel-toggle" :icon="rightOpen ? ArrowRight : ArrowLeft" :aria-expanded="rightOpen" :aria-controls="id + '-right'" :aria-label="t(rightOpen ? 'largeScreen.collapseRight' : 'largeScreen.expandRight')" :title="t(rightOpen ? 'largeScreen.collapseRight' : 'largeScreen.expandRight')" @click="rightOpen = !rightOpen" />
       </div>
+      <div v-if="$slots.bottom" class="bottom-slot"><slot name="bottom" /></div>
     </div>
+    <div v-if="$slots.overlay" class="overlay-layer"><slot name="overlay" /></div>
   </section>
 </template>
 <style scoped>
@@ -38,4 +41,6 @@ const id = useId()
 .panel-toggle { position: absolute; top: 50%; transform: translateY(-50%); width: var(--bec-scene-toggle-width); height: var(--bec-scene-toggle-height); padding: 0; pointer-events: auto; }
 .left-anchor .panel-toggle { left: 100%; }
 .right-anchor .panel-toggle { right: 100%; }
+.overlay-layer { position: absolute; inset: 0; z-index: var(--bec-layer-notices); pointer-events: none; }
+.overlay-layer :deep(.el-overlay) { pointer-events: auto; }
 </style>

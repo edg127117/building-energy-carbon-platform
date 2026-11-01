@@ -50,6 +50,7 @@ public class CarbonRecalculationService {
         String buildingId = text(request.buildingId(), 32, "建筑编码无效");
         authorization.requireRecalculationTrigger(userId, roles, buildingId);
         ResultNature nature = enumValue(ResultNature.class, request.resultNature(), "结果性质无效");
+        if(nature==ResultNature.MONITORING)throw error(400,VALIDATION_FAILED,"小时监测修订不使用正式报告重算接口");
         String reason = text(request.reason(), 500, "重算原因无效");
         String organizationBoundary = text(request.organizationBoundary(), 100,
                 "组织权限边界无效");

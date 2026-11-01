@@ -20,6 +20,7 @@ import static com.platform.energy.period.EnergyPeriodModels.*;
 @RequiredArgsConstructor
 @Transactional(readOnly=true)
 public class ManualPeriodContextService {
+    private static final int MAX_POINT_READINGS=1000;
     public record ProjectionReference(String projectionId,long revision,String status,String quantity,String unit,String nature) { }
     public record PendingLock(String requestId,String projectionId,long projectionRevision,long submittedBy,String status) { }
     public record Context(List<PeriodPolicyVersion> policies,List<RelationContracts.VersionView> relations,
@@ -40,8 +41,8 @@ public class ManualPeriodContextService {
         var policy=choices.stream().filter(p->p.versionId().equals(policyId)&&p.status().equals("APPROVED")).findFirst()
                 .orElseThrow(()->error(409,POLICY_REQUIRED,"请选择已审核的正式周期口径"));
         var window=EnergyPeriodBoundary.resolve("MONTH",month,policy.timezoneId());
-        var rows=manual.readings(building,window.startInclusive(),window.endExclusive(),true);
-        if(rows.size()>5000)throw error(409,LOCK_BLOCKED,"人工来源超过读取上限");
+        var rows=manual.currentApprovedReadings(building,point,window.startInclusive(),window.endExclusive(),MAX_POINT_READINGS+1);
+        if(rows.size()>MAX_POINT_READINGS)throw error(409,LOCK_BLOCKED,"该测点人工来源超过1000条读取上限");
         var readings=rows.stream().map(r->{try{return new ClassificationContracts.ReadingView(r.id(),r.batchId(),mapper.readValue(r.json(),ClassificationContracts.Reading.class),r.quantity(),r.author(),r.batchStatus(),null);}
             catch(Exception e){throw error(409,LOCK_BLOCKED,"人工来源证据无法读取");}}).filter(r->point.equals(r.reading().pointId())).toList();
         var current=periods.findCurrent(building,point,"MONTH",window.startInclusive(),window.endExclusive());

@@ -14,6 +14,7 @@ import com.platform.relation.api.RelationContracts.MeterStructuresView;
 import com.platform.relation.api.RelationContracts.QueryMetadata;
 import com.platform.relation.api.RelationContracts.SpaceNodeView;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -29,6 +30,10 @@ import static com.platform.energy.classification.ClassificationCore.*;
 @Service
 @Transactional(readOnly = true)
 public class ClassificationService {
+    // 内部只读分页复用既有5000条读取规模；导入批次仍为500条，累计与扫描上限独立保留。
+    private static final int MONTHLY_MANUAL_PAGE_SIZE=5_000;
+    private static final int MONTHLY_MANUAL_MAX=20_000;
+    private static final int SEALED_MANUAL_SCAN_MAX=400_000;
     private final ClassificationRepository repository;
     private final EnergyPeriodAuthorization authorization;
     private final RelationGovernanceService relations;
@@ -54,6 +59,29 @@ public class ClassificationService {
     }
     public VersionView version(long user, Collection<String> roles, String building, String id) {
         read(user,roles,building);return view(requireVersion(building,id));
+    }
+    /** 供下游在同一授权边界内取得覆盖完整期间的唯一正式分类版本，不暴露新的 HTTP 配置入口。 */
+    public VersionView effectiveVersion(long user,Collection<String> roles,String building,Instant from,Instant to,String versionId) {
+        read(user,roles,building);window(from,to);return view(resolveEffectiveVersion(building,from,to,versionId));
+    }
+
+    /** 展示治理只复用对象归属及已生效关系校验，不创建正式分类或改变其有效期。 */
+    public void validateDisplayMapping(long user, Collection<String> roles, String building, Configuration configuration) {
+        read(user,roles,building);core.validate(configuration);validateObjects(building,configuration);
+        if(blank(configuration.relationVersionId())) fail("展示归属必须明确计量关系版本");
+        loadRelations(user,roles,building,configuration.relationVersionId());
+    }
+    /** 引用指定历史关系快照的楼层对象，拒绝将房间或当前资产树冒充历史楼层。 */
+    public void validateDisplayFloors(long user,Collection<String> roles,String building,String relation,Set<String> spaceIds) {
+        read(user,roles,building);
+        var tree=relations.historicalSpaceTree(user,roles,building,relation);
+        if(!building.equals(tree.metadata().buildingId())||!relation.equals(tree.metadata().versionId())||tree.metadata().truncated())fail("历史空间树建筑/版本不符或被截断");
+        Set<String> floors=new HashSet<>();Deque<SpaceNodeView> pending=new ArrayDeque<>(tree.roots());int count=0;
+        while(!pending.isEmpty()) {
+            if(++count>5000)fail("历史空间树超过有界上限");
+            var node=pending.removeFirst();if("FLOOR".equals(node.spaceType()))floors.add(node.spaceId());pending.addAll(node.children());
+        }
+        if(!floors.containsAll(spaceIds))fail("楼层引用不存在、跨建筑或属于房间等非楼层空间");
     }
     @Transactional(rollbackFor=Exception.class)
     public VersionView create(long user, Collection<String> roles, String building, CreateRequest request) {
@@ -216,8 +244,7 @@ public class ClassificationService {
                 if(!r.energyItemCode().equals(binding.energyItemCode())||!r.unit().equals(binding.rawUnit())
                         ||!binding.bindingVersionId().equals(endBinding.bindingVersionId())) fail("人工读数品种、单位或有效期与已确认测点绑定不符");
             }
-            var active=repository.readings(building,r.startInclusive(),r.endExclusive(),true);limit(active.size());
-            var overlaps=active.stream().filter(a->decode(a.json(),Reading.class).pointId().equals(r.pointId())).toList();
+            var overlaps=repository.currentApprovedReadings(building,r.pointId(),r.startInclusive(),r.endExclusive(),2);
             if(blank(r.supersedesFactId())) {if(!overlaps.isEmpty())throw error(409,"已有审核通过的同测点重叠期间，请提交明确修订");}
             else {
                 if(row.quantity()==null||!"CONFIRMED".equals(r.status()))fail("修订必须有可确认的有效用量，不能以待确认记录替代已审核来源");
@@ -246,30 +273,29 @@ public class ClassificationService {
         return UnchangedReadingDiagnostics.annotate(rows);
     }
 
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public QueryView query(long user,Collection<String> roles,String building,QueryRequest request) {
+        return queryProjection(user,roles,building,request).view();
+    }
+
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public QueryProjection queryProjection(long user,Collection<String> roles,String building,QueryRequest request) {
         read(user,roles,building);window(request.startInclusive(),request.endExclusive());
         if(!Set.of("DAY","MONTH","YEAR").contains(request.periodType())) fail("统计周期无效");
+        if("MONTH".equals(request.periodType())&&Duration.between(request.startInclusive(),request.endExclusive()).compareTo(Duration.ofDays(31))>0)
+            throw error(409,"月度人工来源查询最多31天，请分段查询");
         text(request.energyItemCode(),64);text(request.unit(),32);text(request.schemeCode(),64);
-        ClassificationRepository.Version version;
-        if(blank(request.versionId())) {
-            var effective=repository.effective(building,request.startInclusive(),request.endExclusive());
-            if(effective.size()!=1) throw error(409,"统计期间跨配置版本或没有完整有效配置，请分段查询");
-            version=effective.getFirst();
-        } else {
-            version=requireVersion(building,request.versionId());
-            if(!"APPROVED".equals(version.status())||version.from()>request.startInclusive().toEpochMilli()
-                    ||(version.to()!=null&&version.to()<request.endExclusive().toEpochMilli())) throw error(409,"指定配置未覆盖完整统计期间");
-        }
+        ClassificationRepository.Version version=resolveEffectiveVersion(building,request.startInclusive(),request.endExclusive(),request.versionId());
         Configuration config=decode(version.json(),Configuration.class);
-        if(blank(config.relationVersionId())) return pending(building,version,request,"尚未关联正式计量关系版本");
+        if(blank(config.relationVersionId())) return pending(building,version,request,config,"尚未关联正式计量关系版本");
         List<BoundaryRule> rules=config.boundaryRules().stream().filter(r->request.energyItemCode().equals(r.energyItemCode())&&request.unit().equals(r.unit())).toList();
-        if(rules.isEmpty())return pending(building,version,request,"该能源品种和单位尚未配置计量口径");
+        if(rules.isEmpty())return pending(building,version,request,config,"该能源品种和单位尚未配置计量口径");
         config=new Configuration(config.relationVersionId(),config.schemes(),config.nodes(),config.bindings(),rules);
         final String relationId=config.relationVersionId();
         RelationData relation=loadRelations(user,roles,building,config.relationVersionId());
         if(relation.nextEffectiveAt()!=null&&request.endExclusive().isAfter(relation.nextEffectiveAt())) throw error(409,"统计期间超过所引用计量关系的有效范围，请按关系生效时间分段");
         String historicalScopeId=historicalScope(user,roles,building,config.relationVersionId(),relation,request.startInclusive(),request.endExclusive());
-        if(relation.metadata().effectiveAt()!=null&&relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(request.startInclusive())&&historicalScopeId==null) return pending(building,version,request,"关系生效前的历史计量范围尚未确认");
+        if(relation.metadata().effectiveAt()!=null&&relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(request.startInclusive())&&historicalScopeId==null) return pending(building,version,request,config,"关系生效前的历史计量范围尚未确认");
         List<PeriodSnapshot> periods=snapshots.listVisibleSnapshots(building,request.periodType(),request.startInclusive(),request.endExclusive(),5001);limit(periods.size());
         Map<String,List<Piece>> grouped=new HashMap<>();
         for(PeriodSnapshot snapshot:periods) if(request.energyItemCode().equals(snapshot.energyItemCode())&&request.unit().equals(snapshot.nativeUnitCode())) {
@@ -277,9 +303,14 @@ public class ClassificationService {
             if(!relationId.equals(rel)) throw error(409,"周期结果引用不同关系版本，请按历史口径分段查询");
             grouped.computeIfAbsent(snapshot.pointId(),k->new ArrayList<>()).add(new Piece(snapshot.startInclusive(),snapshot.endExclusive(),snapshot.nativeQuantity(),snapshot.snapshotId(),snapshot.resultNature(),!"LOCKED_PARTIAL".equals(snapshot.status())));
         }
-        var manual=repository.readings(building,request.startInclusive(),request.endExclusive(),true);limit(manual.size());
         Set<String> sealedManualFacts=new HashSet<>();
         for(var snapshot:periods)sealedManualFacts.addAll(com.platform.energy.period.ManualPeriodInputService.sealedFactIds(json,snapshot.evidenceJson()));
+        // 日视图可能读取整楼24小时来源；已封账的来源先去重，再计入未封账来源上限。
+        boolean pagedManual=Set.of("MONTH","DAY").contains(request.periodType());
+        var manual=pagedManual
+                ? monthlyCurrentApprovedReadings(building,request.startInclusive(),request.endExclusive(),sealedManualFacts)
+                : repository.readings(building,request.startInclusive(),request.endExclusive(),true);
+        if(!pagedManual)limit(manual.size());
         for(var value:manual) {
             if(sealedManualFacts.contains(value.id()))continue;
             Reading r=decode(value.json(),Reading.class);
@@ -318,11 +349,71 @@ public class ClassificationService {
                     &&!meterAncestor(a,b,meterIndex)&&!meterAncestor(b,a,meterIndex)) {
                 boolean confirmed=rules.stream().filter(r->r.boundaryId().equals(meterIndex.get(a).boundaryId())||r.boundaryId().equals(meterIndex.get(b).boundaryId()))
                         .allMatch(r->r.independentChannelsConfirmed()&&"CONFIRMED".equals(r.status()));
-                if(!confirmed)return pending(building,version,request,"同设备存在多个非上下级计量通道，独立性尚未确认，不能相加");
+                if(!confirmed)return pending(building,version,request,config,"同设备存在多个非上下级计量通道，独立性尚未确认，不能相加");
             }
         }
         String totalKind=rules.stream().anyMatch(r->"SUBMETER_SUM".equals(r.mode()))?"MEASURED_SUBTOTAL":"BOUNDARY_TOTAL";
-        return new QueryView(building,version.id(),config.relationVersionId(),request.unit(),request.startInclusive(),request.endExclusive(),result.total(),result.assigned(),result.unallocated(),result.residual(),result.status(),result.nature(),totalKind,result.additive(),result.nodes(),result.balances(),result.issues(),sourceEvidence.stream().distinct().toList());
+        QueryView view=new QueryView(building,version.id(),config.relationVersionId(),request.unit(),request.startInclusive(),request.endExclusive(),result.total(),result.assigned(),result.unallocated(),result.residual(),result.status(),result.nature(),totalKind,result.additive(),result.nodes(),result.balances(),result.issues(),sourceEvidence.stream().distinct().toList());
+        List<SourceSlice> slices=request.filters()==null||request.filters().isEmpty()?result.sourceSlices():List.of();
+        return new QueryProjection(view,slices,config);
+    }
+
+    public record QueryProjection(QueryView view,List<ClassificationCore.SourceSlice> slices,
+                                  Configuration configuration) {}
+
+    public record IntervalContext(String classificationVersionId,String relationVersionId,long modelRevision,
+                                  Configuration configuration,List<Meter> meters,Map<String,Set<String>> resolvedBindings,
+                                  String historicalMeteringScopeId) { }
+
+    /** 小时计算复用同一历史计量结构与归属解析；这里只提供上下文，不伪造正式封账快照。 */
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public IntervalContext intervalContext(long user,Collection<String> roles,String building,String versionId,
+            Instant from,Instant to,String energy) {
+        read(user,roles,building);window(from,to);
+        if(!Duration.between(from,to).equals(Duration.ofHours(1)))throw error(400,"小时计量上下文必须为完整一小时");
+        var version=resolveEffectiveVersion(building,from,to,versionId);
+        Configuration original=decode(version.json(),Configuration.class);
+        var rules=original.boundaryRules().stream().filter(r->energy.equals(r.energyItemCode())).toList();
+        if(blank(original.relationVersionId()) || original.schemes().isEmpty() || rules.isEmpty()
+                || rules.stream().anyMatch(r->!"CONFIRMED".equals(r.status())||"SUBMETER_SUM".equals(r.mode())))
+            throw error(409,"小时建筑核算需要已确认的完整边界计量口径，不能把分表小计当全楼量");
+        var config=new Configuration(original.relationVersionId(),original.schemes(),original.nodes(),original.bindings(),rules);
+        var relation=loadRelations(user,roles,building,config.relationVersionId());
+        String historicalScopeId=historicalScope(user,roles,building,config.relationVersionId(),relation,from,to);
+        // 历史小时复用已经审核的计量适用期；保留引用，不把版本实际激活时间回填到过去。
+        if(relation.metadata().effectiveAt()==null || relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(from)&&historicalScopeId==null
+                || relation.nextEffectiveAt()!=null && relation.nextEffectiveAt().isBefore(to))
+            throw error(409,"计量关系未完整覆盖该小时");
+        var boundaries=rules.stream().map(BoundaryRule::boundaryId).collect(java.util.stream.Collectors.toSet());
+        var meters=relation.meters().stream().filter(m->boundaries.contains(m.boundaryId())).toList();
+        if(meters.isEmpty() || meters.size()>500)throw error(409,"小时计量来源缺失或超过500个测点");
+        Map<String,Meter> index=new HashMap<>();meters.forEach(m->index.put(m.pointId(),m));
+        var equipment=repository.pointEquipment(building,index.keySet());
+        for(Meter a:meters)for(Meter b:meters)if(!a.pointId().equals(b.pointId())&&equipment.containsKey(a.pointId())
+                &&equipment.get(a.pointId()).equals(equipment.get(b.pointId()))&&!meterAncestor(a.pointId(),b.pointId(),index)
+                &&!meterAncestor(b.pointId(),a.pointId(),index)&&rules.stream()
+                .filter(r->r.boundaryId().equals(a.boundaryId())||r.boundaryId().equals(b.boundaryId())).anyMatch(r->!r.independentChannelsConfirmed()))
+            throw error(409,"同设备独立计量通道尚未确认，不能相加");
+        Map<String,Set<String>> ancestors=new HashMap<>();
+        if(config.bindings().stream().anyMatch(b->"SPACE".equals(b.objectType()))) {
+            var tree=relations.historicalSpaceTree(user,roles,building,config.relationVersionId());
+            for(var root:tree.roots())collectSpaces(root,Set.of(),ancestors);
+        }
+        return new IntervalContext(version.id(),config.relationVersionId(),relation.metadata().modelRevision(),config,meters,
+                resolve(config,relation.assignments(),ancestors),historicalScopeId);
+    }
+
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public List<ReadingView> reviewedIntervalReadings(long user,Collection<String> roles,String building,
+            Instant from,Instant to,Instant asOf) {
+        read(user,roles,building);window(from,to);
+        if(!Duration.between(from,to).equals(Duration.ofHours(1)) || asOf==null || asOf.isBefore(to))throw error(400,"小时来源或接收截止无效");
+        var values=repository.approvedReadingsAsOf(building,from,to,asOf,5001);limit(values.size());
+        return values.stream().map(value->{
+            var reading=decode(value.json(),Reading.class);
+            if(value.quantity()==null || normalize(reading).compareTo(value.quantity())!=0)throw error(409,"已审核小时来源的固定用量证据不一致");
+            return new ReadingView(value.id(),value.batchId(),reading,value.quantity(),value.author(),value.batchStatus(),null);
+        }).toList();
     }
 
     public record SealedProjection(String classificationVersionId,String relationVersionId,
@@ -452,6 +543,24 @@ public class ClassificationService {
             if(!blank(binding.meterPointId())&&!repository.objectExists(building,"POINT",binding.meterPointId())) fail("计量测点不存在或跨建筑");
         }
     }
+    /** 所有页都保留调用方原始窗口；超过上限明确失败，不能以截断来源伪造完整统计。 */
+    private List<ClassificationRepository.StoredReading> monthlyCurrentApprovedReadings(String building,Instant from,Instant to,Set<String> sealedFacts) {
+        List<ClassificationRepository.StoredReading> values=new ArrayList<>();Instant cursorStart=null;String cursorFactId=null;
+        int scanned=0;
+        while(true) {
+            int pageSize=MONTHLY_MANUAL_PAGE_SIZE;
+            List<ClassificationRepository.StoredReading> page=repository.currentApprovedReadingsPage(building,from,to,cursorStart,cursorFactId,pageSize);
+            // 500点×31天×24小时最多372000条；扫描仍有界，不能按点位或期间掩盖新修订事实。
+            scanned+=page.size();
+            if(scanned>SEALED_MANUAL_SCAN_MAX)throw error(409,"封账人工来源扫描超过400000条有界查询上限，请分段查询");
+            page.stream().filter(value->!sealedFacts.contains(value.id())).forEach(values::add);
+            if(values.size()>MONTHLY_MANUAL_MAX)throw error(409,"人工来源超过20000条有界查询上限，请分段查询");
+            if(page.size()<pageSize)return values;
+            var last=page.getLast();
+            if(last.startInclusive()==null)throw error(409,"人工来源分页游标无效");
+            cursorStart=last.startInclusive();cursorFactId=last.id();
+        }
+    }
     private BigDecimal normalize(Reading r) {
         text(r.pointId(),80);text(r.energyItemCode(),64);text(r.unit(),32);text(r.sourceReference(),500);window(r.startInclusive(),r.endExclusive());
         if(r.status()==null||r.timePrecision()==null||!Set.of("CONFIRMED","PENDING_EXPERT").contains(r.status())||!Set.of("EXACT","DATE_ONLY").contains(r.timePrecision())) fail("读数确认状态或时间精度无效");
@@ -477,8 +586,22 @@ public class ClassificationService {
     private void read(long user,Collection<String> roles,String building) {text(building,32);authorization.requireReader(roles);authorization.checkBuilding(user,roles,building);if(!repository.buildingExists(building))throw error(404,"建筑不存在");}
     private void write(long user,Collection<String> roles,String building) {read(user,roles,building);authorization.requirePolicyMaintainer(user,roles);}
     private ClassificationRepository.Version requireVersion(String building,String id) {var v=repository.version(building,id);if(v==null)throw error(404,"分类版本不存在");return v;}
+    private ClassificationRepository.Version resolveEffectiveVersion(String building,Instant from,Instant to,String versionId) {
+        if(blank(versionId)) {
+            var effective=repository.effective(building,from,to);
+            if(effective.size()!=1)throw error(409,"统计期间跨配置版本或没有完整有效配置，请分段查询");
+            return effective.getFirst();
+        }
+        var version=requireVersion(building,versionId);
+        if(!"APPROVED".equals(version.status())||version.from()==null||version.from()>from.toEpochMilli()
+                ||(version.to()!=null&&version.to()<to.toEpochMilli()))throw error(409,"指定配置未覆盖完整统计期间");
+        return version;
+    }
     private VersionView view(ClassificationRepository.Version v) {var config=decode(v.json(),Configuration.class);return new VersionView(v.id(),v.buildingId(),v.no(),v.revision(),v.status(),instant(v.from()),instant(v.to()),v.author(),v.reviewer(),config,core.validate(config));}
-    private QueryView pending(String building,ClassificationRepository.Version version,QueryRequest r,String message) {return new QueryView(building,version.id(),null,r.unit(),r.startInclusive(),r.endExclusive(),null,null,null,null,"PENDING_EXPERT","UNDETERMINED","UNDETERMINED",false,List.of(),List.of(),List.of(issue("PENDING_EXPERT",version.id(),message)),List.of());}
+    private QueryProjection pending(String building,ClassificationRepository.Version version,QueryRequest r,Configuration config,String message) {
+        QueryView view=new QueryView(building,version.id(),null,r.unit(),r.startInclusive(),r.endExclusive(),null,null,null,null,"PENDING_EXPERT","UNDETERMINED","UNDETERMINED",false,List.of(),List.of(),List.of(issue("PENDING_EXPERT",version.id(),message)),List.of());
+        return new QueryProjection(view,List.of(),config);
+    }
     private void log(long user,String building,String action,String id,String reason) {audit.append(new AuditEvidence("ENERGY_CLASSIFICATION",building,"USER",user,action,"ENERGY_CLASSIFICATION",id,id,null,null,reason,"SUCCESS",null,TraceContext.current(),LocalDateTime.now(),auditProperties.getEnvironmentMode(),auditProperties.isAllowSelfApproval()));}
     private String encode(Object object) {try{return json.writeValueAsString(object);}catch(JsonProcessingException e){throw error(400,"配置或读数无法序列化");}}
     private <T>T decode(String text,Class<T> type) {try{return json.readValue(text,type);}catch(JsonProcessingException e){throw error(409,"已存储证据无法解析");}}

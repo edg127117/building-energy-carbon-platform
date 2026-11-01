@@ -7,6 +7,24 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CarbonEvidenceTest {
     @Test
+    void canonicalBytesAndHashesStayStableForOrderedAndUnorderedNestedEvidence() {
+        var unordered=CarbonEvidence.parse("{\"z\":[{\"b\":true,\"a\":null}],\"a\":{\"y\":2,\"x\":\"南京\\n证据\"}}");
+        String original=unordered.toString();
+        String expected="{\"a\":{\"x\":\"南京\\n证据\",\"y\":2},\"z\":[{\"a\":null,\"b\":true}]}";
+        String canonical=CarbonEvidence.canonical(unordered);
+        assertThat(canonical).isEqualTo(expected);
+        assertThat(CarbonEvidence.canonical(CarbonEvidence.parse(canonical))).isEqualTo(expected);
+        assertThat(CarbonCalculationCore.sha256(canonical)).isEqualTo(CarbonCalculationCore.sha256(expected));
+        assertThat(unordered.toString()).isEqualTo(original);
+    }
+    @Test
+    void orderedPropertiesStillNormalizeNestedFloatingPointNumbersToExactDecimalText() {
+        var ordered=CarbonEvidence.parse("{\"a\":[{\"b\":1.0000,\"c\":0.01234567890123456789}],\"z\":-0.0}");
+        String expected="{\"a\":[{\"b\":\"1\",\"c\":\"0.01234567890123456789\"}],\"z\":\"0\"}";
+        assertThat(CarbonEvidence.canonical(ordered)).isEqualTo(expected);
+        assertThat(CarbonEvidence.canonical(CarbonEvidence.parse(expected))).isEqualTo(expected);
+    }
+    @Test
     void upstreamIsSharedAcrossSlicesAndFullEvidenceStillDetectsTampering() {
         var common=CarbonEvidence.object();common.put("contractVersion","ENERGY_SUMMARY_CARBON_V1");
         common.putArray("compositionSnapshots").addObject().put("snapshotId","ROOT");

@@ -16,7 +16,13 @@ public class ClassificationRepository {
     public record Version(String id, String buildingId, int no, long revision, String status,
                           Long from, Long to, String json, long author, Long reviewer) {}
     public record Batch(String id, String buildingId, String hash, String status, long revision, long author) {}
-    public record StoredReading(String id, String batchId, String json, BigDecimal quantity, long author, String batchStatus) {}
+    public record StoredReading(String id, String batchId, String json, BigDecimal quantity, long author,
+                               String batchStatus, Instant startInclusive) {
+        public StoredReading(String id, String batchId, String json, BigDecimal quantity, long author,
+                            String batchStatus) {
+            this(id,batchId,json,quantity,author,batchStatus,null);
+        }
+    }
 
     public void lock(String buildingId) {
         // MySQL 上重复键异常会留下共享锁；原子 upsert 直接取得写锁，避免多个事务同时升级锁导致死锁。
@@ -98,13 +104,71 @@ public class ClassificationRepository {
         jdbc.update("INSERT INTO biz_energy_manual_reading(fact_id,batch_id,building_id,point_id,start_inclusive,end_exclusive,reading_json,normalized_quantity,supersedes_fact_id,created_by) VALUES (?,?,?,?,?,?,?,?,?,?)",id,batch,building,reading.pointId(),reading.startInclusive().toEpochMilli(),reading.endExclusive().toEpochMilli(),json,quantity,reading.supersedesFactId(),user);
     }
     public int approveBatch(String building,String id,long revision,long reviewer) {
-        return jdbc.update("UPDATE biz_energy_manual_batch SET status='APPROVED',reviewed_by=?,revision=revision+1 WHERE building_id=? AND batch_id=? AND status='PENDING_REVIEW' AND revision=?",reviewer,building,id,revision);
+        return jdbc.update("UPDATE biz_energy_manual_batch SET status='APPROVED',reviewed_by=?,reviewed_at=?,revision=revision+1 WHERE building_id=? AND batch_id=? AND status='PENDING_REVIEW' AND revision=?",reviewer,Instant.now().toEpochMilli(),building,id,revision);
+    }
+    /** 小时计算按实际审批时间冻结来源；迁移前没有审批时刻的旧批次不能冒充水位之前已审核。 */
+    public List<StoredReading> approvedReadingsAsOf(String building,Instant from,Instant to,Instant asOf,int limit) {
+        return jdbc.query("""
+                SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r
+                JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
+                WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
+                  AND b.status='APPROVED' AND b.created_at<=? AND b.reviewed_at<=?
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_energy_manual_reading s
+                    JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
+                    WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id
+                      AND sb.status='APPROVED' AND sb.created_at<=? AND sb.reviewed_at<=?)
+                ORDER BY r.start_inclusive,r.fact_id LIMIT ?
+                """,this::stored,building,to.toEpochMilli(),from.toEpochMilli(),asOf.toEpochMilli(),asOf.toEpochMilli(),asOf.toEpochMilli(),asOf.toEpochMilli(),limit);
     }
     public List<StoredReading> readings(String building,Instant from,Instant to,boolean approved) {
-        return jdbc.query("SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>? "+(approved?"AND b.status='APPROVED' AND NOT EXISTS (SELECT 1 FROM biz_energy_manual_reading s JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id WHERE s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED') ":"")+"ORDER BY r.start_inclusive,r.fact_id LIMIT 5001",(r,n)->new StoredReading(r.getString("fact_id"),r.getString("batch_id"),r.getString("reading_json"),r.getBigDecimal("normalized_quantity"),r.getLong("created_by"),r.getString("batch_status")),building,to.toEpochMilli(),from.toEpochMilli());
+        if(approved)return currentApprovedReadingsPage(building,from,to,null,null,5001);
+        return jdbc.query("""
+                SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r
+                JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
+                WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
+                ORDER BY r.start_inclusive,r.fact_id LIMIT 5001
+                """,this::stored,building,to.toEpochMilli(),from.toEpochMilli());
+    }
+    /** 按测点读取当前审核事实，避免单一测点工作流被同楼其他来源的读取上限阻断。 */
+    public List<StoredReading> currentApprovedReadings(String building,String point,Instant from,Instant to,int limit) {
+        return jdbc.query("""
+                SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r
+                JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
+                WHERE r.building_id=? AND r.point_id=? AND r.start_inclusive<? AND r.end_exclusive>?
+                  AND b.status='APPROVED'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_energy_manual_reading s
+                    JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
+                    WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
+                ORDER BY r.start_inclusive,r.fact_id LIMIT ?
+                """,this::stored,building,point,to.toEpochMilli(),from.toEpochMilli(),limit);
+    }
+    /** 稳定游标分页；显式排除空修订目标配合覆盖索引，替代关系仍限定在同一建筑。 */
+    public List<StoredReading> currentApprovedReadingsPage(String building,Instant from,Instant to,
+                                                            Instant afterStartInclusive,String afterFactId,int limit) {
+        String prefix="""
+                SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r
+                JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
+                WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
+                  AND b.status='APPROVED'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_energy_manual_reading s
+                    JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
+                    WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
+                """;
+        if(afterStartInclusive==null)return jdbc.query(prefix+" ORDER BY r.start_inclusive,r.fact_id LIMIT ?",this::stored,
+                building,to.toEpochMilli(),from.toEpochMilli(),limit);
+        return jdbc.query(prefix+" AND (r.start_inclusive>? OR (r.start_inclusive=? AND r.fact_id>?)) ORDER BY r.start_inclusive,r.fact_id LIMIT ?",
+                this::stored,building,to.toEpochMilli(),from.toEpochMilli(),afterStartInclusive.toEpochMilli(),afterStartInclusive.toEpochMilli(),afterFactId,limit);
     }
     public List<StoredReading> batchReadings(String building,String batch) {
-        return jdbc.query("SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id WHERE r.building_id=? AND r.batch_id=? ORDER BY r.fact_id",(r,n)->new StoredReading(r.getString("fact_id"),r.getString("batch_id"),r.getString("reading_json"),r.getBigDecimal("normalized_quantity"),r.getLong("created_by"),r.getString("batch_status")),building,batch);
+        return jdbc.query("SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id WHERE r.building_id=? AND r.batch_id=? ORDER BY r.fact_id",this::stored,building,batch);
+    }
+    private StoredReading stored(java.sql.ResultSet r,int row) throws java.sql.SQLException {
+        return new StoredReading(r.getString("fact_id"),r.getString("batch_id"),r.getString("reading_json"),
+                r.getBigDecimal("normalized_quantity"),r.getLong("created_by"),r.getString("batch_status"),
+                Instant.ofEpochMilli(r.getLong("start_inclusive")));
     }
     private long count(String sql,Object... args) { Long n=jdbc.queryForObject(sql,Long.class,args);return n==null?0:n; }
 }

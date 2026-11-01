@@ -200,6 +200,16 @@ CREATE TABLE IF NOT EXISTS `biz_carbon_denominator_version` (
         (`effective_to` IS NULL OR `effective_to` > `effective_from`))
 );
 
+-- 与V95保持一致，历史配置覆盖预检也会读取获批面积的实际适用期间。
+CREATE TABLE IF NOT EXISTS biz_carbon_area_applicability (
+    applicability_id VARCHAR(32) PRIMARY KEY,
+    denominator_version_id VARCHAR(32) NOT NULL,
+    effective_from DATE NOT NULL,
+    effective_to DATE NULL,
+    FOREIGN KEY (denominator_version_id) REFERENCES biz_carbon_denominator_version(denominator_version_id),
+    CHECK (effective_to IS NULL OR effective_to > effective_from)
+);
+
 CREATE TABLE IF NOT EXISTS `biz_carbon_dependency_change` (
     `change_id` VARCHAR(32) NOT NULL,
     `change_type` VARCHAR(40) NOT NULL,

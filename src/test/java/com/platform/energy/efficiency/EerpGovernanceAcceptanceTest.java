@@ -135,7 +135,7 @@ class EerpGovernanceAcceptanceTest {
 
         TaskView task = eerpService.createPeriod(operator, ENERGY_MANAGER,
                 new PeriodRequest(idempotency("governed-period"), active.versionId(), PERIOD_START, PERIOD_END,
-                        PERIOD_END, null));
+                        Instant.ofEpochMilli(System.currentTimeMillis()), null));
 
         assertThat(task.status()).isEqualTo("SUCCEEDED");
         PeriodResult result = (PeriodResult) task.result();

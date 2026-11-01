@@ -189,6 +189,17 @@ class CarbonRuleRepository {
                 """, this::factor, energy, timestamp(to), timestamp(from)).stream().map(this::withComponents).toList();
     }
 
+    /** 小时匹配必须看到所有相交候选，不能把小时中途生效的更优规则过滤掉后回退。 */
+    List<FactorVersion> hourlyFactors(String item,LocalDateTime from,LocalDateTime to) {
+        var rows=jdbc.query(factorSelect()+"""
+                 WHERE f.energy_item_code=? AND v.status='ACTIVE'
+                   AND v.effective_from<? AND (v.effective_to IS NULL OR v.effective_to>?)
+                 ORDER BY v.factor_version_id LIMIT 501
+                """,this::factor,item,timestamp(to),timestamp(from));
+        if(rows.size()>500)throw CarbonErrors.error(409,CarbonErrors.LIMIT_EXCEEDED,"小时适用因子超过500项");
+        return rows.stream().map(this::withComponents).toList();
+    }
+
     List<GwpVersion> findActiveGwp(String gasCode, UsageNature nature,
                                    LocalDateTime start, LocalDateTime end) {
         return jdbc.query("""
@@ -204,6 +215,19 @@ class CarbonRuleRepository {
                 UsageNature.valueOf(rs.getString("usage_nature")),
                 local(rs, "effective_from"), local(rs, "effective_to")),
                 gasCode, nature.name(), timestamp(start), timestamp(end));
+    }
+
+    List<GwpVersion> hourlyGwp(String gas,UsageNature nature,LocalDateTime from,LocalDateTime to) {
+        var rows=jdbc.query("""
+                SELECT * FROM biz_carbon_gwp_version WHERE gas_code=? AND status='ACTIVE'
+                  AND (?='DEVELOPMENT_REFERENCE' OR usage_nature='FORMAL')
+                  AND effective_from<? AND (effective_to IS NULL OR effective_to>?)
+                ORDER BY gwp_version_id LIMIT 501
+                """,(rs,n)->new GwpVersion(rs.getString("gwp_version_id"),rs.getString("gas_code"),rs.getBigDecimal("gwp_value"),
+                rs.getString("source_reference"),UsageNature.valueOf(rs.getString("usage_nature")),local(rs,"effective_from"),local(rs,"effective_to")),
+                gas,nature.name(),timestamp(to),timestamp(from));
+        if(rows.size()>500)throw CarbonErrors.error(409,CarbonErrors.LIMIT_EXCEEDED,"小时GWP候选超过500项");
+        return rows;
     }
 
     GwpVersion findGwpVersion(String versionId) {
@@ -316,12 +340,71 @@ class CarbonRuleRepository {
     List<DenominatorVersion> findActiveDenominators(String buildingId, DenominatorType type,
                                                      UsageNature nature, LocalDate start,
                                                      LocalDate end) {
+        if (type == DenominatorType.BUILDING_AREA) {
+            var slices = areaSlices(buildingId, nature, start, end);
+            var weighted = AreaTimeline.weigh(slices, start, end);
+            if ("AREA_CONFLICT".equals(weighted.status())) return slices.stream().map(AreaTimeline.Slice::version).toList();
+            if (!"AVAILABLE".equals(weighted.status())) return List.of();
+            // 原月/年核算仍要求单一版本覆盖全期，不把加权规则扩散到既有核算。
+            return slices.stream().map(AreaTimeline.Slice::version).distinct().toList();
+        }
         return jdbc.query(denominatorSelect() + """
                  WHERE d.building_id=? AND d.denominator_type=? AND v.usage_nature=?
                    AND v.status='ACTIVE' AND v.effective_from<=?
                    AND (v.effective_to IS NULL OR v.effective_to>=?)
                 """, CarbonRuleRepository::denominator, buildingId, type.name(), nature.name(),
                 date(start), date(end));
+    }
+
+    List<AreaTimeline.Slice> areaSlices(String building, UsageNature nature, LocalDate start, LocalDate end) {
+        return jdbc.query(denominatorSelect().replace("v.*", "v.*,a.effective_from AS effective_from_slice,a.effective_to AS effective_to_slice") + """
+                 JOIN biz_carbon_area_applicability a ON a.denominator_version_id=v.denominator_version_id
+                 WHERE d.building_id=? AND d.denominator_type='BUILDING_AREA' AND v.usage_nature=?
+                   AND v.status='ACTIVE' AND a.effective_from<? AND (a.effective_to IS NULL OR a.effective_to>?)
+                 ORDER BY a.effective_from,a.applicability_id
+                """, (rs,n) -> new AreaTimeline.Slice(denominator(rs,n), localDate(rs,"effective_from_slice"), localDate(rs,"effective_to_slice")),
+                building, nature.name(), date(end), date(start));
+    }
+
+    /** 调用者持有分母身份锁；只替代新版本批准区间，保留前后历史适用段。 */
+    void applyArea(DenominatorVersion value, long actor) {
+        var rows = jdbc.query("""
+                SELECT a.* FROM biz_carbon_area_applicability a JOIN biz_carbon_denominator_version v
+                  ON v.denominator_version_id=a.denominator_version_id
+                WHERE v.denominator_id=? AND v.usage_nature=? AND a.effective_from<COALESCE(?,'9999-12-31')
+                  AND (a.effective_to IS NULL OR a.effective_to>?)
+                """, (r,n) -> new String[]{r.getString("applicability_id"),r.getString("denominator_version_id"),
+                        r.getString("effective_from"),r.getString("effective_to")},
+                value.denominatorId(),value.usageNature().name(),date(value.effectiveTo()),date(value.effectiveFrom()));
+        for (var row : rows) {
+            LocalDate from=LocalDate.parse(row[2]), to=row[3]==null?null:LocalDate.parse(row[3]);
+            jdbc.update("DELETE FROM biz_carbon_area_applicability WHERE applicability_id=?",row[0]);
+            if (from.isBefore(value.effectiveFrom())) insertArea(row[1],from,value.effectiveFrom());
+            if (value.effectiveTo()!=null && (to==null || to.isAfter(value.effectiveTo()))) insertArea(row[1],value.effectiveTo(),to);
+        }
+        insertArea(value.denominatorVersionId(),value.effectiveFrom(),value.effectiveTo());
+        jdbc.update("""
+                UPDATE biz_carbon_denominator_version SET status='DISABLED',disabled_at=CURRENT_TIMESTAMP,
+                  disabled_by=?,config_revision=config_revision+1
+                WHERE denominator_id=? AND usage_nature=? AND status='ACTIVE'
+                  AND NOT EXISTS (SELECT 1 FROM biz_carbon_area_applicability a
+                    WHERE a.denominator_version_id=biz_carbon_denominator_version.denominator_version_id)
+                """,actor,value.denominatorId(),value.usageNature().name());
+    }
+    private void insertArea(String version, LocalDate from, LocalDate to) {
+        jdbc.update("INSERT INTO biz_carbon_area_applicability VALUES (?,?,?,?)",
+                java.util.UUID.randomUUID().toString().replace("-",""),version,date(from),date(to));
+    }
+    String areaAudit(DenominatorVersion value) {
+        var rows=jdbc.query("""
+                SELECT a.denominator_version_id,a.effective_from,a.effective_to FROM biz_carbon_area_applicability a
+                JOIN biz_carbon_denominator_version v ON v.denominator_version_id=a.denominator_version_id
+                WHERE v.denominator_id=? AND v.usage_nature=? ORDER BY a.effective_from,a.denominator_version_id
+                """, (r,n)->r.getString(1)+":"+r.getString(2)+":"+r.getString(3),value.denominatorId(),value.usageNature().name());
+        return String.join(";",rows);
+    }
+    void removeArea(String version) {
+        jdbc.update("DELETE FROM biz_carbon_area_applicability WHERE denominator_version_id=?",version);
     }
 
     int reviewDenominator(String versionId, int revision, long reviewerId, LocalDateTime now,

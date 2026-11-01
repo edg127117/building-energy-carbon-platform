@@ -36,6 +36,51 @@ class EnergyBoundarySummaryServiceTest {
     private static final Instant END = Instant.parse("2026-08-31T16:00:00Z");
 
     @Test
+    void usesTheSameHistoricalHierarchyToAvoidCountingFloorAndRoomSubmetersTwice() {
+        var authorization=mock(EnergyPeriodAuthorization.class);
+        var repository=mock(EnergyBoundarySummaryRepository.class);
+        var reader=mock(EnergyPeriodSnapshotReader.class);
+        var relations=mock(RelationGovernanceService.class);
+        var roles=Set.of("BUILDING_OWNER");
+        var metadata=new QueryMetadata("BLD001","REL_V1",1,LocalDateTime.of(2026,1,1,0,0),7,0,false,0,0,0,0);
+        var points=List.of("MAIN","FLOOR","ROOM_A","ROOM_B");
+        var quantities=List.of("1000","1000","600","400");
+        var snapshots=new java.util.ArrayList<PeriodSnapshot>();
+        var assignments=new java.util.ArrayList<MeteringAssignmentView>();
+        var structures=new java.util.ArrayList<com.platform.relation.api.RelationContracts.MeterStructureView>();
+        for(int i=0;i<points.size();i++) {
+            String p=points.get(i),role=i==0?"MAIN":"SUB";
+            var quantity=new BigDecimal(quantities.get(i));
+            snapshots.add(new PeriodSnapshot("SNAP_"+p,"key_"+p,"PROJ_"+p,"BLD001",p,"MONTH",START,END,"Asia/Shanghai","PERIOD",1,
+                    "LOCKED_COMPLETE","FORMAL","GRID_ELECTRICITY",quantity,"kWh",quantity.movePointLeft(3),"TCE",BigDecimal.ONE,"","",
+                    "{\"relationVersionId\":\"REL_V1\"}","HASH_"+p,"{\"perspective\":\"CALORIFIC_EQUIVALENT\"}",END,null,null,1,LocalDateTime.of(2026,9,2,0,0)));
+            assignments.add(new MeteringAssignmentView("A_"+p,"ASSIGNED",null,null,"isolated", "BOUNDARY","B","测试边界","ELECTRICITY",
+                    "CONFIRMED","ACTIVE","N_"+p,p,p,p,role,"INBOUND","CONFIRMED","SPACE_NODE_"+p,"SPACE","SPACE_"+p,p,p));
+            String parent=i==0?null:i==1?"N_MAIN":"N_FLOOR";
+            structures.add(new com.platform.relation.api.RelationContracts.MeterStructureView("S_"+p,"BOUNDARY","N_"+p,p,role,parent,parent,
+                    "INBOUND","CONFIRMED",null,null,"isolated",null,"FORMAL"));
+        }
+        when(reader.listVisibleSnapshots("BLD001","MONTH",START,END,501)).thenReturn(snapshots);
+        when(relations.historicalMeteringAssignments(1L,roles,"BLD001","REL_V1",1,100))
+                .thenReturn(new MeteringAssignmentsView(metadata,1,100,4,assignments));
+        when(relations.historicalMeterStructures(1L,roles,"BLD001","REL_V1",1,100))
+                .thenReturn(new com.platform.relation.api.RelationContracts.MeterStructuresView(metadata,1,100,4,structures));
+        when(repository.findApproved(eq("BLD001"),eq("BOUNDARY"),eq("GRID_ELECTRICITY"),any())).thenReturn(
+                new BoundaryPolicyVersion("POLICY","POLICY_V1",1,"BLD001","BOUNDARY","GRID_ELECTRICITY","MAIN_WITH_SUBMETER_BREAKDOWN",
+                        "APPROVED","FORMAL","isolated",LocalDateTime.of(2026,1,1,0,0),null,0,1,LocalDateTime.of(2026,1,1,0,0),2L,LocalDateTime.of(2026,1,2,0,0),"review"));
+        var service=new EnergyBoundarySummaryService(authorization,repository,reader,relations,new RelationGovernanceProperties(),mock(EnergyCatalogLookup.class),
+                new EnergyBoundarySummaryCore(),new ObjectMapper(),mock(AuditEvidenceWriter.class),mock(AuditGovernanceProperties.class));
+        var result=service.query(1,roles,new SummaryQueryRequest("BLD001","MONTH",START,END,List.of("ENERGY_ITEM")));
+        assertThat(result.sourceSnapshotCount()).isEqualTo(4);
+        assertThat(result.groups()).singleElement().satisfies(g->{
+            assertThat(g.grossInboundQuantities().get("kWh")).isEqualByComparingTo("1000");
+            assertThat(g.assignedQuantities().get("kWh")).isEqualByComparingTo("1000");
+            assertThat(g.residualQuantities().get("kWh")).isZero();
+            assertThat(g.tceByPerspective().get("CALORIFIC_EQUIVALENT")).isEqualByComparingTo("1");
+        });
+    }
+
+    @Test
     void listsPolicyVersionsOnlyAfterBuildingCheckAndRejectsSilentTruncation() {
         var authorization = mock(EnergyPeriodAuthorization.class);
         var repository = mock(EnergyBoundarySummaryRepository.class);

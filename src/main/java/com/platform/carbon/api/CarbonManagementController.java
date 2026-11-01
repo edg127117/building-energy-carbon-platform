@@ -15,9 +15,14 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,6 +38,7 @@ import java.util.List;
 @RestController
 @RequestMapping("/v1/carbon-management")
 @RequiredArgsConstructor
+@Validated
 @PreAuthorize("hasAnyRole('BUILDING_OWNER','ENERGY_MANAGER','PLATFORM_ADMIN')")
 @ApiResponses({
         @ApiResponse(responseCode = "400", description = "碳规则、周期或参数无效",
@@ -177,6 +183,18 @@ public class CarbonManagementController {
                 SecurityUser.userId(authentication), SecurityUser.roles(authentication), batchId)));
     }
 
+    @GetMapping("/results/months")
+    @ApiResponse(responseCode = "200", description = "按北京自然月读取的正式固定结果", useReturnTypeSchema = true)
+    public Result<List<MonthlyCalculationResultView>> monthResults(
+            Authentication authentication,
+            @RequestParam @NotBlank @Size(max = 32) String buildingId,
+            @RequestParam("months") @NotEmpty @Size(max = 3)
+            List<@NotBlank @Pattern(regexp = "^(?:20(?:0[0-9]|[1-9][0-9])|21[0-9]{2}|2200)-(?:0[1-9]|1[0-2])$") String> months) {
+        return Result.success(calculationService.monthResults(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, months).stream()
+                .map(this::monthResult).toList());
+    }
+
     @GetMapping("/calculations/{batchId}/items/{itemId}/evidence")
     @ApiResponse(responseCode = "200", description = "已校验的固定追溯证据", useReturnTypeSchema = true)
     public Result<JsonNode> evidence(Authentication authentication, @PathVariable String batchId,
@@ -305,6 +323,12 @@ public class CarbonManagementController {
                         value.finalValue(), value.unitCode(), value.denominatorVersionId(),
                         value.unavailableReason(), value.evidenceHash())).toList(),
                 batch.requestHash(), batch.createdBy(), batch.roundingPolicyVersionId());
+    }
+
+    private MonthlyCalculationResultView monthResult(
+            CarbonCalculationService.MonthlyCalculationResult value) {
+        return new MonthlyCalculationResultView(value.month(), value.state().name(), value.reason(),
+                value.conflictBatchIds(), value.detail() == null ? null : calculation(value.detail()));
     }
 
     private static RecalculationBatchView recalculation(

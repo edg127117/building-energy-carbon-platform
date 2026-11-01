@@ -55,6 +55,17 @@ export interface CalculationDetail {
   roundingPolicyVersionId: string
 }
 
+export type MonthlyCalculationResultState = 'READY' | 'MISSING' | 'AMBIGUOUS' | 'FAILED'
+
+/** 后端按精确北京自然月裁决的固定结果；READY 才携带可复核的批次详情。 */
+export interface MonthlyCalculationResult {
+  month: string
+  state: MonthlyCalculationResultState
+  reason: string | null
+  conflictBatchIds: string[]
+  batch: CalculationDetail | null
+}
+
 export interface CalculationItem {
   calculationItemId: string
   snapshotId: string
@@ -173,11 +184,28 @@ export interface CarbonClassificationReport {
 }
 
 const basePath = '/v1/carbon-management/calculations'
+const monthlyResultsPath = '/v1/carbon-management/results/months'
 const encoded = (value: string) => encodeURIComponent(value)
+
+function repeatedMonthParams(buildingId: string, months: readonly string[]): string {
+  const params = new URLSearchParams({ buildingId })
+  months.forEach(month => params.append('months', month))
+  return params.toString()
+}
 
 export const carbonResultsApi = {
   listBatches(buildingId: string, signal?: AbortSignal) {
     return requestApi<CalculationBatch[]>({ method: 'get', url: basePath, params: { buildingId }, signal })
+  },
+  getMonthlyResults(buildingId: string, months: readonly string[], signal?: AbortSignal) {
+    return requestApi<MonthlyCalculationResult[]>({
+      method: 'get',
+      url: monthlyResultsPath,
+      params: { buildingId, months },
+      // Spring 以重复的 months 参数绑定 List，不能使用 Axios 默认的 months[] 形式。
+      paramsSerializer: { serialize: () => repeatedMonthParams(buildingId, months) },
+      signal,
+    })
   },
   runCalculation(data: RunCalculationRequest) {
     return requestApi<CalculationDetail>({ method: 'post', url: basePath, data })

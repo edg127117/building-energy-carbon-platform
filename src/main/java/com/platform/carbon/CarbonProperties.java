@@ -18,6 +18,8 @@ public class CarbonProperties {
     private int maximumConcurrentCalculations = 16;
     private Duration calculationTimeout = Duration.ofSeconds(20);
     private Duration queryTimeout = Duration.ofSeconds(5);
+    // 整月日序列最多编排31个独立日查询，使用独立总预算，不扩大其他核算和查询的超时。
+    private Duration dailyTrendQueryTimeout = Duration.ofSeconds(30);
     private Duration calculationRecoveryTimeout = Duration.ofMillis(100);
     private Duration slowCalculationThreshold = Duration.ofSeconds(5);
     private Duration recalculationScanDelay = Duration.ofSeconds(30);
@@ -34,6 +36,7 @@ public class CarbonProperties {
                 || maximumConcurrentCalculations < 1 || maximumConcurrentCalculations > 1_000
                 || !positive(calculationTimeout) || !positive(slowCalculationThreshold)
                 || !positive(queryTimeout) || !positive(calculationRecoveryTimeout)
+                || !positive(dailyTrendQueryTimeout) || dailyTrendQueryTimeout.compareTo(Duration.ofMinutes(2)) > 0
                 || calculationRecoveryTimeout.compareTo(Duration.ofSeconds(1)) > 0
                 || !positive(recalculationScanDelay) || !positive(recalculationLease)
                 || !positive(retryBackoff) || !positive(recalculationMergeWindow)) {
@@ -55,6 +58,8 @@ public class CarbonProperties {
     public void setMaximumConcurrentCalculations(int value) { maximumConcurrentCalculations = value; }
     public Duration getQueryTimeout() { return queryTimeout; }
     public void setQueryTimeout(Duration value) { queryTimeout = value; }
+    public Duration getDailyTrendQueryTimeout() { return dailyTrendQueryTimeout; }
+    public void setDailyTrendQueryTimeout(Duration value) { dailyTrendQueryTimeout = value; }
     public Duration getCalculationRecoveryTimeout() { return calculationRecoveryTimeout; }
     public void setCalculationRecoveryTimeout(Duration value) { calculationRecoveryTimeout = value; }
     public Duration getCalculationTimeout() { return calculationTimeout; }

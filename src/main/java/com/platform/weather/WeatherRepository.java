@@ -205,8 +205,11 @@ public class WeatherRepository {
                 .mapToLong(s->s.values().values().stream().filter(Objects::nonNull).count()).sum();
     }
     public Dataset head(String binding,Source source,Product product,LocalDate day) {
-        String id=one("SELECT dataset_id FROM biz_weather_dataset_head WHERE binding_id=? AND source=? AND product=? AND business_day=?",(r,n)->r.getString(1),binding,source.name(),product.name(),day);
-        return dataset(id);
+        return dataset(headId(binding,source,product,day));
+    }
+    /** 趋势查询先读取轻量指针，在单次请求内复用不可变载荷；不改变原head的选批规则。 */
+    public String headId(String binding,Source source,Product product,LocalDate day) {
+        return one("SELECT dataset_id FROM biz_weather_dataset_head WHERE binding_id=? AND source=? AND product=? AND business_day=?",(r,n)->r.getString(1),binding,source.name(),product.name(),day);
     }
     public List<Dataset> latest(String binding,Source source,Product product) {
         var ids=jdbc.queryForList("SELECT id FROM biz_weather_dataset WHERE binding_id=? AND source=? AND product=? AND state='PUBLISHED' ORDER BY fetched_at DESC LIMIT 8",String.class,binding,source.name(),product.name());

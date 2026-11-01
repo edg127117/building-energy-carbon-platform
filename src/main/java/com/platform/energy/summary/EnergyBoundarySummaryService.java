@@ -220,7 +220,9 @@ public class EnergyBoundarySummaryService {
         List<AssignmentEvidence> assignments = relations.values().stream()
                 .flatMap(value -> value.assignments().stream()).toList();
         List<BoundaryPolicyVersion> policies = policies(measures, assignments);
-        List<QueryGroup> groups = core.project(core.summarize(measures, assignments, policies), dimensions);
+        Map<String,Map<String,Set<String>>> ancestors = new LinkedHashMap<>();
+        relations.forEach((version,relation)->ancestors.put(version,relation.ancestors()));
+        List<QueryGroup> groups = core.project(core.summarize(measures, assignments, policies, ancestors), dimensions);
         return new SummaryQueryView(buildingId, periodType, request.startInclusive(),
                 request.endExclusive(), dimensions.stream().map(Enum::name).toList(),
                 snapshots.size(), groups.stream().map(EnergyBoundarySummaryService::view).toList());
@@ -234,6 +236,7 @@ public class EnergyBoundarySummaryService {
         Map<String, RelationSnapshot> result = new LinkedHashMap<>();
         for (String versionId : versions) {
             List<AssignmentEvidence> rows = new ArrayList<>();
+            Map<String,String> nodePoints = new LinkedHashMap<>();
             int page = 1;
             MeteringAssignmentsView first = null;
             while (true) {
@@ -241,20 +244,73 @@ public class EnergyBoundarySummaryService {
                         userId, roles, buildingId, versionId, page, relationPageSize());
                 if (first == null) first = current;
                 long revision = current.metadata().modelRevision();
+                if (!versionId.equals(current.metadata().versionId()) || !buildingId.equals(current.metadata().buildingId())
+                        || revision != first.metadata().modelRevision() || current.size()<1)
+                    relationUnconfirmed("历史计量分配版本或分页无效");
+                for(var value:current.items()) if(value.meterPointNodeId()!=null && value.pointId()!=null) {
+                    String previous=nodePoints.putIfAbsent(value.meterPointNodeId(),value.pointId());
+                    if(previous!=null&&!previous.equals(value.pointId()))relationUnconfirmed("历史计量节点对应多个测点");
+                }
                 current.items().stream().map(value -> assignment(versionId, revision, value))
                         .forEach(rows::add);
                 if (rows.size() > MAX_RELATION_ROWS) {
                     throw error(409, RESULT_LIMIT_EXCEEDED,
                             "关系版本计量分配超过5000条，拒绝无界汇总");
                 }
+                if(current.total()>MAX_RELATION_ROWS)throw error(409,RESULT_LIMIT_EXCEEDED,"关系版本计量分配超过5000条");
                 if (page * (long) current.size() >= current.total()) break;
+                if(current.items().isEmpty())relationUnconfirmed("历史计量分配分页不完整");
                 page++;
             }
             if (first == null) relationUnconfirmed("历史关系版本不存在");
-            result.put(versionId, new RelationSnapshot(first.metadata().modelRevision(), rows));
+            result.put(versionId, new RelationSnapshot(first.metadata().modelRevision(), rows,
+                    hierarchy(userId, roles, buildingId, versionId, first.metadata().modelRevision(), rows, nodePoints)));
         }
         return Map.copyOf(result);
     }
+
+    /** 同角色的多级表不能一起参与边界组成；固定历史结构，而非从名称或当下关系猜父子。 */
+    private Map<String, Set<String>> hierarchy(long user, Collection<String> roles, String building,
+            String version, long revision, List<AssignmentEvidence> assignments, Map<String,String> nodePoints) {
+        boolean needsTree = java.util.stream.Stream.of("SUB", "INDEPENDENT").anyMatch(role ->
+                assignments.stream().filter(a -> role.equals(a.meterRole())).map(AssignmentEvidence::pointId).distinct().count() > 1);
+        if (!needsTree) return Map.of();
+        Map<String, com.platform.relation.api.RelationContracts.MeterStructureView> structures = new LinkedHashMap<>();
+        int count = 0;
+        for (int page=1; ; page++) {
+            var current = relationService.historicalMeterStructures(user, roles, building, version, page, relationPageSize());
+            if (current == null || !building.equals(current.metadata().buildingId())
+                    || !version.equals(current.metadata().versionId()) || revision != current.metadata().modelRevision()
+                    || current.size()<1 || current.total()>MAX_RELATION_ROWS) relationUnconfirmed("历史计量结构版本不一致或超过上限");
+            count += current.items().size();
+            if(count>MAX_RELATION_ROWS) throw error(409,RESULT_LIMIT_EXCEEDED,"计量结构超过5000条");
+            for(var item:current.items()) if(structures.putIfAbsent(item.meterPointNodeId(),item)!=null)
+                relationUnconfirmed("历史计量结构存在重复节点");
+            if(page*(long)current.size()>=current.total())break;
+            if(current.items().isEmpty())relationUnconfirmed("历史计量结构分页不完整");
+        }
+        Map<String,Set<String>> result=new LinkedHashMap<>();
+        for(var entry:nodePoints.entrySet()) {
+            var meter=structures.get(entry.getKey());
+            if(meter==null)relationUnconfirmed("计量分配缺少对应历史结构");
+            if(assignments.stream().filter(a->entry.getValue().equals(a.pointId())).anyMatch(a->
+                    !Objects.equals(a.meterRole(),meter.meterRole()) || !Objects.equals(a.meterDirection(),meter.meterDirection())
+                            || !Objects.equals(a.meteringBoundaryId(),meter.meteringBoundaryId())))relationUnconfirmed("计量结构与分配的角色、方向或边界不一致");
+            Set<String> seen=new LinkedHashSet<>(),parents=new LinkedHashSet<>();
+            String parent=meter.parentMeterPointNodeId();
+            while(parent!=null&&!parent.isBlank()) {
+                if(!seen.add(parent)||seen.size()>64 || parent.equals(entry.getKey()))relationUnconfirmed("历史计量结构形成循环或超过64级");
+                var ancestor=structures.get(parent);
+                if(ancestor==null || !Objects.equals(meter.meteringBoundaryId(),ancestor.meteringBoundaryId())
+                        || !Objects.equals(meter.meterDirection(),ancestor.meterDirection()))relationUnconfirmed("历史计量父节点缺失或跨边界、方向");
+                if(nodePoints.containsKey(parent))parents.add(nodePoints.get(parent));
+                parent=ancestor.parentMeterPointNodeId();
+            }
+            result.put(entry.getValue(),Set.copyOf(parents));
+        }
+        return Map.copyOf(result);
+    }
+
 
     private List<BoundaryPolicyVersion> policies(
             List<SnapshotMeasure> measures, List<AssignmentEvidence> assignments) {
@@ -482,7 +538,8 @@ public class EnergyBoundarySummaryService {
     private record TimeRange(LocalDateTime from, LocalDateTime to) {
     }
 
-    private record RelationSnapshot(long modelRevision, List<AssignmentEvidence> assignments) {
+    private record RelationSnapshot(long modelRevision, List<AssignmentEvidence> assignments,
+                                    Map<String,Set<String>> ancestors) {
     }
 
     private record MeasureKey(String relationVersionId, String pointId) {

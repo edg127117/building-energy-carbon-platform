@@ -65,7 +65,7 @@ public class MonthlyComparisonService {
         return new Response(building, zone.getId(), current, previous, lastYear, comparisons);
     }
 
-    private Period period(long user, Collection<String> roles, String building, LocalDate month, ZoneId zone) {
+    Period period(long user, Collection<String> roles, String building, LocalDate month, ZoneId zone) {
         Instant start = month.atStartOfDay(zone).toInstant();
         Instant end = month.plusMonths(1).atStartOfDay(zone).toInstant();
         List<Value> electricity = electricity(reporting.sealedMonth(user, roles, building, month), zone);

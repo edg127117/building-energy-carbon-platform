@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, provide, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { ElButton, ElAlert, Monitor, Maximize, Minimize, ArrowLeft } from '@/shared/ui'
 import BrandIdentity from '@/shared/components/BrandIdentity.vue'
 import StateBoundary from '@/shared/components/StateBoundary.vue'
@@ -14,20 +14,24 @@ import { useSession } from '@/modules/auth/public'
 import { useFullscreen } from './useFullscreen'
 import { useShellRuntime } from '@/app/providers/runtime'
 import { useShellStore } from '@/app/providers/shell-store'
+import { screenShellKey } from '@/shared/models/screen-shell'
 const { viewportRef, canvasStyle } = useLogicalCanvas()
 const { active, failed, toggle } = useFullscreen()
 const { now } = useShellRuntime()
 const shell = useShellStore()
 const route = useRoute()
+const router = useRouter()
 const session = useSession()
 const pageTitle = computed(() => authorizedPages(session.menus).find(page => page.path === route.path)?.title ?? t(String(route.meta.titleKey ?? 'navigation.switchScreen')))
 const navigationOpen = ref(false)
+const sceneMode = computed(() => route.meta.screenLayout === 'scene')
+provide(screenShellKey, { openNavigation: () => { navigationOpen.value = true }, toggleFullscreen: toggle, exit: () => { void router.push('/systems') }, fullscreen: active })
 </script>
 
 <template>
   <div ref="viewportRef" class="monitor-viewport">
-    <div class="monitor-canvas" :style="canvasStyle" data-page-mode="monitor">
-      <header class="monitor-header">
+    <div class="monitor-canvas" :class="{ 'scene-canvas': sceneMode }" :style="canvasStyle" data-page-mode="monitor">
+      <header v-if="!sceneMode" class="monitor-header">
         <BrandIdentity />
         <h1>{{ pageTitle }}</h1>
         <div class="bec-actions">
@@ -64,4 +68,5 @@ const navigationOpen = ref(false)
 .monitor-notices { position: absolute; top: var(--bec-monitor-header-height); left: var(--bec-monitor-padding); right: var(--bec-monitor-padding); z-index: var(--bec-layer-notices); display: grid; gap: var(--bec-monitor-gap); }
 .monitor-content { min-width: 0; min-height: 0; padding: var(--bec-monitor-padding); }
 .scene-content { padding: 0; }
+.scene-canvas { grid-template-rows: minmax(0, 1fr); }
 </style>

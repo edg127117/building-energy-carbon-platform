@@ -203,7 +203,22 @@ public class EnergySummaryCarbonActivityAdapter implements CarbonActivityInputPo
         snapshots.stream().sorted(Comparator.comparing(PeriodSnapshot::snapshotId)).forEach(snapshot -> {
             ObjectNode source = (ObjectNode) CarbonEvidence.tree(snapshot);
             source.remove("evidenceJson");
-            source.set("evidence", CarbonEvidence.parse(snapshot.evidenceJson()));
+            var frozen = CarbonEvidence.parse(snapshot.evidenceJson());
+            var calculation = frozen;
+            while (calculation.has("calculationEvidence")) calculation = calculation.path("calculationEvidence");
+            if ("REVIEWED_MANUAL_MONTH".equals(calculation.path("inputKind").asText())) {
+                // 人工月量已独立封账；碳批次固定引用不可变快照，避免再次复制每点整月的小时原文。
+                // 原始证据仍完整保存在快照中，校验原字节摘要后才能引用，不能引用当前投影或最新规则。
+                if (!CarbonCalculationCore.sha256(snapshot.evidenceJson()).equals(snapshot.evidenceHash()))
+                    throw error(409, DEPENDENCY_UNAVAILABLE, "人工封账快照的固定证据摘要不一致");
+                var reference = CarbonEvidence.object();
+                reference.put("referenceKind", "IMMUTABLE_PERIOD_SNAPSHOT_V1");
+                reference.put("snapshotId", snapshot.snapshotId());
+                reference.put("evidenceHash", snapshot.evidenceHash());
+                reference.put("inputKind", "REVIEWED_MANUAL_MONTH");
+                if (snapshot.evidenceJson().contains("TEST_ONLY")) reference.put("sourceReferenceNature", "TEST_ONLY");
+                source.set("evidence", reference);
+            } else source.set("evidence", frozen);
             sources.add(source);
         });
         return trace;

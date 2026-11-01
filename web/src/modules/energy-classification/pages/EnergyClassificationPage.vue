@@ -22,6 +22,7 @@ import ReadingWorkbookPanel from '../components/ReadingWorkbookPanel.vue'
 import ReadingBatchReviewPanel from '../components/ReadingBatchReviewPanel.vue'
 import ReadingDiagnosticsPanel from '../components/ReadingDiagnosticsPanel.vue'
 import ManualPeriodPanel from '../components/ManualPeriodPanel.vue'
+import JointFlowConfigurationPanel from '../components/JointFlowConfigurationPanel.vue'
 import {
   cloneConfiguration, mapCsvReadings, parseCsv, readingCsvFields, validateManualReadings,
   type ClassificationDimension, type ClassificationMode,
@@ -55,6 +56,7 @@ const workbookDirty = ref(false)
 const manualPeriodDirty = ref(false)
 const boundarySummaryPolicyDirty = ref(false)
 const carbonResultsDirty = ref(false)
+const jointFlowConfigurationDirty = ref(false)
 const queryForm = ref({ startInclusive: '', endExclusive: '', periodType: '', energyItemCode: '', unit: '', schemeCode: '' })
 const queryFilters = ref<Array<{ schemeCode: string; nodeCode: string }>>([])
 const readingRange = ref({ startInclusive: '', endExclusive: '' })
@@ -162,7 +164,7 @@ function loadBuilding() {
 
 function hasUnsavedWorkspaceChanges(): boolean {
   return projectDirty.value || relationDirty.value || factorDirty.value || profileDirty.value || workbookDirty.value || manualPeriodDirty.value
-    || boundarySummaryPolicyDirty.value || carbonResultsDirty.value || configurationDirty.value
+    || boundarySummaryPolicyDirty.value || carbonResultsDirty.value || jointFlowConfigurationDirty.value || configurationDirty.value
 }
 
 function searchBuildings(keyword: string) {
@@ -744,6 +746,8 @@ function balanceValue(row: Record<string, unknown>, key: 'quantity' | 'childQuan
             <template #header><div class="card-heading"><div><h2>{{ t('energyClassification.configuration.issueTitle') }}</h2></div></div></template>
             <IssueList :issues="workspace.selectedVersion.value.issues" />
           </ElCard>
+
+          <JointFlowConfigurationPanel :building-id="workspace.buildingId.value" @dirty-change="jointFlowConfigurationDirty = $event" />
         </section>
       </ElTabPane>
 
