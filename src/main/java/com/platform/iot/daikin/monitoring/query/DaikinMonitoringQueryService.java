@@ -391,7 +391,7 @@ public class DaikinMonitoringQueryService {
         return rows.get(0);
     }
 
-    private void requireBuilding(Long userId, Set<String> roles, String buildingId) {
+    void requireBuilding(Long userId, Set<String> roles, String buildingId) {
         requireMenu(userId, roles);
         requireId(buildingId, "buildingId");
         checkBuildingAccess(userId, roles, buildingId);

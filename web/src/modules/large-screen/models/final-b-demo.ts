@@ -1,4 +1,4 @@
-import { prototypeAlarms, prototypeDevices, prototypeMirror, prototypeRuntimeRanking } from './screen-prototype'
+import { prototypeAlarms, prototypeMirror } from './screen-prototype'
 import { periodBuckets, type ScreenPeriod } from './screen-period'
 import { periodEntry, type ScreenRedesignData } from './screen-redesign'
 
@@ -6,7 +6,7 @@ import { periodEntry, type ScreenRedesignData } from './screen-redesign'
 export function withApprovedScreenDemo(data: ScreenRedesignData, period: ScreenPeriod): ScreenRedesignData {
   const base = periodEntry(data.mirror, period), demo = prototypeMirror(period)
   const missing = () => Array<number | null>(periodBuckets(period).length).fill(null)
-  return { ...data, devices: prototypeDevices, alarms: prototypeAlarms, runtimeRanking: prototypeRuntimeRanking,
+  return { ...data, alarms: prototypeAlarms,
     mirror: { period, data: {
       dynamicEmissions: demo.dynamicEmissions, dynamicFactors: demo.dynamicFactors,
       staticEmissions: base?.staticEmissions ?? missing(), staticFactors: base?.staticFactors ?? missing(),

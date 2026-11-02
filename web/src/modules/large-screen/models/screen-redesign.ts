@@ -33,8 +33,10 @@ export interface ScreenRedesignData {
   usage?: ScreenPeriodEntry<ScreenUsageData>
   intensity?: ScreenPeriodEntry<ScreenIntensityData>
   devices?: ScreenDeviceSummaryData
+  deviceSummaryUpdatedAt?: number
   alarms?: ScreenAlarmSummaryData
   runtimeRanking?: readonly ScreenRuntimeRankingEntry[]
+  runtimeRankingContext?: string
   intensityBenchmarks?: ScreenIntensityBenchmarks
 }
 
