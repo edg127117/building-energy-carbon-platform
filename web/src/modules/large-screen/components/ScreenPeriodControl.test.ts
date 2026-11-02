@@ -4,6 +4,16 @@ import { describe, expect, it } from 'vitest'
 import ScreenPeriodControl from './ScreenPeriodControl.vue'
 const global = { stubs: { ElPopover: defineComponent({ emits: ['show'], template: '<div><div @click="$emit(\'show\')"><slot name="reference" /></div><slot /></div>' }) } }
 describe('year/month period drafts', () => {
+  it('keeps edited numeric years as strings when applying or switching to month', async () => {
+    const wrapper = mount(ScreenPeriodControl, { props: { modelValue: { kind: 'year', value: '2026' }, label: '统计期间' }, global })
+    await wrapper.get('.period-trigger').trigger('click')
+    await wrapper.get('input').setValue('2025')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual([{ kind: 'year', value: '2025' }])
+    await wrapper.get('.period-kinds button:nth-child(2)').trigger('click')
+    expect(wrapper.get('input').element.value).toBe('2025-01')
+    wrapper.unmount()
+  })
   it('only commits on apply and restores the selected period after cancellation', async () => {
     const wrapper = mount(ScreenPeriodControl, { props: { modelValue: { kind: 'year', value: '2026' }, label: '统计期间' }, global })
     await wrapper.get('.period-trigger').trigger('click')

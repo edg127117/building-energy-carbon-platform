@@ -32,3 +32,20 @@ it('aborts switched scopes, rejects wrong identities and ignores late responses 
   expect(state.data.value.mirror).toBeUndefined(); expect(state.failedMonths.value).toEqual(['2024-02'])
   scope.stop()
 })
+
+it('reuses completed same-building months across staggered card changes but refreshes on explicit retry', async () => {
+  const scope = effectScope(), building = ref('B')
+  const usage = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' }), mirror = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  const state = scope.run(() => useFinalBDaily(building, usage, mirror))!
+  await flushPromises()
+  usage.value = { kind: 'month', value: '2026-10' }; await flushPromises()
+  expect(vi.mocked(readDailyTrends).mock.calls.map(call => call[1])).toEqual(['2026-01', '2026-10'])
+  expect(state.data.value.mirror?.period.value).toBe('2026-01')
+  mirror.value = { kind: 'month', value: '2026-10' }; await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(2)
+  expect(state.data.value.usage?.data.electricity).toHaveLength(31)
+  expect(state.data.value.mirror?.data.staticEmissions).toHaveLength(31)
+  await state.reload()
+  expect(readDailyTrends).toHaveBeenCalledTimes(3)
+  scope.stop()
+})
