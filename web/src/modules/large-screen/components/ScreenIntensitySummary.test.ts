@@ -28,6 +28,7 @@ describe('screen intensity summary', () => {
         sourceReference: 'test://reference', climateLabel: '测试分区', unit: 'kgCO2/(m²·年)', mode: 'FORMAL_YEAR', reasons: [] },
     } })
     expect(wrapper.find('[data-testid="score-person-value"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('85.07')
     expect(wrapper.get('[data-testid="score-area-track"]').attributes('data-raw-ratio')).toBe('150')
     expect(wrapper.get('[data-testid="score-area-bar"]').attributes('style')).toContain('100%')
     expect(wrapper.get('[data-testid="intensity-benchmark-source"]').text()).toContain('隔离测试来源 v2')
@@ -35,7 +36,7 @@ describe('screen intensity summary', () => {
     expect(wrapper.text()).not.toContain('江苏省公共建筑')
     await wrapper.setProps({ data: { areaValue: 0, areaPercentage: null, areaUnit: 'kgCO₂e/m²', personValue: null, personPercentage: null, personUnit: '' },
       benchmarks: { constraint: null, baseline: null, guide: null, mode: 'MONTHLY_YTD', throughMonth: 9, percentageBasis: 'YTD_SHARE_OF_ANNUAL_REFERENCE', reasons: ['YTD_NOT_ANNUAL_COMPARISON'] } })
-    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('0')
+    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('0.00')
     expect(wrapper.find('[data-testid="score-area-bar"]').exists()).toBe(false)
     expect(wrapper.find('.benchmark-context').exists()).toBe(false)
     wrapper.unmount()
@@ -68,7 +69,7 @@ describe('screen intensity summary', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('0')
+    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('0.00')
     expect(wrapper.get('[data-testid="score-area-track"]').attributes('aria-label')).toContain('0%')
     expect(wrapper.get('[data-testid="score-area-bar"]').attributes('style')).toContain('width: 0%')
     expect(wrapper.get('[data-testid="score-person-value"]').text()).toBe('—')
@@ -93,8 +94,8 @@ describe('screen intensity summary', () => {
       },
     })
 
-    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('12.5')
-    expect(wrapper.get('.intensity-label-line .intensity-value').text()).toBe('12.5kgCO₂/m²·年')
+    expect(wrapper.get('[data-testid="score-area-value"]').text()).toBe('12.50')
+    expect(wrapper.get('.intensity-label-line .intensity-value').text()).toBe('12.50kgCO₂/m²·年')
     expect(wrapper.text()).not.toContain('比例—')
     expect(wrapper.get('[data-testid="score-area-track"]').attributes('data-state')).toBe('missing')
     expect(wrapper.find('[data-testid="score-area-bar"]').exists()).toBe(false)

@@ -5,6 +5,7 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { t } from '@/locales'
 import type { ScreenUsageData } from '../models/screen-analytical'
 import { periodBuckets, type ScreenPeriod } from '../models/screen-period'
+import { formatScreenReading } from '../models/screen-reading-format'
 
 const props = defineProps<{ data: ScreenUsageData | null; period: ScreenPeriod; expanded?: boolean; wide?: boolean }>()
 const buckets = computed(() => periodBuckets(props.period))
@@ -20,7 +21,7 @@ const option = computed<ChartOption>(() => ({
   xAxis: { type: 'category', data: buckets.value, axisTick: { show: false }, axisLabel: { showMinLabel: true, showMaxLabel: true, interval: props.period.kind === 'year' ? 0 : 'auto', hideOverlap: false, rotate: props.period.kind === 'year' && !props.wide ? 45 : 0 } },
   yAxis: [
     { type: 'value', name: displayUnit(props.data?.electricityUnit ?? 'kWh'), position: 'left', min: 0 },
-    { type: 'value', name: displayUnit(props.data?.temperatureUnit ?? '℃'), position: 'right', scale: true },
+    { type: 'value', name: displayUnit(props.data?.temperatureUnit ?? '℃'), position: 'right', scale: true, minInterval: 1, axisLabel: { formatter: (value: number) => formatScreenReading(value, 0) } },
   ],
   series: [
     {
@@ -28,6 +29,7 @@ const option = computed<ChartOption>(() => ({
       name: t('largeScreen.usageElectricity'),
       type: 'bar',
       data: electricity.value,
+      tooltip: { valueFormatter: (value: unknown) => formatValue(value, 2) },
       yAxisIndex: 0,
       barMaxWidth: props.expanded ? 36 : 24,
       itemStyle: { color: 'var(--bec-screen-blue)' },
@@ -37,6 +39,7 @@ const option = computed<ChartOption>(() => ({
       name: t('largeScreen.usageTemperature'),
       type: 'line',
       data: temperature.value,
+      tooltip: { valueFormatter: (value: unknown) => formatValue(value, 0) },
       yAxisIndex: 1,
       smooth: false,
       showSymbol: true,
@@ -51,6 +54,10 @@ const option = computed<ChartOption>(() => ({
 
 function isFiniteValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+}
+
+function formatValue(value: unknown, digits: 0 | 2): string {
+  return isFiniteValue(value) ? formatScreenReading(value, digits) : t('largeScreen.missing')
 }
 
 function valuesFor(values: Array<number | null> | undefined, length: number): Array<number | null> {

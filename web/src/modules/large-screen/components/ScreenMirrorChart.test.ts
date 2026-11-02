@@ -50,8 +50,8 @@ describe('ScreenMirrorChart', () => {
     }
     expect(option.xAxis.axisLabel.interval).toBe(0)
     expect(option.yAxis.map(axis => axis.name)).toEqual(['tCO₂e', 'kgCO₂e/kWh'])
-    expect(option.yAxis[0].axisLabel.formatter(-4)).toBe('4')
-    expect(option.yAxis[1].axisLabel.formatter(-0.5)).toBe('0.5')
+    expect(option.yAxis[0].axisLabel.formatter(-4)).toBe('4.00')
+    expect(option.yAxis[1].axisLabel.formatter(-0.5)).toBe('0.50')
     expect(option.series.map(series => ({
       id: series.id,
       type: series.type,
@@ -68,7 +68,24 @@ describe('ScreenMirrorChart', () => {
     expect(option.series.map(series => series.data.slice(0, 3))).toEqual([[5, 0, null], [-4, -2, null], [0.45, 0, null], [-0.5, -0.6, null]])
     expect(option.tooltip.formatter([{
       axisValueLabel: '1月', seriesId: 'static-emissions', seriesName: '静态碳排放量', data: -4,
-    }])).toBe('1月\n静态碳排放量：4 tCO₂e')
+    }])).toBe('1月\n静态碳排放量：4.00 tCO₂e')
+    wrapper.unmount()
+  })
+
+  it('排放量、因子及十字量标固定两位，镜像提示保留实际正值', () => {
+    const wrapper = mount(ScreenMirrorChart, { props: { period: { kind: 'year', value: '2026' }, data: null } })
+    const option = wrapper.findComponent(ChartView).props('option') as {
+      tooltip: { formatter: (params: unknown) => string }
+      yAxis: Array<{ axisPointer: { label: { formatter: (params: { value: number }) => string } } }>
+    }
+    expect(option.tooltip.formatter([
+      { axisValueLabel: '1月', seriesId: 'dynamic-emissions', seriesName: '动态碳排放量', value: 6.5 },
+      { seriesId: 'static-emissions', seriesName: '静态碳排放量', value: -16.374 },
+      { seriesId: 'dynamic-factors', seriesName: '动态碳排放因子', value: 0.48 },
+      { seriesId: 'static-factors', seriesName: '静态碳排放因子', value: -0.583 },
+    ])).toBe('1月\n动态碳排放量：6.50 tCO₂e\n静态碳排放量：16.37 tCO₂e\n动态碳排放因子：0.48 kgCO₂e/kWh\n静态碳排放因子：0.58 kgCO₂e/kWh')
+    expect(option.yAxis[0].axisPointer.label.formatter({ value: -18 })).toBe('18.00')
+    expect(option.yAxis[1].axisPointer.label.formatter({ value: -0.48 })).toBe('0.48')
     wrapper.unmount()
   })
 

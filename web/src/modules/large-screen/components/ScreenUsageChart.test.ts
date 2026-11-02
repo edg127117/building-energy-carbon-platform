@@ -23,6 +23,27 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenUsageChart', () => {
+  it('悬停电量固定两位、温度四舍五入为整数，不改动序列精度', () => {
+    const wrapper = mount(ScreenUsageChart, { props: {
+      period: { kind: 'year', value: '2026' },
+      data: { electricity: [24060.596, 0], temperature: [7.253869047619048, -2.6], electricityUnit: 'kWh', temperatureUnit: '℃' },
+    } })
+    const option = wrapper.findComponent(ChartView).props('option') as {
+      series: Array<{ data: Array<number | null>; tooltip: { valueFormatter: (value: unknown) => string } }>
+      yAxis: Array<{ minInterval?: number; axisLabel?: { formatter: (value: number) => string } }>
+    }
+    expect(option.series[0].tooltip.valueFormatter(24060.596)).toBe('24,060.60')
+    expect(option.series[0].tooltip.valueFormatter(0)).toBe('0.00')
+    expect(option.series[0].tooltip.valueFormatter(null)).toBe('—')
+    expect(option.series[1].tooltip.valueFormatter(7.253869047619048)).toBe('7')
+    expect(option.series[1].tooltip.valueFormatter(-2.6)).toBe('-3')
+    expect(option.yAxis[1].minInterval).toBe(1)
+    expect(option.yAxis[1].axisLabel?.formatter(7)).toBe('7')
+    expect(option.series[0].data[0]).toBe(24060.596)
+    expect(option.series[1].data[0]).toBe(7.253869047619048)
+    wrapper.unmount()
+  })
+
   it('用双轴分别展示电量柱与温度直线，保留零值和缺失点', () => {
     const wrapper = mount(ScreenUsageChart, {
       props: {

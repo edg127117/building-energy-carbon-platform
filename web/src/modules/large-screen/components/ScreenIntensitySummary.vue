@@ -4,6 +4,7 @@ import { Building2, Users, BookOpen } from '@/shared/ui'
 import { t } from '@/locales'
 import intensityCopy from '../locales/carbon-intensity'
 import type { ScreenIntensityData, ScreenIntensityBenchmarks } from '../models/screen-summaries'
+import { formatScreenReading } from '../models/screen-reading-format'
 
 type RatioState = 'missing' | 'in-range' | 'out-of-range'
 
@@ -25,7 +26,7 @@ function isFiniteNumber(value: number | null | undefined): value is number {
 }
 
 function displayNumber(value: number | null | undefined): string {
-  return isFiniteNumber(value) ? numberFormatter.format(value) : t('largeScreen.scoreMissing')
+  return isFiniteNumber(value) ? formatScreenReading(value) : t('largeScreen.scoreMissing')
 }
 
 function displayUnit(value: string | undefined): string {
@@ -45,7 +46,7 @@ function visualPercentage(value: number | null | undefined): number | null {
 
 function displayRatio(value: number | null | undefined): string {
   return isFiniteNumber(value)
-    ? t('largeScreen.scoreRatioValue', { value: displayNumber(value) })
+    ? t('largeScreen.scoreRatioValue', { value: numberFormatter.format(value) })
     : t('largeScreen.scoreMissing')
 }
 

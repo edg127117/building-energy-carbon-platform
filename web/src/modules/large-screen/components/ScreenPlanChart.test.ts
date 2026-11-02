@@ -32,6 +32,17 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenPlanChart', () => {
+  it('月基准、月配额和实际月排放悬停值统一保留两位，缺失不补零', () => {
+    const wrapper = mount(ScreenPlanChart, { props: { period: { kind: 'year', value: '2026' }, data: null } })
+    const option = wrapper.findComponent(ChartView).props('option') as { tooltip: { valueFormatter: (value: unknown) => string } }
+    expect(option.tooltip.valueFormatter(14.020109)).toBe('14.02')
+    expect(option.tooltip.valueFormatter(10)).toBe('10.00')
+    expect(option.tooltip.valueFormatter(8.5)).toBe('8.50')
+    expect(option.tooltip.valueFormatter(0)).toBe('0.00')
+    expect(option.tooltip.valueFormatter(null)).toBe('—')
+    wrapper.unmount()
+  })
+
   it('保留全年月份并突出选中月，且只绘制两条直线点图和实际柱', () => {
     const wrapper = mount(ScreenPlanChart, {
       props: {

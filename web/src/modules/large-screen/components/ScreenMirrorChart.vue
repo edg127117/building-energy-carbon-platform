@@ -5,11 +5,11 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { t } from '@/locales'
 import type { ScreenMirrorData } from '../models/screen-analytical'
 import { periodBuckets, type ScreenPeriod } from '../models/screen-period'
+import { formatScreenReading } from '../models/screen-reading-format'
 
 type TooltipItem = Record<string, unknown>
 
 const props = defineProps<{ data: ScreenMirrorData | null; period: ScreenPeriod; expanded?: boolean }>()
-const formatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 3 })
 
 const buckets = computed(() => periodBuckets(props.period))
 const dynamicEmissions = computed(() => valuesFor(props.data?.dynamicEmissions, buckets.value.length))
@@ -41,6 +41,7 @@ const option = computed<ChartOption>(() => ({
       position: 'left',
       ...extentOptions(emissionExtent.value),
       axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
+      axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
     },
     {
       type: 'value',
@@ -49,6 +50,7 @@ const option = computed<ChartOption>(() => ({
       ...extentOptions(factorExtent.value),
       splitLine: { show: false },
       axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
+      axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
     },
   ],
   series: [
@@ -138,7 +140,7 @@ function extentOptions(extent: number | null): { min: number; max: number; inter
 }
 
 function formatNumber(value: number | null | undefined): string {
-  return isFiniteValue(value) ? formatter.format(value) : t('largeScreen.missing')
+  return isFiniteValue(value) ? formatScreenReading(value) : t('largeScreen.missing')
 }
 
 function displayUnit(value: string | undefined): string {

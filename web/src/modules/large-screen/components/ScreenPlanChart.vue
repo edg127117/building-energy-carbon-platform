@@ -5,6 +5,7 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { t } from '@/locales'
 import type { ScreenPlanData } from '../models/screen-analytical'
 import { periodBuckets, type ScreenPeriod } from '../models/screen-period'
+import { formatScreenReading } from '../models/screen-reading-format'
 
 type QuotaState = 'remaining' | 'exceeded' | 'used' | 'unknown'
 
@@ -48,7 +49,7 @@ const option = computed<ChartOption>(() => ({
   animation: false,
   grid: { top: 30, right: 12, bottom: 34, left: 40 },
   legend: { top: '3%', right: 0, itemWidth: 10, itemHeight: 8 },
-  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, appendToBody: false },
+  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, appendToBody: false, valueFormatter: (value: unknown) => isFiniteValue(value) ? formatScreenReading(value) : t('largeScreen.missing') },
   xAxis: {
     type: 'category',
     data: months.value,
