@@ -22,6 +22,24 @@ describe('碳排放结果接口契约', () => {
     }))
   })
 
+  it('按重复 months 参数读取精确北京自然月结果，并保留取消信号', async () => {
+    const controller = new AbortController()
+    await carbonResultsApi.getMonthlyResults('B/01', ['2026-10', '2026-09', '2025-10'], controller.signal)
+
+    const request = vi.mocked(requestApi).mock.calls[0]?.[0] as {
+      params: { buildingId: string; months: readonly string[] }
+      paramsSerializer: { serialize: () => string }
+      signal: AbortSignal
+    }
+    expect(request).toMatchObject({
+      method: 'get',
+      url: '/v1/carbon-management/results/months',
+      params: { buildingId: 'B/01', months: ['2026-10', '2026-09', '2025-10'] },
+      signal: controller.signal,
+    })
+    expect(request.paramsSerializer.serialize()).toBe('buildingId=B%2F01&months=2026-10&months=2026-09&months=2025-10')
+  })
+
   it('只转发明确填写的正式计算、固定批次证据与重算独立审核请求', async () => {
     const calculation = {
       buildingId: 'B/01', periodType: 'MONTH' as const,

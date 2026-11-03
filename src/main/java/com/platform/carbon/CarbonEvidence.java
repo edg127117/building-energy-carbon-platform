@@ -36,10 +36,27 @@ public final class CarbonEvidence {
 
     public static String canonical(JsonNode value) {
         try {
-            return JSON.writeValueAsString(ordered(value));
+            // 已冻结的规范JSON保持原顺序直接写出；仍递归核对键顺序和小数语义，不复制整棵证据树。
+            return JSON.writeValueAsString(canonicalOrder(value) ? value : ordered(value));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("碳追溯证据无法序列化", exception);
         }
+    }
+
+    private static boolean canonicalOrder(JsonNode value) {
+        if (value.isObject()) {
+            String previous = null;
+            var fields = value.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                if (previous != null && previous.compareTo(entry.getKey()) >= 0) return false;
+                if (!canonicalOrder(entry.getValue())) return false;
+                previous = entry.getKey();
+            }
+        } else if (value.isArray()) {
+            for (var element : value) if (!canonicalOrder(element)) return false;
+        }
+        return !value.isFloatingPointNumber();
     }
 
     /** 同一计量分解的公共证据只保留一份，访问时返回副本，避免各明细互相修改。 */

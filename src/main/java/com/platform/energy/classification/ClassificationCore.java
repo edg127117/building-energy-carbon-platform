@@ -163,13 +163,13 @@ public class ClassificationCore {
         for (Atom atom : atoms) {
             boolean passes = true;
             for (Filter filter : filters) {
-                Set<String> assigned = assigned(config, filter.schemeCode(), atom, input.resolvedBindingPoints(), nodeMap);
+                Set<String> assigned = assigned(config, filter.schemeCode(), atom.ancestors(), input.resolvedBindingPoints(), nodeMap);
                 boolean overlapping = config.schemes().stream().anyMatch(s -> s.code().equals(filter.schemeCode()) && "OVERLAPPING".equals(s.mode()));
                 if (assigned.isEmpty() || (!overlapping && assigned.size() != 1)) { issues.add(issue("UNDETERMINED", atom.pointId(), "联合筛选缺少明确交集归属证据")); passes = false; }
                 else if (assigned.stream().noneMatch(a -> descendant(a, filter.nodeCode(), filter.schemeCode(), nodeMap))) passes = false;
             }
             filterPass.put(atom, passes);
-            matched.put(atom, assigned(config, schemeCode, atom, input.resolvedBindingPoints(), nodeMap));
+            matched.put(atom, assigned(config, schemeCode, atom.ancestors(), input.resolvedBindingPoints(), nodeMap));
         }
         boolean additive = "ADDITIVE".equals(scheme.mode());
         BigDecimal assignedTotal = BigDecimal.ZERO; BigDecimal unallocated = BigDecimal.ZERO;
@@ -204,7 +204,7 @@ public class ClassificationCore {
                 atoms.stream().map(a -> {
                     Map<String,Set<String>> assignments=new LinkedHashMap<>();
                     for(Scheme s:config.schemes()) assignments.put(s.code(),Set.copyOf(
-                            assigned(config,s.code(),a,input.resolvedBindingPoints(),nodeMap)));
+                            assigned(config,s.code(),a.ancestors(),input.resolvedBindingPoints(),nodeMap)));
                     return new SourceSlice(a.pointId(),a.quantity(),a.ancestors(),a.residual(),
                             a.evidenceIds(),Map.copyOf(assignments));
                 }).toList());
@@ -236,12 +236,12 @@ public class ClassificationCore {
         for (Meter child : children) split(child, meters, facts, atoms, balances, issues, false);
     }
 
-    private Set<String> assigned(Configuration config, String scheme, Atom atom, Map<String, Set<String>> resolved, Map<String, Node> nodes) {
+    private Set<String> assigned(Configuration config, String scheme, Set<String> ancestors, Map<String, Set<String>> resolved, Map<String, Node> nodes) {
         Set<String> targets = new LinkedHashSet<>();
         for (Binding binding : config.bindings()) if (scheme.equals(binding.schemeCode())
                 && "METERING".equals(binding.semantics()) && "CONFIRMED".equals(binding.status())) {
             Set<String> points = resolved.getOrDefault(bindingKey(binding), Set.of());
-            if (points.stream().anyMatch(atom.ancestors()::contains)) targets.add(binding.nodeCode());
+            if (points.stream().anyMatch(ancestors::contains)) targets.add(binding.nodeCode());
         }
         // 同一分类路径上父节点绑定与子节点绑定只贡献到最具体节点，再逐级回卷。
         Set<String> result = new LinkedHashSet<>(targets);
@@ -250,6 +250,18 @@ public class ClassificationCore {
     }
 
     public static String bindingKey(Binding b) { return key(b.schemeCode(), b.nodeCode())+"/"+b.objectType()+"/"+b.objectId()+"/"+b.meterPointId(); }
+
+    /** 只对明确测点绑定和冻结祖先作分类投影；索引在请求内复用，不读取今天的对象覆盖关系。 */
+    public java.util.function.BiFunction<String,Set<String>,Set<String>> frozenPointAssignment(Configuration config) {
+        validate(config);
+        Map<String,Node> nodes=new HashMap<>();config.nodes().forEach(node->nodes.put(key(node.schemeCode(),node.code()),node));
+        Map<String,Set<String>> resolved=new HashMap<>();
+        for(Binding binding:config.bindings()) {
+            String point=blank(binding.meterPointId()) && "POINT".equals(binding.objectType())?binding.objectId():binding.meterPointId();
+            resolved.put(bindingKey(binding),blank(point)?Set.of():Set.of(point));
+        }
+        return (scheme,ancestors)->Set.copyOf(assigned(config,scheme,ancestors,resolved,nodes));
+    }
     private static boolean descendant(String child, String parent, String scheme, Map<String, Node> nodes) {
         Node current = nodes.get(key(scheme, child));
         while (current != null) { if (current.code().equals(parent)) return true; current = blank(current.parentCode()) ? null : nodes.get(key(scheme, current.parentCode())); }

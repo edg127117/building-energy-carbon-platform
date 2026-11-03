@@ -1,5 +1,7 @@
+import scene from './scene'
 export default {
-  monitoring: '监控大屏',
+  ...scene,
+  monitoring: '全楼能碳总览',
   trend: '趋势大屏',
   situation: '态势大屏',
   status: '状态大屏',

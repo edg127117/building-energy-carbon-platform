@@ -1,4 +1,7 @@
+import carbonPlan from './carbon-plan.zh-CN'
+
 export default {
+  carbonPlan,
   title: '通用计量分类',
   description: '按建筑维护可追溯的分类版本、计量绑定和原始用量查询。数量、差额和统计口径均由后端计算。',
   tabs: {

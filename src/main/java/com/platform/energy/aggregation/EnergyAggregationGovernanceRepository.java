@@ -93,6 +93,15 @@ public class EnergyAggregationGovernanceRepository {
                 timestamp(from), timestamp(to), limit);
     }
 
+    public List<EventVersionRow> listApprovedEventsAt(String building,String point,LocalDateTime from,
+            LocalDateTime to,LocalDateTime asOf,int limit) {
+        return jdbc.query(eventSelect()+"""
+                 WHERE e.building_id=? AND e.meter_point_id=? AND v.status='APPROVED'
+                   AND v.occurred_at>? AND v.occurred_at<=? AND v.approved_at<=?
+                 ORDER BY v.occurred_at,v.version_no LIMIT ?
+                """,EnergyAggregationGovernanceRepository::eventVersion,building,point,timestamp(from),timestamp(to),timestamp(asOf),limit);
+    }
+
     public int approveEvent(String versionId, int revision, long reviewerId,
                             LocalDateTime approvedAt, String reviewComment) {
         return jdbc.update("""

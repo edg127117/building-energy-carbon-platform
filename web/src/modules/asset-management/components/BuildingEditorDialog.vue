@@ -18,6 +18,8 @@ const form = reactive({
   buildingName: '',
   buildingCode: '',
   buildingType: '',
+  carbonEvaluationCategory: '',
+  carbonEvaluationSubcategory: '',
   constructionYear: undefined as number | undefined,
   totalGfa: undefined as number | undefined,
   climateZone: '',
@@ -55,6 +57,8 @@ watch(() => [props.open, props.building] as const, ([open]) => {
     buildingName: props.building?.buildingName ?? '',
     buildingCode: props.building?.buildingCode ?? '',
     buildingType: props.building?.buildingType ?? '',
+    carbonEvaluationCategory: props.building?.carbonEvaluationCategory ?? '',
+    carbonEvaluationSubcategory: props.building?.carbonEvaluationSubcategory ?? '',
     constructionYear: props.building?.constructionYear ?? undefined,
     totalGfa: props.building?.totalGfa ?? undefined,
     climateZone: props.building?.climateZone ?? '',
@@ -77,6 +81,8 @@ async function submit() {
       buildingName: form.buildingName.trim(),
       buildingCode: nullable(form.buildingCode),
       buildingType: nullable(form.buildingType),
+      carbonEvaluationCategory: form.carbonEvaluationCategory.trim(),
+      carbonEvaluationSubcategory: form.carbonEvaluationSubcategory.trim(),
       constructionYear: form.constructionYear ?? null,
       totalGfa: form.totalGfa ?? null,
       climateZone: nullable(form.climateZone),
@@ -108,6 +114,8 @@ function nullable(value: string): string | null {
       <ElFormItem :label="t('assetManagement.labels.buildingCode')"><ElInput v-model="form.buildingCode" maxlength="50" /></ElFormItem>
       <div class="two-columns">
         <ElFormItem data-test="building-type" prop="buildingType" :label="t('assetManagement.labels.buildingType')" :required="!building"><ElInput v-model="form.buildingType" maxlength="30" /></ElFormItem>
+        <ElFormItem :label="t('assetManagement.labels.carbonEvaluationCategory')"><ElInput v-model="form.carbonEvaluationCategory" maxlength="30" :placeholder="t('assetManagement.labels.carbonEvaluationHint')" /></ElFormItem>
+        <ElFormItem :label="t('assetManagement.labels.carbonEvaluationSubcategory')"><ElInput v-model="form.carbonEvaluationSubcategory" maxlength="60" /></ElFormItem>
         <ElFormItem data-test="building-climate-zone" prop="climateZone" :label="t('assetManagement.labels.climateZone')" :required="!building"><ElInput v-model="form.climateZone" maxlength="30" /></ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.constructionYear')"><ElInputNumber v-model="form.constructionYear" :min="1800" :max="2200" class="wide-control" /></ElFormItem>
         <ElFormItem data-test="building-total-gfa" prop="totalGfa" :label="t('assetManagement.labels.totalGfa')" :required="!building"><ElInputNumber v-model="form.totalGfa" :min="0" class="wide-control" /></ElFormItem>

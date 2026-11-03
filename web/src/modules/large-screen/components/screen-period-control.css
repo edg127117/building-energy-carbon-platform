@@ -1,0 +1,10 @@
+.period-trigger { display: inline-flex; align-items: center; gap: var(--bec-screen-space-6); padding: var(--bec-screen-space-8); border: var(--bec-screen-border-width) solid var(--bec-screen-divider); border-radius: var(--bec-screen-radius); background: var(--bec-screen-detail-panel); color: var(--bec-screen-ink); font-size: var(--bec-screen-font-small); cursor: pointer; white-space: nowrap; }
+.period-editor { display: grid; gap: var(--bec-screen-space-16); color: var(--bec-screen-ink); font-size: var(--bec-screen-font-body); }
+.period-kinds { display: flex; gap: var(--bec-screen-space-8); }
+.period-kinds button[aria-pressed=true] { background: var(--bec-screen-blue); color: var(--bec-screen-border); }
+.period-editor button:disabled { opacity: .5; cursor: default; }
+label { display: grid; gap: var(--bec-screen-space-8); }
+input { font: inherit; color: inherit; padding: var(--bec-screen-space-8); border: var(--bec-screen-border-width) solid var(--bec-screen-divider); }
+.period-editor>div { display: flex; justify-content: flex-end; gap: var(--bec-screen-space-8); }
+.period-editor button { font: inherit; color: inherit; padding: var(--bec-screen-space-6) var(--bec-screen-space-12); border: var(--bec-screen-border-width) solid var(--bec-screen-divider); background: var(--bec-screen-detail-panel); border-radius: var(--bec-screen-radius); cursor: pointer; }
+.period-editor button[type=submit] { background: var(--bec-screen-blue); color: var(--bec-screen-border); }

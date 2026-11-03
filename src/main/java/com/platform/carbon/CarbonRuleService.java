@@ -290,7 +290,10 @@ public class CarbonRuleService {
         authorization.requireRuleActivator(userId, roles, value.buildingId());
         if (value.status() != LifecycleStatus.APPROVED) conflict();
         LocalDateTime now = LocalDateTime.now();
-        repository.disableOverlappingDenominators(value, userId, now);
+        repository.findDenominatorIdForUpdate(value.buildingId(), value.type());
+        String areaBefore=value.type()==DenominatorType.BUILDING_AREA?repository.areaAudit(value):"";
+        if (value.type() == DenominatorType.BUILDING_AREA) repository.applyArea(value, userId);
+        else repository.disableOverlappingDenominators(value, userId, now);
         if (repository.activateDenominator(versionId, request.expectedRevision(), userId, now) != 1) {
             conflict();
         }
@@ -300,6 +303,7 @@ public class CarbonRuleService {
                 value.effectiveTo() == null ? null : value.effectiveTo().atStartOfDay(),
                 userId, now);
         DenominatorVersion activated = requireDenominator(versionId);
+        if (value.type()==DenominatorType.BUILDING_AREA) auditAreaPeriods(userId,value,areaBefore,repository.areaAudit(value));
         audit(userId, activated.buildingId(), "ACTIVATE_CARBON_DENOMINATOR_VERSION",
                 activated.denominatorId(), activated.denominatorVersionId(),
                 denominatorSummary(value), denominatorSummary(activated), false);
@@ -312,6 +316,9 @@ public class CarbonRuleService {
         DenominatorVersion value = requireDenominator(versionId);
         authorization.requireRuleActivator(userId, roles, value.buildingId());
         LocalDateTime now = LocalDateTime.now();
+        repository.findDenominatorIdForUpdate(value.buildingId(), value.type());
+        String areaBefore=value.type()==DenominatorType.BUILDING_AREA?repository.areaAudit(value):"";
+        if (value.type() == DenominatorType.BUILDING_AREA) repository.removeArea(versionId);
         if (repository.disableDenominator(versionId, request.expectedRevision(), userId, now) != 1) {
             conflict();
         }
@@ -321,6 +328,7 @@ public class CarbonRuleService {
                 value.effectiveTo() == null ? null : value.effectiveTo().atStartOfDay(),
                 userId, now);
         DenominatorVersion disabled = requireDenominator(versionId);
+        if (value.type()==DenominatorType.BUILDING_AREA) auditAreaPeriods(userId,value,areaBefore,repository.areaAudit(value));
         audit(userId, disabled.buildingId(), "DISABLE_CARBON_DENOMINATOR_VERSION",
                 disabled.denominatorId(), disabled.denominatorVersionId(),
                 denominatorSummary(value), denominatorSummary(disabled), false);
@@ -465,6 +473,16 @@ public class CarbonRuleService {
         if (factor == UsageNature.FORMAL && source != UsageNature.FORMAL) {
             validation("正式因子或分母不得引用研发来源");
         }
+    }
+
+    /** 审计摘要上限为1000字符，逐段记录差异，避免多年期间被截断而无法追溯。 */
+    private void auditAreaPeriods(long user, DenominatorVersion version, String before, String after) {
+        Set<String> oldRows=new LinkedHashSet<>(List.of(before.split(";")));
+        Set<String> newRows=new LinkedHashSet<>(List.of(after.split(";")));
+        for (String row:oldRows) if (!row.isEmpty()&&!newRows.contains(row))
+            audit(user,version.buildingId(),"REMOVE_CARBON_AREA_PERIOD",version.denominatorId(),version.denominatorVersionId(),row,null,false);
+        for (String row:newRows) if (!row.isEmpty()&&!oldRows.contains(row))
+            audit(user,version.buildingId(),"ADD_CARBON_AREA_PERIOD",version.denominatorId(),version.denominatorVersionId(),null,row,false);
     }
 
     private void dependency(String type, String objectType, String objectId,

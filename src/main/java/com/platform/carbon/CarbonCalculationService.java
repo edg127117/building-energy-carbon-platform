@@ -13,11 +13,14 @@ import com.platform.framework.exception.BusinessException;
 import org.slf4j.MDC;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -36,12 +39,16 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.regex.Pattern;
 
 import static com.platform.carbon.CarbonErrors.*;
 
 @Service
 /** 编排普通同步计算和自动重算候选计算，计算期间不持有 MySQL 事务。 */
 public class CarbonCalculationService {
+    private static final ZoneId BEIJING = ZoneId.of("Asia/Shanghai");
+    private static final Pattern MONTH = Pattern.compile(
+            "^(?:20(?:0[0-9]|[1-9][0-9])|21[0-9]{2}|2200)-(?:0[1-9]|1[0-2])$");
     private final CarbonAuthorization authorization;
     private final CarbonActivityInputPort activityInputPort;
     private final CarbonRuleRepository ruleRepository;
@@ -79,6 +86,7 @@ public class CarbonCalculationService {
                                  RunCalculationRequest request) {
         PeriodType periodType = enumValue(PeriodType.class, request.periodType(), "周期类型无效");
         ResultNature nature = enumValue(ResultNature.class, request.resultNature(), "结果性质无效");
+        if(nature==ResultNature.MONITORING)validation("小时监测结果不使用月季年正式核算接口");
         String buildingId = text(request.buildingId(), 32, "建筑编码无效");
         authorization.requireCalculationRunner(userId, roles, buildingId);
         PeriodWindow window = period(periodType, request.startInclusive(), request.endExclusive(),
@@ -118,6 +126,18 @@ public class CarbonCalculationService {
         return repository.listBatches(buildingId);
     }
 
+    /**
+     * 读取已固定的北京自然月结果，不复用 detail 的超时恢复写路径，也不从多个有效结果中猜选一个。
+     */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public List<MonthlyCalculationResult> monthResults(long userId, Collection<String> roles,
+                                                        String buildingId, List<String> months) {
+        String authorizedBuilding = text(buildingId, 32, "建筑编码无效");
+        authorization.requireReader(userId, roles, authorizedBuilding);
+        return monthWindows(months).stream()
+                .map(window -> monthResult(authorizedBuilding, window)).toList();
+    }
+
     CalculationBatch currentFormal(String buildingId, int year, String timezoneId) {
         ZoneId zone = ZoneId.of(timezoneId);
         return repository.findCurrentFormal(buildingId, PeriodType.YEAR,
@@ -133,6 +153,65 @@ public class CarbonCalculationService {
         String[] stored = repository.itemEvidence(batch.batchId(), text(itemId, 32, "计算明细标识无效"));
         if (stored == null) throw error(404, NOT_FOUND, "碳计算明细不存在");
         return CarbonEvidence.stored(stored[0], stored[1], stored.length > 2 ? stored[2] : null);
+    }
+
+    private MonthlyCalculationResult monthResult(String buildingId, MonthWindow window) {
+        List<CalculationBatch> candidates = repository.findCurrentFormalMonth(buildingId,
+                window.start(), window.end());
+        if (candidates.isEmpty()) {
+            return new MonthlyCalculationResult(window.month(), MonthlyCalculationState.MISSING,
+                    "该自然月没有可读取的正式完整结果", List.of(), null);
+        }
+        if (candidates.size() > 1) {
+            return new MonthlyCalculationResult(window.month(), MonthlyCalculationState.AMBIGUOUS,
+                    "该自然月存在多个可读取的正式完整结果", candidates.stream()
+                    .map(CalculationBatch::batchId).toList(), null);
+        }
+        CalculationBatch candidate = candidates.getFirst();
+        CalculationDetail detail = repository.detail(candidate.batchId());
+        String invalid = invalidMonthDetail(detail, buildingId, window, candidate);
+        if (invalid != null) {
+            return new MonthlyCalculationResult(window.month(), MonthlyCalculationState.FAILED,
+                    invalid, List.of(), null);
+        }
+        return new MonthlyCalculationResult(window.month(), MonthlyCalculationState.READY,
+                null, List.of(), detail);
+    }
+
+    private static String invalidMonthDetail(CalculationDetail detail, String buildingId,
+                                             MonthWindow window, CalculationBatch candidate) {
+        if (detail == null || detail.batch() == null) return "固定结果详情不存在";
+        CalculationBatch batch = detail.batch();
+        if (!candidate.batchId().equals(batch.batchId()) || !buildingId.equals(batch.buildingId())
+                || batch.periodType() != PeriodType.MONTH || !window.start().equals(batch.periodStart())
+                || !window.end().equals(batch.periodEnd()) || !BEIJING.getId().equals(batch.timezoneId())
+                || batch.resultNature() != ResultNature.FORMAL
+                || !Set.of("DIRECT", "PUBLISHED").contains(batch.publicationStatus())
+                || !"COMPLETED_COMPLETE".equals(batch.status())) {
+            return "固定结果详情与请求自然月不一致";
+        }
+        if (!detail.failures().isEmpty() || batch.detailCount() != detail.items().size()) {
+            return "固定结果详情不完整";
+        }
+        return null;
+    }
+
+    private static List<MonthWindow> monthWindows(List<String> months) {
+        if (months == null || months.isEmpty() || months.size() > 3) {
+            validation("月份数量必须在 1 到 3 之间");
+        }
+        Set<String> requested = new LinkedHashSet<>();
+        List<MonthWindow> windows = new ArrayList<>();
+        for (String value : months) {
+            if (value == null || !MONTH.matcher(value).matches()) {
+                validation("月份必须是 2000 到 2200 年的 YYYY-MM");
+            }
+            if (!requested.add(value)) validation("月份不可重复");
+            YearMonth month = YearMonth.parse(value);
+            windows.add(new MonthWindow(value, month.atDay(1).atStartOfDay(BEIJING).toInstant(),
+                    month.plusMonths(1).atDay(1).atStartOfDay(BEIJING).toInstant()));
+        }
+        return List.copyOf(windows);
     }
 
     private CalculationDetail execute(long actorId, String buildingId, PeriodType periodType,
@@ -678,6 +757,7 @@ public class CarbonCalculationService {
 
     private static PeriodWindow period(PeriodType type, Instant start, Instant end,
                                        String timezoneId) {
+        if(type==PeriodType.HOUR)validation("小时监测计算须使用独立小时接口，不写入月季年正式批次");
         if (start == null || end == null || !end.isAfter(start)) validation("周期边界无效");
         ZoneId zone;
         try {
@@ -755,5 +835,18 @@ public class CarbonCalculationService {
     }
 
     private record PeriodWindow(Instant start, Instant end, String timezoneId) {
+    }
+
+    private record MonthWindow(String month, Instant start, Instant end) {
+    }
+
+    public enum MonthlyCalculationState { READY, MISSING, AMBIGUOUS, FAILED }
+
+    public record MonthlyCalculationResult(String month, MonthlyCalculationState state,
+                                           String reason, List<String> conflictBatchIds,
+                                           CalculationDetail detail) {
+        public MonthlyCalculationResult {
+            conflictBatchIds = List.copyOf(conflictBatchIds);
+        }
     }
 }

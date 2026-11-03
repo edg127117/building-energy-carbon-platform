@@ -32,6 +32,10 @@ class FlywayMigrationConfigurationTest {
                 "V01__init_tables.sql",
                 "V03__init_hvac_schema.sql",
                 "V08__mysql_data_quality_fill.sql",
+                "V100__mysql_period_hourly_evidence_capacity.sql",
+                "V101__mysql_manual_interval_covering_indexes.sql",
+                "V102__mysql_daily_trend_read_model.sql",
+                "V103__mysql_carbon_display_read_model.sql",
                 "V10__mysql_data_quality_recalculation.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V12__device_identity.sql",
@@ -109,7 +113,13 @@ class FlywayMigrationConfigurationTest {
                 "V86__mysql_energy_reporting.sql",
                 "V87__mysql_heat_co2_factor_formula.sql",
                 "V88__mysql_default_electricity_factor_year.sql",
-                "V93__mysql_historical_metering_scope.sql");
+                "V93__mysql_historical_metering_scope.sql",
+                "V94__mysql_carbon_intensity_catalog.sql",
+                "V95__mysql_area_applicability.sql",
+                "V96__mysql_carbon_annual_plan.sql",
+                "V97__mysql_hourly_carbon.sql",
+                "V98__mysql_joint_flow_configuration.sql",
+                "V99__mysql_monthly_reading_query_indexes.sql");
 
 
         Set<String> versions = migrations.stream()

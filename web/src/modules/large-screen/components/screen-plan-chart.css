@@ -1,0 +1,17 @@
+.plan-chart { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--bec-screen-ink); }
+.plan-summary { display: grid; grid-template-columns: minmax(0,1.9fr) minmax(0,1.1fr); gap: var(--bec-screen-space-8); flex-shrink: 0; margin-bottom: var(--bec-screen-space-6); }
+.plan-metric { display: flex; min-width: 0; flex-direction: column; justify-content: center; gap: var(--bec-screen-space-3); padding: var(--bec-screen-space-6) var(--bec-screen-space-10); background: var(--bec-screen-glass-subcard); border: var(--bec-screen-border-width) solid var(--bec-screen-card-outline); border-top: var(--bec-screen-space-2) solid var(--bec-screen-blue); border-radius: var(--bec-ref-radius-8); box-shadow: var(--bec-screen-shadow-subcard); }
+.plan-metric--quota { border-top-color: var(--bec-screen-device-green); background: var(--bec-screen-status-on-bg); }
+.plan-metric>span, .plan-target>span { color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); font-weight: var(--bec-screen-weight); white-space: nowrap; }
+.plan-metric--targets { display: grid; grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); gap: var(--bec-screen-space-8); }
+.plan-target { display: grid; gap: var(--bec-screen-space-2); min-width: 0; }
+.plan-target+.plan-target { padding-left: var(--bec-screen-space-8); border-left: var(--bec-screen-border-width) solid var(--bec-screen-divider); }
+.plan-value { line-height: var(--bec-screen-line-tight); display: flex; min-width: 0; align-items: baseline; gap: var(--bec-screen-space-4); }
+.plan-value strong { overflow: hidden; font-family: var(--bec-ref-family-number); font-size: var(--bec-ref-font-20); font-weight: var(--bec-screen-title-weight); font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.plan-value small { color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); white-space: nowrap; }
+.quota-value--remaining { color: var(--bec-screen-quota-green); }
+.quota-value--exceeded { color: var(--bec-screen-quota-red); }
+.quota-value--used, .quota-value--unknown { color: var(--bec-screen-muted); }
+.plan-plot { position: relative; display: flex; flex: 1; min-height: 0; }
+.plan-plot :deep(.chart-view) { flex: 1; min-height: 0; }
+.chart-state { position: absolute; inset: 55% var(--bec-screen-space-12) auto; margin: 0; color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); pointer-events: none; text-align: center; }

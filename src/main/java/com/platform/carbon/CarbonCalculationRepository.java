@@ -52,6 +52,21 @@ class CarbonCalculationRepository {
         return findCurrentFormal(buildingId, periodType, start, end, null);
     }
 
+    /** 联合图按精确月份取至多两项用于冲突裁决，不能扫描最近批次或猜选有效版本。 */
+    List<CalculationBatch> findJointFlowMonth(String buildingId, Instant start, Instant end) {
+        return jdbc.query("SELECT " + BATCH_COLUMNS + """
+                 FROM biz_carbon_calculation_batch b
+                WHERE b.building_id=? AND b.period_type='MONTH' AND b.period_start=? AND b.period_end=?
+                  AND b.timezone_id='Asia/Shanghai' AND b.result_nature='FORMAL'
+                  AND b.publication_status IN ('DIRECT','PUBLISHED') AND b.status='COMPLETED_COMPLETE'
+                  AND NOT EXISTS (SELECT 1 FROM biz_carbon_result_relation r
+                    WHERE r.old_calculation_batch_id=b.calculation_batch_id AND r.relation_status='SUPERSEDED')
+                  AND NOT EXISTS (SELECT 1 FROM biz_carbon_result_relation r
+                    WHERE r.new_calculation_batch_id=b.calculation_batch_id AND r.relation_status='CANDIDATE')
+                ORDER BY b.calculation_batch_id LIMIT 2
+                """, CarbonCalculationRepository::batch, buildingId, timestamp(start), timestamp(end));
+    }
+
     CalculationBatch findCurrentFormal(String buildingId, PeriodType periodType,
                                        Instant start, Instant end, String timezoneId) {
         return one("SELECT " + BATCH_COLUMNS + """
@@ -71,6 +86,28 @@ class CarbonCalculationRepository {
                 ORDER BY b.completed_at DESC,b.created_at DESC,b.calculation_batch_id DESC LIMIT 1
                 """, CarbonCalculationRepository::batch, buildingId, periodType.name(),
                 timestamp(start), timestamp(end), timezoneId, timezoneId);
+    }
+
+    /**
+     * 精确读取北京自然月的当前正式结果；最多保留两个候选，让上层明确返回冲突而非按时间猜选。
+     */
+    List<CalculationBatch> findCurrentFormalMonth(String buildingId, Instant start, Instant end) {
+        return jdbc.query("""
+                SELECT b.* FROM biz_carbon_calculation_batch b
+                WHERE b.building_id=? AND b.period_type='MONTH' AND b.period_start=? AND b.period_end=?
+                  AND b.timezone_id='Asia/Shanghai' AND b.result_nature='FORMAL'
+                  AND b.publication_status IN ('DIRECT','PUBLISHED')
+                  AND b.status='COMPLETED_COMPLETE'
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_carbon_result_relation r
+                    WHERE r.old_calculation_batch_id=b.calculation_batch_id
+                      AND r.relation_status='SUPERSEDED')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM biz_carbon_result_relation candidate
+                    WHERE candidate.new_calculation_batch_id=b.calculation_batch_id
+                      AND candidate.relation_status='CANDIDATE')
+                ORDER BY b.completed_at DESC,b.calculation_batch_id ASC LIMIT 2
+                """, CarbonCalculationRepository::batch, buildingId, timestamp(start), timestamp(end));
     }
 
     void insertBatch(CalculationBatch value) {

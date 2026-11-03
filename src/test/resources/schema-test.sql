@@ -126,6 +126,8 @@ CREATE TABLE building (
   building_name VARCHAR(100) NOT NULL,
   building_code VARCHAR(50),
   building_type VARCHAR(30),
+  carbon_evaluation_category VARCHAR(30),
+  carbon_evaluation_subcategory VARCHAR(60),
   construction_year INT,
   total_gfa DECIMAL(14,2),
   above_ground_gfa DECIMAL(14,2),

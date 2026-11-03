@@ -180,6 +180,17 @@ class EnergyLoop7MysqlIntegrationTest {
                   AND period_start >= '2026-01-01' AND status <> 'SUPERSEDED'
                 """)).singleElement().satisfies(row ->
                 assertThat(row.get("key")).isEqualTo("idx_energy_period_snapshot_visible"));
+        // 历史升级断言保留在各自版本；最新Java仓储的持久化验证必须使用对应的当前结构。
+        var historyBeforeCurrent = jdbc.queryForList("SELECT * FROM flyway_schema_history ORDER BY installed_rank");
+        Integer previousRank = jdbc.queryForObject("SELECT MAX(installed_rank) FROM flyway_schema_history", Integer.class);
+        Flyway current = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").target("101").load();
+        assertThat(current.migrate().migrationsExecuted).as("V87到V101执行当前候选的十个新增迁移").isEqualTo(10);
+        current.validate();
+        assertThat(jdbc.queryForList("SELECT * FROM flyway_schema_history WHERE installed_rank<=? ORDER BY installed_rank",
+                previousRank)).isEqualTo(historyBeforeCurrent);
+        assertThat(current.migrate().migrationsExecuted).as("当前结构重跑不得重复执行迁移").isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_equipment", Integer.class)).isEqualTo(equipmentBefore);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(pointsBefore);
         verifyClassificationStorage(dataSource, jdbc);
     }
 

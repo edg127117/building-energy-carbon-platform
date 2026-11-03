@@ -21,9 +21,11 @@ import static com.platform.energy.period.EnergyPeriodErrors.*;
 @Service
 @RequiredArgsConstructor
 public class ManualPeriodInputService {
+    // 31天逐小时来源为744条；每测点保留1000条硬上限，不放开整楼无界读取。
+    private static final int MAX_SELECTED_FACTS=1000;
     public record Request(@NotBlank String pointId, @NotNull LocalDate month,
                           @NotBlank String policyVersionId, @NotBlank String relationVersionId,
-                          @NotNull @Size(min=1,max=500) List<@NotBlank String> factIds,
+                          @NotNull @Size(min=1,max=1000) List<@NotBlank String> factIds,
                           @NotNull @Min(0) Long expectedProjectionRevision,
                           @NotBlank @Size(max=500) String reason) { }
     public record Evidence(String inputKind, Request request, List<String> readingJson,
@@ -41,9 +43,9 @@ public class ManualPeriodInputService {
     @Transactional(rollbackFor=Exception.class)
     public ProjectionCalculation prepare(long user, Collection<String> roles, String building, Request request) {
         authorization.requireReader(roles);authorization.checkBuilding(user,roles,building);
-        if(request==null||request.factIds()==null||request.factIds().isEmpty()||request.factIds().size()>500
+        if(request==null||request.factIds()==null||request.factIds().isEmpty()||request.factIds().size()>MAX_SELECTED_FACTS
                 ||new HashSet<>(request.factIds()).size()!=request.factIds().size()||request.reason()==null||request.reason().isBlank()
-                ||request.reason().length()>500)throw invalid("须选择1至500条不重复的已审核来源并填写原因");
+                ||request.reason().length()>500)throw invalid("须选择1至1000条不重复的已审核来源并填写原因");
         // 与人工导入审批使用同一建筑锁，冻结来源选择并排除正在替代的事实。
         manual.lock(building);
         var policy=policies.periodPolicyVersion(request.policyVersionId());
@@ -72,20 +74,21 @@ public class ManualPeriodInputService {
                     &&v.effectiveAt().isAfter(relation.metadata().effectiveAt())).map(v->v.effectiveAt().toInstant(ZoneOffset.ofHours(8))).min(Comparator.naturalOrder());
             if(next.isEmpty()||next.get().isBefore(window.endExclusive()))throw invalid("月份跨计量关系版本，不能拆估用量");
         }
-        var available=manual.readings(building,window.startInclusive(),window.endExclusive(),true);
-        if(available.size()>5000)throw invalid("来源查询超过上限");
-        var selected=available.stream().filter(r->request.factIds().contains(r.id())).toList();
-        if(selected.size()!=request.factIds().size())throw invalid("来源未审核、已被替代、跨建筑或不在指定月份内");
-        var readings=selected.stream().map(r->decode(r.json())).sorted(Comparator.comparing(Reading::startInclusive)).toList();
+        var available=manual.currentApprovedReadings(building,request.pointId(),window.startInclusive(),window.endExclusive(),MAX_SELECTED_FACTS+1);
+        if(available.size()>MAX_SELECTED_FACTS)throw invalid("该测点人工来源超过1000条读取上限");
+        Map<String,ClassificationRepository.StoredReading> byFactId=new HashMap<>();available.forEach(r->byFactId.put(r.id(),r));
+        var selected=request.factIds().stream().map(byFactId::get).toList();
+        if(selected.stream().anyMatch(Objects::isNull))throw invalid("来源未审核、已被替代、跨建筑或不在指定月份内");
+        var ordered=selected.stream().sorted(Comparator.comparing((ClassificationRepository.StoredReading r)->decode(r.json()).startInclusive()).thenComparing(ClassificationRepository.StoredReading::id)).toList();
         Instant cursor=window.startInclusive();BigDecimal quantity=BigDecimal.ZERO;String energy=null,unit=null;
-        for(var r:readings) {
+        for(var stored:ordered) {
+            Reading r=decode(stored.json());
             if(r.startInclusive()==null||r.endExclusive()==null||!r.startInclusive().isBefore(r.endExclusive())||!request.pointId().equals(r.pointId())||!"CONFIRMED".equals(r.status())||!"EXACT".equals(r.timePrecision())
                     ||!cursor.equals(r.startInclusive())||r.endExclusive().isAfter(window.endExclusive()))
                 throw invalid("来源须为同一测点、已确认精确边界且连续覆盖整月，不能重叠或按比例补齐");
             if(energy==null){energy=r.energyItemCode();unit=r.unit();}
             if(!Objects.equals(energy,r.energyItemCode())||!Objects.equals(unit,r.unit()))throw invalid("来源能源和单位不一致");
             BigDecimal normalized=normalized(r);
-            var stored=selected.stream().filter(s->decode(s.json()).equals(r)).findFirst().orElseThrow();
             if(stored.quantity()==null||normalized.compareTo(stored.quantity())!=0)throw invalid("人工来源归一用量与固定证据不一致");
             quantity=quantity.add(normalized);cursor=r.endExclusive();
         }

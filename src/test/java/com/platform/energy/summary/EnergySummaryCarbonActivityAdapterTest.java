@@ -78,6 +78,41 @@ class EnergySummaryCarbonActivityAdapterTest {
     }
 
     @Test
+    void pinsImmutableManualMonthWithoutCopyingItsHourlyReadingPayload() {
+        var frozen=CarbonEvidence.object();
+        var input=frozen.putObject("calculationEvidence");
+        input.put("inputKind","REVIEWED_MANUAL_MONTH");
+        var readings=input.putArray("readings");
+        for(int hour=0;hour<744;hour++) readings.add("TEST_ONLY-hour-"+hour+":"+"x".repeat(700));
+        String original=CarbonEvidence.canonical(frozen);
+        String hash=CarbonCalculationCore.sha256(original);
+        when(summaryService.query(org.mockito.ArgumentMatchers.eq(0L),any(),any()))
+                .thenReturn(summary(Map.of("KWH",new BigDecimal("1200")),hash));
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,END,501))
+                .thenReturn(List.of(snapshot(hash,original)));
+
+        var result=adapter.read("BLD001",PeriodType.YEAR,START,END,500).getFirst();
+        var reference=result.traceEvidence().at("/sources/0/evidence");
+        assertThat(reference.path("referenceKind").asText()).isEqualTo("IMMUTABLE_PERIOD_SNAPSHOT_V1");
+        assertThat(reference.path("snapshotId").asText()).isEqualTo("SNAP001");
+        assertThat(reference.path("evidenceHash").asText()).isEqualTo(hash);
+        assertThat(reference.path("sourceReferenceNature").asText()).isEqualTo("TEST_ONLY");
+        assertThat(CarbonEvidence.canonical(result.traceEvidence()).length()).isLessThan(10_000);
+        assertThat(CarbonEvidence.parse(original).at("/calculationEvidence/readings")).hasSize(744);
+    }
+
+    @Test
+    void rejectsManualSnapshotReferenceWhenItsStoredContentDoesNotMatchTheHash() {
+        String hash="e".repeat(64);
+        when(summaryService.query(org.mockito.ArgumentMatchers.eq(0L),any(),any()))
+                .thenReturn(summary(Map.of("KWH",BigDecimal.ONE),hash));
+        when(snapshotReader.listVisibleSnapshots("BLD001","MONTH",START,END,501))
+                .thenReturn(List.of(snapshot(hash,"{\"inputKind\":\"REVIEWED_MANUAL_MONTH\"}")));
+        assertThatThrownBy(()->adapter.read("BLD001",PeriodType.YEAR,START,END,500))
+                .hasMessageContaining("固定证据摘要不一致");
+    }
+
+    @Test
     void rejectsPartialSnapshotEvidenceAfterConcurrentReplacement() {
         when(summaryService.query(org.mockito.ArgumentMatchers.eq(0L), any(), any()))
                 .thenReturn(summary(Map.of("KWH", BigDecimal.ONE), "still-visible", "replaced-hash"));

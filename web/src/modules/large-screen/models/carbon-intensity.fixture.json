@@ -1,0 +1,43 @@
+{
+  "buildingId": "B",
+  "mode": "FORMAL_YEAR",
+  "start": "2025-01-01",
+  "endExclusive": "2026-01-01",
+  "timezoneId": "Asia/Shanghai",
+  "actual": {
+    "value": "85.065",
+    "unit": "kgCO2e/m²",
+    "status": "AVAILABLE",
+    "gasBasis": "CO2_ONLY",
+    "boundaryStatus": "WHOLE_BUILDING_ENERGY",
+    "areaStatus": "BUILDING_AREA",
+    "batchId": "batch",
+    "evidenceHash": "hash",
+    "denominatorVersionId": "area-v1"
+  },
+  "matchStatus": "MATCHED",
+  "comparisonStatus": "COMPARABLE",
+  "reasons": [],
+  "percentage": "150",
+  "evidenceHash": "query-hash",
+  "reference": {
+    "versionId": "standard-v1",
+    "evidenceHash": "standard-hash",
+    "name": "source",
+    "documentVersion": "v1",
+    "sourceReference": "test://source",
+    "publishedOn": null,
+    "unit": "kgCO2/(m²·年)",
+    "rule": {
+      "constraintValue": "56.71",
+      "baselineValue": "35.56",
+      "guideValue": "20.72",
+      "climateLabel": "zone",
+      "gasBasis": "CO2_ONLY",
+      "timeStatus": "KNOWN"
+    }
+  },
+  "percentageStatus": "AVAILABLE",
+  "percentageBasis": "ANNUAL_REFERENCE",
+  "percentageReasons": []
+}

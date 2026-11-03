@@ -118,6 +118,8 @@ public class AssetManagementService {
         applyBuilding(request.buildingName(), request.buildingCode(), request.buildingType(),
                 request.constructionYear(), request.totalGfa(), request.climateZone(), building);
         building.setRegionCode(request.regionCode());
+        building.setCarbonEvaluationCategory(request.carbonEvaluationCategory());
+        building.setCarbonEvaluationSubcategory(request.carbonEvaluationSubcategory());
         return buildingView(call(() -> buildingService.add(building).getData()));
     }
 
@@ -135,6 +137,9 @@ public class AssetManagementService {
         if (request.regionCode() != null) {
             building.setRegionCode(request.regionCode());
         }
+        // 旧客户端省略字段时保留评价依据；显式空字符串用于清除人工选择，恢复档案自动匹配。
+        if (request.carbonEvaluationCategory() != null) building.setCarbonEvaluationCategory(request.carbonEvaluationCategory().trim());
+        if (request.carbonEvaluationSubcategory() != null) building.setCarbonEvaluationSubcategory(request.carbonEvaluationSubcategory().trim());
         call(() -> buildingService.update(building).getData());
         return buildingView(requireBuilding(buildingId));
     }
@@ -535,7 +540,8 @@ public class AssetManagementService {
         String status = retirementService.status(building.getBuildingId());
         return new BuildingView(building.getBuildingId(), building.getBuildingName(),
                 building.getBuildingCode(), building.getBuildingType(), building.getConstructionYear(),
-                building.getTotalGfa(), building.getClimateZone(), building.getRegionCode(), status, references,
+                building.getTotalGfa(), building.getClimateZone(), building.getRegionCode(),
+                building.getCarbonEvaluationCategory(), building.getCarbonEvaluationSubcategory(), status, references,
                 "ACTIVE".equals(status) ? parentActions(references.spaces() + references.systemGroups() + references.equipment()
                         + references.points() + references.authorizations() == 0) : List.of(),
                 millis(building.getUpdateTime(), building.getCreateTime()));

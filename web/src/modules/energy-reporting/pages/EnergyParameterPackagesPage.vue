@@ -21,6 +21,8 @@ import type {
   ParameterPackagePreview,
 } from '../models/parameter-packages'
 import copy from '../locales/zh-CN'
+import CarbonIntensityCatalogPanel from '../components/CarbonIntensityCatalogPanel.vue'
+import intensityCopy from '../locales/intensity-catalog'
 
 type DenominatorDraft = Omit<CreateCarbonDenominatorRequest, 'buildingId' | 'unitCode'>
 
@@ -41,6 +43,7 @@ const denominatorsLoading = ref(false)
 const denominatorsSaving = ref(false)
 const denominatorError = ref('')
 const localError = ref('')
+const showIntensityCatalog = ref(false)
 let denominatorGeneration = 0
 let activeDenominatorRequest: AbortController | null = null
 
@@ -443,8 +446,10 @@ function nullable(value: string | null): string | null {
         <p>{{ copy.parameters.description }}</p>
       </div>
       <ElButton @click="router.push({ path: route.path, query: { ...route.query, mode: undefined } })">{{ copy.parameters.returnDaily }}</ElButton>
+      <ElButton @click="showIntensityCatalog = !showIntensityCatalog">{{ intensityCopy.title }}</ElButton>
     </header>
 
+    <CarbonIntensityCatalogPanel v-if="showIntensityCatalog" />
     <ElCard shadow="never" class="building-card">
       <ElForm label-position="top" class="building-form">
         <ElFormItem :label="copy.parameters.building">

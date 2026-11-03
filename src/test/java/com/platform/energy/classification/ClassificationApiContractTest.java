@@ -31,6 +31,8 @@ class ClassificationApiContractTest {
         new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
                 new org.springframework.core.io.ByteArrayResource(ddl.getBytes(charset)),
                 new org.springframework.core.io.ClassPathResource("energy-reporting-carbon-schema-test.sql")).execute(dataSource);
+        new org.springframework.jdbc.core.JdbcTemplate(dataSource)
+                .execute("ALTER TABLE biz_energy_manual_batch ADD COLUMN IF NOT EXISTS reviewed_at BIGINT NULL");
     }
 
     @Test

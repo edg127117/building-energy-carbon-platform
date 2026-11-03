@@ -4,7 +4,7 @@ import { screens } from '@/modules/large-screen/public'
 import { formatDateTime, formatNumber } from '@/shared/utils/format'
 describe('Chinese messages and display formatting', () => {
   it('resolves all registered screen names', () => {
-    for (const screen of screens) expect(t(screen.titleKey)).toMatch(/大屏$/)
+    expect(screens.map(screen => t(screen.titleKey))).toEqual(['全楼能碳总览'])
   })
   it('substitutes complete sentences and rejects unknown keys', () => {
     expect(t('common.updatedAt', { time: '12:00' })).toBe('数据更新时间：12:00')

@@ -275,6 +275,30 @@ class EnergyConversionServiceIntegrationTest {
         service.approveParameter(USER, ENERGY, parameterVersion, conversionApprove());
     }
 
+    @Test
+    void formalBatchMatchesSingleResultsAndWritesNoSimulationAudit() {
+        approveCatalog("EIV_HEAT_1", false);
+        var formula=service.createFormulaVersion(USER, ENERGY, new CreateFormulaVersionRequest(
+                "BATCH_DIRECT_HEAT", "DIRECT_TCE_FACTOR", "CALORIFIC_EQUIVALENT", "DIRECT_TCE_FACTOR_V1",
+                "GJ", "TCE", "TCE_PER_INPUT_UNIT", "MANUAL", "批量正式折标兼容验证", AT, null));
+        service.approveFormula(USER, ENERGY, formula.versionId(), conversionApprove());
+        var parameter=service.createParameterVersion(USER, ENERGY, new CreateParameterVersionRequest(
+                "BATCH_DIRECT_FACTOR", "HEAT", formula.versionId(), new BigDecimal("0.5"), "TCE_PER_INPUT_UNIT", null,
+                "PURCHASED_HEAT", "GLOBAL", "PRODUCTION", "MANUAL", "正式批量规则", AT, null));
+        service.approveParameter(USER, ENERGY, parameter.versionId(), conversionApprove());
+        var values=java.util.List.of(BigDecimal.ZERO,new BigDecimal("2"),new BigDecimal("0.123456789123456789"));
+        var request=heatDirectRequest(BigDecimal.ZERO);
+        var batch=service.evaluateFormalRulesBatch(USER, ENERGY, request, AT.plusMonths(1), values);
+        for(int i=0;i<values.size();i++) {
+            assertThat(batch.get(i).tce()).isEqualByComparingTo(service.evaluateFormalRules(USER, ENERGY,
+                    heatDirectRequest(values.get(i)), AT.plusMonths(1)).tce());
+            assertThat(batch.get(i).parameterVersionId()).isEqualTo(parameter.versionId());
+        }
+        assertThatThrownBy(()->service.evaluateFormalRulesBatch(USER, ENERGY, request, AT.plusMonths(1),java.util.List.of(new BigDecimal("-1"))))
+                .isInstanceOf(BusinessException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_security_audit_event WHERE action_type='RUN_TCE_DEVELOPMENT_SIMULATION'",Integer.class)).isZero();
+    }
+
     private void approveCatalog(String itemVersion, boolean massUnits) {
         catalogService.approveItem(USER, ENERGY, itemVersion, catalogApprove());
         catalogService.approveUnit(USER, ENERGY, "EUV_MJ_1", catalogApprove());

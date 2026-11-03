@@ -392,8 +392,16 @@ public class EnergyConversionService {
     /** 只评价已批准正式规则；是否成为正式结果由调用方的来源审核与封账决定。整段引用须同版。 */
     public FormalConversion evaluateFormalRules(long user, Collection<String> roles, SimulationRequest request,
                                                 LocalDateTime endExclusive) {
+        return evaluateFormalRulesBatch(user, roles, request, endExclusive,
+                java.util.Collections.singletonList(request.quantity())).getFirst();
+    }
+
+    /** 同一能源和期间只解析一次正式规则、单位及权限；不缓存到请求之外，也不写入结果。 */
+    public List<FormalConversion> evaluateFormalRulesBatch(long user, Collection<String> roles, SimulationRequest request,
+                                                          LocalDateTime endExclusive, List<BigDecimal> quantities) {
         authorization.requireReader(roles);
         authorization.checkBuilding(user, roles, request.buildingId());
+        if (quantities == null || quantities.isEmpty() || quantities.size() > 5000) validation("批量折标应为1至5000条");
         TimeRange interval = range(request.effectiveAt(), endExclusive);
         if (endExclusive == null) validation("正式折标必须指定完整期间");
         var item = approvedItem(request.energyItemCode(), interval.from());
@@ -412,7 +420,7 @@ public class EnergyConversionService {
         var selected = matches.getFirst();
         requireRange(selected.effectiveFrom(), selected.effectiveTo(), interval, "折标参数未覆盖整个期间");
         validateParameterReferences(selected, interval);
-        var conversion = catalogLookup.convert(nonNegative(request.quantity(), "活动量不能为负数"),
+        var conversion = catalogLookup.convert(BigDecimal.ZERO,
                 request.inputUnitCode(), selected.inputUnitCode(), interval.from()).orElseThrow(() ->
                 EnergyConversionErrors.error(409, EnergyConversionErrors.UNIT_INCOMPATIBLE, "活动量单位与正式规则不兼容"));
         requireRange(conversion.inputUnit().effectiveFrom(), conversion.inputUnit().effectiveTo(), interval,
@@ -422,10 +430,15 @@ public class EnergyConversionService {
         if (!conversion.targetUnit().versionId().equals(selected.inputUnitVersionId()))
             referenceConflict("期间跨单位版本或正式参数的单位引用失效");
         var standard = selected.standardCoalVersionId() == null ? null : requireStandardCoal(selected.standardCoalVersionId());
-        var value = calculate(selected, standard, conversion.convertedQuantity());
-        return new FormalConversion(value, "TCE", selected.versionId(), selected.formulaVersionId(),
-                selected.standardCoalVersionId(), java.util.Map.of("parameter", parameterView(selected),
-                "conversion", conversion, "startInclusive", interval.from(), "endExclusive", endExclusive));
+        return quantities.stream().map(quantity -> {
+            var converted = catalogLookup.convert(nonNegative(quantity, "活动量不能为负数"),
+                    conversion.inputUnit(), conversion.targetUnit()).orElseThrow(() ->
+                    EnergyConversionErrors.error(409, EnergyConversionErrors.UNIT_INCOMPATIBLE, "活动量单位与正式规则不兼容"));
+            var value = calculate(selected, standard, converted.convertedQuantity());
+            return new FormalConversion(value, "TCE", selected.versionId(), selected.formulaVersionId(),
+                    selected.standardCoalVersionId(), java.util.Map.of("parameter", parameterView(selected),
+                    "conversion", converted, "startInclusive", interval.from(), "endExclusive", endExclusive));
+        }).toList();
     }
 
     public OptionsView options(Collection<String> roles) {

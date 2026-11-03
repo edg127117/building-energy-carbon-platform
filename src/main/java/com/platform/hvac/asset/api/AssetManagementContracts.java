@@ -34,6 +34,8 @@ public final class AssetManagementContracts {
             @NotNull BigDecimal totalGfa,
             @NotBlank @Size(max = 30) String climateZone,
             @NotBlank @Pattern(regexp = "\\S+") @Size(max = 12) String regionCode,
+            @Size(max = 30) String carbonEvaluationCategory,
+            @Size(max = 60) String carbonEvaluationSubcategory,
             String status) {
     }
 
@@ -45,6 +47,8 @@ public final class AssetManagementContracts {
             BigDecimal totalGfa,
             @Size(max = 30) String climateZone,
             @Pattern(regexp = "\\S+") @Size(max = 12) String regionCode,
+            @Size(max = 30) String carbonEvaluationCategory,
+            @Size(max = 60) String carbonEvaluationSubcategory,
             String status) {
     }
 
@@ -58,6 +62,8 @@ public final class AssetManagementContracts {
             BigDecimal totalGfa,
             String climateZone,
             String regionCode,
+            String carbonEvaluationCategory,
+            String carbonEvaluationSubcategory,
             String status,
             References references,
             List<String> allowedActions,
