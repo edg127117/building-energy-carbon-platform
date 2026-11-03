@@ -143,7 +143,7 @@ function toggleMotion() { motion.value = !motion.value; scene.value?.setMotion(m
       <article v-else class="screen-card chart-card usage-card"><header><h2>{{ s('redesignUsage') }}</h2><ScreenPeriodControl v-model="usagePeriod" :label="s('redesignUsage')" /></header><ScreenUsageChart :period="usagePeriod" :data="usage" :expanded="reviewingLayout" :wide="layoutVariant === 'c'" /></article>
     </template>
     <template #bottom>
-      <ScreenSummaryCandidate v-if="reviewingLayout" class="screen-summary-dock" :variant="layoutVariant ?? 'a'" :alarms="alarms" :devices="devices" :runtime-ranking="runtimeRanking" :runtime-ranking-context="props.data?.runtimeRankingContext" :updated-at="prototypeMode ? deviceFrameTime : props.data?.deviceSummaryUpdatedAt" embedded />
+      <ScreenSummaryCandidate v-if="reviewingLayout" class="screen-summary-dock" :variant="layoutVariant ?? 'a'" :alarms="alarms" :devices="devices" :runtime-ranking="runtimeRanking" :updated-at="prototypeMode ? deviceFrameTime : props.data?.deviceSummaryUpdatedAt" embedded />
       <div v-else class="bottom-panels">
         <article v-show="alarmsOpen" class="screen-card bottom-card alarm-card"><header><h2>{{ s('alarms') }}</h2><button class="collapse-bottom" :aria-label="s('collapseAlarms')" @click="alarmsOpen = false"><ChevronDown :size="16" /></button></header><ScreenAlarmSummary :data="alarms" /></article>
         <button v-if="!alarmsOpen" class="bottom-restore restore-alarm" :aria-label="s('expandAlarms')" @click="alarmsOpen = true">{{ s('alarms') }}</button>

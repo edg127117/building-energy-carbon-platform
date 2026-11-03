@@ -28,10 +28,8 @@ const runtimeContext = computed(() => {
   const view = monitoring.rankingContext.value
   if (!view) return undefined
   const format = (time: number) => new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', dateStyle: 'medium', timeStyle: 'short' }).format(time)
-  const reasons = new Set(['IDENTITY_CONFLICT', 'INVALID_RUNTIME', 'NO_COVERAGE'])
-  const excluded = Object.entries(view.excludedReasons).map(([key, count]) => `${s('finalBRuntimeExclusion' + (reasons.has(key) ? key : 'OTHER'))} ${count}`).join('、') || s('finalBDeviceNoReasons')
   const stateMessage = monitoring.rankingFailed.value ? s('finalBRuntimeRankingRefreshFailed') : s('finalBRuntimeRankingFresh')
-  return s('finalBRuntimeRankingContext', { month: view.month, start: format(view.periodStart), end: format(view.periodEnd), asOf: format(view.asOf), ranked: view.rankedDevices, total: view.totalDevices, excluded, state: stateMessage })
+  return s('finalBRuntimeRankingContext', { month: view.month, asOf: format(view.asOf), state: stateMessage })
 })
 const summaryContext = computed(() => {
   const lastSuccess = monitoring.summaryLastSuccess.value
@@ -56,7 +54,7 @@ const summaryContext = computed(() => {
     modeReasons: formatReasons(details?.modeReasons), speedReasons: formatReasons(details?.speedReasons),
   })
 })
-const data = computed(() => withOutdoorTemperature(withApprovedScreenDemo({ ...state.data.value, ...annual.data.value, ...daily.data.value, ...flow.data.value, plan: plan.data.value ? { period: { kind: 'year' as const, value: state.periods.value.plan.value.slice(0, 4) }, data: plan.data.value } : undefined, intensity: intensity.data.value?.intensity, intensityBenchmarks: intensity.data.value?.intensityBenchmarks, devices: monitoring.devices.value, deviceSummaryUpdatedAt: monitoring.updatedAt.value, runtimeRanking: monitoring.runtimeRanking.value, runtimeRankingContext: runtimeContext.value }, state.periods.value.mirror), state.periods.value.usage, temperature.values.value))
+const data = computed(() => withOutdoorTemperature(withApprovedScreenDemo({ ...state.data.value, ...annual.data.value, ...daily.data.value, ...flow.data.value, plan: plan.data.value ? { period: { kind: 'year' as const, value: state.periods.value.plan.value.slice(0, 4) }, data: plan.data.value } : undefined, intensity: intensity.data.value?.intensity, intensityBenchmarks: intensity.data.value?.intensityBenchmarks, devices: monitoring.devices.value, deviceSummaryUpdatedAt: monitoring.updatedAt.value, runtimeRanking: monitoring.runtimeRanking.value }, state.periods.value.mirror), state.periods.value.usage, temperature.values.value))
 const building = computed(() => state.buildings.value.find(item => item.buildingId === state.buildingId.value))
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 </script>

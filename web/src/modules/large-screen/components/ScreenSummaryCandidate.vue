@@ -7,7 +7,7 @@ import type { ScreenAlarmSummaryData, ScreenDeviceSummaryData, ScreenRuntimeRank
 type GroupKey = 'switch' | 'mode' | 'speed'
 interface Reading { key: string; label: string; count: number | null; icon: Component; tone: string }
 interface Group { key: GroupKey; label: string; icon: Component; readings: Reading[] }
-const props = defineProps<{ variant: 'a' | 'b' | 'c'; alarms?: ScreenAlarmSummaryData; devices?: ScreenDeviceSummaryData; runtimeRanking?: readonly ScreenRuntimeRankingEntry[]; runtimeRankingContext?: string; updatedAt?: number; embedded?: boolean }>()
+const props = defineProps<{ variant: 'a' | 'b' | 'c'; alarms?: ScreenAlarmSummaryData; devices?: ScreenDeviceSummaryData; runtimeRanking?: readonly ScreenRuntimeRankingEntry[]; updatedAt?: number; embedded?: boolean }>()
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 const id = useId()
 const alarmOpen = ref(true), deviceOpen = ref(true)
@@ -53,9 +53,6 @@ function visualWidth(value: number | null) {
 function readingLabel(entry: Reading) {
   return s('summaryReading', { label: entry.label, count: number(entry.count), total: number(props.devices?.total) })
 }
-function coverageLabel(status?: ScreenRuntimeRankingEntry['coverageStatus']) {
-  return status ? s('finalBRuntimeCoverage' + status) : s('missing')
-}
 </script>
 
 <template>
@@ -91,7 +88,7 @@ function coverageLabel(status?: ScreenRuntimeRankingEntry['coverageStatus']) {
           </nav>
         </div>
         <div v-if="variant === 'b' && deviceView === 'ranking'" class="runtime-ranking" data-test="candidate-runtime-ranking">
-          <article v-for="(entry, index) in runtimeRanking ?? []" :key="entry.rank" class="ranking-card" :class="'tone-' + rankingTones[index % rankingTones.length]" :data-test="'candidate-rank-' + entry.rank" :title="s('summaryRankCoverageTitle', { context: runtimeRankingContext ?? '', coverage: coverageLabel(entry.coverageStatus), covered: number(entry.coveredHours), coveragePercentage: number(entry.coveragePercentage), on: number(entry.hours) })" tabindex="0" :aria-label="s('summaryRankReading', { rank: entry.rank, room: entry.room, hours: number(entry.hours) })">
+          <article v-for="(entry, index) in runtimeRanking ?? []" :key="entry.rank" class="ranking-card" :class="'tone-' + rankingTones[index % rankingTones.length]" :data-test="'candidate-rank-' + entry.rank" tabindex="0" :aria-label="s('summaryRankReading', { rank: entry.rank, room: entry.room, hours: number(entry.hours) })">
             <div class="ranking-top"><span class="ranking-badge">{{ s('summaryRankBadge', { rank: entry.rank }) }}</span><span class="ranking-floor">{{ entry.floor }}</span></div>
             <strong class="ranking-room">{{ entry.room }}</strong>
             <div class="ranking-bottom"><span class="ranking-period"><Clock :size="12" aria-hidden="true" />{{ s('summaryRuntimePeriod') }}</span><span class="ranking-hours"><b>{{ number(entry.hours) }}</b><small>{{ s('summaryRuntimeUnit') }}</small></span></div>
