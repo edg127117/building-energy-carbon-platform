@@ -23,9 +23,13 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenUsageChart', () => {
-  it('区分等待汇总与缺少数据，不把加载中显示成空态', () => {
+  it('区分等待汇总、失败与缺少数据，不把加载中显示成空态', async () => {
     const wrapper = mount(ScreenUsageChart, { props: { period: { kind: 'month', value: '2026-01' }, data: null, loading: true } })
     expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="usage-empty"]').exists()).toBe(false)
+    await wrapper.setProps({ failed: true })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="usage-empty"]').exists()).toBe(false)
     wrapper.unmount()
   })

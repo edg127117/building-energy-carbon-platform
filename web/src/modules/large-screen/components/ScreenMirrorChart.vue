@@ -9,7 +9,7 @@ import { formatScreenReading } from '../models/screen-reading-format'
 
 type TooltipItem = Record<string, unknown>
 
-const props = defineProps<{ data: ScreenMirrorData | null; period: ScreenPeriod; expanded?: boolean; loading?: boolean }>()
+const props = defineProps<{ data: ScreenMirrorData | null; period: ScreenPeriod; expanded?: boolean; loading?: boolean; failed?: boolean }>()
 
 const buckets = computed(() => periodBuckets(props.period))
 const dynamicEmissions = computed(() => valuesFor(props.data?.dynamicEmissions, buckets.value.length))
@@ -185,7 +185,8 @@ function tooltipUnit(seriesId: string): string {
 <template>
   <section class="mirror-chart" :aria-label="t('largeScreen.mirrorChartLabel')">
     <ChartView :option="option" :accessible-label="t('largeScreen.mirrorChartLabel')" />
-    <p v-if="loading" class="chart-state" role="status">{{ t('common.loading') }}</p>
+    <p v-if="failed" class="chart-state" role="alert">{{ t('largeScreen.failed') }}</p>
+    <p v-else-if="loading" class="chart-state" role="status">{{ t('common.loading') }}</p>
     <p v-else-if="!hasChartData" class="chart-state" data-test="mirror-empty">{{ t('largeScreen.mirrorEmpty') }}</p>
   </section>
 </template>

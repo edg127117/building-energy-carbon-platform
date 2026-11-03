@@ -24,6 +24,7 @@ export interface ScreenBusinessFlowGraph {
 /** 大屏展示输入；独立原型和业务接口显式分开，旧能源/系统流图不能冒充用途/楼层图。 */
 export interface ScreenRedesignData {
   loading?: { usage: boolean; mirror: boolean }
+  failed?: { usage: boolean; mirror: boolean }
   annual?: { year: string; carbon: number | null; intensity: number | null; throughMonth?: number }
   previousMonth?: { month: string; carbon: number | null; intensity: number | null }
   composition?: ScreenPeriodEntry<ScreenCompositionData>

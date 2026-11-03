@@ -27,6 +27,9 @@ const building = computed(() => state.buildings.value.find(item => item.building
 const renderData = computed(() => ({ ...data.value, loading: {
   usage: state.periods.value.usage.kind === 'month' && daily.loading.value && !daily.data.value.usage,
   mirror: state.periods.value.mirror.kind === 'month' && daily.loading.value && !daily.data.value.mirror,
+}, failed: {
+  usage: state.periods.value.usage.kind === 'month' && daily.failedMonths.value.includes(state.periods.value.usage.value),
+  mirror: state.periods.value.mirror.kind === 'month' && daily.failedMonths.value.includes(state.periods.value.mirror.value),
 } }))
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 </script>

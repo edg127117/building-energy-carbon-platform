@@ -7,7 +7,7 @@ import type { ScreenUsageData } from '../models/screen-analytical'
 import { periodBuckets, type ScreenPeriod } from '../models/screen-period'
 import { formatScreenReading } from '../models/screen-reading-format'
 
-const props = defineProps<{ data: ScreenUsageData | null; period: ScreenPeriod; expanded?: boolean; wide?: boolean; loading?: boolean }>()
+const props = defineProps<{ data: ScreenUsageData | null; period: ScreenPeriod; expanded?: boolean; wide?: boolean; loading?: boolean; failed?: boolean }>()
 const buckets = computed(() => periodBuckets(props.period))
 const electricity = computed(() => valuesFor(props.data?.electricity, buckets.value.length))
 const temperature = computed(() => valuesFor(props.data?.temperature, buckets.value.length))
@@ -75,7 +75,8 @@ function displayUnit(value: string | undefined): string {
 <template>
   <section class="usage-chart" :aria-label="t('largeScreen.usageChartLabel')">
     <ChartView :option="option" :accessible-label="t('largeScreen.usageChartLabel')" />
-    <p v-if="loading" class="chart-state" role="status">{{ t('common.loading') }}</p>
+    <p v-if="failed" class="chart-state" role="alert">{{ t('largeScreen.failed') }}</p>
+    <p v-else-if="loading" class="chart-state" role="status">{{ t('common.loading') }}</p>
     <p v-else-if="!hasChartData" class="chart-state" data-test="usage-empty">{{ t('largeScreen.usageEmpty') }}</p>
   </section>
 </template>

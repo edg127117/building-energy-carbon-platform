@@ -27,9 +27,13 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenMirrorChart', () => {
-  it('静态结果尚在准备时明确显示加载状态', () => {
+  it('静态结果尚在准备时显示加载，失败时不冒充缺测', async () => {
     const wrapper = mount(ScreenMirrorChart, { props: { period: { kind: 'month', value: '2026-01' }, data: null, loading: true } })
     expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="mirror-empty"]').exists()).toBe(false)
+    await wrapper.setProps({ failed: true })
+    expect(wrapper.find('[role="alert"]').exists()).toBe(true)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="mirror-empty"]').exists()).toBe(false)
     wrapper.unmount()
   })
