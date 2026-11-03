@@ -1,4 +1,6 @@
 # 仅供隔离自动化测试，不作为部署环境密钥。
+daily-trend-summary:
+  enabled: false
 management:
   server:
     port: 0

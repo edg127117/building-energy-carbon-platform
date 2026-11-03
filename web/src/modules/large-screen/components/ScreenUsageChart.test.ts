@@ -23,6 +23,12 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenUsageChart', () => {
+  it('区分等待汇总与缺少数据，不把加载中显示成空态', () => {
+    const wrapper = mount(ScreenUsageChart, { props: { period: { kind: 'month', value: '2026-01' }, data: null, loading: true } })
+    expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="usage-empty"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('悬停电量固定两位、温度四舍五入为整数，不改动序列精度', () => {
     const wrapper = mount(ScreenUsageChart, { props: {
       period: { kind: 'year', value: '2026' },

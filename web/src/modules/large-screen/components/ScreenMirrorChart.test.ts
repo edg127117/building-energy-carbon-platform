@@ -27,6 +27,12 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenMirrorChart', () => {
+  it('静态结果尚在准备时明确显示加载状态', () => {
+    const wrapper = mount(ScreenMirrorChart, { props: { period: { kind: 'month', value: '2026-01' }, data: null, loading: true } })
+    expect(wrapper.find('[role="status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="mirror-empty"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
   it('把静态序列仅映射为负坐标，仍以正值展示轴标签和悬停读数', () => {
     const wrapper = mount(ScreenMirrorChart, {
       props: {

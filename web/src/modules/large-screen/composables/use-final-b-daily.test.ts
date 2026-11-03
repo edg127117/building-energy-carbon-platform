@@ -49,3 +49,88 @@ it('reuses completed same-building months across staggered card changes but refr
   expect(readDailyTrends).toHaveBeenCalledTimes(3)
   scope.stop()
 })
+
+it('commits each month as soon as it completes', async () => {
+  const pending: Array<{ month: string; resolve: (view: DailyTrends) => void }> = []
+  vi.mocked(readDailyTrends).mockImplementation((building, month) => new Promise(resolve => pending.push({ month, resolve })))
+  const scope = effectScope(), building = ref('B')
+  const usage = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  const mirror = ref<ScreenPeriod>({ kind: 'month', value: '2026-02' })
+  const state = scope.run(() => useFinalBDaily(building, usage, mirror))!
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(2)
+
+  pending.find(item => item.month === '2026-02')!.resolve(dailyFixture('B', '2026-02'))
+  await flushPromises()
+  expect(state.data.value.mirror?.period.value).toBe('2026-02')
+  expect(state.data.value.usage).toBeUndefined()
+  expect(state.loading.value).toBe(true)
+
+  pending.find(item => item.month === '2026-01')!.resolve(dailyFixture('B', '2026-01'))
+  await flushPromises()
+  expect(state.data.value.usage?.period.value).toBe('2026-01')
+  expect(state.loading.value).toBe(false)
+
+  mirror.value = usage.value
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(2)
+  scope.stop()
+})
+
+it('shares a same-building in-flight request when the second card selects its month', async () => {
+  let resolveRequest!: (view: DailyTrends) => void
+  vi.mocked(readDailyTrends).mockImplementation(() => new Promise(resolve => { resolveRequest = resolve }))
+  const scope = effectScope(), building = ref('B')
+  const usage = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  const mirror = ref<ScreenPeriod>({ kind: 'year', value: '2026' })
+  const state = scope.run(() => useFinalBDaily(building, usage, mirror))!
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(1)
+
+  mirror.value = usage.value
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(1)
+  resolveRequest(dailyFixture('B', '2026-01'))
+  await flushPromises()
+  expect(state.data.value.usage?.period.value).toBe('2026-01')
+  expect(state.data.value.mirror?.period.value).toBe('2026-01')
+  scope.stop()
+})
+
+it('aborts the active request when its scope is disposed', async () => {
+  vi.mocked(readDailyTrends).mockImplementation(() => new Promise(() => undefined))
+  const scope = effectScope(), building = ref('B')
+  const period = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  scope.run(() => useFinalBDaily(building, period, period))
+  const signal = vi.mocked(readDailyTrends).mock.calls[0][2]!
+  scope.stop()
+  expect(signal.aborted).toBe(true)
+})
+
+it('does not commit a removed month response and reload replaces a current in-flight request', async () => {
+  const pending: Array<{ building: string; month: string; resolve: (view: DailyTrends) => void; signal?: AbortSignal }> = []
+  vi.mocked(readDailyTrends).mockImplementation((building, month, signal) => new Promise(resolve => pending.push({ building, month, resolve, signal })))
+  const scope = effectScope(), building = ref('B')
+  const period = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  const state = scope.run(() => useFinalBDaily(building, period, period))!
+  await flushPromises()
+
+  period.value = { kind: 'month', value: '2026-02' }
+  await flushPromises()
+  expect(pending[0].signal?.aborted).toBe(false)
+  pending[0].resolve(dailyFixture('B', '2026-01'))
+  await flushPromises()
+  expect(state.views.value.has('2026-01')).toBe(false)
+  expect(state.data.value.usage).toBeUndefined()
+
+  const oldSignal = pending[1].signal
+  const reload = state.reload()
+  await flushPromises()
+  expect(oldSignal?.aborted).toBe(true)
+  expect(pending).toHaveLength(3)
+  pending[1].resolve(dailyFixture('B', '2026-02'))
+  pending[2].resolve(dailyFixture('B', '2026-02'))
+  await reload
+  expect(state.views.value.get('2026-02')?.buildingId).toBe('B')
+  scope.stop()
+})

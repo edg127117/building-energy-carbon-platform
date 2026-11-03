@@ -29,6 +29,8 @@ class DailyElectricityCarbonApiContractTest {
     @MockBean BuildingScopeService scopes;
     @MockBean BuildingDailyElectricityReader electricity;
     @MockBean HourlyCarbonRepository hourly;
+    @MockBean DailyTrendSummaryRepository summaries;
+    @MockBean DailyTrendSummaryCache resultCache;
     @BeforeEach void setup() {
         when(tokens.validateActiveToken(anyLong(),anyString())).thenReturn(TokenValidationResult.ACTIVE);
         when(electricity.read(anyLong(),anyCollection(),any(),any())).thenAnswer(c->{
@@ -59,5 +61,22 @@ class DailyElectricityCarbonApiContractTest {
         verify(hourly,never()).publish(anyLong(),any(),any(),any(),any());
         mvc.perform(get(path).with(role("ENERGY_MANAGER")).param("month","2024-13"))
                 .andExpect(status().isBadRequest()).andExpect(jsonPath("$.errorCode").value("DAILY_TREND_QUERY_INVALID"));
+    }
+    @Test void summaryRouteRetainsRoleAndBuildingBoundaryBeforeCacheRead() throws Exception {
+        String path="/v1/energy-reporting/buildings/BLD001/daily-trends/summary";
+        mvc.perform(get(path).param("month","2026-01")).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).with(role("THIRD_PARTY")).param("month","2026-01")).andExpect(status().isForbidden());
+        doThrow(new com.platform.framework.exception.BusinessException(403,"无建筑权限")).when(scopes).checkAccess(eq(1L),anyCollection(),eq("BLD001"));
+        mvc.perform(get(path).with(role("BUILDING_OWNER")).param("month","2026-01")).andExpect(status().isForbidden());
+        verifyNoInteractions(summaries,resultCache,electricity,hourly);
+    }
+    @Test void summaryFirstReadReturnsPreparationInsteadOfDoingInlineCalculation() throws Exception {
+        when(summaries.sourceVersion(eq("BLD001"),any())).thenReturn("a".repeat(64));
+        mvc.perform(get("/v1/energy-reporting/buildings/BLD001/daily-trends/summary").with(role("ENERGY_MANAGER")).param("month","2026-01"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.state").value("PREPARING"))
+                .andExpect(jsonPath("$.data.days.length()").value(0)).andExpect(jsonPath("$.data.retryAfterSeconds").value(2))
+                .andExpect(jsonPath("$.data.contractVersion").value(DailyTrendSummaryContracts.CONTRACT));
+        verify(summaries).request(eq("BLD001"),eq("2026-01"),eq(1L),eq("a".repeat(64)),anyLong());
+        verifyNoInteractions(electricity,hourly,resultCache);
     }
 }

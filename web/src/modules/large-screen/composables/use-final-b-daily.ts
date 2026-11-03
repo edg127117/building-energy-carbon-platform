@@ -4,40 +4,88 @@ import { dailyScreenData, validateDailyTrends } from '../models/final-b-daily'
 import { validScreenPeriod, type ScreenPeriod } from '../models/screen-period'
 import type { ScreenRedesignData } from '../models/screen-redesign'
 
-/** 两张卡同月共用一次读取；切换建筑、期间或销毁后，旧请求不能回填新画布。 */
+/** 两卡同建筑同月共享请求；期间切换只接纳当前月份结果，换建筑或销毁时中止请求。 */
 export function useFinalBDaily(buildingId: Ref<string>, usage: Ref<ScreenPeriod>, mirror: Ref<ScreenPeriod>) {
   const views = shallowRef<ReadonlyMap<string, DailyTrends>>(new Map())
   const failedMonths = ref<string[]>([]), loading = ref(false)
-  let generation = 0, disposed = false, controller: AbortController | undefined
+  const inFlight = new Map<string, { controller: AbortController; promise: Promise<void> }>()
   const months = computed(() => [...new Set([usage.value, mirror.value]
     .filter(p => p.kind === 'month' && validScreenPeriod(p)).map(p => p.value))].sort())
-  async function load(reuseCompleted: boolean) {
-    const current = ++generation, building = buildingId.value, requested = [...months.value]
-    controller?.abort()
-    // 切卡保留同建筑已完成月份，避免两卡交错切月时重复占用整月查询预算；手动重试仍重新读取。
-    const retained = new Map([...views.value].filter(([month, view]) => reuseCompleted && requested.includes(month) && view.buildingId === building))
-    views.value = retained; failedMonths.value = []; loading.value = false
-    if (!building || !requested.length) return
-    const pending = requested.filter(month => !retained.has(month))
-    if (!pending.length) return
-    controller = new AbortController(); const signal = controller.signal
-    const valid = () => !disposed && current === generation && !signal.aborted && building === buildingId.value
-    loading.value = true
-    const results = await Promise.all(pending.map(async month => {
-      try {
-        const view = await readDailyTrends(building, month, signal)
-        validateDailyTrends(view, building, month)
-        return { month, view }
-      } catch { return { month, view: null } }
-    }))
-    if (!valid()) return
-    views.value = new Map([...retained, ...results.filter(item => item.view !== null).map(item => [item.month, item.view!] as const)])
-    failedMonths.value = results.filter(item => item.view === null).map(item => item.month)
-    loading.value = false
+  let activeBuilding = buildingId.value, disposed = false
+  const requestKey = (building: string, month: string) => `${building}\u0000${month}`
+
+  function updateLoading() {
+    loading.value = !!activeBuilding && months.value.some(month => inFlight.has(requestKey(activeBuilding, month)))
   }
-  const reload = () => load(false)
-  watch([buildingId, () => months.value.join(',')], () => { void load(true) }, { immediate: true })
-  onScopeDispose(() => { disposed = true; generation++; controller?.abort() })
+
+  function abortAll() {
+    for (const request of inFlight.values()) request.controller.abort()
+    inFlight.clear()
+  }
+
+  function startRequest(building: string, month: string) {
+    const key = requestKey(building, month), controller = new AbortController()
+    const request: { controller: AbortController; promise: Promise<void> } = { controller, promise: Promise.resolve() }
+    inFlight.set(key, request)
+    request.promise = (async () => {
+      const current = () => !disposed && inFlight.get(key) === request && building === activeBuilding
+        && building === buildingId.value && months.value.includes(month)
+      try {
+        const view = await readDailyTrends(building, month, controller.signal)
+        validateDailyTrends(view, building, month)
+        if (!current()) return
+        views.value = new Map([...views.value, [month, view]])
+        failedMonths.value = failedMonths.value.filter(item => item !== month)
+      } catch {
+        if (current() && !failedMonths.value.includes(month)) failedMonths.value = [...failedMonths.value, month]
+      } finally {
+        if (inFlight.get(key) === request) inFlight.delete(key)
+        updateLoading()
+      }
+    })()
+    updateLoading()
+    return request.promise
+  }
+
+  async function load(forceRefresh = false) {
+    const building = buildingId.value, requested = [...months.value]
+    if (building !== activeBuilding) {
+      abortAll()
+      activeBuilding = building
+      views.value = new Map()
+      failedMonths.value = []
+    }
+
+    const retained = new Map([...views.value].filter(([month, view]) => requested.includes(month) && view.buildingId === building))
+    views.value = retained
+    failedMonths.value = failedMonths.value.filter(month => requested.includes(month))
+    if (!building || disposed) {
+      updateLoading()
+      return
+    }
+
+    const pending: Promise<void>[] = []
+    for (const month of requested) {
+      const key = requestKey(building, month)
+      if (forceRefresh) {
+        const previous = inFlight.get(key)
+        previous?.controller.abort()
+        if (previous) inFlight.delete(key)
+        retained.delete(month)
+        failedMonths.value = failedMonths.value.filter(item => item !== month)
+      } else if (retained.has(month)) continue
+
+      const existing = inFlight.get(key)
+      pending.push(existing?.promise ?? startRequest(building, month))
+    }
+    views.value = new Map(retained)
+    updateLoading()
+    await Promise.all(pending)
+  }
+
+  const reload = () => load(true)
+  watch([buildingId, () => months.value.join(',')], () => { void load() }, { immediate: true })
+  onScopeDispose(() => { disposed = true; abortAll() })
   const data = computed<ScreenRedesignData>(() => {
     let result: ScreenRedesignData = {}
     // 月视图读取失败也清空对应月输入，绝不回用另一个期间的值或原型静态数据。

@@ -7,7 +7,7 @@ export function validateDailyTrends(view: DailyTrends, building: string, month: 
   const [year, m] = month.split('-').map(Number)
   const count = new Date(Date.UTC(year, m, 0)).getUTCDate()
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month) || view.buildingId !== building || view.month !== month
-    || view.timezoneId !== 'Asia/Shanghai' || view.contractVersion !== 'DAILY_ELECTRICITY_STATIC_CARBON_V1'
+    || view.timezoneId !== 'Asia/Shanghai' || !['DAILY_ELECTRICITY_STATIC_CARBON_V1', 'DAILY_ELECTRICITY_STATIC_CARBON_SUMMARY_V1'].includes(view.contractVersion)
     || view.resultNature !== 'MONITORING' || view.electricityUnit !== 'kWh' || view.emissionUnit !== 'tCO2e'
     || view.factorUnit !== 'kgCO2e/kWh' || !Array.isArray(view.days) || view.days.length !== count) throw new Error('DAILY_TREND_SCOPE_MISMATCH')
   view.days.forEach((day, index) => {

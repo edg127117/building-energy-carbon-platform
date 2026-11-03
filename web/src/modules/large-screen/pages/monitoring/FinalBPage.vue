@@ -24,11 +24,15 @@ const temperature = useOutdoorTemperature(state.buildingId, computed(() => state
 const intensity = useCarbonIntensity(computed(() => intensityQuery(state.buildingId.value, state.periods.value.intensity)), computed(() => state.periods.value.intensity))
 const data = computed(() => withOutdoorTemperature(withApprovedScreenDemo({ ...state.data.value, ...annual.data.value, ...daily.data.value, ...flow.data.value, plan: plan.data.value ? { period: { kind: 'year' as const, value: state.periods.value.plan.value.slice(0, 4) }, data: plan.data.value } : undefined, intensity: intensity.data.value?.intensity, intensityBenchmarks: intensity.data.value?.intensityBenchmarks }, state.periods.value.mirror), state.periods.value.usage, temperature.values.value))
 const building = computed(() => state.buildings.value.find(item => item.buildingId === state.buildingId.value))
+const renderData = computed(() => ({ ...data.value, loading: {
+  usage: state.periods.value.usage.kind === 'month' && daily.loading.value && !daily.data.value.usage,
+  mirror: state.periods.value.mirror.kind === 'month' && daily.loading.value && !daily.data.value.mirror,
+} }))
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 </script>
 
 <template>
-  <IndexPage layout-variant="b" :data="data" @period-change="state.periods.value = $event">
+  <IndexPage layout-variant="b" :data="renderData" @period-change="state.periods.value = $event">
     <template #data-context>
       <p>{{ s('finalBInterfaceNotice') }}</p>
       <p>{{ s('finalBBuildingContext', { value: building?.buildingName ?? s(code ? 'noBuildings' : 'finalBBuildingNotConfigured') }) }}</p>
