@@ -67,7 +67,9 @@ export function validateBuildingRuntimeRanking(value: BuildingRuntimeRanking, bu
       && countValid(item.mappingVersion) && item.mappingVersion > 0
       && countValid(item.onMillis) && countValid(item.coveredMillis) && item.onMillis <= item.coveredMillis
       && item.coveredMillis <= value.elapsedMillis
-      && finiteNonNegative(item.hours) && finiteNonNegative(item.percentage) && item.percentage <= 100
+      && finiteNonNegative(item.hours) && finiteNonNegative(item.coveredHours)
+      && finiteNonNegative(item.coveragePercentage) && item.coveragePercentage <= 100
+      && finiteNonNegative(item.percentage) && item.percentage <= 100
       && ['PARTIAL', 'COMPLETE'].includes(item.coverageStatus)
   })
   if (!window || value.buildingId !== buildingId || value.scope !== 'ACTIVE_BOUND_DAIKIN_INDOOR'
@@ -94,5 +96,7 @@ export function mapBuildingRuntimeRanking(value: BuildingRuntimeRanking): Screen
     coverageStatus: item.coverageStatus,
     coveredMillis: item.coveredMillis,
     onMillis: item.onMillis,
+    coveredHours: item.coveredHours,
+    coveragePercentage: item.coveragePercentage,
   }))
 }

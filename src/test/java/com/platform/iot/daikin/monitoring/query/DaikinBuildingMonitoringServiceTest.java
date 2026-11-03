@@ -183,6 +183,8 @@ class DaikinBuildingMonitoringServiceTest {
         assertThat(result.statisticsZone()).isEqualTo("Asia/Shanghai");
         assertThat(result.periodStart()).isEqualTo(Instant.parse("2026-10-31T16:00:00Z").toEpochMilli());
         assertThat(result.items().getFirst().hours()).isEqualByComparingTo("1");
+        assertThat(result.items().getFirst().coveredHours()).isEqualByComparingTo("2");
+        assertThat(result.items().getFirst().coveragePercentage()).isEqualByComparingTo("5.71");
         assertThat(result.items().getFirst().spaceName()).isEqualTo("实验室");
         assertThat(result.items().getFirst().floorName()).isEqualTo("三楼");
         assertThat(result.items().getFirst().coverageStatus()).isEqualTo("PARTIAL");
@@ -192,6 +194,8 @@ class DaikinBuildingMonitoringServiceTest {
         assertThat(result.items().get(1).hours()).isEqualByComparingTo("0.5");
         assertThat(result.items().get(1).percentage()).isEqualByComparingTo("50");
         assertThat(result.items().get(2).hours()).isZero();
+        assertThat(result.items().get(2).coveredHours()).isEqualByComparingTo("1.3889");
+        assertThat(result.items().get(2).coveragePercentage()).isEqualByComparingTo("3.97");
     }
 
     @Test

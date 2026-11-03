@@ -17,7 +17,8 @@ function ranking(overrides: Partial<BuildingRuntimeRanking> = {}): BuildingRunti
     asOf: start + 1000, periodStart: start, periodEnd: Date.UTC(2026, 10, 1) - 8 * 60 * 60 * 1000,
     elapsedMillis: 1000, totalDevices: 1, rankedDevices: 1, excludedReasons: {},
     items: [{ rank: 1, equipmentId: 'E1', identityId: 'I1', mappingVersion: 2, equipmentCode: 'AC-01', equipmentName: '内机',
-      spaceName: '会议室', floorName: null, onMillis: 1000, coveredMillis: 1000, hours: 0.0003, percentage: 100, coverageStatus: 'PARTIAL' }], ...overrides }
+      spaceName: '会议室', floorName: null, onMillis: 1000, coveredMillis: 1000, hours: 0.0003,
+      coveredHours: 0.0003, coveragePercentage: 100, percentage: 100, coverageStatus: 'PARTIAL' }], ...overrides }
 }
 
 describe('building monitoring contract mapping', () => {
@@ -48,6 +49,8 @@ describe('building monitoring contract mapping', () => {
     })) })
     expect(() => validateBuildingRuntimeRanking(truncated, 'B', '2026-10')).not.toThrow()
     expect(() => validateBuildingRuntimeRanking(ranking({ items: [{ ...ranking().items[0], coveredMillis: 1001 }] }), 'B', '2026-10')).toThrow()
+    expect(() => validateBuildingRuntimeRanking(ranking({ items: [{ ...ranking().items[0], coveragePercentage: 101 }] }), 'B', '2026-10')).toThrow()
+    expect(() => validateBuildingRuntimeRanking(ranking({ items: [{ ...ranking().items[0], coveredHours: -1 }] }), 'B', '2026-10')).toThrow()
     expect(() => validateBuildingRuntimeRanking(ranking({ source: 'SYNTHETIC' as never }), 'B', '2026-10')).toThrow()
     expect(() => validateBuildingRuntimeRanking(ranking({ periodStart: 0 }), 'B', '2026-10')).toThrow()
     const duplicate = ranking(); duplicate.items.push({ ...duplicate.items[0], rank: 2 })
@@ -57,6 +60,6 @@ describe('building monitoring contract mapping', () => {
 
   it('displays formal space and equipment identity without guessing a missing floor', () => {
     const [item] = mapBuildingRuntimeRanking(ranking())
-    expect(item).toMatchObject({ room: '会议室 · 内机', floor: '—', coverageStatus: 'PARTIAL' })
+    expect(item).toMatchObject({ room: '会议室 · 内机', floor: '—', coverageStatus: 'PARTIAL', coveredHours: 0.0003, coveragePercentage: 100 })
   })
 })

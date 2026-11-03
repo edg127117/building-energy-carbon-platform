@@ -145,6 +145,8 @@ public class DaikinBuildingMonitoringService {
             candidates.add(new RuntimeRank(0, target.equipmentId(), target.identityId(), target.mappingVersion(),
                     target.equipmentCode(), names.get(target.equipmentId()), space == null ? null : space.name(),
                     floor(space, spaces), on, covered, BigDecimal.valueOf(on).divide(BigDecimal.valueOf(3_600_000), 4, RoundingMode.HALF_UP),
+                    BigDecimal.valueOf(covered).divide(BigDecimal.valueOf(3_600_000), 4, RoundingMode.HALF_UP),
+                    BigDecimal.valueOf(covered).multiply(BigDecimal.valueOf(100)).divide(BigDecimal.valueOf(elapsed), 2, RoundingMode.HALF_UP),
                     null, covered < elapsed ? "PARTIAL" : "COMPLETE"));
         }
         candidates.sort(Comparator.comparingLong(RuntimeRank::onMillis).reversed().thenComparing(RuntimeRank::equipmentId));
@@ -153,7 +155,7 @@ public class DaikinBuildingMonitoringService {
         for (RuntimeRank row : candidates.subList(0, Math.min(limit, candidates.size()))) {
             items.add(new RuntimeRank(items.size() + 1, row.equipmentId(), row.identityId(), row.mappingVersion(),
                     row.equipmentCode(), row.equipmentName(), row.spaceName(), row.floorName(), row.onMillis(), row.coveredMillis(),
-                    row.hours(), highest == 0 ? BigDecimal.ZERO : BigDecimal.valueOf(row.onMillis()).multiply(BigDecimal.valueOf(100))
+                    row.hours(), row.coveredHours(), row.coveragePercentage(), highest == 0 ? BigDecimal.ZERO : BigDecimal.valueOf(row.onMillis()).multiply(BigDecimal.valueOf(100))
                     .divide(BigDecimal.valueOf(highest), 2, RoundingMode.HALF_UP), row.coverageStatus()));
         }
         return new RuntimeRanking(buildingId, SCOPE, "PLATFORM_OBSERVED", month, ZONE.getId(), now, start, end,

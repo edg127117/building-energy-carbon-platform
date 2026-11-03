@@ -58,6 +58,21 @@ describe('summary card design candidates', () => {
     expect(wrapper.findAll('.status-reading')).toHaveLength(10)
     wrapper.unmount()
   })
+  it('B观测排名复用后端覆盖率和小时值，零开机仍展示且不新增状态行或切换按钮', async () => {
+    const runtimeRanking = [{ rank: 1, room: '会议室 · 内机', floor: '三楼', hours: 0, percentage: 0,
+      coveredHours: 2, coveragePercentage: 5.71, coverageStatus: 'PARTIAL' as const }]
+    const wrapper = mount(ScreenSummaryCandidate, { props: { ...base, variant: 'b', runtimeRanking } })
+    expect(wrapper.findAll('[data-test="candidate-group-mode"] .status-reading')).toHaveLength(3)
+    expect(wrapper.findAll('[data-test="candidate-group-speed"] .status-reading')).toHaveLength(4)
+    expect(wrapper.findAll('.group-filter button')).toHaveLength(2)
+    expect(wrapper.get('.group-filter button:last-child').text()).toBe('当月观测开机时长排名')
+    await wrapper.get('.group-filter button:last-child').trigger('click')
+    const card = wrapper.get('[data-test="candidate-rank-1"]')
+    expect(card.attributes('title')).toContain('有效覆盖：2 小时（5.71%）')
+    expect(card.attributes('title')).toContain('观测开机：0 小时')
+    expect(card.attributes('aria-label')).toContain('当月观测开机 0 小时')
+    wrapper.unmount()
+  })
   it('两个卡片可以独立收起展开，刷新数据不重建数字节点', async () => {
     const wrapper = mount(ScreenSummaryCandidate, { props: { ...base, variant: 'a' } })
     await wrapper.get('[aria-label="收起报警信息"]').trigger('click')

@@ -34,6 +34,8 @@ export interface BuildingRuntimeRank {
   onMillis: number
   coveredMillis: number
   hours: number
+  coveredHours: number
+  coveragePercentage: number
   percentage: number
   coverageStatus: 'PARTIAL' | 'COMPLETE'
 }
