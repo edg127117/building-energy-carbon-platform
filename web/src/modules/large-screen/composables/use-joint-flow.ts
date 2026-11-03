@@ -1,5 +1,5 @@
 import { computed, onScopeDispose, ref, shallowRef, watch, type Ref } from 'vue'
-import { queryJointFlow, type JointFlowView } from '@/modules/energy-classification/public'
+import { queryPreparedJointFlow, type JointFlowView } from '@/modules/energy-classification/public'
 import type { ScreenPeriod } from '../models/screen-period'
 import type { ScreenRedesignData } from '../models/screen-redesign'
 import { jointFlowRequest, screenJointFlow, validateJointFlow } from '../models/joint-flow'
@@ -30,7 +30,7 @@ export function useJointFlow(buildingId: Ref<string>, period: Ref<ScreenPeriod>,
     state.value = 'LOADING'
     const valid = () => !disposed && generation === current && !signal.aborted
     try {
-      const response = await queryJointFlow(request, signal)
+      const response = await queryPreparedJointFlow(request, signal)
       validateJointFlow(response, request)
       // 先确认两张图都属于当前正式配置；换建筑、期间或卸载后，旧响应绝不能回填到大屏。
       screenJointFlow(response.carbon, 'tCO2e', response.dimensions)

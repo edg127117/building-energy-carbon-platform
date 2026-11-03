@@ -6,7 +6,7 @@ import type { ScreenPeriod } from '../models/screen-period'
 import type { JointFlowView } from '@/modules/energy-classification/public'
 
 const api = vi.hoisted(() => vi.fn())
-vi.mock('@/modules/energy-classification/public', () => ({ queryJointFlow: api }))
+vi.mock('@/modules/energy-classification/public', () => ({ queryPreparedJointFlow: api }))
 vi.mock('@/locales', () => ({ t: (key: string) => key }))
 
 function jointFlowFixture(): JointFlowView {

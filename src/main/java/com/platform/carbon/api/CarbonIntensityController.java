@@ -18,6 +18,12 @@ import static com.platform.carbon.CarbonIntensityContracts.*;
 public class CarbonIntensityController {
     private final CarbonIntensityCatalogService catalog;
     private final CarbonIntensityService intensity;
+    private final CarbonDisplayQueryService display;
+    @GetMapping("/buildings/{buildingId}/summary")
+    public Result<CarbonDisplayQueryContracts.View> summary(Authentication auth,@PathVariable String buildingId,@RequestParam String mode,
+            @RequestParam int year,@RequestParam(required=false) Integer month,@RequestParam(defaultValue="Asia/Shanghai") String timezoneId) {
+        return Result.success(display.intensity(SecurityUser.userId(auth),SecurityUser.roles(auth),buildingId,mode,year,month,timezoneId));
+    }
     @GetMapping("/catalog") public Result<List<Version>> list() { return Result.success(catalog.list()); }
     @PostMapping("/catalog")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")

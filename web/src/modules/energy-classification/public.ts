@@ -12,7 +12,7 @@ export { carbonPlanApi } from './api/carbon-plan'
 export type { CarbonPlanResponse, CarbonPlanVersion, CarbonPlanBaseline } from './api/carbon-plan'
 export { default as CarbonPlanPanel } from './components/CarbonPlanPanel.vue'
 export { default as CarbonPlanPage } from './pages/CarbonPlanPage.vue'
-export { previewJointFlow, queryJointFlow } from './api/joint-flow'
+export { previewJointFlow, queryJointFlow, queryPreparedJointFlow } from './api/joint-flow'
 export { jointFlowConfigurationApi } from './api/joint-flow-configurations'
 export type { JointFlowCoverage, JointFlowGraph, JointFlowNode, JointFlowRequest, JointFlowView } from './api/joint-flow'
 export type {

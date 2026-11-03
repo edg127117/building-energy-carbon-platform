@@ -1,4 +1,5 @@
 import { requestApi } from '@/infrastructure/http/public'
+import { readPreparedQuery, type PreparedQueryEnvelope } from '@/shared/infrastructure/prepared-query'
 
 export type { JointFlowConfiguration, JointFlowConfigurationVersion, JointFlowConversion, JointFlowDimension, JointFlowDimensionKey, JointFlowDimensionNode, JointFlowDimensionSource, JointFlowFloorReference, JointFlowSelection } from '../models/joint-flow-configuration'
 
@@ -68,6 +69,13 @@ const basePath = '/v1/carbon-management/joint-flow'
 /** 查询与草稿预览均由后端完成冻结结果归属和数值计算；浏览器只传递范围及明确配置版本。 */
 export function queryJointFlow(request: JointFlowRequest, signal?: AbortSignal) {
   return requestApi<JointFlowView>({ method: 'post', url: `${basePath}/query`, data: request, signal })
+}
+
+export function queryPreparedJointFlow(request: JointFlowRequest, signal?: AbortSignal) {
+  return readPreparedQuery<JointFlowView>(
+    signal => requestApi<PreparedQueryEnvelope<JointFlowView>>({ method: 'post', url: `${basePath}/summary-query`, data: request, signal }),
+    { kind: 'JOINT_FLOW', buildingId: request.buildingId }, signal,
+  )
 }
 
 export function previewJointFlow(request: JointFlowRequest, signal?: AbortSignal) {

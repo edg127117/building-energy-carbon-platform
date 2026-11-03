@@ -17,6 +17,11 @@ import org.springframework.web.bind.annotation.*;
 /** 新增分析查询保留原报表契约，不发布核算、变更分类或触发设备操作。 */
 public class JointFlowController {
     private final JointFlowService service;
+    private final CarbonDisplayQueryService display;
+    @PostMapping("/summary-query")
+    public Result<CarbonDisplayQueryContracts.View> summary(Authentication authentication,@Valid @RequestBody JointFlowContracts.Request request) {
+        return Result.success(display.jointFlow(SecurityUser.userId(authentication),SecurityUser.roles(authentication),request));
+    }
     @PostMapping("/query")
     public Result<JointFlowContracts.View> query(Authentication authentication, @Valid @RequestBody JointFlowContracts.Request request) {
         return Result.success(service.query(SecurityUser.userId(authentication), SecurityUser.roles(authentication), request));

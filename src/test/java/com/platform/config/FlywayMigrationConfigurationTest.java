@@ -35,6 +35,7 @@ class FlywayMigrationConfigurationTest {
                 "V100__mysql_period_hourly_evidence_capacity.sql",
                 "V101__mysql_manual_interval_covering_indexes.sql",
                 "V102__mysql_daily_trend_read_model.sql",
+                "V103__mysql_carbon_display_read_model.sql",
                 "V10__mysql_data_quality_recalculation.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V12__device_identity.sql",

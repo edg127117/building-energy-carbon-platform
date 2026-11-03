@@ -29,12 +29,36 @@ class JointFlowApiContractTest {
     @MockBean TokenCacheService tokens;
     @MockBean JointFlowService service;
     @MockBean JointFlowConfigurationService configurations;
+    @MockBean CarbonDisplayQueryService display;
     private static final String PATH="/v1/carbon-management/joint-flow/query";
     private static final String BODY="""
         {"buildingId":"BLD001","periodType":"MONTH","period":"2024-01"}
         """;
     private String bearer(String role) { return "Bearer "+jwt.generateToken(1L,"joint-flow-reader",List.of(role),1L); }
     @BeforeEach void session() { when(tokens.validateActiveToken(anyLong(),anyString())).thenReturn(TokenValidationResult.ACTIVE); }
+    @Test void summaryRoutesKeepLoginRoleAndScopeChecksAndExposePreparationContract() throws Exception {
+        String path="/v1/carbon-management/joint-flow/summary-query";
+        mvc.perform(post(path).contentType("application/json").content(BODY)).andExpect(status().isUnauthorized());
+        mvc.perform(post(path).contentType("application/json").content(BODY).header("Authorization",bearer("THIRD_PARTY"))).andExpect(status().isForbidden());
+        when(display.jointFlow(eq(1L),anyCollection(),any())).thenReturn(new CarbonDisplayQueryContracts.View(CarbonDisplayQueryContracts.CONTRACT,"JOINT_FLOW","BLD001","query","source","PREPARING",null,1));
+        mvc.perform(post(path).contentType("application/json").content(BODY).header("Authorization",bearer("BUILDING_OWNER")))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.state").value("PREPARING"))
+                .andExpect(jsonPath("$.data.contractVersion").value("CARBON_DISPLAY_QUERY_V1")).andExpect(jsonPath("$.data.data").isEmpty());
+        when(display.jointFlow(eq(1L),anyCollection(),any())).thenThrow(new com.platform.framework.exception.BusinessException(403,"scope"));
+        mvc.perform(post(path).contentType("application/json").content(BODY).header("Authorization",bearer("BUILDING_OWNER"))).andExpect(status().isForbidden());
+        verify(service,never()).query(anyLong(),anyCollection(),any());verify(service,never()).preview(anyLong(),anyCollection(),any());
+    }
+    @Test void intensitySummaryUsesOriginalParametersAndDoesNotGrantNewWriteCapability() throws Exception {
+        String path="/v1/carbon-intensity/buildings/BLD001/summary?mode=MONTHLY_YTD&year=2026&month=10";
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header("Authorization",bearer("THIRD_PARTY"))).andExpect(status().isForbidden());
+        when(display.intensity(eq(1L),anyCollection(),eq("BLD001"),eq("MONTHLY_YTD"),eq(2026),eq(10),eq("Asia/Shanghai")))
+                .thenReturn(new CarbonDisplayQueryContracts.View(CarbonDisplayQueryContracts.CONTRACT,"CARBON_INTENSITY","BLD001","query","source","READY",java.util.Map.of("actual",java.util.Map.of("value","4.791448")),0));
+        mvc.perform(get(path).header("Authorization",bearer("BUILDING_OWNER"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.kind").value("CARBON_INTENSITY")).andExpect(jsonPath("$.data.data.actual.value").value("4.791448"));
+        when(display.intensity(anyLong(),anyCollection(),anyString(),anyString(),anyInt(),any(),anyString())).thenThrow(new com.platform.framework.exception.BusinessException(403,"scope"));
+        mvc.perform(get(path).header("Authorization",bearer("BUILDING_OWNER"))).andExpect(status().isForbidden());
+    }
     @Test void configurationSelectionRequiresExplicitVersionAndPreviewUsesSeparateEndpoint() throws Exception {
         String selection="/v1/carbon-management/joint-flow/buildings/BLD001/configurations/selection";
         mvc.perform(get(selection)).andExpect(status().isUnauthorized());

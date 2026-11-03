@@ -1,4 +1,5 @@
 import { requestApi } from '@/infrastructure/http/public'
+import { readPreparedQuery, type PreparedQueryEnvelope } from '@/shared/infrastructure/prepared-query'
 
 export interface IntensityQuery {
   buildingId: string; mode: 'FORMAL_YEAR' | 'MONTHLY_YTD' | 'MONTH'; year: number; month?: number; timezoneId: string
@@ -15,5 +16,8 @@ export interface CarbonIntensityView {
 /** 卡片仅查询已有强度与后端比较比例，不触发核算、标准维护或建筑配置。 */
 export function readCarbonIntensity(query: IntensityQuery, signal?: AbortSignal) {
   const { buildingId, ...params } = query
-  return requestApi<CarbonIntensityView>({ method: 'get', url: `/v1/carbon-intensity/buildings/${encodeURIComponent(buildingId)}`, params, signal })
+  return readPreparedQuery<CarbonIntensityView>(
+    signal => requestApi<PreparedQueryEnvelope<CarbonIntensityView>>({ method: 'get', url: `/v1/carbon-intensity/buildings/${encodeURIComponent(buildingId)}/summary`, params, signal }),
+    { kind: 'CARBON_INTENSITY', buildingId }, signal,
+  )
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { previewJointFlow, queryJointFlow } from './joint-flow'
+import { previewJointFlow, queryJointFlow, queryPreparedJointFlow } from './joint-flow'
 
 const api = vi.hoisted(() => vi.fn())
 vi.mock('@/infrastructure/http/public', () => ({ requestApi: api }))
@@ -26,5 +26,15 @@ describe('联合能碳流读取契约', () => {
     await previewJointFlow(request)
 
     expect(api).toHaveBeenCalledWith({ method: 'post', url: '/v1/carbon-management/joint-flow/preview', data: request, signal: undefined })
+  })
+
+  it('新增准备式大屏读取使用兼容路由并解包 READY 数据', async () => {
+    const request = { buildingId: 'B/01', periodType: 'MONTH' as const, period: '2026-09' }
+    api.mockResolvedValue({ contractVersion: 'CARBON_DISPLAY_QUERY_V1', kind: 'JOINT_FLOW', buildingId: 'B/01',
+      queryKey: 'q1', sourceVersion: 'v1', state: 'READY', data: { state: 'READY' }, retryAfterSeconds: 2 })
+    const controller = new AbortController()
+
+    await expect(queryPreparedJointFlow(request, controller.signal)).resolves.toEqual({ state: 'READY' })
+    expect(api).toHaveBeenCalledWith({ method: 'post', url: '/v1/carbon-management/joint-flow/summary-query', data: request, signal: expect.any(AbortSignal) })
   })
 })
