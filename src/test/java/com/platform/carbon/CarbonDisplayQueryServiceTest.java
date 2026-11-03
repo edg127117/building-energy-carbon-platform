@@ -32,6 +32,16 @@ class CarbonDisplayQueryServiceTest {
         when(versions.version(q)).thenReturn("v");when(repo.head(q.key())).thenReturn(head);
     }
     View query(){return service.intensity(1,roles,"B","MONTHLY_YTD",2026,10,"Asia/Shanghai");}
+    @Test void readinessInspectionDoesNotRegisterOrBuildMissingResults(){
+        when(repo.head(q.key())).thenReturn(null);
+        assertThat(service.inspect(1,roles,q).state()).isEqualTo("PREPARING");
+        verify(repo,never()).request(any(),anyString(),anyLong(),anyString(),anyLong());verifyNoInteractions(flow,intensity);
+    }
+    @Test void prewarmRegistersCurrentSourceUnderAuthorizedTaskIdentityWithoutReadingFacts(){
+        service.prepare(1,roles,q);
+        verify(auth).requireReader(roles);verify(auth).checkBuilding(1,roles,"B");
+        verify(repo).request(eq(q),anyString(),eq(1L),eq("v"),anyLong());verifyNoInteractions(flow,intensity,cache);
+    }
     @Test void scopeCheckPrecedesAnyCacheLookup(){
         doThrow(new BusinessException(403,"denied")).when(auth).checkBuilding(1,roles,"B");
         assertThatThrownBy(this::query).isInstanceOf(BusinessException.class);verifyNoInteractions(repo,versions,cache,flow,intensity);

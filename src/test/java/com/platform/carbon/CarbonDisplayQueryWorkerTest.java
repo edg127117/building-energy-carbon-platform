@@ -11,11 +11,12 @@ class CarbonDisplayQueryWorkerTest {
     final CarbonDisplaySourceVersion versions=mock(CarbonDisplaySourceVersion.class);
     final CarbonDisplayQueryService service=mock(CarbonDisplayQueryService.class);
     final SysUserMapper users=mock(SysUserMapper.class);final SysRoleMapper roles=mock(SysRoleMapper.class);
+    final CarbonDisplayPrewarmService prewarm=mock(CarbonDisplayPrewarmService.class);
     final CarbonDisplayQueryContracts.Query q=CarbonDisplayQueryContracts.intensity("B","MONTHLY_YTD",2026,10,"Asia/Shanghai");
     final CarbonDisplayQueryRepository.Head h=new CarbonDisplayQueryRepository.Head(q.key(),"B",q.kind(),"{}",1,"v",null,"PENDING",null,null,0,0,null,null);
     CarbonDisplayQueryWorker worker(){
         when(repo.due(anyLong())).thenReturn(List.of(h));when(service.parse(h)).thenReturn(q);when(versions.version(q)).thenReturn("v");when(repo.claim(eq(h),anyLong())).thenReturn("lease");
-        return new CarbonDisplayQueryWorker(repo,versions,service,new CarbonDisplayQueryProperties(),users,roles);
+        return new CarbonDisplayQueryWorker(repo,versions,service,new CarbonDisplayQueryProperties(),new CarbonDisplayTaskIdentity(users,roles),prewarm);
     }
     @Test void currentDisabledAccountCannotUseSavedPrivileges(){try(var worker=worker()){
         worker.refresh();verify(service,never()).rebuild(any(),any(),any());verifyNoInteractions(roles);
@@ -27,5 +28,11 @@ class CarbonDisplayQueryWorkerTest {
         var user=new SysUser();user.setId(1L);user.setStatus(1);user.setDelFlag(0);user.setActivationPending(0);
         when(users.selectSecurityState(1L)).thenReturn(user);when(roles.selectRoleKeysByUserId(1L)).thenReturn(List.of("BUILDING_OWNER"));
         worker.refresh();verify(repo).defer(eq(bad),anyLong());verify(service).rebuild(h,"lease",List.of("BUILDING_OWNER"));
+    }}
+    @Test void defaultRegistrationFailureCannotBlockExistingTasks(){try(var worker=worker()){
+        doThrow(new IllegalStateException("bad target")).when(prewarm).registerDefaults();
+        var user=new SysUser();user.setId(1L);user.setStatus(1);user.setDelFlag(0);user.setActivationPending(0);
+        when(users.selectSecurityState(1L)).thenReturn(user);when(roles.selectRoleKeysByUserId(1L)).thenReturn(List.of("BUILDING_OWNER"));
+        worker.refresh();verify(prewarm).registerDefaults();verify(service).rebuild(h,"lease",List.of("BUILDING_OWNER"));
     }}
 }

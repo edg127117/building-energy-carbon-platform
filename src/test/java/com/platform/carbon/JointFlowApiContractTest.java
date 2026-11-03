@@ -30,12 +30,25 @@ class JointFlowApiContractTest {
     @MockBean JointFlowService service;
     @MockBean JointFlowConfigurationService configurations;
     @MockBean CarbonDisplayQueryService display;
+    @MockBean CarbonDisplayPrewarmService prewarm;
     private static final String PATH="/v1/carbon-management/joint-flow/query";
     private static final String BODY="""
         {"buildingId":"BLD001","periodType":"MONTH","period":"2024-01"}
         """;
     private String bearer(String role) { return "Bearer "+jwt.generateToken(1L,"joint-flow-reader",List.of(role),1L); }
     @BeforeEach void session() { when(tokens.validateActiveToken(anyLong(),anyString())).thenReturn(TokenValidationResult.ACTIVE); }
+    @Test void readinessIsScopedAuthenticatedAndNeverStartsOrReportsWholePlatformHealth() throws Exception {
+        String path="/v1/carbon-display/buildings/BLD001/readiness";
+        mvc.perform(get(path)).andExpect(status().isUnauthorized());
+        mvc.perform(get(path).header("Authorization",bearer("THIRD_PARTY"))).andExpect(status().isForbidden());
+        when(prewarm.readiness(eq(1L),anyCollection(),eq("BLD001"))).thenReturn(new CarbonDisplayPrewarmService.Readiness("BLD001","DEFAULT_FLOW_AND_INTENSITY_ONLY","Asia/Shanghai",java.time.Instant.now(),true,false,"NOT_READY",List.of()));
+        mvc.perform(get(path).header("Authorization",bearer("BUILDING_OWNER"))).andExpect(status().isOk())
+                .andExpect(header().string("Cache-Control","no-store")).andExpect(jsonPath("$.data.ready").value(false))
+                .andExpect(jsonPath("$.data.scope").value("DEFAULT_FLOW_AND_INTENSITY_ONLY"));
+        when(prewarm.readiness(eq(1L),anyCollection(),eq("BLD001"))).thenThrow(new com.platform.framework.exception.BusinessException(403,"scope"));
+        mvc.perform(get(path).header("Authorization",bearer("BUILDING_OWNER"))).andExpect(status().isForbidden());
+        verifyNoInteractions(display,service);
+    }
     @Test void summaryRoutesKeepLoginRoleAndScopeChecksAndExposePreparationContract() throws Exception {
         String path="/v1/carbon-management/joint-flow/summary-query";
         mvc.perform(post(path).contentType("application/json").content(BODY)).andExpect(status().isUnauthorized());

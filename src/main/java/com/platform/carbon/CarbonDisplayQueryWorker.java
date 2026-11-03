@@ -1,9 +1,6 @@
 package com.platform.carbon;
 
 import com.platform.framework.exception.BusinessException;
-import com.platform.security.AuthenticationStateService;
-import com.platform.system.mapper.SysRoleMapper;
-import com.platform.system.mapper.SysUserMapper;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.slf4j.LoggerFactory;
@@ -16,13 +13,14 @@ class CarbonDisplayQueryWorker implements AutoCloseable {
     private final CarbonDisplaySourceVersion versions;
     private final CarbonDisplayQueryService service;
     private final CarbonDisplayQueryProperties properties;
-    private final SysUserMapper users;
-    private final SysRoleMapper roles;
+    private final CarbonDisplayTaskIdentity identity;
+    private final CarbonDisplayPrewarmService prewarm;
+    private long discoverAfter;
     private final java.util.concurrent.atomic.AtomicBoolean active=new java.util.concurrent.atomic.AtomicBoolean();
     private final java.util.concurrent.ExecutorService worker=java.util.concurrent.Executors.newSingleThreadExecutor(Thread.ofPlatform().daemon().name("carbon-display-refresh-",0).factory());
     CarbonDisplayQueryWorker(CarbonDisplayQueryRepository repository,CarbonDisplaySourceVersion versions,CarbonDisplayQueryService service,
-            CarbonDisplayQueryProperties properties,SysUserMapper users,SysRoleMapper roles){
-        this.repository=repository;this.versions=versions;this.service=service;this.properties=properties;this.users=users;this.roles=roles;
+            CarbonDisplayQueryProperties properties,CarbonDisplayTaskIdentity identity,CarbonDisplayPrewarmService prewarm){
+        this.repository=repository;this.versions=versions;this.service=service;this.properties=properties;this.identity=identity;this.prewarm=prewarm;
     }
     @Scheduled(fixedDelayString="${carbon-display-query.scan-delay-ms:1000}",initialDelayString="${carbon-display-query.initial-delay-ms:15000}")
     public void scan(){
@@ -32,6 +30,10 @@ class CarbonDisplayQueryWorker implements AutoCloseable {
     void refresh(){
         long now=System.currentTimeMillis();
         try {
+            if(now>=discoverAfter){
+                discoverAfter=now+properties.getRecheckInterval().toMillis();
+                try{prewarm.registerDefaults();}catch(RuntimeException e){LoggerFactory.getLogger(getClass()).warn("Carbon display default registration unavailable");}
+            }
             for(var h:repository.due(now)) {
                 String token=null;
                 try {
@@ -40,10 +42,7 @@ class CarbonDisplayQueryWorker implements AutoCloseable {
                     if(!current.equals(h.source())){repository.request(q,h.query(),h.user(),current,now);h=repository.head(h.key());}
                     token=repository.claim(h,now);if(token==null)continue;
                     // 任务不存角色或Token；执行时重读账号/角色，再由原服务检查当前建筑权限。
-                    if(!AuthenticationStateService.isEnabled(users.selectSecurityState(h.user())))throw new BusinessException(403,"CARBON_DISPLAY_ACTOR_DISABLED","后台读取账号不可用");
-                    var currentRoles=roles.selectRoleKeysByUserId(h.user()).stream().map(r->r.toUpperCase(Locale.ROOT))
-                            .filter(Set.of("BUILDING_OWNER","ENERGY_MANAGER","PLATFORM_ADMIN")::contains).toList();
-                    if(currentRoles.isEmpty())throw new BusinessException(403,"CARBON_DISPLAY_ACTOR_FORBIDDEN","后台读取职责不可用");
+                    var currentRoles=identity.currentRoles(h.user());
                     service.rebuild(h,token,currentRoles);
                 }catch(RuntimeException e){
                     String code=e instanceof BusinessException b&&b.getErrorCode()!=null?b.getErrorCode():"CARBON_DISPLAY_REFRESH_FAILED";

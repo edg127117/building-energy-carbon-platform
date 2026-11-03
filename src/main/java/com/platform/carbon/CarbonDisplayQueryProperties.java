@@ -12,6 +12,8 @@ public class CarbonDisplayQueryProperties {
     private boolean enabled=true;
     private Duration cacheTtl=Duration.ofMinutes(30), recheckInterval=Duration.ofSeconds(30), lease=Duration.ofMinutes(2);
     private int maximumVersionRows=20000;
+    private java.util.List<PrewarmTarget> prewarmTargets=java.util.List.of();
+    public record PrewarmTarget(String buildingCode,long actorId) { }
     @PostConstruct void validate(){
         if(cacheTtl==null||cacheTtl.isNegative()||cacheTtl.isZero()||recheckInterval==null||recheckInterval.compareTo(Duration.ofSeconds(5))<0
                 ||lease==null||lease.compareTo(Duration.ofMinutes(1))<0||maximumVersionRows<100||maximumVersionRows>1000000)
@@ -22,4 +24,6 @@ public class CarbonDisplayQueryProperties {
     public Duration getRecheckInterval(){return recheckInterval;} public void setRecheckInterval(Duration v){recheckInterval=v;}
     public Duration getLease(){return lease;} public void setLease(Duration v){lease=v;}
     public int getMaximumVersionRows(){return maximumVersionRows;} public void setMaximumVersionRows(int v){maximumVersionRows=v;}
+    public java.util.List<PrewarmTarget> getPrewarmTargets(){return prewarmTargets;}
+    public void setPrewarmTargets(java.util.List<PrewarmTarget> v){prewarmTargets=v;}
 }
