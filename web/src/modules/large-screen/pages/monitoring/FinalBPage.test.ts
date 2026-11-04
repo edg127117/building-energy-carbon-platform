@@ -6,13 +6,14 @@ import IndexPage from './IndexPage.vue'
 import { readCarbonIntensity, type CarbonIntensityView } from '../../api/carbon-intensity'
 import { intensityView } from '../../models/carbon-intensity.test-fixture'
 import type { ScreenPeriods, ScreenRedesignData } from '../../models/screen-redesign'
+import type { ScreenDynamicElectricityData, ScreenDynamicElectricityStatus } from '../../composables/use-screen-dynamic-electricity'
 import { carbonPlanApi, type CarbonPlanResponse } from '@/modules/energy-classification/public'
 import { readAnnualOverview, readDailyTrends } from '@/modules/energy-reporting/public'
 import { annualFixture } from '../../models/final-b-annual.test-fixture'
 import { dailyFixture } from '../../models/final-b-daily.test-fixture'
 
 vi.mock('./IndexPage.vue', () => ({ default: {
-  name: 'BScreenContent', props: ['data', 'layoutVariant'], emits: ['periodChange'], template: '<div />',
+  name: 'BScreenContent', props: ['data', 'layoutVariant'], emits: ['periodChange'], template: '<div><slot name="data-context" /></div>',
 } }))
 vi.mock('../../api/carbon-intensity', () => ({ readCarbonIntensity: vi.fn() }))
 vi.mock('@/modules/energy-reporting/api/annual-overview', async original => ({
@@ -23,6 +24,7 @@ vi.mock('@/modules/energy-classification/public', async original => ({
   ...await original<typeof import('@/modules/energy-classification/public')>(), carbonPlanApi: { query: vi.fn() },
 }))
 vi.mock('../../composables/use-final-b-data', () => ({ useFinalBData: () => state }))
+vi.mock('../../composables/use-screen-dynamic-electricity', () => ({ useScreenDynamicElectricity: () => dynamic }))
 vi.mock('../../composables/use-joint-flow', () => ({ useJointFlow: () => ({
   data: ref<ScreenRedesignData>({ carbonFlow: { period: { kind: 'year', value: '2026' }, data: {
     total: 104, unit: 'tCO2e', nodes: [], links: [],
@@ -45,8 +47,16 @@ function initialState() {
   }
 }
 let state: ReturnType<typeof initialState>
+function initialDynamic() {
+  return {
+    data: ref<ScreenDynamicElectricityData | null>(null), status: ref<ScreenDynamicElectricityStatus>('unavailable'),
+    loading: ref(false), failed: ref(false), reload: vi.fn(),
+  }
+}
+let dynamic: ReturnType<typeof initialDynamic>
 
 beforeEach(() => {
+  dynamic = initialDynamic()
   vi.mocked(readDailyTrends).mockReset()
   vi.mocked(readDailyTrends).mockImplementation(async (building, month) => dailyFixture(building, month))
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-31T10:00:00+08:00'))
@@ -78,7 +88,7 @@ describe('final B intensity integration', () => {
     expect(data.usage?.data.electricity.slice(0, 2)).toEqual([0, 123.456])
     expect(data.mirror?.data.staticEmissions).toEqual(Array(29).fill(0.00123456789))
     expect(data.mirror?.data.staticFactors).toEqual(Array(29).fill(0.56))
-    expect(data.mirror?.data.dynamicFactors).toHaveLength(29)
+    expect(data.mirror?.data.dynamicFactors).toEqual(Array(29).fill(null))
     expect(data.devices?.on).toBe(25)
     wrapper.unmount()
   })
@@ -166,6 +176,50 @@ describe('final B intensity integration', () => {
     expect(state.data.value.annual?.carbon).toBe(104)
     expect(wrapper.findComponent(IndexPage).props('data').annual).toBeUndefined()
     expect(wrapper.findComponent(IndexPage).props('data').composition).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  it('仅在静态 CO2-only 单位一致时合并动态两项，静态数值保持不变', async () => {
+    const period = { kind: 'year' as const, value: '2026' }
+    const staticEmissions = Array.from({ length: 12 }, (_, index) => index + 1)
+    const staticFactors = Array.from({ length: 12 }, () => 0.56)
+    state.data.value = { ...state.data.value, mirror: { period, data: {
+      dynamicEmissions: Array(12).fill(null), dynamicFactors: Array(12).fill(null),
+      staticEmissions, staticFactors, emissionUnit: 'tCO₂', factorUnit: 'kgCO₂/kWh',
+    } } }
+    dynamic.data.value = {
+      period, dynamicEmissions: Array.from({ length: 12 }, (_, index) => index / 10), dynamicFactors: Array(12).fill(0.5),
+      emissionUnit: 'tCO₂', factorUnit: 'kgCO₂/kWh', sourceNatures: ['SOURCE_LABELLED'], hasSimulatedSource: false, status: 'ready',
+    }
+    const wrapper = mount(FinalBPage)
+    await flushPromises()
+    const mirror = (wrapper.findComponent(IndexPage).props('data') as ScreenRedesignData).mirror?.data
+    expect(mirror?.staticEmissions).toEqual(staticEmissions)
+    expect(mirror?.staticFactors).toEqual(staticFactors)
+    expect(mirror?.dynamicEmissions.slice(0, 3)).toEqual([0, 0.1, 0.2])
+    expect(mirror?.dynamicFactors).toEqual(Array(12).fill(0.5))
+    expect(wrapper.text()).toContain('因子来源性质：SOURCE_LABELLED')
+    wrapper.unmount()
+  })
+
+  it('动态失败或 CO2e 静态序列不清空静态数据，也不标记静态镜像读取失败', async () => {
+    const period = { kind: 'year' as const, value: '2026' }
+    const staticEmissions = Array(12).fill(7)
+    state.data.value = { ...state.data.value, mirror: { period, data: {
+      dynamicEmissions: Array(12).fill(null), dynamicFactors: Array(12).fill(null),
+      staticEmissions, staticFactors: Array(12).fill(0.56), emissionUnit: 'tCO₂e', factorUnit: 'kgCO₂e/kWh',
+    } } }
+    dynamic.data.value = {
+      period, dynamicEmissions: Array(12).fill(6), dynamicFactors: Array(12).fill(0.5),
+      emissionUnit: 'tCO₂', factorUnit: 'kgCO₂/kWh', sourceNatures: [], hasSimulatedSource: false, status: 'ready',
+    }
+    dynamic.failed.value = true
+    const wrapper = mount(FinalBPage)
+    await flushPromises()
+    const data = wrapper.findComponent(IndexPage).props('data') as ScreenRedesignData
+    expect(data.mirror?.data.staticEmissions).toEqual(staticEmissions)
+    expect(data.mirror?.data.dynamicEmissions).toEqual(Array(12).fill(null))
+    expect(data.failed?.mirror).toBe(false)
     wrapper.unmount()
   })
 })

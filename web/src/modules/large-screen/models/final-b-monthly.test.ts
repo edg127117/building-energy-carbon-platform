@@ -62,6 +62,8 @@ describe('B screen backend result mapping', () => {
     const data = mapFinalBMonthly(new Map([['2026-09', report]]), periods, '2026-09', new Map([['2026-09', 0.5827]]))
     expect(data.mirror?.data.staticEmissions[8]).toBe(23.946337)
     expect(data.mirror?.data.staticFactors[8]).toBe(0.5827)
+    expect(data.mirror?.data.emissionUnit).toBe('tCO₂')
+    expect(data.mirror?.data.factorUnit).toBe('kgCO₂/kWh')
     expect(data.mirror?.data.dynamicFactors.every(value => value === null)).toBe(true)
   })
   it('preserves month boundaries across the new year and rejects malformed decimal text', () => {

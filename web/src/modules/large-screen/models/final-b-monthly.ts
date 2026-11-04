@@ -84,10 +84,13 @@ export function mapFinalBMonthly(reports: ReadonlyMap<string, MonthlyComparisonR
   }
   if (periods.mirror.kind === 'year') {
     const months = yearMonths(periods.mirror.value)
+    // fixedFactors 只由 CO2-only 冻结证据写入，因此有静态值时可与动态 CO2 共用双轴单位。
+    const staticCo2Only = months.some(month => fixedFactors.has(month))
     data.mirror = { period: periods.mirror, data: {
       dynamicEmissions: months.map(() => null), dynamicFactors: months.map(() => null),
       staticEmissions: months.map(month => fixedFactors.has(month) ? monthlyMetric(reports.get(month)?.current, 'TOTAL_EMISSION') : null),
-      staticFactors: months.map(month => fixedFactors.get(month) ?? null), emissionUnit: 'tCO₂e', factorUnit: 'kgCO₂e/kWh',
+      staticFactors: months.map(month => fixedFactors.get(month) ?? null),
+      emissionUnit: staticCo2Only ? 'tCO₂' : 'tCO₂e', factorUnit: staticCo2Only ? 'kgCO₂/kWh' : 'kgCO₂e/kWh',
     } }
   }
   return data

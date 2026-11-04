@@ -7,6 +7,8 @@ export interface DailyTrendDay {
   electricityEvidenceIds?: string[]; electricitySourceNature: string | null
   staticEmissionTco2e: string | null; staticCarbonStatus: string
   staticFactorKgCo2ePerKwh: string | null; factorStatus: string
+  /** 旧摘要可缺失；缺失按 UNKNOWN 处理，不能与动态 CO2 同轴混标。 */
+  gasBasis?: 'CO2_ONLY' | 'GHG_CO2E' | 'UNKNOWN'
   hourlyBatchId: string | null; hourlyRevision: number | null; hourlySourceNature: string | null
   factorVersionIds: string[]; hourlyEvidenceHash: string | null
 }

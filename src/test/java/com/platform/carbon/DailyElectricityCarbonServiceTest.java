@@ -39,6 +39,7 @@ class DailyElectricityCarbonServiceTest {
             assertThat(day.staticFactorKgCo2ePerKwh()).isEqualByComparingTo("0.56");
             assertThat(day.factorVersionIds()).containsExactly("factor");
             assertThat(day.hourlySourceNature()).isEqualTo("SIMULATED");
+            assertThat(day.gasBasis()).isEqualTo("CO2_ONLY");
         });
         assertThat(view.state()).isEqualTo("COMPLETE");
         assertThat(view.resultNature()).isEqualTo("MONITORING");
