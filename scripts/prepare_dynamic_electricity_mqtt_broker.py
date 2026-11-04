@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--port',type=int,default=18897)
     parser.add_argument('--image',default='eclipse-mosquitto:2')
     parser.add_argument('--execute',action='store_true',required=True)
+    parser.add_argument('--with-v2-adapters',action='store_true')
     args=parser.parse_args();root=args.root.resolve()
     config=json.loads((root/'private/local.json').read_text(encoding='utf-8'))
     if root.drive.upper()!='D:' or config['purpose']!='DYNAMIC_CARBON_EA84_ONLY' or Path(config['runtimeRoot']).resolve()!=root:
@@ -41,6 +42,22 @@ def main():
             'mqtt.topics.v2-adapter-ack':broker['ackPrefix']+'/adapter','mqtt.tls.enabled':False,'mqtt.tls.allow-plaintext-for-tests':True})
         backend.write_text(''.join(k+': '+json.dumps(v,ensure_ascii=False)+'\n' for k,v in settings.items()),encoding='utf-8')
     private=root/'private/mqtt.json'
+    def configure_v2(broker):
+        if not args.with_v2_adapters:return False
+        directory=root/'mqtt/config'
+        for role in ('adapter','edge'):
+            broker.setdefault(role+'User',role)
+            broker.setdefault(role+'Password',secrets.token_urlsafe(28))
+        broker['rawTopic']=name+'/raw/up'
+        acl='user platform\n'+''.join('topic read '+broker[key]+'\n' for key in ['standardTopic','legacyTopic','v2Topic'])+'topic write '+broker['ackPrefix']+'/#\n'
+        acl+='user simulator\ntopic write '+broker['standardTopic']+'\ntopic write '+broker['rawTopic']+'\n'
+        acl+='user adapter\ntopic read '+broker['rawTopic']+'\ntopic write '+broker['v2Topic']+'\ntopic read '+broker['ackPrefix']+'/adapter\n'
+        acl+='user edge\ntopic write '+broker['v2Topic']+'\ntopic read '+broker['ackPrefix']+'/adapter\n'
+        if broker.get('v2AdaptersReady') and (directory/'acl').read_text(encoding='utf-8')==acl:return False
+        (directory/'passwords').write_text(''.join(broker[role+'User']+':'+broker[role+'Password']+'\n' for role in ['platform','simulator','adapter','edge']),encoding='utf-8')
+        docker('run','--rm','--network','none','-v',str(directory)+':/work',broker['imageId'],'mosquitto_passwd','-H','sha512-pbkdf2','-U','/work/passwords')
+        (directory/'acl').write_text(acl,encoding='utf-8');broker['v2AdaptersReady']=True
+        private.write_text(json.dumps(broker),encoding='utf-8');return True
     if private.exists():
         saved=json.loads(private.read_text(encoding='utf-8'))
         if saved['purpose']!=purpose or saved['containerName']!=name:raise ValueError('BROKER_OWNERSHIP_MISMATCH')
@@ -48,10 +65,14 @@ def main():
         if inspected['Config']['Labels'].get('codex.purpose')!=purpose:raise ValueError('BROKER_LABEL_MISMATCH')
         if inspected['Id']!=saved['containerId'] or inspected['Image']!=saved['imageId']:raise ValueError('BROKER_IDENTITY_MISMATCH')
         if saved['host']!='127.0.0.1' or set(inspected['NetworkSettings']['Networks'])!={saved['network']}:raise ValueError('DEDICATED_BROKER_NETWORK_REQUIRED')
-        if not inspected['State']['Running']:docker('start',name)
         if saved['port']!=args.port:raise ValueError('BROKER_PORT_MISMATCH')
         ports=inspected['HostConfig']['PortBindings'].get('1883/tcp',[])
         if ports!=[{'HostIp':'127.0.0.1','HostPort':str(saved['port'])}]:raise ValueError('LOOPBACK_PORT_PUBLICATION_REQUIRED')
+        network_state=json.loads(docker('network','inspect',saved['network']).stdout)[0]
+        if network_state['Labels'].get('codex.purpose')!=purpose:raise ValueError('BROKER_NETWORK_OWNERSHIP_MISMATCH')
+        changed=configure_v2(saved)
+        if changed:docker('restart',name)
+        elif not inspected['State']['Running']:docker('start',name)
         configure_platform(saved)
         print('OWN_INDEPENDENT_BROKER_REUSED');return
     with socket.socket() as probe:
@@ -84,6 +105,7 @@ def main():
         time.sleep(1)
     else:raise RuntimeError('INDEPENDENT_BROKER_START_FAILED')
     configure_platform(broker)
+    if configure_v2(broker):docker('restart',name)
     print(json.dumps({'result':'INDEPENDENT_MQTT_BROKER_READY','containerId':container,'port':args.port,'imageId':image['Id']}))
 
 

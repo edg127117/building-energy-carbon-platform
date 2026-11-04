@@ -139,7 +139,7 @@ public class MqttConfig {
         this.failureEvidenceRecorder = failureEvidenceRecorder;
     }
 
-    /** 首次连接失败后的单线程重试调度器，不承载 MQTT 消息业务处理。 */
+    /** 连接重试与应用ACK发布共用单线程；业务计算不在这里执行，发布有独立超时。 */
     @Bean(name = "mqttTaskScheduler", destroyMethod = "shutdown")
     public ThreadPoolTaskScheduler mqttTaskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
@@ -151,7 +151,8 @@ public class MqttConfig {
     /** 创建拥有固定 clientId 的本地订阅客户端，稳定会话由 cleanSession=false 保留。 */
     @Bean
     public IMqttClient mqttClient() throws MqttException {
-        return new MqttClient(brokerUrl, clientId, new MemoryPersistence());
+        var client=new MqttClient(brokerUrl, clientId, new MemoryPersistence());
+        client.setTimeToWait(10000);return client;
     }
 
     /** 应用启动后注册回调并尝试连接；连接失败不阻断平台其他模块启动。 */
@@ -164,7 +165,7 @@ public class MqttConfig {
                 return;
             }
             client.setManualAcks(true);
-            client.setCallback(callback(client));
+            client.setCallback(callback(client,scheduler));
             connectOrScheduleRetry(client, scheduler);
         };
     }
@@ -239,7 +240,7 @@ public class MqttConfig {
         };
     }
 
-    private MqttCallbackExtended callback(IMqttClient client) {
+    private MqttCallbackExtended callback(IMqttClient client,TaskScheduler scheduler) {
         return new MqttCallbackExtended() {
             @Override
             public void connectComplete(boolean reconnect, String serverURI) {
@@ -263,6 +264,7 @@ public class MqttConfig {
             @Override
             public void messageArrived(String topic, MqttMessage message) {
                 boolean acknowledge = true;
+                boolean deferredAck=false;
                 V2ProcessingResult v2Result = null;
                 try {
                     byte[] payloadBytes = message.getPayload();
@@ -288,9 +290,10 @@ public class MqttConfig {
                         if (acknowledge && v2Result.requiresApplicationAck()) {
                             byte[] ackPayload = objectMapper.writeValueAsBytes(
                                     v2Result.applicationAck());
-                            client.publish(v2Result.ackTopic(), ackPayload, 1, false);
-                            meterRegistry.counter("iot.telemetry.v2.application_ack",
-                                    "result", "published").increment();
+                            var result=v2Result;
+                            // ACK同步发布也不能占用Paho回调；发布完成后才确认原始V2消息。
+                            scheduler.schedule(()->publishApplicationAck(client,topic,message,result,ackPayload),Instant.now());
+                            deferredAck=true;acknowledge=false;
                         }
                         log.debug("V2 MQTT 报文处理完成: resultCode={}, ackMode={}, metrics={}",
                                 v2Result.resultCode(), v2Result.actualAckMode(),
@@ -323,16 +326,6 @@ public class MqttConfig {
                         return;
                     }
                     log.warn("拒绝未配置路由的MQTT主题并确认丢弃: topic={}", topic);
-                } catch (MqttException exception) {
-                    acknowledge = false;
-                    if (v2Result != null) {
-                        meterRegistry.counter("iot.telemetry.v2.application_ack",
-                                "result", "failed").increment();
-                        telemetryV2MqttMessageHandler.recordApplicationAckFailure(
-                                v2Result.canonicalMessageId(),
-                                "MQTT_QOS1_APPLICATION_ACK_PUBLISH_FAILED");
-                    }
-                    log.error("V2 应用 ACK 发布失败，保留原消息重投: topic={}", topic);
                 } catch (IOException | IllegalArgumentException exception) {
                     log.warn("MQTT报文JSON格式错误，已确认丢弃: topic={}, reason={}",
                             topic, exception.getMessage());
@@ -350,7 +343,7 @@ public class MqttConfig {
                             meterRegistry.counter("iot.telemetry.v2.inbound_ack", "result",
                                     inboundAckObserved ? "completed" : "failed").increment();
                         }
-                    } else if (v2Result != null) {
+                    } else if (v2Result != null&&!deferredAck) {
                         meterRegistry.counter("iot.telemetry.v2.inbound_ack", "result", "failed")
                                 .increment();
                     }
@@ -359,9 +352,23 @@ public class MqttConfig {
 
             @Override
             public void deliveryComplete(IMqttDeliveryToken token) {
-                // 本客户端只订阅设备上行，没有平台下行发布，空实现仅满足 Paho 回调契约。
+                // 应用ACK的完成与入站确认由发布任务处理，此回调不重复确认。
             }
         };
+    }
+
+    private void publishApplicationAck(IMqttClient client,String topic,MqttMessage message,V2ProcessingResult result,byte[] payload) {
+        try {
+            client.publish(result.ackTopic(),payload,1,false);
+            meterRegistry.counter("iot.telemetry.v2.application_ack","result","published").increment();
+            boolean observed=acknowledge(client,topic,message);
+            meterRegistry.counter("iot.telemetry.v2.inbound_ack","result",observed?"completed":"failed").increment();
+        } catch(MqttException|RuntimeException failure) {
+            meterRegistry.counter("iot.telemetry.v2.application_ack","result","failed").increment();
+            meterRegistry.counter("iot.telemetry.v2.inbound_ack","result","failed").increment();
+            telemetryV2MqttMessageHandler.recordApplicationAckFailure(result.canonicalMessageId(),"MQTT_QOS1_APPLICATION_ACK_PUBLISH_FAILED");
+            log.error("V2应用ACK发布失败，保留原消息重投: topic={}",topic);
+        }
     }
 
     private void subscribeUpstream(IMqttClient client) throws MqttException {

@@ -71,6 +71,43 @@ class DynamicElectricityLiveServiceTest {
         meters(2,false);
     }
     private static LocalDateTime local(Instant at){return LocalDateTime.ofInstant(at,ZoneId.of("Asia/Shanghai"));}
+
+    @Test void v2ReceiptFailureRollsBackInputThenFrozenRecoveryPersistsWithoutResolvingAliasAgain() throws Exception {
+        jdbc.execute("CREATE TABLE biz_telemetry_message_intent(canonical_message_id VARCHAR(64) PRIMARY KEY,building_id VARCHAR(32),payload_hash VARCHAR(64),snapshot_json CLOB,terminal_json CLOB,state VARCHAR(20) DEFAULT 'PENDING',created_ms BIGINT,retry_count INT DEFAULT 0,next_retry_ms BIGINT DEFAULT 0)");
+        jdbc.execute("CREATE TABLE biz_telemetry_conflict_budget(budget_key VARCHAR(30) PRIMARY KEY,used_rows BIGINT DEFAULT 0)");
+        jdbc.update("INSERT INTO biz_telemetry_conflict_budget VALUES('PENDING_MESSAGE',0)");
+        jdbc.execute("CREATE TABLE v2_test_receipt(id VARCHAR(64) PRIMARY KEY,status VARCHAR(40))");
+        var key=new DeviceIdentityKey("SERIAL_NO","P0");
+        var binding=new DeviceIdentityBinding("I",key,"P0","P0","B","METER",com.platform.iot.reliability.AckMode.ADAPTER_PROXY,com.platform.iot.reliability.CorrelationPolicy.BOOT_ID_AND_SEQ,null,"own/ack");
+        when(devices.find(key)).thenReturn(Optional.of(binding));
+        var points=mock(com.platform.iot.quality.DataPointConfigProvider.class);
+        when(points.find(any(com.platform.iot.quality.PointAliasKey.class))).thenReturn(Optional.of(new com.platform.iot.quality.PointRuntimeConfig("P0","P0","period","B",null,"P0","P0",null,null,null,"ANALOG","kWh","ONLINE",0,null,null)));
+        var helper=new com.platform.iot.ingest.v2.DynamicElectricityV2Input(live,points,"MQTT_STANDARD_V1");
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var journal=new com.platform.iot.reliability.TelemetryMessageJournal(jdbc,mapper);
+        var receipts=mock(com.platform.iot.reliability.mapper.TelemetryReceiptMapper.class);
+        var first=new java.util.concurrent.atomic.AtomicBoolean(true);
+        doAnswer(a->{if(first.getAndSet(false))throw new org.springframework.dao.DataAccessResourceFailureException("simulated receipt failure");
+            com.platform.iot.reliability.model.TelemetryReceipt r=a.getArgument(0);return jdbc.update("INSERT INTO v2_test_receipt VALUES(?,?)",r.getCanonicalMessageId(),r.getReceiptStatus());}).when(receipts).insert(any());
+        var numeric=mock(com.platform.iot.ingest.standard.StandardTelemetryIngestionService.class);
+        var v2=new com.platform.iot.ingest.v2.TelemetryV2IngestionService(devices,mock(UnknownDeviceHandler.class),numeric,receipts,
+                mock(com.platform.iot.reliability.mapper.TelemetryReceiptFailureMapper.class),new com.platform.iot.ingest.v2.AckModeResolver(),new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),"own/ack",journal,helper);
+        var period=new com.platform.adapter.model.ElectricityInterval("Q",from.toEpochMilli(),from.plusSeconds(900).toEpochMilli(),1,BigDecimal.ONE,new BigDecimal("0.5"),"kWh","kgCO2/kWh","SIMULATED","V2_TEST");
+        var message=new com.platform.iot.ingest.v2.TelemetryV2Message("2.0","METER",1,key,"PERIOD-M1",null,"BOOT",1L,from.toEpochMilli(),System.currentTimeMillis(),null,null,null,null,"ADAPTER_DERIVED","DEVICE_REPORTED","DERIVED","ADAPTER_PROXY","BOOT_ID_AND_SEQ",List.of(),period);
+        assertThatThrownBy(()->v2.ingest(message,System.currentTimeMillis())).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+        assertThat(journal.find("PERIOD-M1").state()).isEqualTo("PENDING");
+        reset(points); // 恢复必须使用首次冻结的测点，不能重新套用变化后的别名。
+        var restored=v2.recover("PERIOD-M1");
+        assertThat(restored.status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.PERIOD_INPUT_PERSISTED);
+        assertThat(restored.requiresApplicationAck()).isTrue();
+        assertThat(journal.find("PERIOD-M1").state()).isEqualTo("COMPLETE");
+        assertThat(jdbc.queryForObject("SELECT input_json FROM biz_dynamic_electricity_task",String.class)).contains("MQTT_STANDARD_V2");
+        long revision=jdbc.queryForObject("SELECT revision FROM biz_dynamic_electricity_task",Long.class);
+        assertThat(v2.ingest(message,System.currentTimeMillis()).status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.DUPLICATE_PERIOD_INPUT);
+        assertThat(jdbc.queryForObject("SELECT revision FROM biz_dynamic_electricity_task",Long.class)).isEqualTo(revision);
+        verifyNoInteractions(points,numeric);
+    }
     private void meters(int count,boolean tree) {
         var meters=new ArrayList<ClassificationCore.Meter>();var rules=new ArrayList<ClassificationContracts.BoundaryRule>();
         for(int i=0;i<count;i++) {

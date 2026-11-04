@@ -17,7 +17,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import static org.assertj.core.api.Assertions.*;
 
-/** 显式独立Broker/MySQL/HTTP验收。业务数据只经现有MQTT标准主题，HTTP仅登录与读取，SQL只读。 */
+/** 显式独立Broker/MySQL/HTTP验收；V2模式只发原始主题，必须经实际适配器，HTTP仅登录读取、SQL只读。 */
 @EnabledIfEnvironmentVariable(named="DYNAMIC_MQTT_IT_ROOT",matches="D:.*")
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class DynamicElectricityMqttIndependentAcceptanceTest {
@@ -31,6 +31,10 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
     private String building,token,base,stage;
     private Connection database;
     private long revision;
+    private boolean viaAdapter;
+    private String transport;
+    private MqttClient ackListener;
+    private final Set<String> applicationAcks=ConcurrentHashMap.newKeySet();
 
     @BeforeAll void connect() throws Exception {
         root=Path.of(System.getenv("DYNAMIC_MQTT_IT_ROOT")).toRealPath();
@@ -47,16 +51,34 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         building=fixture.path("buildingId").asText();assertThat(building).isNotEqualTo(config.path("buildingId").asText());
         base="http://127.0.0.1:"+config.path("ports").path("api").asInt()+"/api";
         stage=System.getenv().getOrDefault("DYNAMIC_MQTT_IT_STAGE","full");
+        String route=System.getenv().getOrDefault("DYNAMIC_MQTT_IT_TRANSPORT","STANDARD_V1");
+        assertThat(route).isIn("STANDARD_V1","V2_ADAPTER");viaAdapter="V2_ADAPTER".equals(route);
+        if(viaAdapter){assertThat(broker.path("v2AdaptersReady").asBoolean()).isTrue();assertThat(broker.path("rawTopic").asText()).startsWith(broker.path("containerName").asText()+"/");}
+        transport=viaAdapter?"MQTT_STANDARD_V2":"MQTT_STANDARD_V1";
         revision=Long.parseLong(System.getenv().getOrDefault("DYNAMIC_MQTT_IT_REVISION","100"));
         assertThat(revision).isPositive();Arrays.fill(revisions,revision);
-        out=root.resolve("mqtt-acceptance");Files.createDirectories(out);
+        out=root.resolve(viaAdapter?"mqtt-v2-acceptance":"mqtt-acceptance");Files.createDirectories(out);
         database=DriverManager.getConnection("jdbc:mysql://127.0.0.1:"+config.path("ports").path("mysql").asInt()+"/iot_platform?serverTimezone=Asia%2FShanghai&useSSL=false&allowPublicKeyRetrieval=true","root",config.path("mysqlPassword").asText());
         database.setReadOnly(true);
         if(!"offline-publish".equals(stage))token=api("/auth/login",config.path("accounts").path("admin")).path("token").asText();
+        if(viaAdapter&&"full".equals(stage)) {
+            ackListener=new MqttClient("tcp://127.0.0.1:"+broker.path("port").asInt(),broker.path("containerName").asText()+"-acceptance-ack",new MemoryPersistence());
+            ackListener.setTimeToWait(10000);ackListener.setCallback(new MqttCallback() {
+                public void connectionLost(Throwable failure) { }
+                public void deliveryComplete(IMqttDeliveryToken token) { }
+                public void messageArrived(String topic,MqttMessage message)throws Exception {
+                    var ack=json.readTree(message.getPayload());
+                    if(Set.of("PERIOD_INPUT_PERSISTED","DUPLICATE_PERIOD_INPUT").contains(ack.path("status").asText()))applicationAcks.add(ack.path("canonicalMessageId").asText());
+                }
+            });
+            var options=new MqttConnectOptions();options.setUserName(broker.path("edgeUser").asText());options.setPassword(broker.path("edgePassword").asText().toCharArray());options.setCleanSession(true);options.setConnectionTimeout(10);
+            ackListener.connect(options);ackListener.subscribe(broker.path("ackPrefix").asText()+"/adapter",1);
+        }
     }
     @AfterAll void close() throws Exception {
         for(var client:clients)if(client!=null){if(client.isConnected())client.disconnect();client.close();}
         if(database!=null)database.close();
+        if(ackListener!=null){if(ackListener.isConnected())ackListener.disconnect();ackListener.close();}
     }
     private String path(){return "/v1/carbon-management/buildings/"+building+"/dynamic-electricity";}
     private JsonNode api(String path,JsonNode body) throws Exception {
@@ -71,6 +93,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
     private synchronized MqttClient client(int meter) throws Exception {
         if(clients[meter]!=null)return clients[meter];
         var client=new MqttClient("tcp://127.0.0.1:"+broker.path("port").asInt(),"dyn-ea84-sim-"+meter,new MemoryPersistence());
+        client.setTimeToWait(10000);
         var options=new MqttConnectOptions();options.setUserName(broker.path("simulatorUser").asText());options.setPassword(broker.path("simulatorPassword").asText().toCharArray());
         options.setCleanSession(true);options.setConnectionTimeout(10);client.connect(options);clients[meter]=client;return client;
     }
@@ -88,7 +111,18 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
     }
     private void publish(int slot,int meter,long version,String quantity,boolean factor) throws Exception {publish(meter,payload(slot,meter,version,quantity,factor));}
     private void publish(int meter,ObjectNode body) throws Exception {
-        var message=new MqttMessage(json.writeValueAsBytes(body));message.setQos(1);client(meter).publish(broker.path("standardTopic").asText(),message);
+        var message=new MqttMessage(json.writeValueAsBytes(viaAdapter?vendor(body):body));message.setQos(1);client(meter).publish(broker.path(viaAdapter?"rawTopic":"standardTopic").asText(),message);
+    }
+    private ObjectNode vendor(ObjectNode standard) {
+        var p=standard.path("electricityInterval");var raw=json.createObjectNode();String meter=standard.path("deviceIdentity").path("value").asText();
+        raw.put("meter",meter);raw.put("protocol","kgCO2/kWh".equals(p.path("factorUnit").asText())?"DYNAMIC_PERIOD_CO2":"INVALID_UNIT_PROTOCOL");
+        raw.put("time",standard.path("eventTime").asLong());raw.put("seq",standard.path("seq").asLong());raw.put("boot","V2_SIMULATED");
+        raw.put("messageId",meter+":"+p.path("startInclusive").asText()+":"+p.path("revision").asLong());
+        raw.put("from",Instant.parse(p.path("startInclusive").asText()).toEpochMilli());raw.put("to",Instant.parse(p.path("endExclusive").asText()).toEpochMilli());raw.put("revision",p.path("revision").asLong());
+        if(p.hasNonNull("electricityKwh"))raw.put("energy",new BigDecimal(p.path("electricityKwh").asText()));
+        if(p.hasNonNull("factorKgCo2PerKwh"))raw.put("factor",new BigDecimal(p.path("factorKgCo2PerKwh").asText()));
+        // 厂家报文携带的内部归属声明不被适配器采纳，可信测点由服务器别名确定。
+        raw.put("pointId",p.path("pointId").asText());raw.put("buildingId","UNTRUSTED_BUILDING");return raw;
     }
     private record Task(String state,long actor,long revision,String resultId,JsonNode inputs) { }
     private Task task(int slot) throws Exception {
@@ -106,7 +140,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
                 for(int meter=0;meter<100;meter++) {
                     var source=task.inputs().path(fixture.path("points").get(meter).path("pointId").asText());
                     matches&=source.path("quantityRevision").asLong()==expected[meter]&&source.path("factorRevision").asLong()==expected[meter]
-                            &&"MQTT_STANDARD_V1".equals(source.path("transport").asText())&&!source.path("identityId").asText().isBlank();
+                            &&transport.equals(source.path("transport").asText())&&!source.path("identityId").asText().isBlank();
                 }
                 if(matches)return task;
             }
@@ -169,6 +203,18 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         }
         save("load",Map.of("meters",100,"intervalMinutes",15,"intervals",96,"pairedUploads",9600,"clockMode","EVENT_TIME_COMPRESSED_WITH_EACH_BATCH_DRAINED",
                 "elapsedMs",(System.nanoTime()-started)/1000000,"measurements",measured));
+        if(viaAdapter)try(var statement=database.prepareStatement("SELECT COUNT(*) FROM biz_telemetry_receipt WHERE building_id=? AND receipt_status='PERIOD_INPUT_PERSISTED' AND metric_count=0")) {
+            statement.setString(1,building);try(var rows=statement.executeQuery()){rows.next();assertThat(rows.getInt(1)).isGreaterThanOrEqualTo(9600);}
+        }
+        if(viaAdapter) {
+            var expected=new HashSet<String>();
+            try(var s=database.prepareStatement("SELECT r.canonical_message_id FROM biz_telemetry_receipt r JOIN biz_telemetry_message_intent i ON r.canonical_message_id=i.canonical_message_id WHERE r.building_id=? AND CAST(JSON_UNQUOTE(JSON_EXTRACT(i.snapshot_json,'$.message.electricityInterval.revision')) AS UNSIGNED)=?")) {
+                s.setString(1,building);s.setLong(2,revision);try(var rows=s.executeQuery()){while(rows.next())expected.add(rows.getString(1));}
+            }
+            assertThat(expected).hasSize(9600);long until=System.nanoTime()+Duration.ofSeconds(15).toNanos();
+            while(!applicationAcks.containsAll(expected)&&System.nanoTime()<until)Thread.sleep(100);
+            assertThat(applicationAcks).containsAll(expected);save("application-acks",Map.of("expectedMessages",9600,"allPeriodAcksObserved",true));
+        }
         long before=task(95).revision();
         for(int meter=0;meter<100;meter++)publish(95,meter,revision,meter==0?"99":"1",true);
         revisions[0]=revision+1;publish(95,0,revision+1,"99",true);assertThat(awaitReady(95,revisions).revision()).isEqualTo(before+1);
@@ -185,8 +231,8 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         revisions[0]=revision+2;publish(95,0,revision+2,"100",true);revisions[1]=revision+2;publish(95,1,revision+2,null,true);
         var corrected=awaitReady(95,revisions);assertThat(task(94).resultId()).isEqualTo(beforeOther);
         var evidence=api(path()+"/results/"+corrected.resultId()+"/evidence",null);
-        for(var source:evidence.path("electricityEvidence"))assertThat(source.path("transport").asText()).isEqualTo("MQTT_STANDARD_V1");
+        for(var source:evidence.path("electricityEvidence"))assertThat(source.path("transport").asText()).isEqualTo(transport);
         checkResults();save("behavior",Map.of("duplicateNotCounted",true,"oldRevisionIgnored",true,"invalidMessagesRejected",true,"splitCorrection",true,"unaffectedIntervalRetained",true));
-        System.out.println("INDEPENDENT_MQTT_100_METER_CHAIN_OK");
+        System.out.println(viaAdapter?"INDEPENDENT_V2_ADAPTER_100_METER_CHAIN_OK":"INDEPENDENT_MQTT_100_METER_CHAIN_OK");
     }
 }

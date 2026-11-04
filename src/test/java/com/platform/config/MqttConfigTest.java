@@ -266,6 +266,8 @@ class MqttConfigTest {
             HvacMqttMessageHandler handler,
             StandardTelemetryMqttMessageHandler standardHandler) {
         TaskScheduler scheduler = mock(TaskScheduler.class);
+        org.mockito.Mockito.doAnswer(a->{if(!((Instant)a.getArgument(1)).isAfter(Instant.now().plusMillis(100)))((Runnable)a.getArgument(0)).run();return null;})
+                .when(scheduler).schedule(any(Runnable.class),any(Instant.class));
         TelemetryV2MqttMessageHandler v2Handler =
                 mock(TelemetryV2MqttMessageHandler.class);
         MqttTlsProperties tls = new MqttTlsProperties();
@@ -293,6 +295,20 @@ class MqttConfigTest {
         ReflectionTestUtils.setField(config, "retryMultiplier", 2.0);
         ReflectionTestUtils.setField(config, "retryJitterRatio", 0.0);
         return new ConfigFixture(config, scheduler, v2Handler, meterRegistry);
+    }
+
+    @Test
+    void applicationAckIsPublishedOutsideCallbackAndOnlyThenCompletesInbound() throws Exception {
+        IMqttClient client=mock(IMqttClient.class);
+        var f=configuredConfig(mock(HvacMqttMessageHandler.class),mock(StandardTelemetryMqttMessageHandler.class));
+        var ack=new PlatformApplicationAck("1.0","P1",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",1L,2L,AckMode.ADAPTER_PROXY,"ADAPTER_ONLY");
+        when(f.v2Handler().handle(any(byte[].class),anyLong())).thenReturn(new V2ProcessingResult("P1",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",0,false,AckMode.ADAPTER_PROXY,"own/ack",ack,null));
+        f.config().initMqttClient(client,f.scheduler()).run();org.mockito.Mockito.reset(f.scheduler());
+        capturedCallback(client).messageArrived("platform/telemetry/v2/up",mqttMessage(60,"{}"));
+        verify(client,never()).publish(any(String.class),any(byte[].class),any(Integer.class),any(Boolean.class));
+        verify(client,never()).messageArrivedComplete(60,1);
+        var task=ArgumentCaptor.forClass(Runnable.class);verify(f.scheduler()).schedule(task.capture(),any(Instant.class));task.getValue().run();
+        var ordered=inOrder(client);ordered.verify(client).publish(any(String.class),any(byte[].class),any(Integer.class),any(Boolean.class));ordered.verify(client).messageArrivedComplete(60,1);
     }
 
     private MqttCallback capturedCallback(IMqttClient client) throws Exception {

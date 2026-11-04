@@ -70,6 +70,7 @@ public class JsonTelemetryParser {
                 .sorted(Comparator.comparingInt(ProtocolFieldMapping::sortOrder))
                 .toList();
         validateUniqueMetricCodes(activeMappings);
+        try {IntervalMappings.validate(activeMappings);}catch(IllegalArgumentException ex){throw error(ex.getMessage(),"周期字段映射无效");}
 
         List<StandardMetric> metrics = new ArrayList<>();
         for (ProtocolFieldMapping mapping : activeMappings) {
@@ -101,6 +102,16 @@ public class JsonTelemetryParser {
                 ? TimeSource.ADAPTER_RECEIVED : TimeSource.DEVICE_REPORTED;
         MessageIdentity messageIdentity = createIdentity(
                 identity, sourceMessageId, bootId, seq, deviceTime);
+        com.platform.adapter.model.ElectricityInterval interval;
+        try {interval=IntervalMappings.extract(activeMappings,metrics,"ADAPTER_V2:"+profile.profileCode()+":"+profile.profileVersion());}
+        catch(IllegalArgumentException|ArithmeticException ex){throw error("INVALID_ELECTRICITY_INTERVAL",ex.getMessage());}
+        if(interval!=null) {
+            var consumed=activeMappings.stream().filter(m->IntervalMappings.interval(m.valueType())).map(ProtocolFieldMapping::metricCode).collect(java.util.stream.Collectors.toSet());
+            metrics.removeIf(m->consumed.contains(m.code()));
+            // 同一采集时刻的合法修订与拆分报文须拥有不同消息键；周期版本仍由平台独立校验。
+            messageIdentity=new MessageIdentity(hash(messageIdentity.canonicalMessageId()+"|interval|"+interval.metricCode()+"|"+interval.startMs()+"|"+interval.endMs()+"|"+interval.revision()
+                    +"|"+(interval.electricityKwh()!=null)+"|"+(interval.factorKgCo2PerKwh()!=null)),messageIdentity.idSource(),messageIdentity.dedupMode());
+        }
         return new StandardTelemetryMessage(
                 "2.0",
                 requiredText(profile.profileCode(), "profileCode"),
@@ -121,7 +132,7 @@ public class JsonTelemetryParser {
                 messageIdentity.dedupMode(),
                 defaultText(profile.maxAckMode(), "EVIDENCE_ONLY"),
                 defaultText(profile.correlationPolicy(), "NONE"),
-                metrics);
+                metrics,interval);
     }
 
     private MessageIdentity createIdentity(

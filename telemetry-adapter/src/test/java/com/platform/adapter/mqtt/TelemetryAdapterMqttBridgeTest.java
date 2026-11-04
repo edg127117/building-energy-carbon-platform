@@ -36,6 +36,7 @@ import static org.mockito.Mockito.when;
 class TelemetryAdapterMqttBridgeTest {
 
     private IMqttClient client;
+    private IMqttClient ackClient;
     private ProtocolProfileProvider profileProvider;
     private TaskScheduler scheduler;
     private TelemetryAdapterMqttBridge bridge;
@@ -44,8 +45,11 @@ class TelemetryAdapterMqttBridgeTest {
     @BeforeEach
     void setUp() throws Exception {
         client = mock(IMqttClient.class);
+        ackClient=mock(IMqttClient.class);
         profileProvider = mock(ProtocolProfileProvider.class);
         scheduler = mock(TaskScheduler.class);
+        org.mockito.Mockito.doAnswer(a->{if(!((Instant)a.getArgument(1)).isAfter(Instant.now().plusMillis(100)))((Runnable)a.getArgument(0)).run();return null;})
+                .when(scheduler).schedule(any(Runnable.class),any(Instant.class));
         ObjectMapper objectMapper = new ObjectMapper();
         AdapterMqttProperties properties = new AdapterMqttProperties();
         properties.setBrokerUrl("tcp://localhost:1883");
@@ -61,6 +65,7 @@ class TelemetryAdapterMqttBridgeTest {
         profileProperties = new AdapterProfileProperties();
         bridge = new TelemetryAdapterMqttBridge(
                 client,
+                ackClient,
                 scheduler,
                 properties,
                 objectMapper,
@@ -69,6 +74,25 @@ class TelemetryAdapterMqttBridgeTest {
                 profileProvider,
                 new AdapterMqttSslContextFactory());
         when(profileProvider.resolve(anyString(), any())).thenReturn(resolved());
+    }
+
+    @Test
+    void applicationAckUsesIndependentConnectionAndRemovesOldRawAckSubscription() throws Exception {
+        bridge.start();
+        verify(client).unsubscribe("platform/telemetry/v2/ack/adapter");
+        verify(client).subscribe("device/raw/energy/up",1);
+        verify(ackClient).subscribe("platform/telemetry/v2/ack/adapter",1);
+        verify(ackClient).setManualAcks(true);
+    }
+
+    @Test
+    void callbackDefersSynchronousPublishUntilWorkerRuns() throws Exception {
+        org.mockito.Mockito.reset(scheduler);
+        bridge.messageArrived("device/raw/energy/up",message(60,"{\"MAC\":\"123456789012345\",\"current_energy\":1}"));
+        verify(client,never()).publish(anyString(),any(byte[].class),anyInt(),any(Boolean.class));
+        verify(client,never()).messageArrivedComplete(60,1);
+        var work=ArgumentCaptor.forClass(Runnable.class);verify(scheduler).schedule(work.capture(),any(Instant.class));work.getValue().run();
+        verify(client).publish(anyString(),any(byte[].class),anyInt(),any(Boolean.class));verify(client).messageArrivedComplete(60,1);
     }
 
     @Test

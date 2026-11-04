@@ -46,6 +46,7 @@ public class TelemetryV2IngestionService {
     private final MeterRegistry meterRegistry;
     private final String trustedAdapterAckTopic;
     private final TelemetryMessageJournal journal;
+    private final DynamicElectricityV2Input intervalInput;
 
     public TelemetryV2IngestionService(
             DeviceIdentityProvider identityProvider,
@@ -57,6 +58,15 @@ public class TelemetryV2IngestionService {
             MeterRegistry meterRegistry,
             @Value("${mqtt.topics.v2-adapter-ack:platform/telemetry/v2/ack/adapter}")
             String trustedAdapterAckTopic, TelemetryMessageJournal journal) {
+        this(identityProvider,unknownDeviceHandler,standardIngestionService,receiptMapper,failureMapper,ackModeResolver,meterRegistry,trustedAdapterAckTopic,journal,null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public TelemetryV2IngestionService(DeviceIdentityProvider identityProvider,UnknownDeviceHandler unknownDeviceHandler,
+            StandardTelemetryIngestionService standardIngestionService,TelemetryReceiptMapper receiptMapper,TelemetryReceiptFailureMapper failureMapper,
+            AckModeResolver ackModeResolver,MeterRegistry meterRegistry,
+            @Value("${mqtt.topics.v2-adapter-ack:platform/telemetry/v2/ack/adapter}") String trustedAdapterAckTopic,
+            TelemetryMessageJournal journal,DynamicElectricityV2Input intervalInput) {
         this.identityProvider = identityProvider;
         this.unknownDeviceHandler = unknownDeviceHandler;
         this.standardIngestionService = standardIngestionService;
@@ -66,6 +76,7 @@ public class TelemetryV2IngestionService {
         this.meterRegistry = meterRegistry;
         this.trustedAdapterAckTopic = trustedAdapterAckTopic;
         this.journal = journal;
+        this.intervalInput=intervalInput;
     }
 
     public V2ProcessingResult ingest(TelemetryV2Message message, long platformReceivedAt) {
@@ -107,15 +118,24 @@ public class TelemetryV2IngestionService {
         var entry=journal.find(message.canonicalMessageId());
         if(entry==null) {
             var prior=receiptMapper.selectById(message.canonicalMessageId());
-            var batch=prior==null?standardIngestionService.prepareImmutable(toStandardMessage(message),platformReceivedAt):null;
+            var batch=prior==null&&!message.metrics().isEmpty()?standardIngestionService.prepareImmutable(toStandardMessage(message),platformReceivedAt):null;
             if(batch!=null && batch.result().outcome()!=StandardTelemetryOutcome.ACCEPTED) {
                 if(batch.result().outcome()==StandardTelemetryOutcome.RETRYABLE_FAILURE)
                     return retryable(message.canonicalMessageId(),"PREPARATION_UNAVAILABLE",batch.result().detail());
                 return permanent(message.canonicalMessageId(),ReceiptStatus.PLATFORM_REJECTED,"PLATFORM_REJECTED",mode,platformReceivedAt,null,batch.result().detail());
             }
-            var snapshot=new TelemetryMessageJournal.Snapshot(message,binding,mode,platformReceivedAt,batch==null?java.util.List.of():batch.events());
+            com.platform.carbon.DynamicElectricityContracts.DeviceIntervalRequest interval=null;
+            if(prior==null&&message.electricityInterval()!=null) {
+                try {interval=java.util.Objects.requireNonNull(intervalInput).prepare(message,binding);}
+                catch(IllegalArgumentException|com.platform.framework.exception.BusinessException ex) {
+                    if(ex instanceof com.platform.framework.exception.BusinessException b&&b.getCode()>=500)
+                        return retryable(message.canonicalMessageId(),b.getErrorCode(),b.getMessage());
+                    return permanent(message.canonicalMessageId(),ReceiptStatus.PLATFORM_REJECTED,"INVALID_ELECTRICITY_INTERVAL",mode,platformReceivedAt,null,ex.getMessage());
+                }
+            }
+            var snapshot=new TelemetryMessageJournal.Snapshot(message,binding,mode,platformReceivedAt,batch==null?java.util.List.of():batch.events(),interval);
             entry=prior==null?journal.freeze(hash,snapshot):journal.freezeLegacy(prior.getPayloadHash(),snapshot,
-                    permanent(message.canonicalMessageId(),ReceiptStatus.DUPLICATE_PERSISTED,"DUPLICATE_PERSISTED",mode,platformReceivedAt,prior.getPersistedAt(),null));
+                    permanent(message.canonicalMessageId(),duplicate(message),duplicate(message).name(),mode,platformReceivedAt,prior.getPersistedAt(),null));
         }
         if(!hash.equals(entry.hash())) {
             journal.conflict(message.canonicalMessageId(),hash,message);
@@ -133,8 +153,9 @@ public class TelemetryV2IngestionService {
         StandardTelemetryResult storage=null;
         if(initial.terminal()==null && !initial.snapshot().events().isEmpty())
             storage=standardIngestionService.ingestPrepared(initial.snapshot().events());
+        if(initial.snapshot().intervalRequest()!=null&&initial.snapshot().events().isEmpty())storage=StandardTelemetryResult.accepted(0);
         final StandardTelemetryResult prepared=storage;
-        return journal.locked(id,entry->{
+        try {return journal.locked(id,entry->{
             var result=finishFrozen(entry,prepared);
             if(!result.retryable()&&entry.terminal()==null) {
                 journal.complete(id,result);
@@ -142,7 +163,16 @@ public class TelemetryV2IngestionService {
                     journal.queueRecovered(entry.snapshot().events());
             }
             return result;
-        });
+        });} catch(com.platform.framework.exception.BusinessException ex) {
+            // 周期任务事务回滚后再保存永久拒绝，不能在已标记回滚的事务里伪造成功回执。
+            if(ex.getCode()>=500)return retryable(id,ex.getErrorCode(),ex.getMessage());
+            return journal.locked(id,entry->{
+                if(entry.terminal()!=null)return entry.terminal();
+                var frozen=entry.snapshot();
+                var rejected=permanent(id,ReceiptStatus.PLATFORM_REJECTED,ex.getErrorCode(),frozen.mode(),frozen.receivedAt(),null,ex.getMessage());
+                journal.complete(id,rejected);return rejected;
+            });
+        }
     }
 
     private V2ProcessingResult finishFrozen(TelemetryMessageJournal.Entry entry,StandardTelemetryResult storage) {
@@ -154,9 +184,9 @@ public class TelemetryV2IngestionService {
         String payloadHash=entry.hash();
         if(entry.terminal()!=null) {
             var terminal=entry.terminal();
-            if(terminal.status()==ReceiptStatus.PLATFORM_PERSISTED || terminal.status()==ReceiptStatus.DUPLICATE_PERSISTED) {
+            if(persisted(terminal.status())) {
                 receiptMapper.incrementAttempt(message.canonicalMessageId(),time(System.currentTimeMillis()),trimToNull(message.batchId()),nullableTime(message.retransmittedAt()));
-                return permanent(message.canonicalMessageId(),ReceiptStatus.DUPLICATE_PERSISTED,"DUPLICATE_PERSISTED",mode,System.currentTimeMillis(),
+                return permanent(message.canonicalMessageId(),duplicate(message),duplicate(message).name(),mode,System.currentTimeMillis(),
                         terminal.applicationAck().persistedAtEpochMillis()==null?null:time(terminal.applicationAck().persistedAtEpochMillis()),null);
             }
             return terminal;
@@ -179,8 +209,8 @@ public class TelemetryV2IngestionService {
             meterRegistry.counter("iot.telemetry.v2", "outcome", "duplicate").increment();
             meterRegistry.counter("iot.telemetry.v2.message", "result", "duplicate")
                     .increment();
-            return permanent(message.canonicalMessageId(), ReceiptStatus.DUPLICATE_PERSISTED,
-                    "DUPLICATE_PERSISTED", mode, platformReceivedAt,
+            return permanent(message.canonicalMessageId(), duplicate(message),
+                    duplicate(message).name(), mode, platformReceivedAt,
                     existing.getPersistedAt(), null);
         }
 
@@ -205,6 +235,7 @@ public class TelemetryV2IngestionService {
                     platformReceivedAt, null, storage.detail());
         }
 
+        if(frozen.intervalRequest()!=null)java.util.Objects.requireNonNull(intervalInput).persist(frozen.intervalRequest(),binding);
         LocalDateTime persistedAt = LocalDateTime.now(PROJECT_ZONE);
         TelemetryReceipt receipt = new TelemetryReceipt();
         receipt.setCanonicalMessageId(message.canonicalMessageId());
@@ -228,15 +259,16 @@ public class TelemetryV2IngestionService {
         receipt.setConfiguredAckMode(mode.configuredMode().name());
         receipt.setActualAckMode(mode.actualMode().name());
         receipt.setDowngradeReason(mode.downgradeReason());
-        receipt.setReceiptStatus(ReceiptStatus.PLATFORM_PERSISTED.name());
-        receipt.setResultCode("PLATFORM_PERSISTED");
+        ReceiptStatus saved=message.electricityInterval()==null?ReceiptStatus.PLATFORM_PERSISTED:ReceiptStatus.PERIOD_INPUT_PERSISTED;
+        receipt.setReceiptStatus(saved.name());
+        receipt.setResultCode(saved.name());
         receipt.setMetricCount(message.metrics().size());
         receipt.setAttemptCount(1);
         meterRegistry.timer("iot.telemetry.v2.receipt_insert")
                 .record(() -> receiptMapper.insert(receipt));
         meterRegistry.counter("iot.telemetry.v2", "outcome", "persisted").increment();
-        return permanent(message.canonicalMessageId(), ReceiptStatus.PLATFORM_PERSISTED,
-                "PLATFORM_PERSISTED", mode, platformReceivedAt, persistedAt, null,
+        return permanent(message.canonicalMessageId(), saved,
+                saved.name(), mode, platformReceivedAt, persistedAt, null,
                 storage.processedMetrics());
     }
 
@@ -329,7 +361,7 @@ public class TelemetryV2IngestionService {
                 || message.collectedAt() != null && message.collectedAt() <= 0
                 || message.retransmittedAt() != null && message.retransmittedAt() <= 0
                 || message.sourceSeq() != null && message.sourceSeq() < 0
-                || message.metrics() == null || message.metrics().isEmpty() || message.metrics().size()>500
+                || message.metrics() == null || message.metrics().isEmpty()&&message.electricityInterval()==null || message.metrics().size()>500
                 || !("DEVICE_REPORTED".equals(message.timeSource())
                 || "ADAPTER_RECEIVED".equals(message.timeSource()))
                 || !("DEVICE_REPORTED".equals(message.idSource())
@@ -343,6 +375,11 @@ public class TelemetryV2IngestionService {
         for(var metric:message.metrics()) {
             if(metric==null||!hasText(metric.code())||metric.value()==null||!hasText(metric.unit())||!hasText(metric.sourceField()))
                 return "V2 指标内容缺失";
+        }
+        if(message.electricityInterval()!=null) {
+            try {message.electricityInterval().validate();}catch(IllegalArgumentException ex){return ex.getMessage();}
+            if(message.metrics().stream().anyMatch(m->m.code().equals(message.electricityInterval().metricCode())))
+                return "周期电量点不能同时作为普通原始测点重复上传";
         }
         if (message.collectedAt() == null
                 && !"ADAPTER_RECEIVED".equals(message.timeSource())) {
@@ -365,6 +402,13 @@ public class TelemetryV2IngestionService {
                 .forEach(metric -> canonical.append(metric.code()).append('=')
                         .append(metric.value().stripTrailingZeros().toPlainString()).append('@')
                         .append(metric.unit()).append('\u001e'));
+        if(message.electricityInterval()!=null) {
+            var p=message.electricityInterval();canonical.append("INTERVAL_V1");
+            for(Object value:new Object[]{p.metricCode(),p.startMs(),p.endMs(),p.revision(),p.electricityKwh(),p.factorKgCo2PerKwh(),p.electricityUnit(),p.factorUnit(),p.sourceNature(),p.sourceReference()}) {
+                String text=value instanceof BigDecimal d?d.stripTrailingZeros().toPlainString():java.util.Objects.toString(value,"<null>");
+                canonical.append(text.length()).append(':').append(text);
+            }
+        }
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
                     .digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
@@ -372,6 +416,14 @@ public class TelemetryV2IngestionService {
         } catch (NoSuchAlgorithmException exception) {
             throw new IllegalStateException("JDK 缺少 SHA-256", exception);
         }
+    }
+
+    private static boolean persisted(ReceiptStatus status) {
+        return status==ReceiptStatus.PLATFORM_PERSISTED||status==ReceiptStatus.DUPLICATE_PERSISTED
+                ||status==ReceiptStatus.PERIOD_INPUT_PERSISTED||status==ReceiptStatus.DUPLICATE_PERIOD_INPUT;
+    }
+    private static ReceiptStatus duplicate(TelemetryV2Message message) {
+        return message.electricityInterval()==null?ReceiptStatus.DUPLICATE_PERSISTED:ReceiptStatus.DUPLICATE_PERIOD_INPUT;
     }
 
     private void recordFailure(

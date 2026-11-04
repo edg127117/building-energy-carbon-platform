@@ -43,7 +43,13 @@ public class TelemetryMessageJournal {
         tx.setTimeout(60);
     }
     public record Snapshot(TelemetryV2Message message,DeviceIdentityBinding binding,AckModeResolution mode,
-            long receivedAt,List<RawTelemetryEvent> events) { }
+            long receivedAt,List<RawTelemetryEvent> events,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            com.platform.carbon.DynamicElectricityContracts.DeviceIntervalRequest intervalRequest) {
+        public Snapshot(TelemetryV2Message message,DeviceIdentityBinding binding,AckModeResolution mode,long receivedAt,List<RawTelemetryEvent> events) {
+            this(message,binding,mode,receivedAt,events,null);
+        }
+    }
     public record Entry(String id,String hash,Snapshot snapshot,String state,V2ProcessingResult terminal) { }
 
     public Entry find(String id) {

@@ -27,8 +27,6 @@ public class TelemetryV2MqttMessageHandler {
         }
         try {
             var body=objectMapper.readTree(payload);
-            if(body!=null&&body.hasNonNull("electricityInterval"))
-                return malformedWithEvidence("设备周期载荷须使用标准主题，不能作为V2数值遥测确认");
             return ingestionService.ingest(objectMapper.treeToValue(body,TelemetryV2Message.class),platformReceivedAt);
         } catch (IOException | IllegalArgumentException exception) {
             return malformedWithEvidence("V2 MQTT 报文 JSON 无效");

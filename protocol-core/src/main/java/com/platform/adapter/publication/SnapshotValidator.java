@@ -15,7 +15,7 @@ public final class SnapshotValidator {
 
     public static final int SUPPORTED_SCHEMA_VERSION = 1;
     private static final Set<String> OUTPUT_VERSIONS = Set.of("V1", "V2");
-    private static final Set<String> VALUE_TYPES = Set.of("DECIMAL");
+    private static final Set<String> VALUE_TYPES = com.platform.adapter.parser.IntervalMappings.TYPES;
     private static final Set<String> ACK_MODES = Set.of(
             "DEVICE_DIRECT", "ADAPTER_PROXY", "EVIDENCE_ONLY");
     private static final Set<String> CORRELATION_POLICIES = Set.of(
@@ -133,6 +133,10 @@ public final class SnapshotValidator {
         if (mappings == null || mappings.isEmpty()) {
             fail("EMPTY_MAPPING_SET", "启用协议模板至少包含一个字段映射");
         }
+        try {com.platform.adapter.parser.IntervalMappings.validate(mappings);}
+        catch(IllegalArgumentException ex){fail(ex.getMessage(),"周期字段映射无效");}
+        if("V1".equals(outputVersion)&&com.platform.adapter.parser.IntervalMappings.hasInterval(mappings))
+            fail("V2_INTERVAL_REQUIRED","周期映射需要V2输出，不能静默降级");
         Set<String> metricCodes = new HashSet<>();
         Set<String> sourcePaths = new HashSet<>();
         for (ProtocolFieldMapping mapping : mappings) {
@@ -169,7 +173,7 @@ public final class SnapshotValidator {
         }
         String valueType = required(mapping.valueType(), "valueType").toUpperCase(Locale.ROOT);
         if (!VALUE_TYPES.contains(valueType)) {
-            fail("UNSUPPORTED_VALUE_TYPE", "第一版字段映射仅支持DECIMAL");
+            fail("UNSUPPORTED_VALUE_TYPE", "不支持的字段类型或周期角色");
         }
         required(mapping.targetUnit(), "targetUnit");
         if (mapping.sortOrder() < 0) {

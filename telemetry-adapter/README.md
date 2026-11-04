@@ -2,6 +2,8 @@
 
 ## 1. 结论与边界
 
+动态用电周期数据沿用现有V2输出：在既有字段映射的value_type中声明电量、CO2因子、明确时界和修订角色，转换为electricityInterval；其他普通测点仍可共包。JDBC和远程快照均使用共用解析核心，V1输出遇到周期载荷会拒绝降级。周期接入应用回执与原RAW持久化回执分别表示，接入成功不等于计算完成。契约及独立验收见[动态用电监测](../docs/development/dynamic-electricity-monitoring.md#现有适配器与v2周期载荷)。
+
 该模块部署在云服务器，与 EMQX 同侧运行。它把不同设备的 JSON 多字段报文按 MySQL
 协议模板转换为统一批量报文，再发布到 `device/telemetry/up`，由本地平台主动订阅。
 

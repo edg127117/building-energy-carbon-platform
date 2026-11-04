@@ -46,6 +46,12 @@ public class TelemetryMessageFactory {
         List<StandardMetric> metrics = device.getPoints().stream()
                 .map(point -> metric(point, values))
                 .toList();
+        var mappings=intervalMappings(device);
+        var interval=com.platform.adapter.parser.IntervalMappings.extract(mappings,metrics.stream().map(m->new com.platform.adapter.model.StandardMetric(m.code(),m.value(),m.unit(),m.sourceField())).toList(),"MODBUS_V2:"+device.getProfileCode());
+        if(interval!=null) {
+            var consumed=mappings.stream().filter(m->com.platform.adapter.parser.IntervalMappings.interval(m.valueType())).map(com.platform.adapter.profile.ProtocolFieldMapping::metricCode).collect(java.util.stream.Collectors.toSet());
+            metrics=metrics.stream().filter(m->!consumed.contains(m.code())).toList();
+        }
         return new StandardTelemetryMessage(
                 "2.0",
                 device.getProfileCode(),
@@ -66,7 +72,13 @@ public class TelemetryMessageFactory {
                 "DERIVED",
                 "ADAPTER_PROXY",
                 "BOOT_ID_AND_SEQ",
-                metrics);
+                metrics,interval);
+    }
+
+    /** 角色来自部署点表，时界和修订来自设备读取值，禁止拿轮询时钟补造15分钟量。 */
+    public static List<com.platform.adapter.profile.ProtocolFieldMapping> intervalMappings(Device device) {
+        return device.getPoints().stream().map(p->new com.platform.adapter.profile.ProtocolFieldMapping(p.getCode(),"MODBUS",p.getCode(),p.getCode(),p.getValueType(),
+                p.getUnit(),p.getUnit(),BigDecimal.ONE,BigDecimal.ZERO,true,true,0)).toList();
     }
 
     private StandardMetric metric(Point point, Map<String, BigDecimal> values) {

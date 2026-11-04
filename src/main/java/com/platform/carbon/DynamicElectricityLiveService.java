@@ -44,6 +44,15 @@ public class DynamicElectricityLiveService {
         return store(0,device.buildingId(),request,"MQTT_STANDARD_V1");
     }
 
+    /** V2冻结的身份和测点不可在重试期间换绑到其他建筑；保存与V2终态回执使用同一MySQL事务。 */
+    @Transactional(rollbackFor=Exception.class)
+    public DeviceIntervalReceipt ingestFromMqttV2(DeviceIntervalRequest request,com.platform.iot.identity.DeviceIdentityBinding frozen) {
+        var current=devices.find(request.deviceIdentity()).orElseThrow(()->problem("DYNAMIC_DEVICE_NOT_ACTIVE","设备尚未启用绑定"));
+        if(!current.identityId().equals(frozen.identityId())||!current.buildingId().equals(frozen.buildingId())||!current.equipmentId().equals(frozen.equipmentId()))
+            throw problem("DYNAMIC_DEVICE_SCOPE_CHANGED","冻结后设备归属改变，拒绝换建筑重放");
+        return store(0,frozen.buildingId(),request,"MQTT_STANDARD_V2");
+    }
+
     private DeviceIntervalReceipt store(long user,String building,DeviceIntervalRequest request,String transport) {
         var from=request.startInclusive();var to=request.endExclusive();
         if(from==null||to==null||from.getNano()!=0||from.getEpochSecond()%900!=0||!to.equals(from.plusSeconds(900))
@@ -91,7 +100,7 @@ public class DynamicElectricityLiveService {
         Collection<String> roles;
         if(systemTask) {
             // MQTT接入已冻结归属；内部读取始终使用任务建筑和逐点目录校验，不接受消息里的角色、账号或建筑。
-            if(task.readings().values().stream().noneMatch(r->"MQTT_STANDARD_V1".equals(r.transport())&&r.identityId()!=null))
+            if(task.readings().values().stream().noneMatch(r->Set.of("MQTT_STANDARD_V1","MQTT_STANDARD_V2").contains(Objects.toString(r.transport(),""))&&r.identityId()!=null))
                 throw problem("DYNAMIC_SYSTEM_TASK_INVALID","系统任务缺少受信设备接入证据");
             roles=List.of("PLATFORM_ADMIN");
         } else {

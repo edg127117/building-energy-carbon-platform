@@ -3,6 +3,7 @@ import type { DeviceProductDetail, ProductPointTemplate } from '@/modules/device
 export type ProtocolFieldType = 'NUMBER' | 'STRING' | 'BOOLEAN' | 'NULL'
 
 export type ProtocolMapping = {
+  valueType?: 'DECIMAL' | 'ELECTRICITY_KWH' | 'CO2_FACTOR' | 'INTERVAL_START' | 'INTERVAL_END' | 'INTERVAL_REVISION' | null
   sourcePath: string
   metricCode: string
   sourceUnit: string

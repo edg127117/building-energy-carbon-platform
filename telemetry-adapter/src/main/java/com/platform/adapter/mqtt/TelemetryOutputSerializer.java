@@ -31,6 +31,7 @@ public class TelemetryOutputSerializer {
         if (!"V1".equalsIgnoreCase(properties.getOutputVersion())) {
             throw new IllegalArgumentException("adapter.profile.output-version仅支持V1或V2");
         }
+        if(message.electricityInterval()!=null)throw new IllegalArgumentException("周期载荷必须使用V2输出，不能静默丢失");
         long eventTime = message.collectedAt() == null
                 ? message.adapterReceivedAt() : message.collectedAt();
         String timeSource = message.timeSource() == TimeSource.DEVICE_REPORTED

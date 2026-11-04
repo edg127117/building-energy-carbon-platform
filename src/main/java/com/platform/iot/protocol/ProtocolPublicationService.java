@@ -83,7 +83,7 @@ public class ProtocolPublicationService {
         List<VersionView> result=new ArrayList<>();
         for(Entry entry:snapshot.profiles()) {
             var p=entry.profile();
-            var mappings=entry.mappings().stream().map(m->new com.platform.iot.protocol.api.ProtocolContracts.Mapping(m.sourcePath(),m.metricCode(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
+            var mappings=entry.mappings().stream().map(m->new com.platform.iot.protocol.api.ProtocolContracts.Mapping(m.sourcePath(),m.metricCode(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder(),m.valueType())).toList();
             var c=new Configuration("导入："+p.profileCode(),request.productBindings().get(p.profileId()),p.profileCode(),p.sourceTopic(),p.deviceIdentityType(),p.deviceIdentityPath(),p.protocolVersionPath(),p.expectedProtocolVersion(),p.timestampPath(),mappings);
             drafts.validate(c,roles);
             String key=id();String entryJson=json(entry);
@@ -225,13 +225,13 @@ public class ProtocolPublicationService {
         Configuration c=read(version.json(),Configuration.class);
         drafts.validate(c,ADMIN);
         if(!version.productHash().equals(productHash(c))) throw ProtocolErrors.invalid("关联产品已变更，请重新冻结协议版本");
-        repository.validateBindings(c.productId(),c.profileCode(),c.mappings().stream().filter(m->m.enabled()).map(m->m.metricCode()).toList(),sourceSystem);
+        repository.validateBindings(c.productId(),c.profileCode(),c.mappings().stream().filter(m->m.enabled()&&!com.platform.adapter.parser.IntervalMappings.parameter(m.valueType())).map(m->m.metricCode()).toList(),sourceSystem);
         if(version.entryJson()!=null) return read(version.entryJson(),Entry.class);
         if(version.revision()>Integer.MAX_VALUE) throw ProtocolErrors.invalid("协议修订号超限");
         var profile=new ProtocolProfile(version.id(),c.profileCode(),(int)version.revision(),c.sourceTopic(),c.identityType(),c.identityPath(),
                 c.discriminatorPath(),c.discriminatorValue(),c.timestampPath(),null,null,null,null,null,"EVIDENCE_ONLY","NONE",true);
         var mappings=c.mappings().stream().filter(m->m.enabled()).map(m->new ProtocolFieldMapping(UUID.nameUUIDFromBytes((version.id()+m.sourcePath()).getBytes(StandardCharsets.UTF_8)).toString().replace("-",""),
-                version.id(),m.sourcePath(),m.metricCode(),"DECIMAL",m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
+                version.id(),m.sourcePath(),m.metricCode(),m.effectiveValueType(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
         return new Entry(profile,mappings);
     }
     private void validateSnapshot(ProtocolPublicationRepository.Target target,Snapshot snapshot) {

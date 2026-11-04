@@ -31,7 +31,14 @@ public final class ProtocolContracts {
             @NotNull @Digits(integer=11,fraction=9) @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal offset,
             @NotNull Boolean required,
             @NotNull Boolean enabled,
-            @NotNull @Min(0) @Max(10000) Integer sortOrder) {}
+            @NotNull @Min(0) @Max(10000) Integer sortOrder,
+            @Pattern(regexp="DECIMAL|ELECTRICITY_KWH|CO2_FACTOR|INTERVAL_START|INTERVAL_END|INTERVAL_REVISION") String valueType) {
+        public Mapping(String sourcePath,String metricCode,String sourceUnit,String targetUnit,BigDecimal scale,BigDecimal offset,
+                Boolean required,Boolean enabled,Integer sortOrder) {
+            this(sourcePath,metricCode,sourceUnit,targetUnit,scale,offset,required,enabled,sortOrder,null);
+        }
+        public String effectiveValueType(){return com.platform.adapter.parser.IntervalMappings.type(valueType);}
+    }
 
     public record UpdateRequest(@NotNull @Min(1) Long revision,
                                 @NotNull @Valid Configuration configuration) {}

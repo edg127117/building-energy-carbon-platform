@@ -174,7 +174,7 @@ public class MqttTelemetryPublisher implements TelemetryPublisher, MqttCallbackE
         // 同步publish已经等待QoS 1交付，本回调不再承载业务成功语义。
     }
 
-    @Scheduled(fixedDelayString = "${modbus-edge.mqtt.ack-scan-delay:5s}")
+    @Scheduled(fixedDelayString = "#{T(org.springframework.boot.convert.DurationStyle).detectAndParse('${modbus-edge.mqtt.ack-scan-delay:5s}').toMillis()}")
     void expireAcks() {
         long cutoff = clock.millis() - properties.getAckTimeout().toMillis();
         pendingAcks.entrySet().removeIf(entry -> {

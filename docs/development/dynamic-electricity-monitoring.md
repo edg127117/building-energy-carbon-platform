@@ -107,7 +107,51 @@ flowchart LR
 
 QoS1处理复用现有MqttConfig订阅、手动确认、重连和标准报文处理器。只有MySQL输入与任务提交成功后才返回接入成功，存储等暂时故障保留重投，非法单位、归属或同版本异值稳定拒绝。Broker PUBACK、平台保存、计算完成与大屏显示是不同阶段，接入成功回执不表示排放已经生成。周期量保存于V105任务输入及不可变动态结果证据，沿用明确区间量语义。
 
-普通metrics报文继续走原数值遥测链路。V2主题含electricityInterval时明确拒绝，避免静默忽略扩展后错误确认；生产方按上述标准主题契约发送。真实设备或厂家网关的字段映射仍需独立联调。
+普通metrics报文继续走原数值遥测链路。V2周期载荷也已接到同一动态任务服务，使用下述V2契约；不能仅把V1报文换主题。真实设备或厂家网关的字段映射仍需独立联调。
+
+### 现有适配器与V2周期载荷
+
+`telemetry-adapter`使用现有字段映射表的`value_type`声明周期角色，JDBC模板与平台发布快照共用同一解析规则，不新增配置页面或数据库结构。普通映射仍为DECIMAL。平台协议映射API提供可选valueType，缺省仍为DECIMAL；旧页面更新未传类型时保留同路径/点码的原角色，避免编辑时静默降级。
+
+| value_type | 输入及目标单位 | 含义 |
+| --- | --- | --- |
+| ELECTRICITY_KWH | 显式换算到kWh | 周期用电量，metric_code必须匹配既有设备用电测点别名 |
+| CO2_FACTOR | kgCO2/kWh | 同区间CO2因子；不能把CO2e改名冒充CO2 |
+| INTERVAL_START / INTERVAL_END | ms，不加倍率或偏移 | 设备提供的Unix毫秒时界，不能用接收时间代替 |
+| INTERVAL_REVISION | 1，不加倍率或偏移 | 正整数业务修订号 |
+
+周期模板须包含上述五种角色且每种唯一。三个元数据字段必需，电量和因子映射可选以支持拆分上报，但单包至少含其中一项。参数字段不要求新增物理测点；可信归属仍由电量点码解析。用于周期载荷的字段从普通metrics中移出，其他普通测点可与周期量共包，不重复写入核算量。适配器输出的sourceNature为SOURCE_LABELLED，仅代表上游声明来源，不能据此认定为实测。
+
+V2信封保留canonicalMessageId、设备身份、profile、bootId/sourceSeq、时间及ACK能力，追加可选载荷：
+
+```json
+{
+  "electricityInterval": {
+    "metricCode": "Q",
+    "startMs": 1790784000000,
+    "endMs": 1790784900000,
+    "revision": 1,
+    "electricityKwh": 1.25,
+    "factorKgCo2PerKwh": 0.5,
+    "electricityUnit": "kWh",
+    "factorUnit": "kgCO2/kWh",
+    "sourceNature": "SOURCE_LABELLED",
+    "sourceReference": "upstream interval reference"
+  }
+}
+```
+
+平台复用现有身份与别名解析内部测点，首次接收时将请求、身份和绑定冻结到既有消息JSON。V2周期摘要包含时界、修订、数值、单位与来源，保持旧普通报文的摘要算法不变。适配器消息键对周期修订和Q/F拆分加以区分；消息重发幂等，业务更正递增revision并形成新的消息键。上游声明的建筑或平台pointId不作为可信归属。
+
+周期输入/动态任务、平台周期接入回执与消息终态在同一MySQL事务提交，来源记录为MQTT_STANDARD_V2；故障回滚后可按原冻结输入重试，不重新解释已改变的别名。冻结后身份跨设备/建筑换绑会拒绝重放。纯周期输入返回PERIOD_INPUT_PERSISTED，重复返回DUPLICATE_PERIOD_INPUT；它们确认输入和任务已保存，不表示配对、计算或展示已完成。普通RAW/TDengine的PLATFORM_PERSISTED含义保持不变；混合报文须完成所有声明载荷的存储后才确认成功。暂时故障保留重投，应用ACK丢失时重复消息仍可返回回执。
+
+`modbus-edge-adapter`的部署点表增加可选value-type，角色与上表一致，复用实际读取/解码值生成同一V2载荷。默认DECIMAL和既有累计/瞬时测点行为保持；不得将轮询时钟或累计表码当成区间量。未提供明确时界、修订、区间量和因子的设备不能假装支持此契约。边缘进程仍不包含本地持久补传队列。
+
+JSON适配器复用既有调度器在Paho回调外发布，应用ACK使用同账号、同Broker的独立连接（clientId追加`-ack`），防止原始QoS1在途窗口阻塞其等待的ACK。平台应用ACK也在回调外发布，成功后再确认入站消息。Broker PUBACK、周期保存、计算READY与页面更新分别验证，不能互相替代。Modbus回执扫描间隔沿用既有Duration配置格式，默认`5s`、ISO格式与毫秒数字均可解析，不新增参数。
+
+独立验收先用Broker准备脚本加`--with-v2-adapters`，再运行`prepare_dynamic_electricity_v2_fixture.py --root <独立根目录> --execute`。后者只实例化适配器现有协议表、准备单独100表建筑的测试别名并生成私有配置，不启动进程。Broker为模拟器、JSON适配器、Modbus适配器和平台分别配置账号及限定主题；模拟器不能直接写入V2主题。所有测试进程使用显式私有配置并清除继承的连接环境变量，禁止加载现场/共享实例配置。
+
+在已有独立验收测试中增加`DYNAMIC_MQTT_IT_TRANSPORT=V2_ADAPTER`，业务数据只发布到专属原始主题，必须经实际运行的适配器进入V2。SQL核验V2周期回执和输入来源，HTTP只登录与查询。默认STANDARD_V1保留原标准入口验收。各模式结果分别保存在独立实例的mqtt-v2-acceptance与mqtt-acceptance目录。真实设备、现场TLS和长期容量不能由模拟结果替代。
 
 独立Broker准备脚本为 `prepare_dynamic_electricity_mqtt_broker.py --root <已初始化的独立根目录> --execute`，只使用已安装镜像，生成独立Docker网络、数据目录、凭据及主题，端口仅绑定127.0.0.1。凭据及连接信息写入该实例私有目录，仓库不保存实际值。本机隔离测试显式使用已有allow-plaintext-for-tests开关，现场TLS不由此验收。
 
