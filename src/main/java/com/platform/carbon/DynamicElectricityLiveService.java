@@ -34,6 +34,17 @@ public class DynamicElectricityLiveService {
     @Transactional(rollbackFor=Exception.class)
     public DeviceIntervalReceipt ingest(long user,Collection<String> roles,String building,DeviceIntervalRequest request) {
         authorization.requireCalculationRunner(user,roles,building);
+        return store(user,building,request,"HTTP");
+    }
+
+    /** MQTT仅由受信主题处理器调用。建筑从启用身份解析，0表示固定建筑范围的系统任务，无浏览器账号或职责配置。 */
+    @Transactional(rollbackFor=Exception.class)
+    public DeviceIntervalReceipt ingestFromMqtt(DeviceIntervalRequest request) {
+        var device=devices.find(request.deviceIdentity()).orElseThrow(()->problem("DYNAMIC_DEVICE_NOT_ACTIVE","设备尚未启用绑定"));
+        return store(0,device.buildingId(),request,"MQTT_STANDARD_V1");
+    }
+
+    private DeviceIntervalReceipt store(long user,String building,DeviceIntervalRequest request,String transport) {
         var from=request.startInclusive();var to=request.endExclusive();
         if(from==null||to==null||from.getNano()!=0||from.getEpochSecond()%900!=0||!to.equals(from.plusSeconds(900))
                 ||to.isAfter(Instant.now())||from.atZone(ZoneId.of("Asia/Shanghai")).getYear()<2000
@@ -55,7 +66,7 @@ public class DynamicElectricityLiveService {
             return new DeviceIntervalReceipt(building,from,to,task.revision(),task.state());
         if(request.revision()==Math.max(prior.quantityRevision(),prior.factorRevision())
                 &&!request.sourceNature().equals(prior.nature()))throw problem("DYNAMIC_DEVICE_REVISION_CONFLICT","同修订的数据性质不一致");
-        var next=new DynamicElectricityLiveRepository.Reading(q,qr,f,fr,request.sourceNature(),request.sourceReference());
+        var next=new DynamicElectricityLiveRepository.Reading(q,qr,f,fr,request.sourceNature(),request.sourceReference(),device.identityId(),transport);
         readings.put(request.pointId(),next);
         if(readings.size()>500)throw problem("DYNAMIC_CAPACITY","一个建筑时段最多500个测点");
         if(next.equals(prior))return new DeviceIntervalReceipt(building,from,to,task.revision(),task.state());
@@ -76,9 +87,18 @@ public class DynamicElectricityLiveService {
         process(task,token,new DynamicElectricityLiveInput.Capture());
     }
     private void process(DynamicElectricityLiveRepository.Task task,String token,DynamicElectricityLiveInput.Capture capture) {
-        if(!AuthenticationStateService.isEnabled(users.selectSecurityState(task.user())))throw problem("DYNAMIC_ACTOR_DISABLED","接入账号已停用");
-        var roles=roleMapper.selectRoleKeysByUserId(task.user());
-        authorization.requireCalculationRunner(task.user(),roles,task.building());
+        boolean systemTask=task.user()==0&&"DEVICE_INTERVAL".equals(task.sourceKind());
+        Collection<String> roles;
+        if(systemTask) {
+            // MQTT接入已冻结归属；内部读取始终使用任务建筑和逐点目录校验，不接受消息里的角色、账号或建筑。
+            if(task.readings().values().stream().noneMatch(r->"MQTT_STANDARD_V1".equals(r.transport())&&r.identityId()!=null))
+                throw problem("DYNAMIC_SYSTEM_TASK_INVALID","系统任务缺少受信设备接入证据");
+            roles=List.of("PLATFORM_ADMIN");
+        } else {
+            if(!AuthenticationStateService.isEnabled(users.selectSecurityState(task.user())))throw problem("DYNAMIC_ACTOR_DISABLED","接入账号已停用");
+            roles=roleMapper.selectRoleKeysByUserId(task.user());
+            authorization.requireCalculationRunner(task.user(),roles,task.building());
+        }
         if(!"DEVICE_INTERVAL".equals(task.sourceKind())) {
             Instant from=Instant.ofEpochMilli(task.from()),to=Instant.ofEpochMilli(task.to());
             if(calculations.sourceVersion(task.building(),from,to,task.sourceKind()).equals(task.metadata()))tasks.checked(task,token);
@@ -99,7 +119,7 @@ public class DynamicElectricityLiveService {
         var summary=new Result(id,task.building(),"INTERVAL",result.start(),result.end(),version,"DEVICE_INTERVAL",summaryValues,
                 task.inputHash(),CarbonEvidence.tree(Map.of("resultId",id)),result.factorHash(),result.capturedAt());
         new TransactionTemplate(transactionManager).executeWithoutResult(status->{
-            authorization.requireCalculationRunner(task.user(),roles,task.building());
+            if(!systemTask)authorization.requireCalculationRunner(task.user(),roles,task.building());
             if(!metadata.equals(tasks.metadataVersion(task.building(),results)))throw problem("DYNAMIC_SOURCE_CHANGED","计算期间计量或能源配置变更");
             if(tasks.publish(task,token,metadata,summary))results.save(result);
         });

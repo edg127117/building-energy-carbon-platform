@@ -10,6 +10,7 @@ flowchart LR
     G --> C
     H[设备15分钟电量与因子] --> I[身份及建筑鉴权并持久入队]
     I --> C
+    M[现有标准MQTT主题] --> I
     C --> D[独立监测结果与来源证据]
     D --> E[只读查询与大屏]
 ```
@@ -71,6 +72,46 @@ flowchart LR
 电量为本时段千瓦时用量。两项可以一起上传，也可分别上传，但同一电表、区间、修订号必须配齐。同版本异值拒绝，重复值只计一次，旧版本重投不覆盖新版本。更正任一值时递增修订号并提供同版本配对值。返回PENDING仅表示输入和任务已保存，计算由后台完成。
 
 大屏每次请求结束后间隔5秒刷新已有月/年数值，切换建筑/期间或卸载撤销旧请求和定时器。前端不做业务汇总，computedThrough只供后端计算与验收，不增加图上标签或状态样式。
+
+### MQTT标准时段接入
+
+平台已有 `mqtt.topics.standard-upstream` 主题接收可选的 `electricityInterval`，默认主题为 `device/telemetry/up`。信封沿用标准1.0身份、协议、事件/接收时间及序号，`metrics` 与周期载荷互斥。每条报文对应一个电表测点的15分钟区间，时间、版本、精度、单位及配对规则与HTTP时段入口一致。
+
+```json
+{
+  "standardVersion": "1.0",
+  "profileCode": "METER_PROFILE",
+  "profileVersion": 1,
+  "deviceIdentity": {"type": "SERIAL_NO", "value": "meter-001"},
+  "eventTime": 1790784900000,
+  "receivedTime": 1790784900000,
+  "timeSource": "DEVICE_REPORTED",
+  "seq": 1,
+  "metrics": [],
+  "electricityInterval": {
+    "pointId": "PLATFORM_POINT_ID",
+    "startInclusive": "2026-10-01T00:00:00+08:00",
+    "endExclusive": "2026-10-01T00:15:00+08:00",
+    "revision": 1,
+    "electricityKwh": "1.25",
+    "factorKgCo2PerKwh": "0.5",
+    "electricityUnit": "kWh",
+    "factorUnit": "kgCO2/kWh",
+    "sourceNature": "SOURCE_LABELLED",
+    "sourceReference": "upstream interval reference"
+  }
+}
+```
+
+建筑由已启用设备身份解析，测点必须属于同一设备、建筑和千瓦时单位。消息不携带平台用户、角色或建筑授权。后台以保留的系统标识0处理已核验设备任务，内部只读解析始终固定在任务建筑；HTTP入口继续校验当前用户职责与建筑范围。输入证据记录服务器解析的identityId和MQTT_STANDARD_V1传输来源，旧HTTP数据的JSON缺省字段仍可读取。
+
+QoS1处理复用现有MqttConfig订阅、手动确认、重连和标准报文处理器。只有MySQL输入与任务提交成功后才返回接入成功，存储等暂时故障保留重投，非法单位、归属或同版本异值稳定拒绝。Broker PUBACK、平台保存、计算完成与大屏显示是不同阶段，接入成功回执不表示排放已经生成。周期量保存于V105任务输入及不可变动态结果证据，沿用明确区间量语义。
+
+普通metrics报文继续走原数值遥测链路。V2主题含electricityInterval时明确拒绝，避免静默忽略扩展后错误确认；生产方按上述标准主题契约发送。真实设备或厂家网关的字段映射仍需独立联调。
+
+独立Broker准备脚本为 `prepare_dynamic_electricity_mqtt_broker.py --root <已初始化的独立根目录> --execute`，只使用已安装镜像，生成独立Docker网络、数据目录、凭据及主题，端口仅绑定127.0.0.1。凭据及连接信息写入该实例私有目录，仓库不保存实际值。本机隔离测试显式使用已有allow-plaintext-for-tests开关，现场TLS不由此验收。
+
+`DynamicElectricityMqttIndependentAcceptanceTest` 默认跳过外部资源，显式提供 `DYNAMIC_MQTT_IT_ROOT` 后执行。`DYNAMIC_MQTT_IT_STAGE=full` 使用100个Paho客户端，每15分钟事件时段100组、96轮，等待每轮平台完整再推进；日历时间压缩，不等同连续24小时运行。它只经MQTT上传业务数据，HTTP仅登录和读取，SQL仅核验。另有pending-restart、offline-publish、resume-restart阶段，验证平台离线时Broker已确认但平台尚未保存、Broker/平台重启后自动重放。各阶段修订号由DYNAMIC_MQTT_IT_REVISION显式指定。
 
 数据库迁移 `V105` 追加 `biz_dynamic_electricity_task`，同一行保存设备周期输入和可恢复待算任务，不复制原始累计量账本。`V104` 新增 `biz_dynamic_electricity_factor` 和 `biz_dynamic_electricity_result`，保留不可变因子修订、结果和摘要，不另建电量事实表。存储摘要用于完整性检查，不代表来源真实性认证。大屏只读取结果；动态系列不再使用原型演示兜底值。静态系列仅在原有冻结证据明确 CO2-only 时共享 CO2 轴，未知气体口径不强行混用。
 

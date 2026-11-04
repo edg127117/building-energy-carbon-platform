@@ -88,6 +88,20 @@ class DynamicElectricityLiveServiceTest {
                 q==null?null:new BigDecimal(q),f==null?null:new BigDecimal(f),"SIMULATED","test-source")));
     }
     private void drain() {jdbc.update("UPDATE biz_dynamic_electricity_task SET next_check=0");live.refresh();}
+    @Test void mqttUsesRegisteredIdentityScopeAndSystemTasksWithoutUserAccount() {
+        tx.executeWithoutResult(s->{
+            live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL","P0"),"METER","P0",from,from.plusSeconds(900),1,new BigDecimal("10"),new BigDecimal("0.5"),"SIMULATED","MQTT-test"));
+            live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL","P1"),"METER","P1",from,from.plusSeconds(900),1,new BigDecimal("20"),new BigDecimal("0.8"),"SIMULATED","MQTT-test"));
+        });
+        clearInvocations(auth,users,roles);drain();
+        var result=tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
+        assertThat(result.values().emissionKgCo2()).isEqualByComparingTo("21");
+        assertThat(results.byId("B",result.id()).electricityEvidence().path("P0").path("transport").asText()).isEqualTo("MQTT_STANDARD_V1");
+        verifyNoInteractions(auth,users,roles);
+        assertThat(jdbc.queryForObject("SELECT requested_by FROM biz_dynamic_electricity_task",Long.class)).isZero();
+        assertThatThrownBy(()->tx.executeWithoutResult(s->live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL","P0"),"METER","P1",from,from.plusSeconds(900),2,new BigDecimal("30"),new BigDecimal("0.5"),"SIMULATED","wrong-meter")))).hasMessageContaining("不匹配");
+    }
+
     @Test void pairsOutOfOrderAvoidsDuplicatesAndWaitsForBothRevisions() {
         upload("P0",from,1,"10",null);upload("P1",from,1,"20","0.8");drain();
         assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1")).isEmpty();

@@ -19,7 +19,11 @@ public class DynamicElectricityLiveRepository {
         this.jdbc=jdbc; this.json=json;
     }
     public record Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,
-                          String nature,String reference) { }
+                          String nature,String reference,String identityId,String transport) {
+        public Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,String nature,String reference) {
+            this(quantity,quantityRevision,factor,factorRevision,nature,reference,null,"HTTP");
+        }
+    }
     public record Task(String building,long from,long to,long user,String inputHash,long revision,String state,
                        String token,long leaseUntil,String metadata,String resultId,String sourceKind,String grain,Map<String,Reading> readings) { }
     private Task row(java.sql.ResultSet r,int n) throws java.sql.SQLException {
