@@ -27,7 +27,7 @@ it('uses demo material only for explicitly authorized sections and never fills s
   const period = { kind: 'month' as const, value: '2024-02' }
   const base = dailyScreenData(dailyFixture(), period, period)
   const data = withApprovedScreenDemo(base, period)
-  expect(data.devices?.on).toBe(25); expect(data.alarms?.deviceAnomalies).toBe(3)
+  expect(data.devices).toBeUndefined(); expect(data.runtimeRanking).toBeUndefined(); expect(data.alarms?.deviceAnomalies).toBe(3)
   expect(data.mirror?.data.dynamicFactors.some(v => v !== null)).toBe(true)
   expect(data.mirror?.data.staticEmissions).toEqual(base.mirror?.data.staticEmissions)
   expect(data.usage).toBe(base.usage)

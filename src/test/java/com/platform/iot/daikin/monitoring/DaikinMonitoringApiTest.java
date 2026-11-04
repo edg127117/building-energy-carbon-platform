@@ -29,6 +29,8 @@ class DaikinMonitoringApiTest {
         mvc.perform(delete("/v1/hvac-monitoring/devices/missing/fast-watch?watchId=watch-one"))
                 .andExpect(status().isUnauthorized());
         for (String path : new String[] {"/v1/hvac-monitoring/buildings/BLD001/devices",
+                "/v1/hvac-monitoring/buildings/BLD001/device-summary",
+                "/v1/hvac-monitoring/buildings/BLD001/runtime-ranking?month=2026-11",
                 "/v1/hvac-monitoring/devices/missing/temperatures/current?field=roomTemp",
                 "/v1/hvac-monitoring/devices/missing/observed-runtime",
                 "/v1/hvac-monitoring/devices/missing/runtime",
@@ -55,6 +57,20 @@ class DaikinMonitoringApiTest {
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/observed-runtime").has("post")).isFalse();
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/fast-watch").has("post")).isTrue();
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/fast-watch").has("delete")).isTrue();
+        for (String endpoint : new String[] {"device-summary", "runtime-ranking"}) {
+            var contract = paths.path("/v1/hvac-monitoring/buildings/{buildingId}/" + endpoint);
+            assertThat(contract.has("get")).isTrue();
+            assertThat(contract.has("post")).isFalse();
+        }
+        mvc.perform(get("/v1/hvac-monitoring/buildings/BLD001/device-summary")
+                .header("Authorization", "Bearer " + token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.scope").value("ACTIVE_BOUND_DAIKIN_INDOOR"))
+                .andExpect(jsonPath("$.data.total").isNumber());
+        mvc.perform(get("/v1/hvac-monitoring/buildings/BLD001/runtime-ranking")
+                .param("month", java.time.YearMonth.now(java.time.ZoneId.of("Asia/Shanghai")).toString())
+                .header("Authorization", "Bearer " + token)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.source").value("PLATFORM_OBSERVED"))
+                .andExpect(jsonPath("$.data.statisticsZone").value("Asia/Shanghai"));
         assertThat(paths.path("/v1/hvac-monitoring/devices/{equipmentId}/runtime/{valueId}/revisions").has("get")).isTrue();
     }
 }

@@ -137,11 +137,44 @@ class DaikinMonitoringStateServiceTest {
     }
 
     @Test
-    void observedRuntimeExcludesMissingAndLongGaps() {
+    void observedRuntimeBridgesShortMissingButExcludesLongGaps() {
         service.observe(target, 100, observation(NOW, Map.of("onOff", value("on"))));
         service.observe(target, 200, observation(NOW + 60_000, Map.of("onOff", unavailable(MISSING))));
         service.observe(target, 300, observation(NOW + 120_000, Map.of("onOff", value("on"))));
         service.observe(target, 400, observation(NOW + 480_001, Map.of("onOff", value("off"))));
+
+        assertThat(jdbc.queryForObject("SELECT SUM(on_ms) FROM biz_daikin_observed_runtime_day", Long.class))
+                .isEqualTo(120_000L);
+        assertThat(jdbc.queryForObject("SELECT SUM(covered_ms) FROM biz_daikin_observed_runtime_day", Long.class))
+                .isEqualTo(120_000L);
+    }
+
+    @Test
+    void observedRuntimeIncludesExactlyFiveMinutesButDoesNotExtrapolateOrCountDuplicateRecovery() {
+        service.observe(target, 100, observation(NOW, Map.of("onOff", value("on"))));
+        service.observe(target, 200, observation(NOW + 60_000, Map.of("onOff", unavailable(UNKNOWN))));
+        service.observe(target, 300, observation(NOW + 300_000, Map.of("onOff", value("off"))));
+        service.observe(target, 300, observation(NOW + 300_000, Map.of("onOff", value("off"))));
+        clock.set(NOW + 600_001);
+        service.scanStale(clock.millis(), 10);
+        service.observe(target, 400, observation(NOW + 600_001, Map.of("onOff", value("on"))));
+
+        assertThat(jdbc.queryForObject("SELECT SUM(on_ms) FROM biz_daikin_observed_runtime_day", Long.class))
+                .isEqualTo(300_000L);
+        assertThat(jdbc.queryForObject("SELECT SUM(covered_ms) FROM biz_daikin_observed_runtime_day", Long.class))
+                .isEqualTo(300_000L);
+        service.observe(target, 500, observation(NOW + 660_001, Map.of("onOff", value("off"))));
+        assertThat(jdbc.queryForObject("SELECT SUM(on_ms) FROM biz_daikin_observed_runtime_day", Long.class))
+                .isEqualTo(360_000L);
+    }
+
+    @Test
+    void shortMissingRecoveryCannotBridgeChangedBuildingOrMapping() {
+        service.observe(target, 100, observation(NOW, Map.of("onOff", value("on"))));
+        service.observe(target, 200, observation(NOW + 60_000, Map.of("onOff", unavailable(MISSING))));
+        var moved = target("building-B", 4);
+        service.registerTarget(moved, NOW + 60_000);
+        service.observe(moved, 300, observation(NOW + 120_000, Map.of("onOff", value("off"))));
 
         assertThat(count("biz_daikin_observed_runtime_day")).isZero();
     }

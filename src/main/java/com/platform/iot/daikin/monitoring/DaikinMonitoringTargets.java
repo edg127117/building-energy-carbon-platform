@@ -42,6 +42,11 @@ public class DaikinMonitoringTargets {
         return query(" WHERE d.pending_id=?", pendingId).stream().findFirst();
     }
 
+    /** 建筑汇总复用正式目标资格，不依赖已经产生分钟观测；不能用列表第一页作为总分母。 */
+    public List<Target> forBuilding(String buildingId) {
+        return query(" WHERE e.building_id=? ORDER BY e.equip_id,i.identity_id", buildingId);
+    }
+
     private List<Target> query(String suffix, String parameter) {
         return jdbc.query(SELECT + suffix, (rs, row) -> new Target(
                 new DaikinDeviceKey(rs.getString("source_id"), rs.getString("site_id"),

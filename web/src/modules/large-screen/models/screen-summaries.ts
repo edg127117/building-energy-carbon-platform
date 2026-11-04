@@ -33,6 +33,11 @@ export interface ScreenRuntimeRankingEntry {
   floor: string
   hours: number | null
   percentage: number | null
+  coverageStatus?: 'PARTIAL' | 'COMPLETE'
+  coveredMillis?: number
+  onMillis?: number
+  coveredHours?: number
+  coveragePercentage?: number
 }
 
 export interface ScreenIntensityBenchmarks {

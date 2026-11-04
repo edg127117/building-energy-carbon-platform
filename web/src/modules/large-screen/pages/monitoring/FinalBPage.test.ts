@@ -12,7 +12,7 @@ import { annualFixture } from '../../models/final-b-annual.test-fixture'
 import { dailyFixture } from '../../models/final-b-daily.test-fixture'
 
 vi.mock('./IndexPage.vue', () => ({ default: {
-  name: 'BScreenContent', props: ['data', 'layoutVariant'], emits: ['periodChange'], template: '<div />',
+  name: 'BScreenContent', props: ['data', 'layoutVariant'], emits: ['periodChange'], template: '<div><slot name="data-context" /></div>',
 } }))
 vi.mock('../../api/carbon-intensity', () => ({ readCarbonIntensity: vi.fn() }))
 vi.mock('@/modules/energy-reporting/api/annual-overview', async original => ({
@@ -30,6 +30,13 @@ vi.mock('../../composables/use-joint-flow', () => ({ useJointFlow: () => ({
 }) }))
 vi.mock('../../composables/use-outdoor-temperature', () => ({ useOutdoorTemperature: () => ({
   values: ref(Array.from({ length: 12 }, () => 20)), state: ref('READY'), view: ref(null), loading: ref(false), reload: vi.fn(),
+}) }))
+vi.mock('../../composables/use-building-monitoring', () => ({ useBuildingMonitoring: () => ({
+  devices: ref({ total: 4, on: 2, off: 1, unknown: 1, modes: [], speeds: [] }), updatedAt: ref(123),
+  summaryLastSuccess: ref(123), summaryExpired: ref(false), summaryFailed: ref(false),
+  summaryDiagnostics: ref({ modeExtras: [['dry', 1]], speedExtras: [['middleHigh', 1]],
+    unknownReasons: [['MISSING', 1]], modeReasons: [], speedReasons: [] }),
+  runtimeRanking: ref([]), rankingContext: ref(undefined), rankingFailed: ref(false),
 }) }))
 
 function initialState() {
@@ -79,7 +86,11 @@ describe('final B intensity integration', () => {
     expect(data.mirror?.data.staticEmissions).toEqual(Array(29).fill(0.00123456789))
     expect(data.mirror?.data.staticFactors).toEqual(Array(29).fill(0.56))
     expect(data.mirror?.data.dynamicFactors).toHaveLength(29)
-    expect(data.devices?.on).toBe(25)
+    expect(data.devices?.on).toBe(2)
+    expect(wrapper.text()).toContain('除湿模式 1')
+    expect(wrapper.text()).toContain('中高档 1')
+    expect(wrapper.text()).toContain('缺少观测 1')
+    expect(data.deviceSummaryUpdatedAt).toBe(123)
     wrapper.unmount()
   })
 
