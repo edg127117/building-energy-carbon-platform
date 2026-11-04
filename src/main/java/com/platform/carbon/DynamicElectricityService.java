@@ -23,10 +23,10 @@ public class DynamicElectricityService {
     private final CarbonAuthorization authorization;
     private final DynamicElectricityRepository repository;
     private final DynamicElectricityInputReader electricity;
-    private final DailyTrendSummaryRepository sourceVersions;
     private final PlatformTransactionManager transactionManager;
     private final AuditEvidenceWriter audit;
     private final AuditGovernanceProperties auditProperties;
+    private final DynamicElectricityLiveRepository live;
 
     @Transactional(rollbackFor = Exception.class)
     public ImportReceipt ingest(long user, Collection<String> roles, String building, ImportRequest request) {
@@ -59,7 +59,7 @@ public class DynamicElectricityService {
                     request.sourceNature(), request.sourceReference(), request.sourceRegion(), request.scenario());
             pending.add(new FactorRow(factor, revision, importId, requestHash, ""));
         }
-        pending.forEach(f -> repository.insertFactor(building, f));
+        pending.forEach(f -> {repository.insertFactor(building,f);live.invalidateLegacy(building,f.factor().start(),f.factor().end());});
         appendAudit(user, building, "IMPORT_DYNAMIC_ELECTRICITY_FACTOR", importId, requestHash);
         return new ImportReceipt(importId, pending.size(), requestHash);
     }
@@ -73,15 +73,15 @@ public class DynamicElectricityService {
         window(request.startInclusive(), request.endExclusive());
         var windows = split(request.startInclusive(), request.endExclusive(), request.grain());
         var session = electricity.session(request.sourceKind());
-        Map<YearMonth, String> versions = new HashMap<>();
+        String metadata=live.metadataVersion(building,repository);
+        Map<Instant, String> versions = new HashMap<>();
         var results = new ArrayList<Result>();
         var deadline = CarbonCalculationDeadline.start(Duration.ofMinutes(5));
         try (var ignored = deadline.bind()) {
             for (var interval : windows) {
                 deadline.requireRemaining();
                 Instant from = interval[0], to = interval[1];
-                YearMonth month = YearMonth.from(from.atZone(ZONE));
-                String version = versions.computeIfAbsent(month, m -> sourceVersion(building, m, request.sourceKind()));
+                String version = versions.computeIfAbsent(from, m -> sourceVersion(building, from, to, request.sourceKind(),metadata));
                 var input = session.read(user, roles, building, from, to, request.grain());
                 var factors = repository.factors(building, from, to);
                 var values = DynamicElectricityCore.calculate(input.contributions(), factors.stream().map(FactorRow::factor).toList(), from, to);
@@ -93,11 +93,13 @@ public class DynamicElectricityService {
             new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
                 repository.lock(building);
                 authorization.requireCalculationRunner(user, roles, building);
-                versions.forEach((month, version) -> {
-                    if (!version.equals(sourceVersion(building, month, request.sourceKind()))) throw problem("DYNAMIC_SOURCE_CHANGED", "来源已修订，请重新计算");
+                String publishMetadata=live.metadataVersion(building,repository);
+                versions.forEach((from, version) -> {
+                    var end=results.stream().filter(r->r.start().equals(from)).findFirst().orElseThrow().end();
+                    if (!version.equals(sourceVersion(building, from, end, request.sourceKind(),publishMetadata))) throw problem("DYNAMIC_SOURCE_CHANGED", "来源已修订，请重新计算");
                 });
                 deadline.requireRemaining();
-                results.forEach(repository::save);
+                results.forEach(r->{repository.save(r);live.registerCalculation(r,user);});
                 appendAudit(user, building, "CALCULATE_DYNAMIC_ELECTRICITY", hash(encode(results.stream().map(Result::id).toList())),
                         hash(encode(versions.entrySet().stream().sorted(Map.Entry.comparingByKey()).map(Object::toString).toList())));
             });
@@ -125,7 +127,12 @@ public class DynamicElectricityService {
                 buckets = split(start(day), start(day.plusDays(1)), "HOUR");
             } else throw new DateTimeException("period");
         } catch (DateTimeException | NumberFormatException ex) { throw new BusinessException(400, "DYNAMIC_QUERY_INVALID", "查询期间无效"); }
-        var stored = repository.results(building, buckets.getFirst()[0], buckets.getLast()[1]);
+        var stored = new ArrayList<>(repository.results(building, buckets.getFirst()[0], buckets.getLast()[1]));
+        var deviceCoverage=live.deviceCoverage(building,buckets.getFirst()[0],buckets.getLast()[1]);
+        stored.removeIf(r->deviceCoverage.stream().anyMatch(w->r.start().isBefore(w[1])&&r.end().isAfter(w[0])));
+        String metadata=stored.isEmpty()&&!live.hasData(building,buckets.getFirst()[0],buckets.getLast()[1])?null:live.metadataVersion(building,repository);
+        if(metadata!=null)
+            stored.addAll(live.current(building,buckets.getFirst()[0],buckets.getLast()[1],metadata));
         Map<String, String> versions = new HashMap<>();
         var points = new ArrayList<Point>();
         for (var bucket : buckets) {
@@ -134,34 +141,36 @@ public class DynamicElectricityService {
                 case "DAY" -> bucket[0].atZone(ZONE).toLocalDateTime().toString();
                 default -> bucket[0].atZone(ZONE).toLocalDate().toString();
             };
-            if (bucket[1].isAfter(Instant.now())) {
+            if (bucket[0].isAfter(Instant.now())) {
                 points.add(empty(key, bucket, "NOT_ENDED", "PERIOD_NOT_ENDED"));
                 continue;
             }
-            YearMonth month = YearMonth.from(bucket[0].atZone(ZONE));
             var candidates = stored.stream().filter(r -> !r.start().isBefore(bucket[0]) && !r.end().isAfter(bucket[1])).toList();
-            var current = candidates.stream().filter(r -> r.sourceVersion().equals(versions.computeIfAbsent(month + ":" + r.sourceKind(),
-                    keyVersion -> sourceVersion(building, month, r.sourceKind())))).toList();
+            var current = candidates.stream().filter(r -> "DEVICE_INTERVAL".equals(r.sourceKind()) || r.sourceVersion().equals(versions.computeIfAbsent(r.start() + ":" + r.end() + ":" + r.sourceKind(),
+                    keyVersion -> sourceVersion(building, r.start(), r.end(), r.sourceKind(),metadata)))).toList();
             // 优先选覆盖当前游标的最粗已存结果；同一电量不能同时累计月、日和小时三个粒度。
+            Map<Instant,Result> byStart=new HashMap<>();
+            current.forEach(r->byStart.merge(r.start(),r,(a,b)->a.end().isAfter(b.end())?a:b));
             var used = new ArrayList<Result>();
             Instant cursor = bucket[0];
             while (cursor.isBefore(bucket[1])) {
                 Instant at = cursor;
-                var next = current.stream().filter(r -> r.start().equals(at)).max(Comparator.comparing(Result::end));
-                if (next.isEmpty()) break;
-                used.add(next.get());
-                cursor = next.get().end();
+                var next = byStart.get(at);
+                if (next == null) break;
+                used.add(next);
+                cursor = next.end();
             }
-            if (!cursor.equals(bucket[1])) {
+            boolean accumulating=bucket[1].isAfter(Instant.now()) && cursor.isAfter(bucket[0]);
+            if (!cursor.equals(bucket[1]) && !accumulating) {
                 points.add(empty(key, bucket, candidates.isEmpty() ? "MISSING" : current.isEmpty() ? "STALE" : "PARTIAL", "COMPLETE_RESULT_REQUIRED"));
                 continue;
             }
             BigDecimal quantity = used.stream().map(r -> r.values().quantity()).reduce(BigDecimal.ZERO, BigDecimal::add);
             BigDecimal emission = used.stream().map(r -> r.values().emissionKgCo2()).reduce(BigDecimal.ZERO, BigDecimal::add);
-            points.add(new Point(key, bucket[0], bucket[1], "COMPLETE", null, quantity, emission.movePointLeft(3),
+            points.add(new Point(key, bucket[0], bucket[1], accumulating?"ACCUMULATING":"COMPLETE", null, quantity, emission.movePointLeft(3),
                     quantity.signum() == 0 ? null : emission.divide(quantity, MathContext.DECIMAL128),
                     used.stream().map(Result::grain).distinct().sorted().toList(), used.stream().map(Result::id).toList(),
-                    used.stream().flatMap(r -> r.values().sourceNatures().stream()).distinct().sorted().toList()));
+                    used.stream().flatMap(r -> r.values().sourceNatures().stream()).distinct().sorted().toList(), cursor));
         }
         return new View(building, type, period, ZONE.getId(), "tCO2", "kgCO2/kWh", "MONITORING", List.copyOf(points));
     }
@@ -175,13 +184,13 @@ public class DynamicElectricityService {
         return result;
     }
 
-    private String sourceVersion(String building, YearMonth month, String sourceKind) {
-        var factors = repository.factors(building, start(month.atDay(1)), start(month.plusMonths(1).atDay(1)));
-        return hash(encode(List.of("DYNAMIC_ELECTRICITY_V2", sourceKind,
-                "RAW_CUMULATIVE".equals(sourceKind) ? repository.rawVersion(building) : "REVIEWED_INTERVAL",
-                repository.inputMetadataVersion(building, sourceKind),
-                sourceVersions.sourceVersion(building, month),
-                repository.projectVersion(building), factors.stream().map(FactorRow::hash).toList())));
+    String sourceVersion(String building, Instant from, Instant to, String sourceKind) {
+        return sourceVersion(building,from,to,sourceKind,live.metadataVersion(building,repository));
+    }
+    private String sourceVersion(String building,Instant from,Instant to,String sourceKind,String metadata) {
+        return hash(encode(List.of("DYNAMIC_ELECTRICITY_V3",sourceKind,metadata,
+                repository.electricityVersion(building,from,to,sourceKind),
+                repository.factors(building,from,to).stream().map(FactorRow::hash).toList())));
     }
 
     static List<Instant[]> split(Instant from, Instant to, String grain) {

@@ -42,6 +42,22 @@ public final class DynamicElectricityContracts {
         }
     }
 
+    /** 适配层沿用平台身份认证；同一电表同一时段的修订号递增，两项可分开补齐。 */
+    @Schema(name = "DynamicElectricityDeviceIntervalRequest")
+    public record DeviceIntervalRequest(
+            @NotNull @Valid com.platform.iot.identity.DeviceIdentityKey deviceIdentity,
+            @NotBlank @Size(max=64) String profileCode,
+            @NotBlank @Size(max=80) String pointId,
+            @NotNull Instant startInclusive, @NotNull Instant endExclusive,
+            @Min(1) long revision,
+            @DecimalMin("0") @Digits(integer=12,fraction=12) BigDecimal electricityKwh,
+            @DecimalMin("0") @Digits(integer=12,fraction=18) BigDecimal factorKgCo2PerKwh,
+            @NotBlank @Pattern(regexp="SOURCE_LABELLED|SIMULATED") String sourceNature,
+            @NotBlank @Size(max=500) String sourceReference) { }
+
+    public record DeviceIntervalReceipt(String buildingId, Instant startInclusive, Instant endExclusive,
+                                        long revision, String state) { }
+
     @Schema(name = "DynamicElectricityImportReceipt")
     public record ImportReceipt(String importId, int observations, String evidenceHash) { }
 
@@ -51,7 +67,14 @@ public final class DynamicElectricityContracts {
             @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal electricityKwh,
             @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal emissionTco2,
             @JsonFormat(shape = JsonFormat.Shape.STRING) BigDecimal factorKgCo2PerKwh,
-            List<String> grains, List<String> resultIds, List<String> sourceNatures) { }
+            List<String> grains, List<String> resultIds, List<String> sourceNatures, Instant computedThrough) {
+        public Point(String period, Instant startInclusive, Instant endExclusive, String status, String reasonCode,
+                     BigDecimal electricityKwh, BigDecimal emissionTco2, BigDecimal factorKgCo2PerKwh,
+                     List<String> grains, List<String> resultIds, List<String> sourceNatures) {
+            this(period,startInclusive,endExclusive,status,reasonCode,electricityKwh,emissionTco2,
+                    factorKgCo2PerKwh,grains,resultIds,sourceNatures,null);
+        }
+    }
 
     @Schema(name = "DynamicElectricityView")
     public record View(String buildingId, String periodType, String period, String timezoneId,

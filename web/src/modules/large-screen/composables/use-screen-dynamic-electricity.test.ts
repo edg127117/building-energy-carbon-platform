@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, h, ref, type Ref } from 'vue'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   type DynamicElectricityPoint,
   type DynamicElectricityPointStatus,
@@ -27,6 +27,7 @@ function yearPoint(month: number, status: DynamicElectricityPointStatus = 'COMPL
   const complete = status === 'COMPLETE'
   return {
     period, startInclusive: isoAtShanghaiMidnight(`${period}-01`), endExclusive: isoAtShanghaiMidnight(`${next}-01`),
+    computedThrough: complete ? isoAtShanghaiMidnight(`${next}-01`) : null,
     status, reasonCode: complete ? null : 'COMPLETE_RESULT_REQUIRED',
     electricityKwh: complete ? String(month === 1 ? 0 : 100) : null,
     emissionTco2: complete ? String(month === 1 ? 0 : month / 10) : null,
@@ -56,6 +57,9 @@ function monthView(month: string, buildingId = 'B-1'): DynamicElectricityView {
         period: date,
         startInclusive: isoAtShanghaiMidnight(date),
         endExclusive: new Date(Date.parse(`${date}T00:00:00+08:00`) + 24 * 60 * 60 * 1_000).toISOString(),
+        computedThrough: complete
+          ? new Date(Date.parse(`${date}T00:00:00+08:00`) + 24 * 60 * 60 * 1_000).toISOString()
+          : null,
         status: complete ? 'COMPLETE' : index === 1 ? 'PARTIAL' : 'NOT_ENDED',
         reasonCode: complete ? null : 'COMPLETE_RESULT_REQUIRED',
         electricityKwh: complete ? '0' : null,
@@ -92,7 +96,15 @@ async function settle(): Promise<void> {
   await flushPromises()
 }
 
+async function settleMicrotasks(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 describe('useScreenDynamicElectricity', () => {
+  afterEach(() => vi.useRealTimers())
+
   beforeEach(() => {
     vi.resetAllMocks()
     buildingId = ref('B-1')
@@ -124,6 +136,43 @@ describe('useScreenDynamicElectricity', () => {
     expect(validated?.dynamicEmissions.slice(0, 3)).toEqual([0, null, null])
     expect(validated?.dynamicFactors.slice(0, 3)).toEqual([null, null, null])
     expect(validated?.hasSimulatedSource).toBe(true)
+  })
+
+  it('只显示当前开放自然桶的 ACCUMULATING 完整前缀，并校验 computedThrough 在桶内', () => {
+    vi.setSystemTime(new Date('2026-09-15T04:00:00.000Z'))
+    const month: ScreenPeriod = { kind: 'month', value: '2026-09' }
+    const view = monthView('2026-09')
+    view.points[14] = {
+      ...view.points[14]!, status: 'ACCUMULATING', reasonCode: null,
+      electricityKwh: '125.5', emissionTco2: '0.06275', factorKgCo2PerKwh: '0.5',
+      computedThrough: '2026-09-15T03:00:00.000Z',
+    }
+
+    const validated = validateScreenDynamicElectricityView(view, 'B-1', month)
+    expect(validated?.dynamicEmissions[14]).toBe(0.06275)
+    expect(validated?.dynamicFactors[14]).toBe(0.5)
+    expect(validated?.status).toBe('partial')
+
+    view.points[14]!.computedThrough = '2026-09-16T03:00:00.000Z'
+    expect(validateScreenDynamicElectricityView(view, 'B-1', month)).toBeNull()
+    view.points[14]!.computedThrough = '2026-09-14T16:00:00.000Z'
+    expect(validateScreenDynamicElectricityView(view, 'B-1', month)).toBeNull()
+    view.points[14]!.computedThrough = '2026-09-15T16:00:00.000Z'
+    expect(validateScreenDynamicElectricityView(view, 'B-1', month)).toBeNull()
+    view.points[14]!.computedThrough = null
+    expect(validateScreenDynamicElectricityView(view, 'B-1', month)?.dynamicEmissions[14]).toBe(0.06275)
+    view.points[13] = { ...view.points[13]!, status: 'ACCUMULATING', electricityKwh: '1', emissionTco2: '1', factorKgCo2PerKwh: '1' }
+    expect(validateScreenDynamicElectricityView(view, 'B-1', month)).toBeNull()
+  })
+
+  it('兼容后端完整槽位截止点等于 endExclusive，以及非累计状态的 null 截止点', () => {
+    const points = Array.from({ length: 12 }, (_, index) => yearPoint(index + 1))
+    points[0] = yearPoint(1, 'COMPLETE', { computedThrough: isoAtShanghaiMidnight('2026-02-01') })
+    points[1] = yearPoint(2, 'PARTIAL', { computedThrough: null })
+
+    const validated = validateScreenDynamicElectricityView(yearView('B-1', points), 'B-1', YEAR)
+
+    expect(validated?.dynamicEmissions.slice(0, 2)).toEqual([0, null])
   })
 
   it('接受 BigDecimal 科学计数法的零量和小量，只投影为有限数值', () => {
@@ -187,6 +236,61 @@ describe('useScreenDynamicElectricity', () => {
     await dynamic.reload()
     expect(dynamic.status.value).toBe('ready')
     expect(dynamic.data.value?.dynamicEmissions[0]).toBe(0)
+    wrapper.unmount()
+  })
+
+  it('每轮结束五秒后才刷新，后台保留当前值且失败后清空', async () => {
+    vi.useFakeTimers()
+    const second = deferred<DynamicElectricityView>()
+    vi.mocked(readDynamicElectricity).mockResolvedValueOnce(yearView()).mockReturnValueOnce(second.promise)
+    const wrapper = mountDynamic()
+    await settleMicrotasks()
+    expect(dynamic.data.value?.dynamicEmissions[0]).toBe(0)
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(2)
+    expect(dynamic.data.value?.dynamicEmissions[0]).toBe(0)
+    expect(dynamic.status.value).toBe('ready')
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(2)
+    second.reject(new Error('offline'))
+    await settleMicrotasks()
+    expect(dynamic.data.value).toBeNull()
+    expect(dynamic.status.value).toBe('error')
+    wrapper.unmount()
+  })
+
+  it('卸载时停止待执行的自动刷新', async () => {
+    vi.useFakeTimers()
+    vi.mocked(readDynamicElectricity).mockImplementation(async requestedBuildingId => yearView(requestedBuildingId))
+    const wrapper = mountDynamic()
+    await settleMicrotasks()
+    wrapper.unmount()
+
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(1)
+  })
+
+  it('切换建筑后撤销旧计时并按新请求完成时间启动刷新', async () => {
+    vi.useFakeTimers()
+    vi.mocked(readDynamicElectricity).mockImplementation(async requestedBuildingId => yearView(requestedBuildingId))
+    const wrapper = mountDynamic()
+    await settleMicrotasks()
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(1)
+
+    buildingId.value = 'B-2'
+    await settleMicrotasks()
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(2)
+    expect(dynamic.data.value?.period).toEqual(YEAR)
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(readDynamicElectricity).toHaveBeenCalledTimes(3)
+    expect(readDynamicElectricity).toHaveBeenLastCalledWith('B-2', 'YEAR', '2026', expect.any(AbortSignal))
     wrapper.unmount()
   })
 })

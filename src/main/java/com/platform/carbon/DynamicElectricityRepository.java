@@ -77,7 +77,7 @@ public class DynamicElectricityRepository {
     /** 小时输入还依赖目录绑定与单位；保守读取已确认版本头，不能让配置修订后的旧结果继续可用。 */
     public String inputMetadataVersion(String building, String sourceKind) {
         var heads = new ArrayList<Object>();
-        heads.add(versionHeads("SELECT point_id,unit FROM biz_data_point WHERE building_id=? ORDER BY point_id", building));
+        heads.add(versionHeads("SELECT point_id,unit,equip_id,del_flag,status FROM biz_data_point WHERE building_id=? ORDER BY point_id", building));
         heads.add(versionHeads("""
                 SELECT b.point_id,v.binding_version_id,v.config_revision,v.confirmation_status,v.effective_from,v.effective_to
                 FROM biz_energy_point_item_binding b JOIN biz_energy_point_item_binding_version v ON v.binding_id=b.binding_id
@@ -117,6 +117,24 @@ public class DynamicElectricityRepository {
         return hash(encode(List.of(receipts, selections, quality)));
     }
 
+    /** 只核对本结果实际覆盖的输入时段。累计量同时纳入左右锚点，边界更正可使相邻两小时各自失效。 */
+    public String electricityVersion(String building,Instant from,Instant to,String sourceKind) {
+        if("RAW_CUMULATIVE".equals(sourceKind)) {
+            var facts=jdbc.queryForList("SELECT point_id,event_ms,payload_hash,storage_state,conflict_revision,selection_version FROM biz_telemetry_raw_intent WHERE building_id=? AND event_ms>=? AND event_ms<=? ORDER BY point_id,event_ms",building,from.toEpochMilli(),to.toEpochMilli());
+            var quality=jdbc.queryForList("SELECT config_revision FROM biz_quality_usage_config_revision ORDER BY singleton_id");
+            return hash(encode(List.of(facts,quality,jdbc.queryForList("SELECT point_id,config_revision FROM biz_energy_point_profile WHERE building_id=? ORDER BY point_id",building))));
+        }
+        var facts=jdbc.queryForList("""
+                SELECT r.fact_id,r.point_id,r.reading_json,r.normalized_quantity,b.revision,b.reviewed_at
+                FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
+                WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>? AND b.status='APPROVED'
+                  AND NOT EXISTS (SELECT 1 FROM biz_energy_manual_reading s JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
+                    WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
+                ORDER BY r.fact_id
+                """,building,to.toEpochMilli(),from.toEpochMilli());
+        return hash(encode(facts));
+    }
+
     public void save(Result result) {
         String payload = encode(result);
         if (payload.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 16_000_000)
@@ -132,7 +150,7 @@ public class DynamicElectricityRepository {
     public List<Result> results(String building, Instant from, Instant to) {
         var values = jdbc.query("""
                 SELECT payload_json,payload_hash FROM biz_dynamic_electricity_result
-                WHERE building_id=? AND grain<>'LOCK' AND start_ms>=? AND end_ms<=?
+                WHERE building_id=? AND grain NOT IN ('LOCK','INTERVAL') AND start_ms>=? AND end_ms<=?
                 ORDER BY start_ms,end_ms DESC,created_at DESC LIMIT 50001
                 """, (r, n) -> decode(r.getString(1), r.getString(2), Result.class), building, from.toEpochMilli(), to.toEpochMilli());
         if (values.size() > 50000) throw DynamicElectricityCore.problem("DYNAMIC_CAPACITY", "动态结果超过读取上限");

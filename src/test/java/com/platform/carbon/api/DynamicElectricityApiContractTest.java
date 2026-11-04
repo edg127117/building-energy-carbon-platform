@@ -32,6 +32,7 @@ class DynamicElectricityApiContractTest {
     @Autowired com.platform.security.JwtService jwt;
     @MockBean TokenCacheService tokens;
     @MockBean DynamicElectricityService service;
+    @MockBean com.platform.carbon.DynamicElectricityLiveService live;
 
     @BeforeEach void setup() {
         when(tokens.validateActiveToken(anyLong(), anyString())).thenReturn(TokenValidationResult.ACTIVE);
@@ -45,6 +46,20 @@ class DynamicElectricityApiContractTest {
     private ImportRequest request() {
         return new ImportRequest("key", "isolated fixture", "420000", "NO_EXTERNAL_HYDRO", "SIMULATED", "kgCO2/kWh",
                 List.of(new Observation("*", Instant.parse("2025-01-01T00:00:00Z"), Instant.parse("2025-01-01T01:00:00Z"), new BigDecimal("0.523456789012345678"))));
+    }
+
+    @Test void deviceIntervalRequiresAuthenticationRoleAndValidValues() throws Exception {
+        var request=new DeviceIntervalRequest(new com.platform.iot.identity.DeviceIdentityKey("SERIAL","M1"),"METER","P",
+                Instant.parse("2025-01-01T00:00:00Z"),Instant.parse("2025-01-01T00:15:00Z"),1,
+                new BigDecimal("12.345"),new BigDecimal("0.54321"),"SIMULATED","isolated device");
+        String payload=json.writeValueAsString(request);
+        mvc.perform(post(BASE+"/intervals").contentType(MediaType.APPLICATION_JSON).content(payload)).andExpect(status().isUnauthorized());
+        mvc.perform(post(BASE+"/intervals").with(role("BUILDING_OWNER")).contentType(MediaType.APPLICATION_JSON).content(payload)).andExpect(status().isForbidden());
+        mvc.perform(post(BASE+"/intervals").with(role("ENERGY_MANAGER")).contentType(MediaType.APPLICATION_JSON).content(payload)).andExpect(status().isOk());
+        verify(live).ingest(1L,Set.of("ENERGY_MANAGER"),"B",request);
+        clearInvocations(live);
+        mvc.perform(post(BASE+"/intervals").with(role("ENERGY_MANAGER")).contentType(MediaType.APPLICATION_JSON).content(payload.replace("12.345","-1"))).andExpect(status().isBadRequest());
+        verifyNoInteractions(live);
     }
 
     @Test void rejectsAnonymousReadersAndOwnerWrites() throws Exception {

@@ -37,6 +37,7 @@ class FlywayMigrationConfigurationTest {
                 "V102__mysql_daily_trend_read_model.sql",
                 "V103__mysql_carbon_display_read_model.sql",
                 "V104__mysql_dynamic_electricity_carbon.sql",
+                "V105__mysql_dynamic_electricity_tasks.sql",
                 "V10__mysql_data_quality_recalculation.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V12__device_identity.sql",

@@ -20,6 +20,15 @@ import java.util.List;
 /** 动态监测入口沿用碳职责和建筑范围。因子接收与计算显式写入，图表查询保持只读。 */
 public class DynamicElectricityController {
     private final DynamicElectricityService service;
+    private final com.platform.carbon.DynamicElectricityLiveService live;
+
+    @PostMapping("/intervals")
+    @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
+    public Result<DeviceIntervalReceipt> interval(Authentication auth, @PathVariable String buildingId,
+                                                @Valid @RequestBody DeviceIntervalRequest request) {
+        return Result.success(live.ingest(SecurityUser.userId(auth), SecurityUser.roles(auth), buildingId, request));
+    }
+
 
     @PostMapping("/factors")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")

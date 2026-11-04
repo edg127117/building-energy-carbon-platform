@@ -11,7 +11,8 @@ const EMISSION_UNIT = 'tCO2'
 const FACTOR_UNIT = 'kgCO2/kWh'
 const RESULT_NATURE = 'MONITORING'
 const DAY_MS = 24 * 60 * 60 * 1_000
-const POINT_STATUSES = new Set<DynamicElectricityPointStatus>(['COMPLETE', 'MISSING', 'PARTIAL', 'NOT_ENDED', 'STALE'])
+const REFRESH_INTERVAL_MS = 5_000
+const POINT_STATUSES = new Set<DynamicElectricityPointStatus>(['COMPLETE', 'ACCUMULATING', 'MISSING', 'PARTIAL', 'NOT_ENDED', 'STALE'])
 
 export type ScreenDynamicElectricityStatus = 'loading' | 'ready' | 'partial' | 'missing' | 'error' | 'unavailable'
 
@@ -98,10 +99,18 @@ function statusFor(statuses: DynamicElectricityPointStatus[]): Extract<ScreenDyn
   return statuses.every(status => status === 'MISSING') ? 'missing' : 'partial'
 }
 
-/**
- * 已保存动态结果按北京日/月槽位返回。前端只投影完整槽位，不插值、累计或换算；
- * 任何建筑、单位、时区、窗口或字段不一致都会整体拒绝，避免把错口径结果画进双轴卡。
- */
+function isOpenWindow(period: string, selectedPeriod: ScreenPeriod, now: Date): boolean {
+  const parts = new Intl.DateTimeFormat('en', {
+    timeZone: TIMEZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now)
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]))
+  const openPeriod = selectedPeriod.kind === 'year'
+    ? `${values.year}-${values.month}`
+    : `${values.year}-${values.month}-${values.day}`
+  return period === openPeriod
+}
+
+/** 已保存动态结果按北京自然日/月槽位返回；前端不插值、累计或换算。 */
 export function validateScreenDynamicElectricityView(
   value: unknown,
   buildingId: string,
@@ -137,11 +146,19 @@ export function validateScreenDynamicElectricityView(
       || typeof point.status !== 'string'
       || !POINT_STATUSES.has(point.status as DynamicElectricityPointStatus)
       || (point.reasonCode !== null && typeof point.reasonCode !== 'string')
+      || (point.computedThrough !== undefined && point.computedThrough !== null && instant(point.computedThrough) === null)
       || grains === null || resultIds === null || pointSourceNatures === null) return null
 
     const status = point.status as DynamicElectricityPointStatus
     statuses.push(status)
-    if (status !== 'COMPLETE') {
+    if (point.computedThrough !== undefined && point.computedThrough !== null) {
+      const computedThrough = instant(point.computedThrough)
+      if (computedThrough === null || computedThrough <= expected.startInclusive
+        || (status === 'COMPLETE' ? computedThrough > expected.endExclusive : computedThrough >= expected.endExclusive)) return null
+    }
+    // 累计状态仅接受当前开放槽位的后端完整前缀值，前端不补算或外推。
+    if (status === 'ACCUMULATING' && !isOpenWindow(expected.period, selectedPeriod, new Date())) return null
+    if (status !== 'COMPLETE' && status !== 'ACCUMULATING') {
       if (point.electricityKwh !== null || point.emissionTco2 !== null || point.factorKgCo2PerKwh !== null) return null
       dynamicEmissions.push(null)
       dynamicFactors.push(null)
@@ -171,6 +188,7 @@ export function useScreenDynamicElectricity(buildingId: Readonly<Ref<string>>, p
   const status = ref<ScreenDynamicElectricityStatus>('unavailable')
   let generation = 0
   let abort: AbortController | null = null
+  let refreshTimer: ReturnType<typeof setTimeout> | null = null
   let disposed = false
 
   function requestKey(): string {
@@ -181,15 +199,21 @@ export function useScreenDynamicElectricity(buildingId: Readonly<Ref<string>>, p
     data.value = null
   }
 
+  function stopRefresh(): void {
+    if (refreshTimer !== null) clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+
   function isCurrent(owner: number, key: string, controller: AbortController): boolean {
     return !disposed && !controller.signal.aborted && generation === owner && abort === controller && requestKey() === key
   }
 
-  async function load(): Promise<void> {
+  async function load(preserveCurrent = false): Promise<void> {
     const owner = ++generation
+    stopRefresh()
     abort?.abort()
     abort = null
-    clear()
+    if (!preserveCurrent) clear()
     if (disposed) return
 
     const currentBuildingId = buildingId.value
@@ -202,7 +226,7 @@ export function useScreenDynamicElectricity(buildingId: Readonly<Ref<string>>, p
     const key = requestKey()
     const controller = new AbortController()
     abort = controller
-    status.value = 'loading'
+    if (!preserveCurrent || !data.value) status.value = 'loading'
     try {
       const result = await readDynamicElectricity(currentBuildingId, periodType(currentPeriod), currentPeriod.value, controller.signal)
       if (!isCurrent(owner, key, controller)) return
@@ -219,7 +243,10 @@ export function useScreenDynamicElectricity(buildingId: Readonly<Ref<string>>, p
       clear()
       status.value = 'error'
     } finally {
-      if (generation === owner && abort === controller) abort = null
+      if (generation === owner && abort === controller) {
+        abort = null
+        refreshTimer = setTimeout(() => { void load(true) }, REFRESH_INTERVAL_MS)
+      }
     }
   }
 
@@ -227,6 +254,7 @@ export function useScreenDynamicElectricity(buildingId: Readonly<Ref<string>>, p
   onScopeDispose(() => {
     disposed = true
     generation += 1
+    stopRefresh()
     abort?.abort()
     abort = null
     clear()

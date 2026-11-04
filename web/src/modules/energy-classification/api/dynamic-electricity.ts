@@ -1,12 +1,14 @@
 import { requestApi } from '@/infrastructure/http/public'
 
 export type DynamicElectricityPeriodType = 'YEAR' | 'MONTH'
-export type DynamicElectricityPointStatus = 'COMPLETE' | 'MISSING' | 'PARTIAL' | 'NOT_ENDED' | 'STALE'
+export type DynamicElectricityPointStatus = 'COMPLETE' | 'ACCUMULATING' | 'MISSING' | 'PARTIAL' | 'NOT_ENDED' | 'STALE'
 
 export interface DynamicElectricityPoint {
   period: string
   startInclusive: string
   endExclusive: string
+  /** 累计前缀计算截止点；如有返回，必须位于当前自然槽位内。 */
+  computedThrough?: string | null
   status: DynamicElectricityPointStatus
   reasonCode: string | null
   electricityKwh: string | null

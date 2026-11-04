@@ -23,14 +23,19 @@ LAST = "2026-10-31T16:00:00Z"
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
-    parser.add_argument("--v4-source", type=Path, required=True)
+    parser.add_argument("--v4-source", type=Path)
+    parser.add_argument("--live-meters", type=int, choices=[100], help="Prepare a separate 100-meter upload fixture without historical readings")
     parser.add_argument("--execute", action="store_true", required=True)
     args = parser.parse_args()
     root = args.root.resolve()
     config = json.loads((root / "private/local.json").read_text(encoding="utf-8"))
     if root.drive.upper() != "D:" or config["purpose"] != "DYNAMIC_CARBON_EA84_ONLY" or Path(config["runtimeRoot"]).resolve() != root:
         raise ValueError("INDEPENDENT_INSTANCE_REQUIRED")
-    out = root / "fixture"
+    global WHY
+    meter_count = args.live_meters or 3
+    if args.live_meters:
+        WHY = "DYNAMIC_100_TEST_ONLY;SIMULATED;MAIN_PLUS_99_SUBMETERS;NOT_AS_BUILT"
+    out = root / ("live-fixture" if args.live_meters else "fixture")
     out.mkdir(exist_ok=True)
     base = f"http://127.0.0.1:{config['ports']['api']}/api"
     tokens = {}
@@ -40,7 +45,7 @@ def main():
         if role in tokens:
             headers["Authorization"] = "Bearer " + tokens[role]
         if key:
-            headers["Idempotency-Key"] = "DYN_FIXTURE_" + key
+            headers["Idempotency-Key"] = ("DYN_LIVE_" if args.live_meters else "DYN_FIXTURE_") + key
         data = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
         try:
             with urllib.request.urlopen(urllib.request.Request(base + path, data=data, headers=headers, method=method), timeout=180) as response:
@@ -63,22 +68,31 @@ def main():
         file.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
         return value
 
-    assets = json.loads((args.v4_source / "assets.json").read_text(encoding="utf-8-sig"))
+    if args.live_meters:
+        original_fixture = root / "fixture"
+        original_building = json.loads((original_fixture / "building.json").read_text(encoding="utf-8"))
+        original_building["buildingId"] = config["sourceBuildingId"]
+        bindings = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(original_fixture.glob("binding-approved-0-*.json"))]
+        assets = {"building": original_building, "bindings": {"template": bindings}}
+    else:
+        if args.v4_source is None:
+            raise ValueError("V4_SOURCE_REQUIRED_FOR_HISTORICAL_FIXTURE")
+        assets = json.loads((args.v4_source / "assets.json").read_text(encoding="utf-8-sig"))
     original = assets["building"]
     source_building = original["buildingId"]
     if config.get("sourceBuildingId", config["buildingId"]) != source_building:
         raise ValueError("SOURCE_BUILDING_MISMATCH")
     body = {k: original.get(k) for k in ["buildingType", "constructionYear", "climateZone", "regionCode", "carbonEvaluationCategory", "carbonEvaluationSubcategory"]}
-    body.update(buildingName="创新港动态碳链路独立测试", buildingCode="CXG_DYNAMIC_EA84_TEST", totalGfa=original["totalGfa"], status="ACTIVE")
+    body.update(buildingName="动态碳百表独立测试" if args.live_meters else "创新港动态碳链路独立测试", buildingCode="CXG_DYNAMIC_100_TEST" if args.live_meters else "CXG_DYNAMIC_EA84_TEST", totalGfa=original["totalGfa"], status="ACTIVE")
     building = keep("building", "/v1/assets/buildings", body)
     b = building["buildingId"]
     group = keep("group", "/v1/assets/system-groups", {"buildingId": b, "systemCode": "DYNAMIC_TEST_POWER", "systemName": "动态碳测试电力", "systemType": "ELECTRICITY", "status": "ACTIVE"})
     template = next(iter(assets["bindings"].values()))
     spaces, meters = [], []
-    for index in range(3):
+    for index in range(meter_count):
         space = keep(f"space-{index}", "/v1/assets/spaces", {"buildingId": b, "spaceCode": f"DYN_{index}", "spaceName": f"测试计量范围{index}", "spaceType": "FLOOR" if index == 0 else "ZONE", "parentSpaceId": spaces[0]["spaceId"] if index else None, "status": "ACTIVE"})
         equipment = keep(f"equipment-{index}", "/v1/assets/equipment", {"buildingId": b, "spaceId": space["spaceId"], "systemGroupId": group["systemGroupId"], "typeCode": "ELECTRIC_METER_3P", "equipmentName": f"动态测试表{index}", "status": "ACTIVE"})
-        point = keep(f"point-{index}", "/datapoint/add", {"buildingId": b, "pointCode": f"EM3P{991000 + index}_EPP", "pointName": f"动态测试表{index}", "equipId": equipment.get("equipId") or equipment["equipmentId"], "systemGroupId": group["systemGroupId"], "namingRuleId": "RULE_EM3P_MAIN", "familyCode": "ELECTRIC_METER_3P", "componentCode": "MAIN", "suffixCode": "EPP", "dataType": "ACCUMULATE", "unit": "kWh", "isForCalc": 1, "status": "ONLINE"})
+        point = keep(f"point-{index}", "/datapoint/add", {"buildingId": b, "pointCode": f"EM3P{(992000 if args.live_meters else 991000) + index}_EPP", "pointName": f"动态测试表{index}", "equipId": equipment.get("equipId") or equipment["equipmentId"], "systemGroupId": group["systemGroupId"], "namingRuleId": "RULE_EM3P_MAIN", "familyCode": "ELECTRIC_METER_3P", "componentCode": "MAIN", "suffixCode": "EPP", "dataType": "ACCUMULATE", "unit": "kWh", "isForCalc": 1, "status": "ONLINE"})
         pid = point["pointId"]
         keep(f"profile-{index}", "/v1/energy-point-profiles", {"buildingId": b, "pointId": pid, "energyType": "ELECTRICITY", "energySubtype": "GRID_PURCHASED", "valueSemantics": "CUMULATIVE", "reportingPeriod": "MONTH", "annualSummary": False, "confirmationStatus": "CONFIRMED", "evidenceReference": WHY})
         for ordinal, existing in enumerate(template):
@@ -89,7 +103,12 @@ def main():
 
     relation = keep("relation-created", f"/v1/relation-models/{b}/initialize", {"reason": WHY}, key="INIT")
     vid = relation["versionId"]
-    rows = call(f"/v1/relation-models/{b}/versions/{vid}/nodes?page=1&size=100")["items"]
+    rows = []
+    for page in range(1, 20):
+        items = call(f"/v1/relation-models/{b}/versions/{vid}/nodes?page={page}&size=100")["items"]
+        rows.extend(items)
+        if len(items) < 100:
+            break
     points = {n["businessObjectId"]: n["nodeId"] for n in rows if n["nodeType"] == "POINT"}
     space_nodes = {n["businessObjectId"]: n["nodeId"] for n in rows if n["nodeType"] == "SPACE"}
     revision = call(f"/v1/relation-models/{b}/versions/{vid}")["version"]["revision"]
@@ -113,7 +132,7 @@ def main():
     keep("relation-active", f"/v1/relation-models/versions/{vid}/activate", {"expectedModelRevision": model["modelRevision"], "reason": WHY}, key="ACTIVATE")
     scope = keep("history-scope", f"/v1/relation-models/{b}/versions/{vid}/historical-metering-scopes", {"startInclusive": FIRST, "endExclusive": LAST, "evidenceReference": WHY, "reason": WHY}, key="HISTORY")
     keep("history-reviewed", f"/v1/relation-models/{b}/historical-metering-scopes/{scope['scopeId']}/review", {"approved": True, "reason": WHY}, "reviewer", key="HISTORY_REVIEW")
-    classification = {"relationVersionId": vid, "schemes": [{"code": "DYN_USE", "name": "测试用途", "dimension": "USAGE", "mode": "ADDITIVE"}], "nodes": [{"schemeCode": "DYN_USE", "code": f"SUB_{i}", "name": f"测试用电{i}", "parentCode": None} for i in [1, 2]], "bindings": [{"schemeCode": "DYN_USE", "nodeCode": f"SUB_{i}", "objectType": "POINT", "objectId": meters[i]["pointId"], "meterPointId": meters[i]["pointId"], "semantics": "METERING", "status": "CONFIRMED", "evidence": WHY} for i in [1, 2]], "boundaryRules": [{"boundaryId": boundary["boundaryId"], "mode": "MAIN_WITH_SUBMETER_BREAKDOWN", "status": "CONFIRMED", "evidence": WHY, "energyItemCode": "ELECTRICITY", "unit": "kWh", "independentChannelsConfirmed": False}]}
+    classification = {"relationVersionId": vid, "schemes": [{"code": "DYN_USE", "name": "测试用途", "dimension": "USAGE", "mode": "ADDITIVE"}], "nodes": [{"schemeCode": "DYN_USE", "code": f"SUB_{i}", "name": f"测试用电{i}", "parentCode": None} for i in range(1, meter_count)], "bindings": [{"schemeCode": "DYN_USE", "nodeCode": f"SUB_{i}", "objectType": "POINT", "objectId": meters[i]["pointId"], "meterPointId": meters[i]["pointId"], "semantics": "METERING", "status": "CONFIRMED", "evidence": WHY} for i in range(1, meter_count)], "boundaryRules": [{"boundaryId": boundary["boundaryId"], "mode": "MAIN_WITH_SUBMETER_BREAKDOWN", "status": "CONFIRMED", "evidence": WHY, "energyItemCode": "ELECTRICITY", "unit": "kWh", "independentChannelsConfirmed": False}]}
     route = f"/v1/energy-classification/buildings/{b}/versions"
     c = keep("class-created", route, {"reason": WHY})
     c = keep("class-saved", route + "/" + c["versionId"], {"expectedRevision": c["revision"], "configuration": classification, "reason": WHY}, method="PUT")
@@ -125,6 +144,12 @@ def main():
     for action, role in [("submit", "admin"), ("approve", "reviewer")]:
         project = keep("project-" + action, route + "/" + project["versionId"] + "/" + action, {"expectedRevision": project["revision"], "reason": WHY}, role)
     keep("project-active", route + "/" + project["versionId"] + "/activate-historical", {"expectedRevision": project["revision"], "reason": WHY, "effectiveFrom": FIRST, "effectiveTo": LAST})
+
+    if args.live_meters:
+        (out / "manifest.json").write_text(json.dumps({"purpose": "DYNAMIC_100_SIMULATED_ONLY", "buildingId": b,
+            "meterCount": meter_count, "effectiveTo": LAST, "points": meters}), encoding="utf-8")
+        print("LIVE_100_METER_FIXTURE_READY " + b)
+        return
 
     manifest = json.loads((root / "factors/manifest.json").read_text(encoding="utf-8"))
     expected_months = {}
