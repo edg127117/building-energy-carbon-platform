@@ -106,6 +106,7 @@ V52 分别保存厂家日/月/年当前结果和有变化的修订，零值、�
 | `com.platform.energy.classification` | 版本化分类树、对象归属、计量树分解与原生分类统计、标准Excel预检；向碳模块提供正式封账组成，人工来源须经正式月量候选与独立封账，不能直接进入碳核算 |
 | `com.platform.energy.efficiency` | 电驱动水冷冷站原生周期、年度 EERp 和研发评价 |
 | `com.platform.carbon` | 因子与分母版本、范围一固定源/范围二计算、项目能源版本与碳排除、依赖指纹工作单、冻结分类报表、追溯、月季年重算替代审批；版本化碳强度参考目录与只读比较复用已有强度；水与绿色能源仅预留，移动源未纳入 |
+| `com.platform.alarm` | 独立报警规则、事件与处理审计；只读采集事实，月配额经 `MonthlyQuotaSource` 接入；扩展排放经 `AlarmEmissionSource`，受控模板目录与共享状态字典独立版本化。B 版与运行接线见[报警集成说明](docs/development/alarm-information-integration.md) |
 | `com.platform.relation` | 建筑关系版本、表计层级和方向、计量边界、分层查询及 Excel 草稿导入 |
 | `com.platform.cache`、`config` | Redis 缓存和基础设施装配 |
 | `telemetry-adapter` | 厂商 Topic 到内部 V2 契约的 MQTT 适配与代理 ACK；不等于边缘持久化网关 |
