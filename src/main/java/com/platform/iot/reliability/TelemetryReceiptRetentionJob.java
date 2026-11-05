@@ -26,13 +26,15 @@ import java.util.function.LongSupplier;
 /**
  * 持续清理 V2 热回执和异常证据。
  *
- * <p>24 小时到期的普通成功回执可以直接删除；关联异常的回执和异常明细保留
- * 180 天。单轮共享批次数和时间预算，避免清理任务长期占用 MySQL。</p>
+ * <p>普通成功回执按配置的热窗口删除，周期输入成功回执从首次持久化起保留 7 天；
+ * 重投不会延长这两个窗口。关联异常的回执和异常明细保留 180 天。单轮共享批次数和
+ * 时间预算，避免清理任务长期占用 MySQL。</p>
  */
 public class TelemetryReceiptRetentionJob {
 
     private static final Logger log = LoggerFactory.getLogger(TelemetryReceiptRetentionJob.class);
     private static final ZoneId PROJECT_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final int PERIOD_INPUT_RECEIPT_DAYS = 7;
 
     private final TelemetryReceiptMapper receiptMapper;
     private final TelemetryReceiptFailureMapper failureMapper;
@@ -100,12 +102,14 @@ public class TelemetryReceiptRetentionJob {
         try {
             LocalDateTime now = LocalDateTime.now(clock);
             LocalDateTime receiptBefore = now.minusHours(receiptHours);
+            LocalDateTime periodReceiptBefore = now.minusDays(PERIOD_INPUT_RECEIPT_DAYS);
             LocalDateTime failureBefore = now.minusDays(failureDays);
             CleanupBudget budget = new CleanupBudget(
                     nanoTime.getAsLong(), maxRunNanos, maxBatches, nanoTime);
 
             deleteInBatches("hot_receipt", budget,
-                    () -> receiptMapper.deleteExpiredWithoutFailure(receiptBefore, batchSize));
+                    () -> receiptMapper.deleteExpiredWithoutFailure(
+                            receiptBefore, periodReceiptBefore, batchSize));
             deleteInBatches("failure_receipt", budget,
                     () -> receiptMapper.deleteExpiredWithFailure(failureBefore, batchSize));
             deleteInBatches("failure_detail", budget,
@@ -113,7 +117,7 @@ public class TelemetryReceiptRetentionJob {
             deleteInBatches("mqtt_failure", budget,
                     () -> mqttFailureMapper.deleteExpired(failureBefore, batchSize));
             if (budget.canContinue()) {
-                refreshGauges(receiptBefore);
+                refreshGauges(receiptBefore, periodReceiptBefore);
             }
         } catch (RuntimeException exception) {
             meterRegistry.counter("iot.telemetry.v2.retention.cleanup_failure").increment();
@@ -136,14 +140,22 @@ public class TelemetryReceiptRetentionJob {
         }
     }
 
-    private void refreshGauges(LocalDateTime receiptBefore) {
+    private void refreshGauges(
+            LocalDateTime receiptBefore, LocalDateTime periodReceiptBefore) {
         receiptRows.set(receiptMapper.selectCount(null));
         failureRows.set(failureMapper.selectCount(null));
-        LocalDateTime oldestExpired = receiptMapper
+        LocalDateTime oldestOrdinary = receiptMapper
                 .selectOldestDeletablePersistedAt(receiptBefore);
-        oldestExpiredLagSeconds.set(oldestExpired == null
-                ? 0 : Math.max(0,
-                Duration.between(oldestExpired, receiptBefore).toSeconds()));
+        LocalDateTime oldestPeriodInput = receiptMapper
+                .selectOldestPeriodInputDeletablePersistedAt(periodReceiptBefore);
+        oldestExpiredLagSeconds.set(Math.max(
+                expiredLagSeconds(oldestOrdinary, receiptBefore),
+                expiredLagSeconds(oldestPeriodInput, periodReceiptBefore)));
+    }
+
+    private long expiredLagSeconds(LocalDateTime oldestPersistedAt, LocalDateTime before) {
+        return oldestPersistedAt == null
+                ? 0 : Math.max(0, Duration.between(oldestPersistedAt, before).toSeconds());
     }
 
     private void registerGauges() {

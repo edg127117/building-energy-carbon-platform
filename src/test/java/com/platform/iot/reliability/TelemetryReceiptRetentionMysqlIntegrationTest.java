@@ -82,7 +82,11 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
 
         List<Map<String, Object>> explain = jdbc.queryForList("""
                 EXPLAIN DELETE FROM biz_telemetry_receipt
-                WHERE persisted_at < ?
+                WHERE persisted_at < GREATEST(?, ?)
+                  AND (
+                    (receipt_status NOT IN ('PERIOD_INPUT_PERSISTED', 'DUPLICATE_PERIOD_INPUT') AND persisted_at < ?)
+                    OR (receipt_status IN ('PERIOD_INPUT_PERSISTED', 'DUPLICATE_PERIOD_INPUT') AND persisted_at < ?)
+                  )
                   AND NOT EXISTS (
                     SELECT 1 FROM biz_telemetry_receipt_failure f
                     WHERE f.canonical_message_id =
@@ -90,7 +94,8 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
                   )
                 ORDER BY persisted_at, canonical_message_id
                 LIMIT 2000
-                """, Timestamp.from(NOW.minusSeconds(24 * 3600)));
+                """, Timestamp.from(NOW.minusSeconds(24 * 3600)), Timestamp.from(NOW.minusSeconds(7L * 86400)),
+                Timestamp.from(NOW.minusSeconds(24 * 3600)), Timestamp.from(NOW.minusSeconds(7L * 86400)));
         assertThat(explain).anySatisfy(row -> assertThat(row.get("key"))
                 .isEqualTo("idx_receipt_cleanup"));
 
@@ -112,6 +117,31 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
             assertThat(countReceipt(jdbc, "FAILURE-OLD")).isZero();
             assertThat(countFailure(jdbc, "FAILURE-RECENT")).isEqualTo(1);
             assertThat(countFailure(jdbc, "FAILURE-OLD")).isZero();
+
+            insertReceipt(jdbc, "NORMAL-RECENT", NOW.minusSeconds(23L * 3600));
+            insertReceipt(jdbc, "PERIOD-RETRANSMITTED", NOW.minusSeconds(8L * 86400),
+                    "PERIOD_INPUT_PERSISTED");
+            insertReceipt(jdbc, "PERIOD-DUPLICATE", NOW.minusSeconds(8L * 86400),
+                    "DUPLICATE_PERIOD_INPUT");
+            insertReceipt(jdbc, "PERIOD-BOUNDARY", NOW.minusSeconds(7L * 86400),
+                    "PERIOD_INPUT_PERSISTED");
+            insertReceipt(jdbc, "PERIOD-PROTECTED", NOW.minusSeconds(8L * 86400),
+                    "DUPLICATE_PERIOD_INPUT");
+            jdbc.update("""
+                    UPDATE biz_telemetry_receipt
+                    SET last_platform_received_at=?, retransmitted_at=?, attempt_count=attempt_count+1
+                    WHERE canonical_message_id=?
+                    """, Timestamp.from(NOW), Timestamp.from(NOW), "PERIOD-RETRANSMITTED");
+            insertFailure(jdbc, "PERIOD-FAILURE-RECENT", "PERIOD-PROTECTED",
+                    NOW.minusSeconds(3600));
+
+            job.cleanup();
+
+            assertThat(countReceipt(jdbc, "NORMAL-RECENT")).isEqualTo(1);
+            assertThat(countReceipt(jdbc, "PERIOD-RETRANSMITTED")).isZero();
+            assertThat(countReceipt(jdbc, "PERIOD-DUPLICATE")).isZero();
+            assertThat(countReceipt(jdbc, "PERIOD-BOUNDARY")).isEqualTo(1);
+            assertThat(countReceipt(jdbc, "PERIOD-PROTECTED")).isEqualTo(1);
         }
     }
 
@@ -157,9 +187,14 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
     }
 
     private void insertReceipt(JdbcTemplate jdbc, String id, Instant persistedAt) {
+        insertReceipt(jdbc, id, persistedAt, "PLATFORM_PERSISTED");
+    }
+
+    private void insertReceipt(
+            JdbcTemplate jdbc, String id, Instant persistedAt, String receiptStatus) {
         jdbc.update(connection -> {
             PreparedStatement statement = connection.prepareStatement(receiptInsertSql());
-            bindReceipt(statement, id, persistedAt);
+            bindReceipt(statement, id, persistedAt, receiptStatus);
             return statement;
         });
     }
@@ -178,6 +213,12 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
 
     private void bindReceipt(PreparedStatement statement, String id, Instant persistedAt)
             throws java.sql.SQLException {
+        bindReceipt(statement, id, persistedAt, "PLATFORM_PERSISTED");
+    }
+
+    private void bindReceipt(
+            PreparedStatement statement, String id, Instant persistedAt, String receiptStatus)
+            throws java.sql.SQLException {
         Timestamp time = Timestamp.from(persistedAt);
         statement.setString(1, id);
         statement.setString(2, "I1");
@@ -194,7 +235,7 @@ class TelemetryReceiptRetentionMysqlIntegrationTest {
         statement.setString(13, "0".repeat(64));
         statement.setString(14, "EVIDENCE_ONLY");
         statement.setString(15, "EVIDENCE_ONLY");
-        statement.setString(16, "PLATFORM_PERSISTED");
+        statement.setString(16, receiptStatus);
         statement.setString(17, "PLATFORM_PERSISTED");
         statement.setInt(18, 5);
         statement.setInt(19, 1);

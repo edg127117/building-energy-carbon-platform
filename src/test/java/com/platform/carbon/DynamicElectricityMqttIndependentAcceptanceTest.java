@@ -265,7 +265,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
             try(var rows=statement.executeQuery()) {
                 rows.next();
                 long markers=rows.getLong(1),snapshots=rows.getLong(2),snapshotBytes=rows.getLong(3);
-                assertThat(markers).isEqualTo(viaAdapter?9600:0);
+                assertThat(markers).isZero();
                 assertThat(snapshots).isZero();
                 assertThat(snapshotBytes).isZero();
                 save("normal-storage",Map.of("businessInputs",9600,"messageMarkers",markers,"snapshots",snapshots,"snapshotBytes",snapshotBytes));
@@ -317,13 +317,16 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
                 }
             }
             assertThat(adopted).isEqualTo(revisions[0]);assertThat(initial).isTrue();
-            assertThat(lightSameValue).isTrue();
+            assertThat(lightSameValue).isEqualTo(!viaAdapter);
         }
         checkResults();save("behavior",Map.of("noHardwareBootSeqMessageIdOrRevisionRequired",true,"automaticVersions",true,"duplicatesNotCounted",true,
                 "recognizedReplayDoesNotUndoCorrection",true,"unsequencedLastAcceptanceApplied",true,"missingPairRejected",true,"allAdoptedVersionsRetained",true,"unaffectedIntervalRetained",true));
         System.out.println(viaAdapter?"INDEPENDENT_AUTO_V2_100_METER_CHAIN_OK":"INDEPENDENT_AUTO_V1_100_METER_CHAIN_OK");
     }
-    private long intervalEvidenceCount()throws Exception {
+    private long processedUploadCount()throws Exception {
+        if(viaAdapter)try(var s=database.prepareStatement("SELECT COUNT(*) FROM biz_telemetry_receipt WHERE building_id=? AND receipt_status IN ('PERIOD_INPUT_PERSISTED','DUPLICATE_PERIOD_INPUT')")) {
+            s.setString(1,building);try(var rows=s.executeQuery()){rows.next();return rows.getLong(1);}
+        }
         try(var s=database.prepareStatement("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE building_id=? AND point_id=? AND start_ms=?")) {
             s.setString(1,building);s.setString(2,fixture.path("points").get(0).path("pointId").asText());s.setLong(3,first.plusSeconds(95*900).toEpochMilli());
             try(var rows=s.executeQuery()){rows.next();return rows.getLong(1);}
@@ -339,7 +342,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
             var before=task(95);publish(95,0,revision,"100",true);Thread.sleep(500);assertThat(task(95).inputs()).isEqualTo(before.inputs());
             var versions=new TreeMap<String,Long>();
             before.inputs().fields().forEachRemaining(e->versions.put(e.getKey(),e.getValue().path("quantityRevision").asLong()));
-            save("offline",Map.of("brokerAcceptedPlatformInputUnchanged",true,"businessVersionsBeforeRestart",versions,"evidenceCountBefore",intervalEvidenceCount()));return;
+            save("offline",Map.of("brokerAcceptedPlatformInputUnchanged",true,"businessVersionsBeforeRestart",versions,"processedUploadsBefore",processedUploadCount()));return;
         }
         assertThat(stage).isEqualTo("resume-restart");
         var expected=json.readTree(out.resolve("offline.json").toFile()).path("businessVersionsBeforeRestart");
@@ -351,10 +354,10 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
             assertThat(current.inputs().path(point).path("quantityRevision").asLong()).isEqualTo(revisions[meter]);
             assertThat(current.inputs().path(point).path("factorRevision").asLong()).isEqualTo(revisions[meter]);
         }
-        long countBefore=json.readTree(out.resolve("offline.json").toFile()).path("evidenceCountBefore").asLong();
+        long countBefore=json.readTree(out.resolve("offline.json").toFile()).path("processedUploadsBefore").asLong();
         long until=System.nanoTime()+Duration.ofSeconds(30).toNanos();
-        while(intervalEvidenceCount()<=countBefore&&System.nanoTime()<until)Thread.sleep(100);
-        assertThat(intervalEvidenceCount()).isGreaterThan(countBefore);
+        while(processedUploadCount()<=countBefore&&System.nanoTime()<until)Thread.sleep(100);
+        assertThat(processedUploadCount()).isGreaterThan(countBefore);
         awaitReady(95,revisions);checkResults();save("restart-recovered",Map.of("readOnlyObservation",true,"versionsPreserved",true));
         System.out.println("AUTO_MQTT_OFFLINE_QUEUE_VERSION_RECOVERY_OK");
     }

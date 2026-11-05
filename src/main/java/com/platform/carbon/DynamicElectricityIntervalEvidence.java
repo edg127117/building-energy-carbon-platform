@@ -19,14 +19,16 @@ final class DynamicElectricityIntervalEvidence {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     DynamicElectricityIntervalEvidence(JdbcTemplate jdbc,ObjectMapper json) {this.jdbc=jdbc;this.json=json;}
-    record Input(String id,String hash,DeviceIntervalRequest request,boolean identifiable) { }
+    record Input(String id,String hash,DeviceIntervalRequest request,boolean identifiable,boolean receiptOwned) { }
     private record Recorded(String building,long from,long to,long taskRevision,String requestHash,
                             String snapshot,String snapshotHash,long version,String snapshotState) { }
     Input prepare(DeviceIntervalRequest request,String transport,String building,String identity) {
         String source=request.ingestionId();
         if(source==null&&request.sourceOrder()!=null&&request.sourceOrder().messageId()!=null&&!request.sourceOrder().messageId().isBlank())
             source=hash(transport+"|"+request.deviceIdentity()+"|"+request.profileCode()+"|"+request.sourceOrder().messageId());
-        String id=hash(transport+"|"+building+"|"+identity+"|"+(source==null?UUID.randomUUID().toString():source));
+        boolean receiptOwned="MQTT_STANDARD_V2".equals(transport);
+        // V2的消息去重由平台回执负责。窗口外再次采用是新的业务事件，完整更正证据不能复用旧主键。
+        String id=hash(transport+"|"+building+"|"+identity+"|"+(source==null||receiptOwned?UUID.randomUUID().toString():source));
         // 规范化输入保留十进制精度；比较忽略等值数值的尾零，不把接收时钟用作数据版本。
         var semantic=new LinkedHashMap<String,Object>();
         semantic.put("identity",request.deviceIdentity());semantic.put("profile",request.profileCode());semantic.put("point",request.pointId());
@@ -34,7 +36,7 @@ final class DynamicElectricityIntervalEvidence {
         semantic.put("q",request.electricityKwh()==null?null:request.electricityKwh().stripTrailingZeros());
         semantic.put("f",request.factorKgCo2PerKwh()==null?null:request.factorKgCo2PerKwh().stripTrailingZeros());
         semantic.put("nature",request.sourceNature());semantic.put("reference",request.sourceReference());semantic.put("source",request.sourceOrder());
-        return new Input(id,hash(encode(semantic)),request,source!=null);
+        return new Input(id,hash(encode(semantic)),request,source!=null&&!receiptOwned,receiptOwned);
     }
     DeviceIntervalReceipt replay(Input input,PlatformTransactionManager transactions) {
         if(!input.identifiable())return null;
@@ -71,12 +73,17 @@ final class DynamicElectricityIntervalEvidence {
         if(prior.evidenceId()!=null) {
             // 首报指纹已有稳定身份，补正文时保持键和原受理结果，历史计算引用仍能定位到同一版本。
             String payload=encode(Map.of("policy","INITIAL_ACCEPTANCE","reading",prior));
-            jdbc.update("""
+            int promoted=jdbc.update("""
                     UPDATE biz_dynamic_interval_evidence SET snapshot_json=?,snapshot_hash=?,snapshot_state='FULL',archived_ms=?
                     WHERE event_id=? AND building_id=? AND point_id=? AND start_ms=? AND end_ms=?
                       AND snapshot_state='LIGHT' AND outcome='ADOPTED'
                     """,payload,hash(payload),System.currentTimeMillis(),prior.evidenceId(),task.building(),point,task.from(),task.to());
-            return prior.evidenceId();
+            if(promoted==1||Boolean.TRUE.equals(jdbc.queryForObject(
+                    "SELECT COUNT(*)>0 FROM biz_dynamic_interval_evidence WHERE event_id=?",Boolean.class,prior.evidenceId())))
+                return prior.evidenceId();
+            // 旧V2首报标记可已到期删除。Reading自身仍保存原值，按原内容归档基线，不改写历史结果。
+            if(!"MQTT_STANDARD_V2".equals(prior.transport()))
+                throw new IllegalStateException("动态采用版本的证据引用缺失");
         }
         String payload=encode(Map.of("policy","LEGACY_BASELINE","reading",prior));
         String id=hash("BASELINE|"+task.building()+"|"+point+"|"+task.from()+"|"+task.to()+"|"+hash(payload));
@@ -102,6 +109,7 @@ final class DynamicElectricityIntervalEvidence {
     }
 
     void mark(Task task,Input input,Reading adopted,String outcome) {
+        if(input.receiptOwned())return;
         record(task,input,adopted,outcome,task.revision(),adopted.evidenceId(),null);
     }
 

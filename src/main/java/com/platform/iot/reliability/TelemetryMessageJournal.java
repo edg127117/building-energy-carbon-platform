@@ -69,9 +69,13 @@ public class TelemetryMessageJournal {
         return Objects.requireNonNull(find(snapshot.message().canonicalMessageId()));
     }
     public Entry freezeLegacy(String hash,Snapshot snapshot,V2ProcessingResult proof) {
+        Long persistedAt=proof.applicationAck()==null?null:proof.applicationAck().persistedAtEpochMillis();
+        // V2周期回执去重窗口从首次持久化起算，重建热快照不得把旧消息的保留时间向后推。
+        long created=snapshot.intervalRequest()!=null||snapshot.message().electricityInterval()!=null
+                ?Objects.requireNonNullElse(persistedAt,System.currentTimeMillis()):System.currentTimeMillis();
         tx.executeWithoutResult(status->{
             try {jdbc.update("INSERT INTO biz_telemetry_message_intent (canonical_message_id,building_id,payload_hash,snapshot_json,terminal_json,state,created_ms) VALUES (?,?,?,?,?,'COMPLETE',?)",
-                    snapshot.message().canonicalMessageId(),snapshot.binding().buildingId(),hash,encode(snapshot),encode(proof),System.currentTimeMillis());}
+                    snapshot.message().canonicalMessageId(),snapshot.binding().buildingId(),hash,encode(snapshot),encode(proof),created);}
             catch(DuplicateKeyException exists) { }
         });
         return Objects.requireNonNull(find(snapshot.message().canonicalMessageId()));

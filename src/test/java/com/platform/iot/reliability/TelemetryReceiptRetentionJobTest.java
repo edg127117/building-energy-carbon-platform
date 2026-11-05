@@ -16,6 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -34,14 +35,14 @@ class TelemetryReceiptRetentionJobTest {
         TelemetryReceiptFailureMapper failureMapper = mock(TelemetryReceiptFailureMapper.class);
         MqttFailureAggregateMapper mqttMapper = mock(MqttFailureAggregateMapper.class);
         SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
-        when(receiptMapper.deleteExpiredWithoutFailure(any(), eq(2))).thenReturn(2);
+        when(receiptMapper.deleteExpiredWithoutFailure(any(), any(), eq(2))).thenReturn(2);
         TelemetryReceiptRetentionJob job = new TelemetryReceiptRetentionJob(
                 receiptMapper, failureMapper, mqttMapper, meterRegistry,
                 24, 180, 2, 3, 30_000, FIXED_CLOCK, () -> 0L);
 
         job.cleanup();
 
-        verify(receiptMapper, times(3)).deleteExpiredWithoutFailure(any(), eq(2));
+        verify(receiptMapper, times(3)).deleteExpiredWithoutFailure(any(), any(), eq(2));
         verify(receiptMapper, never()).deleteExpiredWithFailure(any(), anyInt());
         verify(failureMapper, never()).deleteExpired(any(), anyInt());
         verify(mqttMapper, never()).deleteExpired(any(), anyInt());
@@ -55,10 +56,12 @@ class TelemetryReceiptRetentionJobTest {
         TelemetryReceiptMapper receiptMapper = mock(TelemetryReceiptMapper.class);
         TelemetryReceiptFailureMapper failureMapper = mock(TelemetryReceiptFailureMapper.class);
         MqttFailureAggregateMapper mqttMapper = mock(MqttFailureAggregateMapper.class);
-        when(receiptMapper.deleteExpiredWithoutFailure(any(), eq(2000))).thenReturn(0);
+        when(receiptMapper.deleteExpiredWithoutFailure(any(), any(), eq(2000))).thenReturn(0);
         when(receiptMapper.deleteExpiredWithFailure(any(), eq(2000))).thenReturn(0);
         when(failureMapper.deleteExpired(any(), eq(2000))).thenReturn(0);
         when(mqttMapper.deleteExpired(any(), eq(2000))).thenReturn(0);
+        when(receiptMapper.selectCount(isNull())).thenReturn(0L);
+        when(failureMapper.selectCount(isNull())).thenReturn(0L);
         TelemetryReceiptRetentionJob job = new TelemetryReceiptRetentionJob(
                 receiptMapper, failureMapper, mqttMapper, new SimpleMeterRegistry(),
                 24, 180, 2000, 10, 30_000, FIXED_CLOCK, () -> 0L);
@@ -66,7 +69,7 @@ class TelemetryReceiptRetentionJobTest {
         job.cleanup();
 
         var ordered = inOrder(receiptMapper, failureMapper, mqttMapper);
-        ordered.verify(receiptMapper).deleteExpiredWithoutFailure(any(), eq(2000));
+        ordered.verify(receiptMapper).deleteExpiredWithoutFailure(any(), any(), eq(2000));
         ordered.verify(receiptMapper).deleteExpiredWithFailure(any(), eq(2000));
         ordered.verify(failureMapper).deleteExpired(any(), eq(2000));
         ordered.verify(mqttMapper).deleteExpired(any(), eq(2000));
@@ -77,7 +80,7 @@ class TelemetryReceiptRetentionJobTest {
         TelemetryReceiptMapper receiptMapper = mock(TelemetryReceiptMapper.class);
         TelemetryReceiptFailureMapper failureMapper = mock(TelemetryReceiptFailureMapper.class);
         MqttFailureAggregateMapper mqttMapper = mock(MqttFailureAggregateMapper.class);
-        when(receiptMapper.deleteExpiredWithoutFailure(any(), eq(2))).thenReturn(2);
+        when(receiptMapper.deleteExpiredWithoutFailure(any(), any(), eq(2))).thenReturn(2);
         long[] ticks = {0L, 0L, 20_000_000L, 20_000_000L, 20_000_000L};
         AtomicInteger index = new AtomicInteger();
         TelemetryReceiptRetentionJob job = new TelemetryReceiptRetentionJob(
@@ -87,7 +90,40 @@ class TelemetryReceiptRetentionJobTest {
 
         job.cleanup();
 
-        verify(receiptMapper, times(1)).deleteExpiredWithoutFailure(any(), eq(2));
+        verify(receiptMapper, times(1)).deleteExpiredWithoutFailure(any(), any(), eq(2));
         verify(receiptMapper, never()).deleteExpiredWithFailure(any(), anyInt());
+    }
+
+    @Test
+    void calculatesOldestExpiredLagAgainstThePeriodInputSevenDayCutoff() {
+        TelemetryReceiptMapper receiptMapper = mock(TelemetryReceiptMapper.class);
+        TelemetryReceiptFailureMapper failureMapper = mock(TelemetryReceiptFailureMapper.class);
+        MqttFailureAggregateMapper mqttMapper = mock(MqttFailureAggregateMapper.class);
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+        LocalDateTime now = LocalDateTime.now(FIXED_CLOCK);
+        LocalDateTime receiptBefore = now.minusHours(24);
+        LocalDateTime periodReceiptBefore = now.minusDays(7);
+        when(receiptMapper.deleteExpiredWithoutFailure(any(), any(), eq(2000))).thenReturn(0);
+        when(receiptMapper.deleteExpiredWithFailure(any(), eq(2000))).thenReturn(0);
+        when(failureMapper.deleteExpired(any(), eq(2000))).thenReturn(0);
+        when(mqttMapper.deleteExpired(any(), eq(2000))).thenReturn(0);
+        when(receiptMapper.selectCount(isNull())).thenReturn(0L);
+        when(failureMapper.selectCount(isNull())).thenReturn(0L);
+        when(receiptMapper.selectOldestDeletablePersistedAt(receiptBefore))
+                .thenReturn(now.minusHours(26));
+        when(receiptMapper.selectOldestPeriodInputDeletablePersistedAt(periodReceiptBefore))
+                .thenReturn(now.minusDays(8));
+        TelemetryReceiptRetentionJob job = new TelemetryReceiptRetentionJob(
+                receiptMapper, failureMapper, mqttMapper, meterRegistry,
+                24, 180, 2000, 10, 30_000, FIXED_CLOCK, () -> 0L);
+
+        job.cleanup();
+
+        assertThat(meterRegistry.get("iot.telemetry.v2.retention.oldest_expired_lag_seconds")
+                .gauge().value()).isEqualTo(86_400.0);
+        verify(receiptMapper).deleteExpiredWithoutFailure(
+                receiptBefore, periodReceiptBefore, 2000);
+        verify(receiptMapper).selectOldestDeletablePersistedAt(receiptBefore);
+        verify(receiptMapper).selectOldestPeriodInputDeletablePersistedAt(periodReceiptBefore);
     }
 }

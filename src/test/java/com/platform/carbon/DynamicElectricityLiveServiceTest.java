@@ -80,7 +80,7 @@ class DynamicElectricityLiveServiceTest {
         jdbc.execute("CREATE TABLE biz_telemetry_message_intent(canonical_message_id VARCHAR(64) PRIMARY KEY,building_id VARCHAR(32),payload_hash VARCHAR(64),snapshot_json CLOB,terminal_json CLOB,state VARCHAR(20) DEFAULT 'PENDING',created_ms BIGINT,retry_count INT DEFAULT 0,next_retry_ms BIGINT DEFAULT 0)");
         jdbc.execute("CREATE TABLE biz_telemetry_conflict_budget(budget_key VARCHAR(30) PRIMARY KEY,used_rows BIGINT DEFAULT 0)");
         jdbc.update("INSERT INTO biz_telemetry_conflict_budget VALUES('PENDING_MESSAGE',0)");
-        jdbc.execute("CREATE TABLE v2_test_receipt(id VARCHAR(64) PRIMARY KEY,status VARCHAR(40))");
+        jdbc.execute("CREATE TABLE v2_test_receipt(id VARCHAR(64) PRIMARY KEY,status VARCHAR(40),payload CLOB)");
         var key=new DeviceIdentityKey("SERIAL_NO","P0");
         var binding=new DeviceIdentityBinding("I",key,"P0","P0","B","METER",com.platform.iot.reliability.AckMode.ADAPTER_PROXY,com.platform.iot.reliability.CorrelationPolicy.BOOT_ID_AND_SEQ,null,"own/ack");
         when(devices.find(key)).thenReturn(Optional.of(binding));
@@ -90,9 +90,13 @@ class DynamicElectricityLiveServiceTest {
         var mapper=new ObjectMapper().findAndRegisterModules();
         var journal=new com.platform.iot.reliability.TelemetryMessageJournal(jdbc,mapper);
         var receipts=mock(com.platform.iot.reliability.mapper.TelemetryReceiptMapper.class);
+        when(receipts.selectById(anyString())).thenAnswer(a->jdbc.query("SELECT payload FROM v2_test_receipt WHERE id=?",
+                (r,n)->{try{return mapper.readValue(r.getString(1),com.platform.iot.reliability.model.TelemetryReceipt.class);}
+                catch(Exception error){throw new IllegalStateException(error);}},(String)a.getArgument(0)).stream().findFirst().orElse(null));
+        when(receipts.selectForUpdate(anyString())).thenAnswer(a->receipts.selectById((String)a.getArgument(0)));
         var first=new java.util.concurrent.atomic.AtomicBoolean(true);
         doAnswer(a->{if(first.getAndSet(false))throw new org.springframework.dao.DataAccessResourceFailureException("simulated receipt failure");
-            com.platform.iot.reliability.model.TelemetryReceipt r=a.getArgument(0);return jdbc.update("INSERT INTO v2_test_receipt VALUES(?,?)",r.getCanonicalMessageId(),r.getReceiptStatus());}).when(receipts).insert(any());
+            com.platform.iot.reliability.model.TelemetryReceipt r=a.getArgument(0);return jdbc.update("INSERT INTO v2_test_receipt VALUES(?,?,?)",r.getCanonicalMessageId(),r.getReceiptStatus(),mapper.writeValueAsString(r));}).when(receipts).insert(any());
         var numeric=mock(com.platform.iot.ingest.standard.StandardTelemetryIngestionService.class);
         var v2=new com.platform.iot.ingest.v2.TelemetryV2IngestionService(devices,mock(UnknownDeviceHandler.class),numeric,receipts,
                 mock(com.platform.iot.reliability.mapper.TelemetryReceiptFailureMapper.class),new com.platform.iot.ingest.v2.AckModeResolver(),new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),"own/ack",journal,helper);
@@ -107,11 +111,32 @@ class DynamicElectricityLiveServiceTest {
         assertThat(restored.status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.PERIOD_INPUT_PERSISTED);
         assertThat(restored.requiresApplicationAck()).isTrue();
         assertThat(journal.find("PERIOD-M1").state()).isEqualTo("COMPLETE");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isZero();
         assertThat(jdbc.queryForObject("SELECT input_json FROM biz_dynamic_electricity_task",String.class)).contains("MQTT_STANDARD_V2");
         long revision=jdbc.queryForObject("SELECT revision FROM biz_dynamic_electricity_task",Long.class);
         assertThat(v2.ingest(message,System.currentTimeMillis()).status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.DUPLICATE_PERIOD_INPUT);
         assertThat(jdbc.queryForObject("SELECT revision FROM biz_dynamic_electricity_task",Long.class)).isEqualTo(revision);
         verifyNoInteractions(points,numeric);
+        if(version==0) {
+            var persisted=receipts.selectById("PERIOD-M1").getPersistedAt();
+            jdbc.update("DELETE FROM biz_telemetry_message_intent WHERE canonical_message_id='PERIOD-M1'");
+            assertThat(v2.ingest(message,System.currentTimeMillis()).status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.DUPLICATE_PERIOD_INPUT);
+            assertThat(receipts.selectById("PERIOD-M1").getPersistedAt()).isEqualTo(persisted);
+            when(points.find(any(com.platform.iot.quality.PointAliasKey.class))).thenReturn(Optional.of(new com.platform.iot.quality.PointRuntimeConfig("P0","P0","period","B",null,"P0","P0",null,null,null,"ANALOG","kWh","ONLINE",0,null,null)));
+            var corrected=mapper.<com.fasterxml.jackson.databind.node.ObjectNode>valueToTree(message);
+            corrected.put("canonicalMessageId","PERIOD-M2");
+            corrected.withObject("/electricityInterval").put("electricityKwh","2");
+            var changed=mapper.treeToValue(corrected,com.platform.iot.ingest.v2.TelemetryV2Message.class);
+            assertThat(v2.ingest(changed,System.currentTimeMillis()).status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.PERIOD_INPUT_PERSISTED);
+            assertThat(v2.ingest(message,System.currentTimeMillis()).status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.DUPLICATE_PERIOD_INPUT);
+            // 模拟普通回执和热意图已按保留期清掉，原信封再次到达时允许按最后受理值重新采用。
+            jdbc.update("DELETE FROM v2_test_receipt WHERE id='PERIOD-M1'");
+            jdbc.update("DELETE FROM biz_telemetry_message_intent WHERE canonical_message_id='PERIOD-M1'");
+            assertThat(v2.ingest(message,System.currentTimeMillis()).status()).isEqualTo(com.platform.iot.reliability.ReceiptStatus.PERIOD_INPUT_PERSISTED);
+            var adopted=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
+            assertThat(adopted.quantity()).isEqualByComparingTo("1");
+            assertThat(adopted.quantityRevision()).isEqualTo(3);
+        }
     }
     private void meters(int count,boolean tree) {
         var meters=new ArrayList<ClassificationCore.Meter>();var rules=new ArrayList<ClassificationContracts.BoundaryRule>();
@@ -130,6 +155,81 @@ class DynamicElectricityLiveServiceTest {
                 q==null?null:new BigDecimal(q),f==null?null:new BigDecimal(f),"SIMULATED","test-source")));
     }
     private void drain() {jdbc.update("UPDATE biz_dynamic_electricity_task SET next_check=0");live.refresh();}
+    private DeviceIntervalReceipt v2(String id,String quantity) {
+        var key=new DeviceIdentityKey("SERIAL","P0");
+        var request=new DeviceIntervalRequest(key,"METER","P0",from,from.plusSeconds(900),0,
+                new BigDecimal(quantity),new BigDecimal("0.5"),"SIMULATED","v2-source",
+                new SourceOrder(null,null,null,null),id);
+        return tx.execute(status->live.ingestFromMqttV2(request,devices.find(key).orElseThrow()));
+    }
+    @Test void v2BusinessLayerLeavesNormalDedupToReceiptsAndVersionsRemainImmutable() {
+        v2("same-canonical","10");
+        long revision=tasks.locked("B",from,from.plusSeconds(900),0).revision();
+        v2("new-same-value","10");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isZero();
+        assertThat(tasks.locked("B",from,from.plusSeconds(900),0).revision()).isEqualTo(revision);
+        v2("correction","12");
+        // 回执窗口外同一规范ID重新进入业务层，依既有自动采用规则处理，不能被旧完整证据永久拦截。
+        v2("same-canonical","10");
+        v2("correction","12");
+        assertThat(tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0").quantityRevision()).isEqualTo(4);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE snapshot_state='FULL'",Integer.class)).isEqualTo(4);
+    }
+    @Test void oldV2SameValueMarkersCompareNumericBodyWithDecimalFrozenInputs() {
+        v2("first","10");v2("correction","12");
+        automatic("P1",from,null,null,"v1-first","20","0.8",null);drain();
+        String id=jdbc.queryForObject("SELECT event_id FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND outcome='ADOPTED'",String.class);
+        var body=CarbonEvidence.parse(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,id));
+        ((com.fasterxml.jackson.databind.node.ObjectNode)body.path("adopted")).put("quantity",12);
+        String numeric=body.toString();
+        jdbc.update("UPDATE biz_dynamic_interval_evidence SET snapshot_json=?,snapshot_hash=? WHERE event_id=?",numeric,DynamicElectricityRepository.hash(numeric),id);
+        jdbc.update("""
+                INSERT INTO biz_dynamic_interval_evidence(event_id,building_id,point_id,start_ms,end_ms,version_no,task_revision,
+                outcome,request_hash,created_ms,snapshot_state,related_event_id)
+                VALUES ('old-same','B','P0',?,?,2,2,'UNCHANGED','hash',?,'LIGHT',?)
+                """,from.toEpochMilli(),from.plusSeconds(900).toEpochMilli(),System.currentTimeMillis(),id);
+        var retention=new DynamicElectricityEvidenceRetention(jdbc,tasks,results,manager);
+        retention.sweepMarkers(System.currentTimeMillis()+Duration.ofDays(8).toMillis());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE event_id='old-same'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,id)).isEqualTo(numeric);
+    }
+    @Test void oldV2MarkersRetireUsingEmbeddedInputsWithoutRewritingFrozenResults() {
+        v2("first","10");
+        automatic("P1",from,null,null,"v1-first","20","0.8",null);
+        tx.executeWithoutResult(status->{
+            var task=tasks.locked("B",from,from.plusSeconds(900),0);
+            var values=new TreeMap<>(task.readings());
+            values.put("P0",values.get("P0").withEvidence("old-v2-marker"));
+            tasks.update(task,values,0);
+            jdbc.update("""
+                    INSERT INTO biz_dynamic_interval_evidence(event_id,building_id,point_id,start_ms,end_ms,version_no,task_revision,
+                    outcome,request_hash,created_ms,snapshot_state) VALUES ('old-v2-marker','B','P0',?,?,1,1,'ADOPTED','hash',?,'LIGHT')
+                    """,from.toEpochMilli(),from.plusSeconds(900).toEpochMilli(),System.currentTimeMillis());
+        });
+        drain();
+        String inputHash=jdbc.queryForObject("SELECT input_hash FROM biz_dynamic_electricity_task",String.class);
+        var oldResult=tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
+        String resultHash=jdbc.queryForObject("SELECT payload_hash FROM biz_dynamic_electricity_result WHERE result_id=?",String.class,oldResult.id());
+        var retention=new DynamicElectricityEvidenceRetention(jdbc,tasks,results,manager);
+        retention.sweepMarkers(System.currentTimeMillis()+Duration.ofDays(6).toMillis());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE event_id='old-v2-marker'",Integer.class)).isEqualTo(1);
+        long expired=System.currentTimeMillis()+Duration.ofDays(8).toMillis();
+        tx.executeWithoutResult(status->{
+            tasks.locked("B",from,from.plusSeconds(900),0);
+            retention.sweepMarkers(expired);
+            assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE event_id='old-v2-marker'",Integer.class)).isEqualTo(1);
+        });
+        retention.sweepMarkers(expired);retention.sweepMarkers(expired);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE event_id='old-v2-marker'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE point_id='P1'",Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT input_hash FROM biz_dynamic_electricity_task",String.class)).isEqualTo(inputHash);
+        assertThat(jdbc.queryForObject("SELECT payload_hash FROM biz_dynamic_electricity_result WHERE result_id=?",String.class,oldResult.id())).isEqualTo(resultHash);
+        v2("after-cleanup","12");drain();
+        assertThat(results.byId("B",oldResult.id()).electricityEvidence().path("P0").path("quantity").asText()).isEqualTo("10");
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE outcome='LEGACY_BASELINE'",String.class)).contains("10","old-v2-marker");
+        retention.sweep(System.currentTimeMillis()+Duration.ofDays(181).toMillis());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE outcome='LEGACY_BASELINE' AND snapshot_state='FULL'",Integer.class)).isEqualTo(1);
+    }
     private DeviceIntervalReceipt automatic(String point,Instant at,String boot,Long seq,String message,String q,String f,String sequenceSource) {
         return tx.execute(s->live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL",point),"METER",point,at,at.plusSeconds(900),0,
                 q==null?null:new BigDecimal(q),f==null?null:new BigDecimal(f),"SIMULATED","automatic-source",new SourceOrder(boot,seq,message,sequenceSource))));

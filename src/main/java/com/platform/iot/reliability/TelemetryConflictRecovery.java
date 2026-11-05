@@ -128,7 +128,7 @@ public class TelemetryConflictRecovery {
                 if(changed==1)jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-1 WHERE budget_key='EVIDENCE'");
             }
         });
-        // 成功消息冻结快照沿用热回执期限；争议快照留存 180 天，未完成恢复意图不清理。
+        // 成功消息冻结快照保留1天，周期回执独立保留7天；争议快照留存180天，未完成恢复意图不清理。
         // 每轮最多 20,000 个热快照；固定批次允许清理吞吐超过 200 消息/秒的热数据增量。
         for(int batch=0;batch<40;batch++) {
             var old=jdbc.queryForList("SELECT canonical_message_id FROM biz_telemetry_message_intent WHERE state='COMPLETE' AND created_ms<? AND NOT EXISTS(SELECT 1 FROM biz_telemetry_message_conflict c WHERE c.canonical_message_id=biz_telemetry_message_intent.canonical_message_id) ORDER BY created_ms LIMIT 500",String.class,now-Duration.ofDays(1).toMillis());

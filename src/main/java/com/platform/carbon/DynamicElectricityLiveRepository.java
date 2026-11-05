@@ -20,6 +20,7 @@ public class DynamicElectricityLiveRepository {
         this.jdbc=jdbc; this.json=json;this.evidence=new DynamicElectricityIntervalEvidence(jdbc,json);
     }
     DynamicElectricityIntervalEvidence evidence(){return evidence;}
+    /** 自包含的采用版本。evidenceId可指向已清理的旧V2首报标记，重算始终读取本记录的数值与来源。 */
     public record Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,
                           String nature,String reference,String identityId,String transport,
                           @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DynamicElectricityContracts.SourceOrder sourceOrder,
