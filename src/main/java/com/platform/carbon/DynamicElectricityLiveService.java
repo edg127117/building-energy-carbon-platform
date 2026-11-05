@@ -73,14 +73,14 @@ public class DynamicElectricityLiveService {
         var prior=readings.get(request.pointId());
         if(automatic)return storeAutomatic(task,readings,prior,request,device.identityId(),transport,user,received);
         if(prior!=null&&prior.sourceOrder()!=null)throw problem("DYNAMIC_VERSION_MODE_CONFLICT","同一测点时段不能混用来源修订与平台版本");
+        var previous=prior;
         if(prior==null)prior=new DynamicElectricityLiveRepository.Reading(null,0,null,0,request.sourceNature(),request.sourceReference());
         BigDecimal q=merge(prior.quantity(),prior.quantityRevision(),request.electricityKwh(),request.revision());
         BigDecimal f=merge(prior.factor(),prior.factorRevision(),request.factorKgCo2PerKwh(),request.revision());
         long qr=request.electricityKwh()!=null?Math.max(prior.quantityRevision(),request.revision()):prior.quantityRevision();
         long fr=request.factorKgCo2PerKwh()!=null?Math.max(prior.factorRevision(),request.revision()):prior.factorRevision();
-        if(prior.quantity()!=null||prior.factor()!=null)evidence.baseline(task,request.pointId(),prior);
         if(request.revision()<Math.max(prior.quantityRevision(),prior.factorRevision())) {
-            evidence.record(task,received,prior,"SOURCE_STALE",task.revision());return receipt(task);
+            evidence.mark(task,received,prior,"SOURCE_STALE");return receipt(task);
         }
         if(request.revision()==Math.max(prior.quantityRevision(),prior.factorRevision())
                 &&!request.sourceNature().equals(prior.nature()))throw problem("DYNAMIC_DEVICE_REVISION_CONFLICT","同修订的数据性质不一致");
@@ -88,10 +88,10 @@ public class DynamicElectricityLiveService {
         readings.put(request.pointId(),next);
         if(readings.size()>500)throw problem("DYNAMIC_CAPACITY","一个建筑时段最多500个测点");
         if(next.withEvidence(prior.evidenceId()).equals(prior)) {
-            evidence.record(task,received,prior,"UNCHANGED",task.revision());return receipt(task);
+            evidence.mark(task,received,prior,"UNCHANGED");return receipt(task);
         }
-        next=next.withEvidence(received.id());readings.put(request.pointId(),next);
-        evidence.record(task,received,next,"ADOPTED",task.revision()+1);tasks.update(task,readings,user);
+        readings.put(request.pointId(),evidence.adopt(task,received,previous,next));
+        tasks.update(task,readings,user);
         return new DeviceIntervalReceipt(building,from,to,task.revision()+1,"PENDING");
     }
 
@@ -106,18 +106,18 @@ public class DynamicElectricityLiveService {
         long version=1;
         if(prior!=null) {
             if(prior.sourceOrder()==null)throw problem("DYNAMIC_VERSION_MODE_CONFLICT","已有显式修订，不能自动更换同一时段的版本口径");
-            tasks.evidence().baseline(task,request.pointId(),prior);
             version=Math.max(prior.quantityRevision(),prior.factorRevision());
             if(q.compareTo(prior.quantity())==0&&f.compareTo(prior.factor())==0) {
-                tasks.evidence().record(task,received,prior,"UNCHANGED",task.revision());return receipt(task);
+                tasks.evidence().mark(task,received,prior,"UNCHANGED");return receipt(task);
             }
             version=Math.addExact(version,1);
         }
         var next=new DynamicElectricityLiveRepository.Reading(q,version,f,version,request.sourceNature(),request.sourceReference(),identity,transport,
-                order==null?new SourceOrder(null,null,null,null):order).withEvidence(received.id());
+                order==null?new SourceOrder(null,null,null,null):order);
         readings.put(request.pointId(),next);
         if(readings.size()>500)throw problem("DYNAMIC_CAPACITY","一个建筑时段最多500个测点");
-        tasks.evidence().record(task,received,next,"ADOPTED",task.revision()+1);tasks.update(task,readings,user);
+        readings.put(request.pointId(),tasks.evidence().adopt(task,received,prior,next));
+        tasks.update(task,readings,user);
         return new DeviceIntervalReceipt(task.building(),request.startInclusive(),request.endExclusive(),task.revision()+1,"PENDING");
     }
     private static DeviceIntervalReceipt receipt(DynamicElectricityLiveRepository.Task task) {

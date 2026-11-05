@@ -39,6 +39,7 @@ class FlywayMigrationConfigurationTest {
                 "V104__mysql_dynamic_electricity_carbon.sql",
                 "V105__mysql_dynamic_electricity_tasks.sql",
                 "V106__mysql_dynamic_interval_evidence.sql",
+                "V107__mysql_dynamic_interval_evidence_retention.sql",
                 "V10__mysql_data_quality_recalculation.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V12__device_identity.sql",

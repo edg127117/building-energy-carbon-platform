@@ -49,6 +49,7 @@ class DynamicElectricityLiveServiceTest {
             ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V104__mysql_dynamic_electricity_carbon.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V105__mysql_dynamic_electricity_tasks.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V106__mysql_dynamic_interval_evidence.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V107__mysql_dynamic_interval_evidence_retention.sql"));
         }
         jdbc.execute("CREATE TABLE biz_data_point(building_id VARCHAR(32),point_id VARCHAR(80),equip_id VARCHAR(32),del_flag INT,unit VARCHAR(32),status VARCHAR(16))");
         var mapper=new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -136,20 +137,29 @@ class DynamicElectricityLiveServiceTest {
     @Test void automaticAcceptanceKeepsAllVersionsWithoutBootOrSequence() {
         automatic("P0",from,null,null,null,"10","0.5",null);
         automatic("P1",from,null,null,null,"20","0.8",null);drain();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isZero();
         assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("21");
+        var initialResult=tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id();
         long revision=tasks.locked("B",from,from.plusSeconds(900),0).revision();
         automatic("P0",from,null,null,null,"10.0","0.50",null);
         assertThat(tasks.locked("B",from,from.plusSeconds(900),0).revision()).isEqualTo(revision);
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE outcome='UNCHANGED'",String.class)).containsExactly("LIGHT");
         automatic("P0",from,null,null,null,"12","0.6",null);drain();
         assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("23.2");
         automatic("P0",from,null,null,null,"10","0.5",null);drain();
         var adopted=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
         assertThat(adopted.quantityRevision()).isEqualTo(3);assertThat(adopted.quantity()).isEqualByComparingTo("10");
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND outcome='ADOPTED'",Integer.class)).isEqualTo(3);
-        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND version_no=1 AND outcome='ADOPTED'",String.class)).contains("10","0.5");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND snapshot_state='FULL'",Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND version_no=1 AND outcome='LEGACY_BASELINE'",String.class)).contains("10","0.5");
+        var retention=new DynamicElectricityEvidenceRetention(jdbc,tasks,results,manager);
+        retention.sweep(System.currentTimeMillis()+Duration.ofDays(181).toMillis());
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE snapshot_state<>'LIGHT'",String.class)).containsOnly("FULL");
+        assertThat(results.byId("B",initialResult).values().emissionKgCo2()).isEqualByComparingTo("21");
     }
     @Test void recognizedMessageReplayCannotRollBackLaterValueAfterServiceRestart() {
         automatic("P0",from,"BOOT",100L,"A","10","0.5","DEVICE_FIELDS");
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence",String.class)).containsExactly("LIGHT");
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence",String.class)).isNull();
         automatic("P0",from,"BOOT",101L,"B","12","0.6","DEVICE_FIELDS");
         live=new DynamicElectricityLiveService(auth,devices,tasks,results,input,queries,users,roles,manager);
         automatic("P0",from,"BOOT",100L,"A","10","0.5","DEVICE_FIELDS");
@@ -158,6 +168,46 @@ class DynamicElectricityLiveServiceTest {
         assertThatThrownBy(()->automatic("P0",from,"BOOT",100L,"A","99","0.9","DEVICE_FIELDS")).hasMessageContaining("消息身份");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isEqualTo(3);
         assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE outcome='MESSAGE_CONFLICT'",String.class)).contains("99","conflictWith");
+    }
+    @Test void retentionProtectsPendingAndHistoricalResultAndKeepsRetiredMessageIdentity() {
+        automatic("P0",from,null,null,"first","10","0.5",null);
+        automatic("P1",from,null,null,"other","20","0.8",null);
+        drain();
+        String oldResult=tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id();
+        String first=results.byId("B",oldResult).electricityEvidence().path("P0").path("evidenceId").asText();
+        automatic("P0",from,null,null,"unpublished","11","0.5",null);
+        automatic("P0",from,null,null,"same","11.0","0.50",null);
+        String unpublished=jdbc.queryForObject("SELECT related_event_id FROM biz_dynamic_interval_evidence WHERE outcome='UNCHANGED'",String.class);
+        automatic("P0",from,null,null,"current","12","0.5",null);
+        String current=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0").evidenceId();
+        var retention=new DynamicElectricityEvidenceRetention(jdbc,tasks,results,manager);
+        long future=System.currentTimeMillis()+Duration.ofDays(181).toMillis();
+        retention.sweep(future);
+        assertThat(jdbc.queryForObject("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,unpublished)).isEqualTo("FULL");
+        drain();
+        retention.sweep(future); // 回卷游标，下一轮重查原先被待算任务保护的正文。
+        tx.executeWithoutResult(status->{
+            tasks.locked("B",from,from.plusSeconds(900),0);
+            retention.sweep(future);
+            assertThat(jdbc.queryForObject("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,unpublished)).isEqualTo("FULL");
+        });
+        retention.sweep(future);
+        retention.sweep(future);
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE event_id IN (?,?)",String.class,first,current)).containsExactly("FULL","FULL");
+        assertThat(jdbc.queryForObject("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,unpublished)).isEqualTo("RETIRED");
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,unpublished)).isNull();
+        assertThat(jdbc.queryForObject("SELECT snapshot_hash FROM biz_dynamic_interval_evidence WHERE event_id=?",String.class,unpublished)).hasSize(64);
+        long revision=tasks.locked("B",from,from.plusSeconds(900),0).revision();
+        automatic("P0",from,null,null,"unpublished","11","0.5",null);
+        automatic("P0",from,null,null,"same","11","0.5",null);
+        assertThatThrownBy(()->automatic("P0",from,null,null,"unpublished","99","0.5",null)).hasMessageContaining("消息身份");
+        assertThat(tasks.locked("B",from,from.plusSeconds(900),0).revision()).isEqualTo(revision);
+        assertThat(results.byId("B",oldResult).values().emissionKgCo2()).isEqualByComparingTo("21");
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE outcome='MESSAGE_CONFLICT'",String.class)).containsExactly("FULL");
+        retention.sweep(future);retention.sweep(future);
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE outcome='MESSAGE_CONFLICT'",String.class)).containsExactly("RETIRED");
+        assertThatThrownBy(()->automatic("P0",from,null,null,"unpublished","99","0.5",null)).hasMessageContaining("消息身份");
+        assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE outcome='MESSAGE_CONFLICT'",String.class)).containsExactly("RETIRED");
     }
     @Test void resetWrapAndPollingCountersAreMetadataAndMixedModesStillReject() {
         automatic("P0",from,"OLD",4294967295L,null,"10","0.5","DEVICE_FIELDS");
@@ -174,7 +224,7 @@ class DynamicElectricityLiveServiceTest {
         automatic("P0",from,null,null,null,"10","0.5",null);
         doThrow(new org.springframework.dao.DataAccessResourceFailureException("task failure")).when(tasks).update(any(),anyMap(),anyLong());
         assertThatThrownBy(()->automatic("P0",from,null,null,null,"12","0.6",null)).hasMessageContaining("task failure");
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isZero();
         assertThat(tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0").quantity()).isEqualByComparingTo("10");
     }
     @Test void upgradesCurrentInputAsBaselineWithoutFabricatingOlderVersions() throws Exception {

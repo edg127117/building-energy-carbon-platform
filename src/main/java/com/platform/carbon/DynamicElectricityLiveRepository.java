@@ -55,6 +55,12 @@ public class DynamicElectricityLiveRepository {
         return jdbc.query("SELECT * FROM biz_dynamic_electricity_task WHERE building_id=? AND start_ms=? AND end_ms=? FOR UPDATE",
                 this::row,building,from.toEpochMilli(),to.toEpochMilli()).getFirst();
     }
+    Task lockForEvidenceRetention(String building,long from,long to) {
+        return jdbc.query("""
+                SELECT * FROM biz_dynamic_electricity_task WHERE building_id=? AND start_ms=? AND end_ms=?
+                FOR UPDATE SKIP LOCKED
+                """,this::row,building,from,to).stream().findFirst().orElse(null);
+    }
     void update(Task task,Map<String,Reading> inputs,long user) {
         String payload=encode(inputs);
         jdbc.update("""

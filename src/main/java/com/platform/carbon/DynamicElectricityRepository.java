@@ -162,6 +162,13 @@ public class DynamicElectricityRepository {
                 (r, n) -> decode(r.getString(1), r.getString(2), Result.class), building, id).stream().findFirst().orElse(null);
     }
 
+    void visitIntervalResults(String building,long from,long to,java.util.function.Consumer<Result> visitor) {
+        jdbc.query("""
+                SELECT payload_json,payload_hash FROM biz_dynamic_electricity_result
+                WHERE building_id=? AND grain='INTERVAL' AND start_ms=? AND end_ms=?
+                """,r->{visitor.accept(decode(r.getString(1),r.getString(2),Result.class));},building,from,to);
+    }
+
     private List<FactorRow> factorRows(String sql, Object... args) {
         var values = jdbc.query(sql, (r, n) -> new FactorRow(decode(r.getString("payload_json"), r.getString("payload_hash"),
                 DynamicElectricityCore.Factor.class), r.getInt("revision"), r.getString("import_id"), r.getString("request_hash"), r.getString("payload_hash")), args);

@@ -220,6 +220,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         }
         save("load",Map.of("meters",100,"intervalMinutes",15,"intervals",96,"pairedUploads",9600,"clockMode","EVENT_TIME_COMPRESSED_WITH_EACH_BATCH_DRAINED",
                 "elapsedMs",(System.nanoTime()-started)/1000000,"measurements",measured));
+        if(automatic)checkFirstUploadStorage();
         if(viaAdapter)try(var statement=database.prepareStatement("SELECT COUNT(*) FROM biz_telemetry_receipt WHERE building_id=? AND receipt_status='PERIOD_INPUT_PERSISTED' AND metric_count=0")) {
             statement.setString(1,building);try(var rows=statement.executeQuery()){rows.next();assertThat(rows.getInt(1)).isGreaterThanOrEqualTo(9600);}
         }
@@ -255,6 +256,23 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         System.out.println(viaAdapter?"INDEPENDENT_V2_ADAPTER_100_METER_CHAIN_OK":"INDEPENDENT_MQTT_100_METER_CHAIN_OK");
     }
 
+    private void checkFirstUploadStorage()throws Exception {
+        try(var statement=database.prepareStatement("""
+                SELECT COUNT(*),COUNT(snapshot_json),COALESCE(SUM(OCTET_LENGTH(snapshot_json)),0)
+                FROM biz_dynamic_interval_evidence WHERE building_id=? AND start_ms>=? AND end_ms<=?
+                """)) {
+            statement.setString(1,building);statement.setLong(2,first.toEpochMilli());statement.setLong(3,first.plusSeconds(86400).toEpochMilli());
+            try(var rows=statement.executeQuery()) {
+                rows.next();
+                long markers=rows.getLong(1),snapshots=rows.getLong(2),snapshotBytes=rows.getLong(3);
+                assertThat(markers).isEqualTo(viaAdapter?9600:0);
+                assertThat(snapshots).isZero();
+                assertThat(snapshotBytes).isZero();
+                save("normal-storage",Map.of("businessInputs",9600,"messageMarkers",markers,"snapshots",snapshots,"snapshotBytes",snapshotBytes));
+            }
+        }
+    }
+
     private void automaticBehavior()throws Exception {
         long before=task(95).revision();String other=task(94).resultId();
         for(int meter=0;meter<100;meter++)publish(95,meter,revision,meter==0?"99":"1",true);
@@ -280,10 +298,26 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         wrong=payload(95,0,revision+15,"999",true);wrong.put("eventTime",first.plusSeconds(1).toEpochMilli());publish(0,wrong);
         wrong=payload(95,0,revision+15,"999",true);wrong.withObject("/deviceIdentity").put("value","UNKNOWN_METER");publish(0,wrong);
         Thread.sleep(1000);awaitReady(95,revisions);assertThat(task(94).resultId()).isEqualTo(other);
-        try(var s=database.prepareStatement("SELECT outcome,version_no,snapshot_json FROM biz_dynamic_interval_evidence WHERE building_id=? AND point_id=? AND start_ms=? ORDER BY version_no")) {
+        try(var s=database.prepareStatement("SELECT outcome,version_no,snapshot_json,snapshot_state FROM biz_dynamic_interval_evidence WHERE building_id=? AND point_id=? AND start_ms=? ORDER BY version_no")) {
             s.setString(1,building);s.setString(2,point);s.setLong(3,first.plusSeconds(95*900).toEpochMilli());
-            int adopted=0;boolean initial=false;try(var rows=s.executeQuery()){while(rows.next())if("ADOPTED".equals(rows.getString(1))){adopted++;if(rows.getLong(2)==1)initial=new BigDecimal(json.readTree(rows.getString(3)).path("request").path("electricityKwh").asText()).compareTo(new BigDecimal("99"))==0;}}
+            int adopted=0;boolean initial=false,lightSameValue=false;
+            try(var rows=s.executeQuery()) {
+                while(rows.next()) {
+                    String outcome=rows.getString(1);
+                    if("UNCHANGED".equals(outcome)) {
+                        assertThat(rows.getString(4)).isEqualTo("LIGHT");
+                        assertThat(rows.getString(3)).isNull();
+                        lightSameValue=true;
+                    } else if(Set.of("ADOPTED","LEGACY_BASELINE").contains(outcome)) {
+                        adopted++;
+                        assertThat(rows.getString(4)).isEqualTo("FULL");
+                        if(rows.getLong(2)==1)
+                            initial=new BigDecimal(json.readTree(rows.getString(3)).path("reading").path("quantity").asText()).compareTo(new BigDecimal("99"))==0;
+                    }
+                }
+            }
             assertThat(adopted).isEqualTo(revisions[0]);assertThat(initial).isTrue();
+            assertThat(lightSameValue).isTrue();
         }
         checkResults();save("behavior",Map.of("noHardwareBootSeqMessageIdOrRevisionRequired",true,"automaticVersions",true,"duplicatesNotCounted",true,
                 "recognizedReplayDoesNotUndoCorrection",true,"unsequencedLastAcceptanceApplied",true,"missingPairRejected",true,"allAdoptedVersionsRetained",true,"unaffectedIntervalRetained",true));
