@@ -7,7 +7,7 @@ import { useFinalBData } from '../../composables/use-final-b-data'
 import { useFinalBAnnual } from '../../composables/use-final-b-annual'
 import { useFinalBDaily } from '../../composables/use-final-b-daily'
 import { useScreenDynamicElectricity } from '../../composables/use-screen-dynamic-electricity'
-import { withApprovedScreenDemo } from '../../models/final-b-demo'
+import { withScreenMirror } from '../../models/final-b-mirror'
 import { useScreenCarbonPlan } from '../../composables/use-screen-carbon-plan'
 import { useJointFlow } from '../../composables/use-joint-flow'
 import { useOutdoorTemperature } from '../../composables/use-outdoor-temperature'
@@ -57,7 +57,7 @@ const summaryContext = computed(() => {
   })
 })
 const data = computed(() => {
-  const base = withOutdoorTemperature(withApprovedScreenDemo({ ...state.data.value, ...annual.data.value, ...daily.data.value, ...flow.data.value, plan: plan.data.value ? { period: { kind: 'year' as const, value: state.periods.value.plan.value.slice(0, 4) }, data: plan.data.value } : undefined, intensity: intensity.data.value?.intensity, intensityBenchmarks: intensity.data.value?.intensityBenchmarks, devices: monitoring.devices.value, deviceSummaryUpdatedAt: monitoring.updatedAt.value, runtimeRanking: monitoring.runtimeRanking.value }, state.periods.value.mirror), state.periods.value.usage, temperature.values.value)
+  const base = withOutdoorTemperature(withScreenMirror({ ...state.data.value, ...annual.data.value, ...daily.data.value, ...flow.data.value, plan: plan.data.value ? { period: { kind: 'year' as const, value: state.periods.value.plan.value.slice(0, 4) }, data: plan.data.value } : undefined, intensity: intensity.data.value?.intensity, intensityBenchmarks: intensity.data.value?.intensityBenchmarks, devices: monitoring.devices.value, deviceSummaryUpdatedAt: monitoring.updatedAt.value, runtimeRanking: monitoring.runtimeRanking.value }, state.periods.value.mirror), state.periods.value.usage, temperature.values.value)
   const mirror = base.mirror
   const dynamicData = dynamic.data.value
   if (!mirror || !dynamicData || mirror.period.kind !== dynamicData.period.kind || mirror.period.value !== dynamicData.period.value) return base
@@ -86,7 +86,7 @@ const s = (key: string, params?: Record<string, string | number>) => t('largeScr
 </script>
 
 <template>
-  <IndexPage layout-variant="b" :data="renderData" @period-change="state.periods.value = $event">
+  <IndexPage layout-variant="b" :data="renderData" :alarm-building-id="state.buildingId.value ?? ''" @period-change="state.periods.value = $event">
     <template #data-context>
       <p>{{ s('finalBInterfaceNotice') }}</p>
       <p>{{ s('finalBBuildingContext', { value: building?.buildingName ?? s(code ? 'noBuildings' : 'finalBBuildingNotConfigured') }) }}</p>

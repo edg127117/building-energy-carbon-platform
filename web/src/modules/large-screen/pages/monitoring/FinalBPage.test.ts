@@ -13,7 +13,7 @@ import { annualFixture } from '../../models/final-b-annual.test-fixture'
 import { dailyFixture } from '../../models/final-b-daily.test-fixture'
 
 vi.mock('./IndexPage.vue', () => ({ default: {
-  name: 'BScreenContent', props: ['data', 'layoutVariant'], emits: ['periodChange'], template: '<div><slot name="data-context" /></div>',
+  name: 'BScreenContent', props: ['data', 'layoutVariant', 'alarmBuildingId'], emits: ['periodChange'], template: '<div><slot name="data-context" /></div>',
 } }))
 vi.mock('../../api/carbon-intensity', () => ({ readCarbonIntensity: vi.fn() }))
 vi.mock('@/modules/energy-reporting/api/annual-overview', async original => ({
@@ -89,6 +89,7 @@ describe('final B intensity integration', () => {
     const period = { kind: 'month' as const, value: '2024-02' }
     page.vm.$emit('periodChange', { ...state.periods.value, usage: period, mirror: period })
     await flushPromises()
+    expect(page.props('alarmBuildingId')).toBe(state.buildingId.value)
     const data = page.props('data') as ScreenRedesignData
     expect(readDailyTrends).toHaveBeenCalledTimes(1)
     expect(data.usage?.period).toEqual(period)

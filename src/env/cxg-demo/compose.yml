@@ -91,6 +91,7 @@ services:
     ports: ['19080:8080']
     volumes:
       - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./web:/usr/share/nginx/html:ro
     networks: [edge, application]
     depends_on: [app]
     mem_limit: 128m

@@ -28,7 +28,7 @@ let returnFocus: HTMLElement | null = null
 const activeTotal = computed(() => selected.value === 'DEVICE' ? summary.value?.deviceAnomalies ?? null : summary.value?.emissionWarnings ?? null)
 const selectedGroups = computed(() => selected.value === 'DEVICE' ? summary.value?.deviceGroups ?? [] : summary.value?.emissionGroups ?? [])
 const selectedUnit = computed(() => text(selected.value === 'DEVICE' ? 'deviceUnit' : 'eventUnit'))
-const selectedReason = computed(() => selected.value === 'DEVICE' ? summary.value?.deviceReason : summary.value?.emissionReason)
+const selectedReason = computed(() => error.value || (selected.value === 'DEVICE' ? summary.value?.deviceReason : summary.value?.emissionReason))
 const statisticTime = computed(() => selected.value === 'EMISSION' ? (summary.value?.period || '—') : (summary.value ? new Date(summary.value.updatedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '—'))
 const statisticLabel = computed(() => text(selected.value === 'EMISSION' ? 'assessmentMonth' : 'statisticTime'))
 const canOpenEvents = computed(() => hasVisibleAlarmPage(session.menus))
@@ -41,7 +41,7 @@ function hasVisibleAlarmPage(menus: GrantedMenu[]): boolean {
   })
 }
 
-watch(() => props.buildingId, () => { void refresh(true) })
+watch(() => props.buildingId, () => { if (selected.value) close(); void refresh(true) })
 onMounted(() => {
   void refresh(true)
   poll = setInterval(() => { void refresh(false) }, 30_000)
@@ -75,6 +75,9 @@ async function open(kind: AlarmCategory, trigger: HTMLElement) {
 function openFromEvent(kind: AlarmCategory, event: MouseEvent) {
   if (event.currentTarget instanceof HTMLElement) void open(kind, event.currentTarget)
 }
+function openEmbedded(kind: 'device' | 'emission', event: MouseEvent) {
+  openFromEvent(kind === 'device' ? 'DEVICE' : 'EMISSION', event)
+}
 function close() {
   clearTimeout(idle)
   selected.value = null
@@ -101,8 +104,9 @@ function goToEvents() {
 </script>
 
 <template>
-  <section ref="root" class="screen-alarm-summary" :aria-label="text('summaryAria')">
-    <ElSkeleton v-if="loading && !summary && !error" :rows="2" animated />
+  <section ref="root" class="screen-alarm-summary" :class="{ embedded: $slots.default }" :aria-label="text('summaryAria')">
+    <slot v-if="$slots.default" :counts="{ device: summary?.deviceAnomalies, emission: summary?.emissionWarnings }" :open="openEmbedded" />
+    <ElSkeleton v-else-if="loading && !summary && !error" :rows="2" animated />
     <p v-else-if="error" class="summary-error">{{ text('summaryUnavailable') }} <span>{{ error }}</span></p>
     <p v-else-if="!summary" class="summary-empty">{{ text('noSummary') }}</p>
     <template v-else>
@@ -151,6 +155,7 @@ function goToEvents() {
   gap:var(--bec-space-group);
   min-width:0
 }
+.screen-alarm-summary.embedded { display: contents; }
 .summary-card {
   display:grid;
   justify-items:center;

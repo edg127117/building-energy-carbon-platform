@@ -91,9 +91,11 @@ public class DailyTrendSummaryRepository {
     }
     public List<Candidate> discover() {
         // 只预热已有小时结果且尚未登记的月份；不用扫描读数，不为无数据历史自动扩建整包结果。
+        // 按月首日期比较，避免已有表与连接使用不同排序规则时无法发现月份。
         return jdbc.query("""
                 SELECT h.building_id,SUBSTRING(CAST(h.day_date AS CHAR(10)),1,7) AS month_key,MIN(h.created_by) AS actor FROM biz_carbon_hourly_batch h
-                WHERE NOT EXISTS (SELECT 1 FROM biz_daily_trend_read_model m WHERE m.building_id=h.building_id AND m.month_key=SUBSTRING(CAST(h.day_date AS CHAR(10)),1,7))
+                WHERE NOT EXISTS (SELECT 1 FROM biz_daily_trend_read_model m WHERE m.building_id=h.building_id AND CAST(CONCAT(m.month_key,'-01') AS DATE)
+                    = CAST(CONCAT(SUBSTRING(CAST(h.day_date AS CHAR(10)),1,7),'-01') AS DATE))
                 GROUP BY h.building_id,SUBSTRING(CAST(h.day_date AS CHAR(10)),1,7) ORDER BY h.building_id,month_key LIMIT 20
                 """,(r,n)->new Candidate(r.getString(1),r.getString(2),r.getLong(3)));
     }

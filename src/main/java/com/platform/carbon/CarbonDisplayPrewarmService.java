@@ -53,7 +53,7 @@ public class CarbonDisplayPrewarmService {
         authorization.requireReader(roles);authorization.checkBuilding(user,roles,building);
         CarbonDisplayQueryProperties.PrewarmTarget selected=null;
         try {
-            for(var target:targets())if(resolveBuilding(target.buildingCode()).equals(building)){selected=target;break;}
+            selected=targetForBuilding(building);
         }catch(RuntimeException e){return result(building,false,"CONFIGURATION_ERROR",List.of());}
         if(!properties.isEnabled()||selected==null)return result(building,false,"NOT_CONFIGURED",List.of());
         String taskError=null;
@@ -95,6 +95,10 @@ public class CarbonDisplayPrewarmService {
         return List.of(new Plan("FLOW_YEAR",annualFlow),new Plan("INTENSITY_YTD",annualIntensity),
                 new Plan("FLOW_MONTH",CarbonDisplayQueryContracts.flow(new JointFlowContracts.Request(building,"MONTH",previous.toString(),null,null))),
                 new Plan("INTENSITY_MONTH",CarbonDisplayQueryContracts.intensity(building,"MONTH",previous.getYear(),previous.getMonthValue(),ZONE.getId())));
+    }
+    CarbonDisplayQueryProperties.PrewarmTarget targetForBuilding(String building){
+        for(var target:targets())if(resolveBuilding(target.buildingCode()).equals(building))return target;
+        return null;
     }
     private List<CarbonDisplayQueryProperties.PrewarmTarget> targets(){
         var values=properties.getPrewarmTargets();if(values==null)return List.of();

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest'
 import { dailyScreenData, validateDailyTrends } from './final-b-daily'
 import { dailyFixture } from './final-b-daily.test-fixture'
-import { withApprovedScreenDemo } from './final-b-demo'
+import { withScreenMirror } from './final-b-mirror'
 
 it.each(['2024-02', '2026-02', '2026-04', '2026-01'])('aligns exact daily values, preserves zero and gaps for %s', month => {
   const view = dailyFixture('B', month), period = { kind: 'month' as const, value: month }
@@ -33,14 +33,14 @@ it('rejects crossed identities, units, truncated months, duplicate dates and cha
     (v: ReturnType<typeof dailyFixture>) => { v.days[0].gasBasis = 'INVALID' as never },
   ]) { const view = dailyFixture(); change(view); expect(() => validateDailyTrends(view, 'B', '2024-02')).toThrow() }
 })
-it('uses demo material only for explicitly authorized sections and never fills static or dynamic carbon data', () => {
+it('preserves period-aligned real static values and leaves unavailable carbon slots empty', () => {
   const period = { kind: 'month' as const, value: '2024-02' }
   const base = dailyScreenData(dailyFixture(), period, period)
-  const data = withApprovedScreenDemo(base, period)
-  expect(data.devices).toBeUndefined(); expect(data.runtimeRanking).toBeUndefined(); expect(data.alarms?.deviceAnomalies).toBe(3)
+  const data = withScreenMirror(base, period)
+  expect(data.devices).toBeUndefined(); expect(data.runtimeRanking).toBeUndefined(); expect(data.alarms).toBeUndefined()
   expect(data.mirror?.data.dynamicFactors).toEqual(Array(29).fill(null))
   expect(data.mirror?.data.staticEmissions).toEqual(base.mirror?.data.staticEmissions)
   expect(data.usage).toBe(base.usage)
-  expect(withApprovedScreenDemo({}, period).mirror?.data.staticEmissions).toEqual(Array(29).fill(null))
-  expect(withApprovedScreenDemo(base, { kind: 'year', value: '2025' }).mirror?.data.staticFactors).toEqual(Array(12).fill(null))
+  expect(withScreenMirror({}, period).mirror?.data.staticEmissions).toEqual(Array(29).fill(null))
+  expect(withScreenMirror(base, { kind: 'year', value: '2025' }).mirror?.data.staticFactors).toEqual(Array(12).fill(null))
 })

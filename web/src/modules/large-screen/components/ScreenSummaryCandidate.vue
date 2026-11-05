@@ -4,10 +4,12 @@ import { Activity, Bell, ChevronDown, CircleAlert, CircleCheck, CircleX, Clock, 
 import { t } from '@/locales'
 import type { ScreenAlarmSummaryData, ScreenDeviceSummaryData, ScreenRuntimeRankingEntry } from '../models/screen-summaries'
 
+import { ScreenAlarmSummary } from '@/modules/alarms/public'
+
 type GroupKey = 'switch' | 'mode' | 'speed'
 interface Reading { key: string; label: string; count: number | null; icon: Component; tone: string }
 interface Group { key: GroupKey; label: string; icon: Component; readings: Reading[] }
-const props = defineProps<{ variant: 'a' | 'b' | 'c'; alarms?: ScreenAlarmSummaryData; devices?: ScreenDeviceSummaryData; runtimeRanking?: readonly ScreenRuntimeRankingEntry[]; updatedAt?: number; embedded?: boolean }>()
+const props = defineProps<{ variant: 'a' | 'b' | 'c'; alarms?: ScreenAlarmSummaryData; devices?: ScreenDeviceSummaryData; runtimeRanking?: readonly ScreenRuntimeRankingEntry[]; updatedAt?: number; embedded?: boolean; alarmBuildingId?: string }>()
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 const id = useId()
 const alarmOpen = ref(true), deviceOpen = ref(true)
@@ -29,7 +31,7 @@ const refreshTime = computed(() => typeof props.updatedAt === 'number' && Number
 const alarms = computed(() => [
   { key: 'device', label: s('alarmSummaryDeviceAnomalies'), value: props.alarms?.deviceAnomalies, unit: s('alarmSummaryDeviceUnit'), icon: CircleAlert, tone: 'danger' },
   { key: 'emission', label: s('alarmSummaryEmissionWarnings'), value: props.alarms?.emissionWarnings, unit: s('alarmSummaryWarningUnit'), icon: Bell, tone: 'amber' },
-])
+] as const)
 const groups = computed<Group[]>(() => [
   { key: 'switch', label: s('deviceSummarySwitch'), icon: Activity, readings: [
     { key: 'on', label: s('deviceSummaryOn'), count: props.devices?.on ?? null, icon: CircleCheck, tone: 'green' },
@@ -63,7 +65,14 @@ function readingLabel(entry: Reading) {
         <button class="icon-button" :aria-label="s(alarmOpen ? 'summaryCollapsePanel' : 'summaryExpandPanel', { label: s('alarms') })" :aria-expanded="alarmOpen" :aria-controls="id + '-alarms'" @click="alarmOpen = !alarmOpen"><ChevronDown :size="18" :class="{ turned: !alarmOpen }" /></button>
       </header>
       <div v-show="alarmOpen" :id="id + '-alarms'" class="alarm-readings">
-        <article v-for="alarm in alarms" :key="alarm.key" class="alarm-reading" :class="'tone-' + alarm.tone" :data-test="'candidate-alarm-' + alarm.key" tabindex="0" :aria-label="s('alarmSummaryCount', { label: alarm.label, count: number(alarm.value), unit: alarm.unit })">
+        <ScreenAlarmSummary v-if="alarmBuildingId !== undefined" v-slot="{ counts, open }" :building-id="alarmBuildingId">
+          <button v-for="alarm in alarms" :key="alarm.key" type="button" class="alarm-reading alarm-action" :class="'tone-' + alarm.tone" :data-test="'candidate-alarm-' + alarm.key" :aria-label="s('alarmSummaryCount', { label: alarm.label, count: number(counts[alarm.key]), unit: alarm.unit })" @click="open(alarm.key, $event)">
+            <span class="alarm-symbol"><component :is="alarm.icon" :size="18" aria-hidden="true" /></span>
+            <span class="alarm-copy"><span class="alarm-name">{{ alarm.label }}</span><i class="alarm-accent" aria-hidden="true" /></span>
+            <span class="alarm-number"><b>{{ number(counts[alarm.key]) }}</b><small>{{ alarm.unit }}</small></span>
+          </button>
+        </ScreenAlarmSummary>
+        <article v-for="alarm in alarmBuildingId === undefined ? alarms : []" :key="alarm.key" class="alarm-reading" :class="'tone-' + alarm.tone" :data-test="'candidate-alarm-' + alarm.key" tabindex="0" :aria-label="s('alarmSummaryCount', { label: alarm.label, count: number(alarm.value), unit: alarm.unit })">
           <span class="alarm-symbol"><component :is="alarm.icon" :size="18" aria-hidden="true" /></span>
           <div class="alarm-copy"><span class="alarm-name">{{ alarm.label }}</span><i class="alarm-accent" aria-hidden="true" /></div>
           <span class="alarm-number"><b>{{ number(alarm.value) }}</b><small>{{ alarm.unit }}</small></span>

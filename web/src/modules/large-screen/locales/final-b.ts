@@ -25,7 +25,7 @@ export default {
   "summaryRankFloor4": "5楼",
   "summaryRankFloor5": "1楼",
   "summaryRankReading": "第{rank}名 {room}：当月观测开机 {hours} 小时",
-  "finalBInterfaceNotice": "接口联调：电量、静态碳、动态碳、温度、设备状态及当月设备运行排名读取所选建筑的后端结果；报警暂用固定展示素材。数据来源性质以对应证据为准，接口可用不代表真实设备验收。",
+  "finalBInterfaceNotice": "接口联调：电量、静态碳、动态碳、温度、设备状态、当月设备运行排名及报警读取所选建筑的后端结果。数据来源性质以对应证据为准，接口可用不代表真实设备验收。",
   "finalBDeviceSnapshotContext": "设备状态范围：{scope}；快照时间：{timestamp}；{state} 可见分类仅为送风、制冷、制热及低速、中速、高速、自动。未映射类别不归入可见行，响应缺失的分类键显示为—。其他模式：{modes}；其他风速：{speeds}；状态未知原因：{reasons}；分类异常原因：模式 {modeReasons}，风速 {speedReasons}。",
   "finalBDeviceScope": "已启用并正式绑定的大金室内机",
   "finalBDeviceSnapshotFresh": "快照当前有效。",
