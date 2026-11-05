@@ -49,7 +49,7 @@ public class AlarmScheduler implements SmartLifecycle {
     public synchronized boolean isRunning() { return executor != null && !executor.isShutdown(); }
 
     public void scan() {
-        var buildings = jdbc.queryForList("SELECT building_id FROM biz_building WHERE del_flag=0 AND building_id>? ORDER BY building_id LIMIT 100", String.class, cursor);
+        var buildings = jdbc.queryForList("SELECT building_id FROM building WHERE del_flag=0 AND building_id>? ORDER BY building_id LIMIT 100", String.class, cursor);
         for (String building : buildings) {
             try { alarms.evaluate(building); }
             catch (RuntimeException exception) { log.error("报警判定失败，建筑={}，异常类型={}", building, exception.getClass().getSimpleName()); }

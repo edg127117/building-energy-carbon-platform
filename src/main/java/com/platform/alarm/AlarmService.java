@@ -765,7 +765,7 @@ public class AlarmService {
     }
 
     private void initialize(String building) {
-        Long exists = jdbc.queryForObject("SELECT COUNT(*) FROM biz_building WHERE building_id=? AND del_flag=0", Long.class, building);
+        Long exists = jdbc.queryForObject("SELECT COUNT(*) FROM building WHERE building_id=? AND del_flag=0", Long.class, building);
         if (exists == null || exists == 0) throw new BusinessException(404, "建筑不存在");
         jdbc.update("INSERT IGNORE INTO biz_alarm_scope(building_id) VALUES (?)", building);
         for (String type : List.of("OFFLINE", "FAULT", "QUOTA")) {

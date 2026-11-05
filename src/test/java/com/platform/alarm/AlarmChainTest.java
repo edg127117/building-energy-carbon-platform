@@ -47,8 +47,8 @@ class AlarmChainTest {
     void setup() throws Exception {
         var ds = new DriverManagerDataSource("jdbc:h2:mem:alarm-" + UUID.randomUUID() + ";MODE=MySQL;DB_CLOSE_DELAY=-1", "sa", "");
         jdbc = new JdbcTemplate(ds);
-        jdbc.execute("CREATE TABLE biz_building(building_id VARCHAR(32),building_name VARCHAR(100),del_flag INT)");
-        jdbc.update("INSERT INTO biz_building VALUES ('A','建筑A',0),('B','建筑B',0)");
+        jdbc.execute("CREATE TABLE building(building_id VARCHAR(32),building_name VARCHAR(100),del_flag INT)");
+        jdbc.update("INSERT INTO building VALUES ('A','建筑A',0),('B','建筑B',0)");
         String migration = Files.readString(Path.of("src/env/init/V110__mysql_alarm_information.sql"));
         migration = migration.substring(0, migration.indexOf("-- 只补齐"));
         for (String sql : migration.split(";")) if (!sql.isBlank()) jdbc.execute(sql);

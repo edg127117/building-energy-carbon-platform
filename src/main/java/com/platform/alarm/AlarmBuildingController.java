@@ -44,7 +44,7 @@ public class AlarmBuildingController {
             filter = " AND building_id IN (" + String.join(",", Collections.nCopies(ids.size(), "?")) + ")";
             args.addAll(ids);
         }
-        return Result.success(jdbc.query("SELECT building_id,building_name FROM biz_building WHERE del_flag=0" + filter + " ORDER BY building_name,building_id",
+        return Result.success(jdbc.query("SELECT building_id,building_name FROM building WHERE del_flag=0" + filter + " ORDER BY building_name,building_id",
                 (rs, row) -> new Building(rs.getString(1), rs.getString(2)), args.toArray()));
     }
     public record Building(String buildingId, String buildingName) { }
