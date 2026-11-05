@@ -213,13 +213,14 @@ public class DaikinMonitoringStateService {
     private void recordObservedRuntime(Target target, CurrentField previous,
                                        DaikinFieldValue incoming, long observedAt, long activationAt) {
         if (!Set.of("on", "off").contains(incoming.normalizedValue()) || previous == null
-                || previous.lastValidAt() == null || !"PRESENT".equals(previous.fieldStatus())
+                || previous.lastValidAt() == null
                 || !Set.of("on", "off").contains(previous.normalizedValue())
                 || !target.buildingId().equals(previous.buildingId())
                 || target.mappingVersion() != previous.mappingVersion()) return;
         long from = previous.lastValidAt();
         long elapsed = observedAt - from;
-        // 只把相邻有效观测之间的短间隔归于前一次状态；停用、搬迁和长间断都不推算开机时间。
+        // 失败观测保留上次有效值；前后有效样本相隔不超过五分钟时按前值估算，允许短漏采。
+        // 停用、搬迁和更长间断不衔接；没有后续有效样本的尾段不外推。
         if (from < activationAt || elapsed <= 0 || elapsed > STALE_AFTER_MS) return;
         boolean wasOn = "on".equals(previous.normalizedValue());
         while (from < observedAt) {
