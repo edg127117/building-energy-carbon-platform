@@ -105,7 +105,7 @@ flowchart LR
 
 建筑由已启用设备身份解析，测点必须属于同一设备、建筑和千瓦时单位。消息不携带平台用户、角色或建筑授权。后台以保留的系统标识0处理已核验设备任务，内部只读解析始终固定在任务建筑；HTTP入口继续校验当前用户职责与建筑范围。输入证据记录服务器解析的identityId和MQTT_STANDARD_V1传输来源，旧HTTP数据的JSON缺省字段仍可读取。
 
-QoS1处理复用现有MqttConfig订阅、手动确认、重连和标准报文处理器。只有MySQL输入与任务提交成功后才返回接入成功，存储等暂时故障保留重投，非法单位、归属或同版本异值稳定拒绝。Broker PUBACK、平台保存、计算完成与大屏显示是不同阶段，接入成功回执不表示排放已经生成。周期量保存于V105任务输入及不可变动态结果证据，沿用明确区间量语义。
+QoS1处理复用现有MqttConfig订阅、手动确认、重连和标准报文处理器。只有MySQL输入与任务提交成功后才返回接入成功，存储等暂时故障保留重投，非法单位、归属或同版本异值稳定拒绝。Broker PUBACK、平台保存、计算完成与大屏显示是不同阶段，接入成功回执不表示排放已经生成。周期量保存于V105当前输入、V106不可变受理证据及V104不可变动态结果，沿用明确区间量语义。
 
 普通metrics报文继续走原数值遥测链路。V2周期载荷也已接到同一动态任务服务，使用下述V2契约；不能仅把V1报文换主题。真实设备或厂家网关的字段映射仍需独立联调。
 
@@ -126,9 +126,15 @@ QoS1处理复用现有MqttConfig订阅、手动确认、重连和标准报文处
 
 标准1.0简化周期载荷可省略startInclusive/endExclusive/revision：DEVICE_REPORTED的eventTime在此周期契约中表示区间结束时间，平台推导前15分钟；SERVER_RECEIVED不能用于推导。V2同样可使用已声明为区间结束的设备collectedAt，不能把普通采样时间或adapterReceivedAt冒充结算边界。已提供时界时优先校验使用；非15分钟对齐、冲突时界、未来时段、缺少设备时界均明确拒绝，不做取整或接收时钟兜底。HTTP显式区间契约保持原样。
 
-平台在V105同一测点/时段行锁内分配业务版本：首次为1，相同重发复用，可靠新值递增；任务调度修订与此业务版本分开。来源bootId/seq/messageId随输入JSON和V2冻结请求保存，进程重启不重置。同一设备启动号内、明确来自设备字段的序号才可比较；旧序号忽略，同序号异值或同消息键异文拒绝。缺序号/启动号仍可首次计算和同值去重，异值无法判新旧时保留原输入并拒绝覆盖，不新增核查或审批流程。同值更高序号推进持久游标，防止随后旧异值反向覆盖；数值业务版本不增加。不同启动号不依到达顺序排序，后续新时段仍正常接收。同一时段不混用显式来源修订与平台自动版本。
+普通MQTT上报省略修订时，平台按“最后成功受理的完整有效电量＋因子”自动采用，不要求硬件新增bootId、seq或修订号。首次数值版本为1，当前数值相同则保留版本且不重新排队；数值不同则递增版本，仅将受影响建筑和准确时段标为待算。比较使用十进制数值，尾零不产生修订。来源字段随每次证据保留；同值包不改变当前采用值的来源性质。缺少任一配对值、计量时界、正确单位或可信设备归属仍拒绝，不把接收时间当作历史归属。显式修订继续按原规则处理旧版、同版冲突与拆分配对，同一测点时段不得混用两种模式。
 
-JSON适配器根据既有seqPath/bootIdPath提取设备字段，自动载荷标注sequenceSource=DEVICE_FIELDS；Modbus现有bootId/sourceSeq来自轮询进程，标注ADAPTER_POLL，只用于传输关联，不作设备更正依据。没有可信顺序时不得仅按更晚接收或更高轮询序号覆盖旧值。来源消息ID用于关联，不代表时间先后。平台协议API补齐seqPath、messageIdPath、bootIdPath、batchIdPath、retransmittedAtPath、maxAckMode和correlationPolicy的预览/发布/导入传递；旧客户端未传的字段沿用已保存配置，预览与发布共用静态能力校验，运行ACK仍受可信设备绑定限制。未新增配置页面。
+有独立来源消息ID时，同ID同文返回原受理结果，不能因为更晚重放而撤销后续更正；同ID异文留存冲突且拒绝覆盖。V2使用首次冻结的canonicalMessageId作为平台受理标识。JSON自动周期无独立来源消息ID时，每次适配生成新的受理标识，避免时刻相同的更正或A→B→A循环被内容哈希去重吞掉；该标识只用于传输关联，不是伪造的设备序号或业务版本。无来源身份的旧缓存重新适配后仍按新的受理事件处理，可能重新采用旧数值，这是已确认的自动取值规则，不能声称识别出了设备真实最新版本。
+
+JSON提取的bootId/seq和Modbus轮询进程产生的ADAPTER_POLL计数均保留追溯，不猜测厂家计数器的新旧语义。自动周期的ADAPTER_GENERATED/NONE消息在可信设备绑定允许ADAPTER_PROXY且有受信adapterAckTopic时，可按受理标识取得ADAPTER_ONLY回执；不因此获得DEVICE_DIRECT能力，不采用载荷自报的Topic。其他遥测和ACK关联策略保持原样。协议预览、发布、导入继续传递已有时间、序号和ACK字段，旧客户端编辑保留未传字段，不新增配置页面。
+
+V106追加biz_dynamic_interval_evidence，保存每次有效的规范化输入、当前采用引用、平台数值版本、任务修订、处理结果和内容摘要。采用证据和V105当前值、待算任务在同一MySQL事务提交；重算结果仍是V104不可变结果。该快照不是原始MQTT报文字节归档。来源ID异文的拒绝证据独立保存，不因业务拒绝回滚。升级时仅为已有当前值建立LEGACY_BASELINE，不补造升级前的历史版本。复用D01原始证据与有效值分离的原则，不写入D01的DOUBLE标量账本，不调用或改变正式能源更正审核。电量12位小数、因子18位小数使用原BigDecimal精度。
+
+受理先校验并准备规范化快照，再进入现有准确时段行锁；同值包只追加证据，不改任务版本、不撤销租约、不重算。继续复用合并任务、已有失效索引和后台恢复，不因本轮新增队列服务、并发配置或人工核查流程。是否需要拆锁或进一步并发调整应由实际负载测量决定。
 
 V2信封保留canonicalMessageId、设备身份、profile、bootId/sourceSeq、时间及ACK能力，追加可选载荷：
 
@@ -163,13 +169,13 @@ JSON适配器复用既有调度器在Paho回调外发布，应用ACK使用同账
 
 在已有独立验收测试中增加`DYNAMIC_MQTT_IT_TRANSPORT=V2_ADAPTER`，业务数据只发布到专属原始主题，必须经实际运行的适配器进入V2。SQL核验V2周期回执和输入来源，HTTP只登录与查询。默认STANDARD_V1保留原标准入口验收。各模式结果分别保存在独立实例的mqtt-v2-acceptance与mqtt-acceptance目录。真实设备、现场TLS和长期容量不能由模拟结果替代。
 
-平台版本验收先用夹具脚本的`--platform-versions`切换独立测试模板，再显式设置`DYNAMIC_MQTT_IT_PLATFORM_VERSIONS=true`。标准1.0百表正常载荷不增加bootId/messageId，只复用已有eventTime/seq；另行提供已有可靠关联能力验证更正分支。V2使用实际JSON适配器提取现有设备时间和序号。两种模式均省略独立起止时间和修订号，各完成100表×96时段；结果分别写入mqtt-auto-v1-acceptance与mqtt-auto-v2-acceptance。夹具变更只作用于独立百表模拟建筑，原建筑与共享资源保持隔离。
+平台版本验收先用夹具脚本的`--platform-versions`切换独立测试模板，再显式设置`DYNAMIC_MQTT_IT_PLATFORM_VERSIONS=true`。标准1.0与实际JSON→V2百表载荷均省略bootId、seq、messageId、独立起止时间和修订号，复用设备结束时间。另测已识别消息重放、异文冲突、无来源顺序的A→B→A、同值无重算及版本证据。两入口各完成100表×96时段；记录Broker确认、数据库输入可见、计算READY三个阶段的耗时，不能把PUBACK当作入库或计算完成。夹具和重启仅作用于清单验证的专属实例，原建筑与共享资源保持隔离。
 
 独立Broker准备脚本为 `prepare_dynamic_electricity_mqtt_broker.py --root <已初始化的独立根目录> --execute`，只使用已安装镜像，生成独立Docker网络、数据目录、凭据及主题，端口仅绑定127.0.0.1。凭据及连接信息写入该实例私有目录，仓库不保存实际值。本机隔离测试显式使用已有allow-plaintext-for-tests开关，现场TLS不由此验收。
 
 `DynamicElectricityMqttIndependentAcceptanceTest` 默认跳过外部资源，显式提供 `DYNAMIC_MQTT_IT_ROOT` 后执行。`DYNAMIC_MQTT_IT_STAGE=full` 使用100个Paho客户端，每15分钟事件时段100组、96轮，等待每轮平台完整再推进；日历时间压缩，不等同连续24小时运行。它只经MQTT上传业务数据，HTTP仅登录和读取，SQL仅核验。另有pending-restart、offline-publish、resume-restart阶段，验证平台离线时Broker已确认但平台尚未保存、Broker/平台重启后自动重放。各阶段修订号由DYNAMIC_MQTT_IT_REVISION显式指定。
 
-数据库迁移 `V105` 追加 `biz_dynamic_electricity_task`，同一行保存设备周期输入和可恢复待算任务，不复制原始累计量账本。`V104` 新增 `biz_dynamic_electricity_factor` 和 `biz_dynamic_electricity_result`，保留不可变因子修订、结果和摘要，不另建电量事实表。存储摘要用于完整性检查，不代表来源真实性认证。大屏只读取结果；动态系列不再使用原型演示兜底值。静态系列仅在原有冻结证据明确 CO2-only 时共享 CO2 轴，未知气体口径不强行混用。
+数据库迁移 `V105` 追加 `biz_dynamic_electricity_task`，同一行保存设备周期输入和可恢复待算任务，不复制原始累计量账本。`V104` 新增 `biz_dynamic_electricity_factor` 和 `biz_dynamic_electricity_result`，保留不可变因子修订、结果和摘要，V106独立保存规范化动态区间输入和采用记录，不复制正式电量事实表。存储摘要用于完整性检查，不代表来源真实性认证。大屏只读取结果；动态系列不再使用原型演示兜底值。静态系列仅在原有冻结证据明确 CO2-only 时共享 CO2 轴，未知气体口径不强行混用。
 
 ## 独立数据准备与复验
 

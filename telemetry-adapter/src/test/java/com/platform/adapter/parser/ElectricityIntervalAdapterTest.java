@@ -36,6 +36,17 @@ class ElectricityIntervalAdapterTest {
         assertThat(q.canonicalMessageId()).isNotEqualTo(f.canonicalMessageId());
         assertThat(q.electricityInterval().factorKgCo2PerKwh()).isNull();
     }
+    @Test void automaticPeriodsWithoutMessageIdentityAreSeparateAcceptanceEvents() {
+        var mappings=mappings().stream().filter(m->!"INTERVAL_REVISION".equals(m.valueType())).toList();
+        String raw="{\"id\":\"A\",\"time\":1790784900000,\"start\":1790784000000,\"end\":1790784900000,\"Q\":10,\"F\":0.5,\"T\":20}";
+        var first=parser.adapt("own/raw",raw.getBytes(),1790785000000L,profile,mappings);
+        var changed=parser.adapt("own/raw",raw.replace("\"Q\":10","\"Q\":12").getBytes(),1790785000001L,profile,mappings);
+        var restored=parser.adapt("own/raw",raw.getBytes(),1790785000002L,profile,mappings);
+        assertThat(List.of(first.canonicalMessageId(),changed.canonicalMessageId(),restored.canonicalMessageId())).doesNotHaveDuplicates();
+        assertThat(first.idSource()).isEqualTo(com.platform.adapter.model.IdSource.ADAPTER_GENERATED);
+        assertThat(first.bootId()).isNull();assertThat(first.sourceSeq()).isNull();
+        assertThat(first.electricityInterval().revision()).isZero();
+    }
     @Test void refusesMissingTimesEmptyPairInvalidUnitsAndV1Downgrade() {
         assertThatThrownBy(()->parse(1,"\"Q\":null,\"F\":null")).isInstanceOf(TelemetryAdaptationException.class);
         var bad=new ArrayList<>(mappings());bad.set(1,mapping("F","CO2_FACTOR","kgCO2e/kWh",false));

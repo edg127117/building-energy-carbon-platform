@@ -38,6 +38,7 @@ class DynamicElectricityServiceTest {
         try (var connection = dataSource.getConnection()) {
             ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/env/init/V104__mysql_dynamic_electricity_carbon.sql"));
             ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/env/init/V105__mysql_dynamic_electricity_tasks.sql"));
+            ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/env/init/V106__mysql_dynamic_interval_evidence.sql"));
         }
         jdbc.execute("CREATE TABLE biz_data_point(building_id VARCHAR(32),point_id VARCHAR(80),del_flag INT,unit VARCHAR(32))");
         jdbc.execute("ALTER TABLE biz_data_point ADD COLUMN equip_id VARCHAR(32)");

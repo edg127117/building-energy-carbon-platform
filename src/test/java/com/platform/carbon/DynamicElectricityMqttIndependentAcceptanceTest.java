@@ -55,7 +55,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         assertThat(route).isIn("STANDARD_V1","V2_ADAPTER");viaAdapter="V2_ADAPTER".equals(route);
         if(viaAdapter){assertThat(broker.path("v2AdaptersReady").asBoolean()).isTrue();assertThat(broker.path("rawTopic").asText()).startsWith(broker.path("containerName").asText()+"/");}
         transport=viaAdapter?"MQTT_STANDARD_V2":"MQTT_STANDARD_V1";
-        trustedOrderEvidence=viaAdapter||!"full".equals(stage);
+        trustedOrderEvidence=false;
         revision=Long.parseLong(System.getenv().getOrDefault("DYNAMIC_MQTT_IT_REVISION","100"));
         automatic="true".equals(System.getenv("DYNAMIC_MQTT_IT_PLATFORM_VERSIONS"));
         assertThat(revision).isPositive();Arrays.fill(revisions,automatic?1:revision);
@@ -112,7 +112,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         if(automatic) {
             input.remove(List.of("startInclusive","endExclusive","revision"));
             if(trustedOrderEvidence){body.put("bootId","DEVICE_AUTO_BOOT");body.put("sourceMessageId","AUTO:"+meter+":"+slot+":"+version);}
-            body.put("seq",version*100+slot);
+            if(trustedOrderEvidence)body.put("seq",version*100+slot);else body.remove("seq");
         }
         return body;
     }
@@ -123,8 +123,10 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
     private ObjectNode vendor(ObjectNode standard) {
         var p=standard.path("electricityInterval");var raw=json.createObjectNode();String meter=standard.path("deviceIdentity").path("value").asText();
         raw.put("meter",meter);raw.put("protocol","kgCO2/kWh".equals(p.path("factorUnit").asText())?"DYNAMIC_PERIOD_CO2":"INVALID_UNIT_PROTOCOL");
-        raw.put("time",standard.path("eventTime").asLong());raw.put("seq",standard.path("seq").asLong());raw.put("boot",automatic?standard.path("bootId").asText():"V2_SIMULATED");
-        raw.put("messageId",automatic?standard.path("sourceMessageId").asText():meter+":"+p.path("startInclusive").asText()+":"+p.path("revision").asLong());
+        raw.put("time",standard.path("eventTime").asLong());
+        if(standard.hasNonNull("seq"))raw.put("seq",standard.path("seq").asLong());
+        if(!automatic||standard.hasNonNull("bootId"))raw.put("boot",automatic?standard.path("bootId").asText():"V2_SIMULATED");
+        if(!automatic||standard.hasNonNull("sourceMessageId"))raw.put("messageId",automatic?standard.path("sourceMessageId").asText():meter+":"+p.path("startInclusive").asText()+":"+p.path("revision").asLong());
         if(!automatic){raw.put("from",Instant.parse(p.path("startInclusive").asText()).toEpochMilli());raw.put("to",Instant.parse(p.path("endExclusive").asText()).toEpochMilli());raw.put("revision",p.path("revision").asLong());}
         if(p.hasNonNull("electricityKwh"))raw.put("energy",new BigDecimal(p.path("electricityKwh").asText()));
         if(p.hasNonNull("factorKgCo2PerKwh"))raw.put("factor",new BigDecimal(p.path("factorKgCo2PerKwh").asText()));
@@ -198,13 +200,20 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         }
         assertThat(stage).isEqualTo("full");
         for(int meter=0;meter<100;meter++)client(meter);
-        var measured=new ArrayList<Map<String,Object>>();long started=System.nanoTime();
+        var measured=new ArrayList<Map<String,Object>>();long started=System.nanoTime(),startedMs=System.currentTimeMillis();
         try(var pool=Executors.newFixedThreadPool(10)) {
             for(int slot=0;slot<96;slot++) {
                 int index=slot;long before=System.nanoTime();var work=new ArrayList<Callable<Void>>();
                 for(int meter=0;meter<100;meter++){int id=meter;work.add(()->{publish(index,id,revision,id==0?"99":"1",true);return null;});}
-                for(var future:pool.invokeAll(work))future.get();long afterBrokerAck=System.nanoTime();var ready=awaitReady(slot,revisions);
-                measured.add(Map.of("slot",slot,"publish100Ms",(afterBrokerAck-before)/1000000,"afterBrokerAckToPlatformReadyMs",(System.nanoTime()-afterBrokerAck)/1000000));
+                for(var future:pool.invokeAll(work))future.get();long afterBrokerAck=System.nanoTime();
+                long deadline=System.nanoTime()+Duration.ofSeconds(30).toNanos();
+                while(System.nanoTime()<deadline){var saved=task(slot);if(saved!=null&&saved.inputs().size()==100)break;Thread.sleep(50);}
+                assertThat(task(slot).inputs().size()).isEqualTo(100);long afterInputCommit=System.nanoTime();
+                var ready=awaitReady(slot,revisions);
+                measured.add(Map.of("slot",slot,"publish100Ms",(afterBrokerAck-before)/1000000,
+                        "afterBrokerAckToInputsPersistedMs",(afterInputCommit-afterBrokerAck)/1000000,
+                        "afterInputsPersistedToReadyMs",(System.nanoTime()-afterInputCommit)/1000000,
+                        "afterBrokerAckToPlatformReadyMs",(System.nanoTime()-afterBrokerAck)/1000000));
                 if(slot%12==0){save("progress",Map.of("completedIntervals",slot+1,"pairedUploads",(slot+1)*100));System.out.println("MQTT_INTERVALS_READY "+(slot+1));}
                 assertThat(ready.actor()).isZero();
             }
@@ -216,9 +225,9 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
         }
         if(viaAdapter) {
             var expected=new HashSet<String>();
-            String filter=automatic?"CAST(JSON_UNQUOTE(JSON_EXTRACT(i.snapshot_json,'$.message.sourceSeq')) AS UNSIGNED) BETWEEN ? AND ?":"CAST(JSON_UNQUOTE(JSON_EXTRACT(i.snapshot_json,'$.message.electricityInterval.revision')) AS UNSIGNED)=?";
+            String filter=automatic?"i.created_ms>=?":"CAST(JSON_UNQUOTE(JSON_EXTRACT(i.snapshot_json,'$.message.electricityInterval.revision')) AS UNSIGNED)=?";
             try(var s=database.prepareStatement("SELECT r.canonical_message_id FROM biz_telemetry_receipt r JOIN biz_telemetry_message_intent i ON r.canonical_message_id=i.canonical_message_id WHERE r.building_id=? AND "+filter)) {
-                s.setString(1,building);s.setLong(2,automatic?revision*100:revision);if(automatic)s.setLong(3,revision*100+95);try(var rows=s.executeQuery()){while(rows.next())expected.add(rows.getString(1));}
+                s.setString(1,building);s.setLong(2,automatic?startedMs:revision);try(var rows=s.executeQuery()){while(rows.next())expected.add(rows.getString(1));}
             }
             assertThat(expected).hasSize(9600);long until=System.nanoTime()+Duration.ofSeconds(15).toNanos();
             while(!applicationAcks.containsAll(expected)&&System.nanoTime()<until)Thread.sleep(100);
@@ -249,26 +258,42 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
     private void automaticBehavior()throws Exception {
         long before=task(95).revision();String other=task(94).resultId();
         for(int meter=0;meter<100;meter++)publish(95,meter,revision,meter==0?"99":"1",true);
-        Thread.sleep(1000);assertThat(task(95).revision()).isEqualTo(before);
-        if(!viaAdapter) {
-            // V1百表正常上传不增加bootId/messageId；另验证已有可靠关联能力时的更正分支。
-            trustedOrderEvidence=true;publish(95,0,revision,"99",true);publish(95,1,revision,"1",true);awaitReady(95,revisions);
-        }
+        Thread.sleep(1500);assertThat(task(95).revision()).isEqualTo(before);
         publish(95,0,revision+1,"100",true);revisions[0]=2;awaitReady(95,revisions);
         publish(95,1,revision+1,"2",true);revisions[1]=2;awaitReady(95,revisions);
-        publish(95,0,revision-1,"999",true);
-        var wrong=payload(95,0,revision+1,"999",true);publish(0,wrong); // 同消息键异值
-        wrong=payload(95,0,revision+2,"999",true);wrong.put("bootId","UNKNOWN_OTHER_BOOT");publish(0,wrong);
-        wrong=payload(95,0,revision+2,"999",true);wrong.put("timeSource","SERVER_RECEIVED");wrong.remove("eventTime");
-        if(!viaAdapter)publish(0,wrong);
-        wrong=payload(95,0,revision+2,"999",true);wrong.withObject("/electricityInterval").put("factorUnit","kgCO2e/kWh");publish(0,wrong);
-        wrong=payload(95,0,revision+2,"999",false);publish(0,wrong);
-        // 同值更高序号必须推进持久游标，再到达的较低序号异值不能反向覆盖。
-        publish(95,0,revision+4,"100",true);Thread.sleep(1200);publish(95,0,revision+3,"888",true);
+        // 无硬件顺序依据仍能自动更正，A→B→A 的第三个包必须再次成为当前值。
+        publish(95,0,revision+2,"101",true);revisions[0]++;awaitReady(95,revisions);
+        publish(95,0,revision+3,"100",true);revisions[0]++;awaitReady(95,revisions);
+        trustedOrderEvidence=true;
+        var recognized=payload(95,0,revision+10,"100",true);publish(0,recognized);
+        publish(95,0,revision+11,"101",true);revisions[0]++;awaitReady(95,revisions);
+        publish(0,recognized);Thread.sleep(1000);awaitReady(95,revisions);
+        var point=fixture.path("points").get(0).path("pointId").asText();
+        assertThat(new BigDecimal(task(95).inputs().path(point).path("quantity").asText())).isEqualByComparingTo("101");
+        var conflict=recognized.deepCopy();conflict.withObject("/electricityInterval").put("electricityKwh","999");publish(0,conflict);
+        publish(95,0,revision+12,"100",true);revisions[0]++;awaitReady(95,revisions);
+        trustedOrderEvidence=false;
+        var reset=payload(95,0,revision+13,"101",true);reset.put("bootId","RESET");reset.put("seq",0);publish(0,reset);revisions[0]++;awaitReady(95,revisions);
+        publish(95,0,revision+14,"100",true);revisions[0]++;awaitReady(95,revisions);
+        var wrong=payload(95,0,revision+15,"999",true);wrong.withObject("/electricityInterval").put("factorUnit","kgCO2e/kWh");publish(0,wrong);
+        wrong=payload(95,0,revision+15,"999",false);publish(0,wrong);
+        wrong=payload(95,0,revision+15,"999",true);wrong.put("eventTime",first.plusSeconds(1).toEpochMilli());publish(0,wrong);
+        wrong=payload(95,0,revision+15,"999",true);wrong.withObject("/deviceIdentity").put("value","UNKNOWN_METER");publish(0,wrong);
         Thread.sleep(1000);awaitReady(95,revisions);assertThat(task(94).resultId()).isEqualTo(other);
-        checkResults();save("behavior",Map.of("hardwareStartEndRevisionOmitted",true,"automaticVersions",true,"duplicatesNotCounted",true,
-                "lateOldValuesIgnored",true,"bootResetConflictRejected",true,"missingPairRejected",true,"sameValueCursorAdvanced",true,"unaffectedIntervalRetained",true));
+        try(var s=database.prepareStatement("SELECT outcome,version_no,snapshot_json FROM biz_dynamic_interval_evidence WHERE building_id=? AND point_id=? AND start_ms=? ORDER BY version_no")) {
+            s.setString(1,building);s.setString(2,point);s.setLong(3,first.plusSeconds(95*900).toEpochMilli());
+            int adopted=0;boolean initial=false;try(var rows=s.executeQuery()){while(rows.next())if("ADOPTED".equals(rows.getString(1))){adopted++;if(rows.getLong(2)==1)initial=new BigDecimal(json.readTree(rows.getString(3)).path("request").path("electricityKwh").asText()).compareTo(new BigDecimal("99"))==0;}}
+            assertThat(adopted).isEqualTo(revisions[0]);assertThat(initial).isTrue();
+        }
+        checkResults();save("behavior",Map.of("noHardwareBootSeqMessageIdOrRevisionRequired",true,"automaticVersions",true,"duplicatesNotCounted",true,
+                "recognizedReplayDoesNotUndoCorrection",true,"unsequencedLastAcceptanceApplied",true,"missingPairRejected",true,"allAdoptedVersionsRetained",true,"unaffectedIntervalRetained",true));
         System.out.println(viaAdapter?"INDEPENDENT_AUTO_V2_100_METER_CHAIN_OK":"INDEPENDENT_AUTO_V1_100_METER_CHAIN_OK");
+    }
+    private long intervalEvidenceCount()throws Exception {
+        try(var s=database.prepareStatement("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE building_id=? AND point_id=? AND start_ms=?")) {
+            s.setString(1,building);s.setString(2,fixture.path("points").get(0).path("pointId").asText());s.setLong(3,first.plusSeconds(95*900).toEpochMilli());
+            try(var rows=s.executeQuery()){rows.next();return rows.getLong(1);}
+        }
     }
     private void automaticRecovery()throws Exception {
         if("ui-change".equals(stage)||"ui-restore".equals(stage)) {
@@ -280,7 +305,7 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
             var before=task(95);publish(95,0,revision,"100",true);Thread.sleep(500);assertThat(task(95).inputs()).isEqualTo(before.inputs());
             var versions=new TreeMap<String,Long>();
             before.inputs().fields().forEachRemaining(e->versions.put(e.getKey(),e.getValue().path("quantityRevision").asLong()));
-            save("offline",Map.of("brokerAcceptedPlatformInputUnchanged",true,"businessVersionsBeforeRestart",versions));return;
+            save("offline",Map.of("brokerAcceptedPlatformInputUnchanged",true,"businessVersionsBeforeRestart",versions,"evidenceCountBefore",intervalEvidenceCount()));return;
         }
         assertThat(stage).isEqualTo("resume-restart");
         var expected=json.readTree(out.resolve("offline.json").toFile()).path("businessVersionsBeforeRestart");
@@ -292,13 +317,10 @@ class DynamicElectricityMqttIndependentAcceptanceTest {
             assertThat(current.inputs().path(point).path("quantityRevision").asLong()).isEqualTo(revisions[meter]);
             assertThat(current.inputs().path(point).path("factorRevision").asLong()).isEqualTo(revisions[meter]);
         }
+        long countBefore=json.readTree(out.resolve("offline.json").toFile()).path("evidenceCountBefore").asLong();
         long until=System.nanoTime()+Duration.ofSeconds(30).toNanos();
-        while(System.nanoTime()<until) {
-            current=task(95);var order=current.inputs().path(fixture.path("points").get(0).path("pointId").asText()).path("sourceOrder");
-            if(order.path("seq").asLong()==revision*100+95&&"READY".equals(current.state()))break;
-            Thread.sleep(100);
-        }
-        assertThat(current.inputs().path(fixture.path("points").get(0).path("pointId").asText()).path("sourceOrder").path("seq").asLong()).isEqualTo(revision*100+95);
+        while(intervalEvidenceCount()<=countBefore&&System.nanoTime()<until)Thread.sleep(100);
+        assertThat(intervalEvidenceCount()).isGreaterThan(countBefore);
         awaitReady(95,revisions);checkResults();save("restart-recovered",Map.of("readOnlyObservation",true,"versionsPreserved",true));
         System.out.println("AUTO_MQTT_OFFLINE_QUEUE_VERSION_RECOVERY_OK");
     }

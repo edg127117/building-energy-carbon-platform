@@ -54,19 +54,20 @@ public final class DynamicElectricityContracts {
             @DecimalMin("0") @Digits(integer=12,fraction=18) BigDecimal factorKgCo2PerKwh,
             @NotBlank @Pattern(regexp="SOURCE_LABELLED|SIMULATED") String sourceNature,
             @NotBlank @Size(max=500) String sourceReference,
-            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) SourceOrder sourceOrder) {
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) SourceOrder sourceOrder,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) @Size(max=64) String ingestionId) {
+        public DeviceIntervalRequest(com.platform.iot.identity.DeviceIdentityKey deviceIdentity,String profileCode,String pointId,Instant startInclusive,Instant endExclusive,
+                long revision,BigDecimal electricityKwh,BigDecimal factorKgCo2PerKwh,String sourceNature,String sourceReference,SourceOrder sourceOrder) {
+            this(deviceIdentity,profileCode,pointId,startInclusive,endExclusive,revision,electricityKwh,factorKgCo2PerKwh,sourceNature,sourceReference,sourceOrder,null);
+        }
         public DeviceIntervalRequest(com.platform.iot.identity.DeviceIdentityKey deviceIdentity,String profileCode,String pointId,Instant startInclusive,Instant endExclusive,
                 long revision,BigDecimal electricityKwh,BigDecimal factorKgCo2PerKwh,String sourceNature,String sourceReference) {
             this(deviceIdentity,profileCode,pointId,startInclusive,endExclusive,revision,electricityKwh,factorKgCo2PerKwh,sourceNature,sourceReference,null);
         }
     }
 
-    /** 来源顺序与平台修订分开保存；跨启动不可比较，适配器轮询序号不能当作设备更正顺序。 */
+    /** 保留来源关联信息；字段存在不代表已获得业务修订规则，普通自动采用不据此排序。 */
     public record SourceOrder(String bootId,Long seq,String messageId,String sequenceSource) {
-        public boolean reliable() {return "DEVICE_FIELDS".equals(sequenceSource)&&bootId!=null&&!bootId.isBlank()&&seq!=null;}
-        public boolean comparable(SourceOrder other) {
-            return other!=null&&reliable()&&other.reliable()&&bootId.equals(other.bootId);
-        }
     }
 
     public record DeviceIntervalReceipt(String buildingId, Instant startInclusive, Instant endExclusive,

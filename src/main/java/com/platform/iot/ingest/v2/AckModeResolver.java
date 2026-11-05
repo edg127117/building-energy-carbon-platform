@@ -15,6 +15,16 @@ public class AckModeResolver {
         AckMode upperBound = level(configured) <= level(declared) ? configured : declared;
         boolean correlatable = satisfies(binding.correlationPolicy(), message);
 
+        // 自动周期的无序号上报由适配器生成受理ID，足以确认这一条代理消息；不能据此声称设备支持直接ACK。
+        if (!correlatable && upperBound != AckMode.EVIDENCE_ONLY
+                && declared == AckMode.ADAPTER_PROXY && hasText(binding.adapterAckTopic())
+                && message.electricityInterval() != null && message.electricityInterval().revision() == 0
+                && "ADAPTER_GENERATED".equals(message.idSource()) && "NONE".equals(message.dedupMode())
+                && hasText(message.canonicalMessageId())) {
+            return new AckModeResolution(configured, AckMode.ADAPTER_PROXY,
+                    binding.adapterAckTopic(), "ADAPTER_EVENT_CORRELATION");
+        }
+
         if (!correlatable || upperBound == AckMode.EVIDENCE_ONLY) {
             return new AckModeResolution(configured, AckMode.EVIDENCE_ONLY, null,
                     correlatable ? "PROTOCOL_CAPABILITY_LIMIT" : "CORRELATION_FIELDS_MISSING");

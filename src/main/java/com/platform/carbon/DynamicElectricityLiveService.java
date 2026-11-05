@@ -55,7 +55,7 @@ public class DynamicElectricityLiveService {
 
     private DeviceIntervalReceipt store(long user,String building,DeviceIntervalRequest request,String transport) {
         var from=request.startInclusive();var to=request.endExclusive();
-        boolean automatic=request.revision()==0&&request.sourceOrder()!=null&&transport.startsWith("MQTT_STANDARD_");
+        boolean automatic=request.revision()==0&&transport.startsWith("MQTT_STANDARD_");
         if(from==null||to==null||from.getNano()!=0||from.getEpochSecond()%900!=0||!to.equals(from.plusSeconds(900))
                 ||to.isAfter(Instant.now())||from.atZone(ZoneId.of("Asia/Shanghai")).getYear()<2000
                 ||!automatic&&request.revision()<1||request.electricityKwh()==null&&request.factorKgCo2PerKwh()==null)
@@ -64,56 +64,60 @@ public class DynamicElectricityLiveService {
         if(!building.equals(device.buildingId())||!request.profileCode().equals(device.expectedProfileCode())
                 ||!tasks.pointOnDevice(building,request.pointId(),device.equipmentId()))
             throw problem("DYNAMIC_DEVICE_SCOPE","设备、测点、建筑、协议或千瓦时单位不匹配");
+        var evidence=tasks.evidence();
+        var received=evidence.prepare(request,transport,building,device.identityId());
+        var replay=evidence.replay(received,transactionManager);if(replay!=null)return replay;
         var task=tasks.locked(building,from,to,user);
+        replay=evidence.replay(received,transactionManager);if(replay!=null)return replay;
         var readings=new TreeMap<>(task.readings());
         var prior=readings.get(request.pointId());
-        if(automatic)return storeAutomatic(task,readings,prior,request,device.identityId(),transport,user);
+        if(automatic)return storeAutomatic(task,readings,prior,request,device.identityId(),transport,user,received);
         if(prior!=null&&prior.sourceOrder()!=null)throw problem("DYNAMIC_VERSION_MODE_CONFLICT","同一测点时段不能混用来源修订与平台版本");
         if(prior==null)prior=new DynamicElectricityLiveRepository.Reading(null,0,null,0,request.sourceNature(),request.sourceReference());
         BigDecimal q=merge(prior.quantity(),prior.quantityRevision(),request.electricityKwh(),request.revision());
         BigDecimal f=merge(prior.factor(),prior.factorRevision(),request.factorKgCo2PerKwh(),request.revision());
         long qr=request.electricityKwh()!=null?Math.max(prior.quantityRevision(),request.revision()):prior.quantityRevision();
         long fr=request.factorKgCo2PerKwh()!=null?Math.max(prior.factorRevision(),request.revision()):prior.factorRevision();
-        if(request.revision()<Math.max(prior.quantityRevision(),prior.factorRevision()))
-            return new DeviceIntervalReceipt(building,from,to,task.revision(),task.state());
+        if(prior.quantity()!=null||prior.factor()!=null)evidence.baseline(task,request.pointId(),prior);
+        if(request.revision()<Math.max(prior.quantityRevision(),prior.factorRevision())) {
+            evidence.record(task,received,prior,"SOURCE_STALE",task.revision());return receipt(task);
+        }
         if(request.revision()==Math.max(prior.quantityRevision(),prior.factorRevision())
                 &&!request.sourceNature().equals(prior.nature()))throw problem("DYNAMIC_DEVICE_REVISION_CONFLICT","同修订的数据性质不一致");
         var next=new DynamicElectricityLiveRepository.Reading(q,qr,f,fr,request.sourceNature(),request.sourceReference(),device.identityId(),transport);
         readings.put(request.pointId(),next);
         if(readings.size()>500)throw problem("DYNAMIC_CAPACITY","一个建筑时段最多500个测点");
-        if(next.equals(prior))return new DeviceIntervalReceipt(building,from,to,task.revision(),task.state());
-        tasks.update(task,readings,user);
+        if(next.withEvidence(prior.evidenceId()).equals(prior)) {
+            evidence.record(task,received,prior,"UNCHANGED",task.revision());return receipt(task);
+        }
+        next=next.withEvidence(received.id());readings.put(request.pointId(),next);
+        evidence.record(task,received,next,"ADOPTED",task.revision()+1);tasks.update(task,readings,user);
         return new DeviceIntervalReceipt(building,from,to,task.revision()+1,"PENDING");
     }
 
-    /** 在时段行锁内判定来源顺序并生成版本；消息重投、进程重启不能重新分配业务版本。 */
+    /** 普通上报按事务成功受理顺序采用；保留来源序号，不猜测未知设备的修订规则。 */
     private DeviceIntervalReceipt storeAutomatic(DynamicElectricityLiveRepository.Task task,TreeMap<String,DynamicElectricityLiveRepository.Reading> readings,
-            DynamicElectricityLiveRepository.Reading prior,DeviceIntervalRequest request,String identity,String transport,long user) {
+            DynamicElectricityLiveRepository.Reading prior,DeviceIntervalRequest request,String identity,String transport,long user,DynamicElectricityIntervalEvidence.Input received) {
         var q=request.electricityKwh();var f=request.factorKgCo2PerKwh();var order=request.sourceOrder();
         if(q==null||f==null)throw problem("DYNAMIC_AUTO_PAIR_REQUIRED","自动版本须同包提供电量和因子；拆包沿用明确的同版本契约");
         if(q.signum()<0||f.signum()<0)throw problem("DYNAMIC_DEVICE_VALUE_INVALID","电量和因子须为非负数");
-        if(order.seq()!=null&&order.seq()<0||order.bootId()!=null&&order.bootId().length()>128||order.messageId()!=null&&order.messageId().length()>128)
+        if(order!=null&&(order.seq()!=null&&order.seq()<0||order.bootId()!=null&&order.bootId().length()>128||order.messageId()!=null&&order.messageId().length()>128))
             throw problem("DYNAMIC_SOURCE_ORDER_INVALID","来源序号或关联标识无效");
         long version=1;
         if(prior!=null) {
             if(prior.sourceOrder()==null)throw problem("DYNAMIC_VERSION_MODE_CONFLICT","已有显式修订，不能自动更换同一时段的版本口径");
-            var old=prior.sourceOrder();
-            boolean same=q.compareTo(prior.quantity())==0&&f.compareTo(prior.factor())==0&&request.sourceNature().equals(prior.nature());
-            boolean comparable=order.comparable(old);
-            if(comparable&&order.seq()<old.seq())return receipt(task);
-            if(!same&&(Objects.equals(order.messageId(),old.messageId())&&order.messageId()!=null
-                    ||!comparable||order.seq()<=old.seq()))
-                throw problem("DYNAMIC_SOURCE_ORDER_CONFLICT","同一时段异值缺少可比较的新版本依据，保留原输入");
+            tasks.evidence().baseline(task,request.pointId(),prior);
             version=Math.max(prior.quantityRevision(),prior.factorRevision());
-            if(same) {
-                // 同值高序号也推进持久来源游标，防止随后到达的旧异值反向覆盖；不增加业务版本。
-                if(!(comparable&&order.seq()>old.seq()||order.reliable()&&!old.reliable()))return receipt(task);
-            } else version=Math.addExact(version,1);
+            if(q.compareTo(prior.quantity())==0&&f.compareTo(prior.factor())==0) {
+                tasks.evidence().record(task,received,prior,"UNCHANGED",task.revision());return receipt(task);
+            }
+            version=Math.addExact(version,1);
         }
-        var next=new DynamicElectricityLiveRepository.Reading(q,version,f,version,request.sourceNature(),request.sourceReference(),identity,transport,order);
+        var next=new DynamicElectricityLiveRepository.Reading(q,version,f,version,request.sourceNature(),request.sourceReference(),identity,transport,
+                order==null?new SourceOrder(null,null,null,null):order).withEvidence(received.id());
         readings.put(request.pointId(),next);
         if(readings.size()>500)throw problem("DYNAMIC_CAPACITY","一个建筑时段最多500个测点");
-        tasks.update(task,readings,user);
+        tasks.evidence().record(task,received,next,"ADOPTED",task.revision()+1);tasks.update(task,readings,user);
         return new DeviceIntervalReceipt(task.building(),request.startInclusive(),request.endExclusive(),task.revision()+1,"PENDING");
     }
     private static DeviceIntervalReceipt receipt(DynamicElectricityLiveRepository.Task task) {

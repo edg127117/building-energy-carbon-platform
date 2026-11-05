@@ -29,7 +29,8 @@ public class DynamicElectricityV2Input {
                 ||!"ONLINE".equalsIgnoreCase(point.status())||!"kWh".equalsIgnoreCase(point.unit()))throw invalid("DYNAMIC_DEVICE_SCOPE");
         return new DeviceIntervalRequest(message.deviceIdentity(),message.profileCode(),point.pointId(),Instant.ofEpochMilli(value.startMs()),Instant.ofEpochMilli(value.endMs()),
                 value.revision(),value.electricityKwh(),value.factorKgCo2PerKwh(),value.sourceNature(),value.sourceReference(),
-                value.revision()==0?new com.platform.carbon.DynamicElectricityContracts.SourceOrder(message.bootId(),message.sourceSeq(),message.sourceMessageId(),value.sequenceSource()):null);
+                value.revision()==0?new com.platform.carbon.DynamicElectricityContracts.SourceOrder(message.bootId(),message.sourceSeq(),message.sourceMessageId(),value.sequenceSource()):null,
+                message.canonicalMessageId());
     }
     public void persist(DeviceIntervalRequest request,DeviceIdentityBinding binding) {live.ingestFromMqttV2(request,binding);}
     private static BusinessException invalid(String code){return new BusinessException(409,code,"设备周期点码、单位或归属无效");}

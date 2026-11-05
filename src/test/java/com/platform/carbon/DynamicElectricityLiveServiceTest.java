@@ -48,6 +48,7 @@ class DynamicElectricityLiveServiceTest {
         try(var c=ds.getConnection()) {
             ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V104__mysql_dynamic_electricity_carbon.sql"));
             ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V105__mysql_dynamic_electricity_tasks.sql"));
+            ScriptUtils.executeSqlScript(c,new FileSystemResource("src/env/init/V106__mysql_dynamic_interval_evidence.sql"));
         }
         jdbc.execute("CREATE TABLE biz_data_point(building_id VARCHAR(32),point_id VARCHAR(80),equip_id VARCHAR(32),del_flag INT,unit VARCHAR(32),status VARCHAR(16))");
         var mapper=new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
@@ -98,6 +99,7 @@ class DynamicElectricityLiveServiceTest {
         var message=new com.platform.iot.ingest.v2.TelemetryV2Message("2.0","METER",1,key,"PERIOD-M1",null,"BOOT",1L,from.toEpochMilli(),System.currentTimeMillis(),null,null,null,null,"ADAPTER_DERIVED","DEVICE_REPORTED","DERIVED","ADAPTER_PROXY","BOOT_ID_AND_SEQ",List.of(),period);
         assertThatThrownBy(()->v2.ingest(message,System.currentTimeMillis())).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isZero();
         assertThat(journal.find("PERIOD-M1").state()).isEqualTo("PENDING");
         reset(points); // 恢复必须使用首次冻结的测点，不能重新套用变化后的别名。
         var restored=v2.recover("PERIOD-M1");
@@ -131,36 +133,58 @@ class DynamicElectricityLiveServiceTest {
         return tx.execute(s->live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL",point),"METER",point,at,at.plusSeconds(900),0,
                 q==null?null:new BigDecimal(q),f==null?null:new BigDecimal(f),"SIMULATED","automatic-source",new SourceOrder(boot,seq,message,sequenceSource))));
     }
-    @Test void platformVersionsUseDeviceOrderAndKeepCursorAcrossServiceRestart() {
-        automatic("P0",from,"BOOT",10L,"M10","10","0.5","DEVICE_FIELDS");
-        automatic("P1",from,"BOOT",10L,"P1M10","20","0.8","DEVICE_FIELDS");drain();
-        var first=tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
-        automatic("P0",from,"BOOT",10L,"M10","10","0.5","DEVICE_FIELDS");drain();
-        assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id()).isEqualTo(first.id());
-        automatic("P0",from,"BOOT",12L,"M12","11","0.5","DEVICE_FIELDS");drain();
-        assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("21.5");
-        // 新建服务实例不丢来源游标；同值高序号也必须挡住随后到达的旧异值。
-        live=new DynamicElectricityLiveService(auth,devices,tasks,results,input,queries,users,roles,manager);
-        automatic("P0",from,"BOOT",15L,"M15","11","0.5","DEVICE_FIELDS");
-        automatic("P0",from,"BOOT",14L,"M14","99","0.9","DEVICE_FIELDS");drain();
-        var retained=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
-        assertThat(retained.quantity()).isEqualByComparingTo("11");assertThat(retained.quantityRevision()).isEqualTo(2);
-        assertThat(retained.sourceOrder().seq()).isEqualTo(15);
-        assertThatThrownBy(()->automatic("P0",from,"OTHER_BOOT",999L,"X","99","0.9","DEVICE_FIELDS")).hasMessageContaining("可比较");
-        assertThatThrownBy(()->automatic("P0",from,"BOOT",15L,"X","99","0.9","DEVICE_FIELDS")).hasMessageContaining("可比较");
-        assertThatThrownBy(()->automatic("P0",from,"BOOT",16L,"M15","99","0.9","DEVICE_FIELDS")).hasMessageContaining("可比较");
-        automatic("P0",from.plusSeconds(900),"OTHER_BOOT",1L,"NEW_PERIOD","1","0.5","DEVICE_FIELDS");
-    }
-    @Test void missingOrderOrAdapterPollOrderNeverSilentlyOverwritesAndMixedModesReject() {
+    @Test void automaticAcceptanceKeepsAllVersionsWithoutBootOrSequence() {
         automatic("P0",from,null,null,null,"10","0.5",null);
+        automatic("P1",from,null,null,null,"20","0.8",null);drain();
+        assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("21");
+        long revision=tasks.locked("B",from,from.plusSeconds(900),0).revision();
         automatic("P0",from,null,null,null,"10.0","0.50",null);
-        assertThatThrownBy(()->automatic("P0",from,null,null,null,"11","0.5",null)).hasMessageContaining("可比较");
-        automatic("P1",from,"POLL",1L,null,"20","0.8","ADAPTER_POLL");
-        assertThatThrownBy(()->automatic("P1",from,"POLL",2L,null,"21","0.8","ADAPTER_POLL")).hasMessageContaining("可比较");
+        assertThat(tasks.locked("B",from,from.plusSeconds(900),0).revision()).isEqualTo(revision);
+        automatic("P0",from,null,null,null,"12","0.6",null);drain();
+        assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("23.2");
+        automatic("P0",from,null,null,null,"10","0.5",null);drain();
+        var adopted=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
+        assertThat(adopted.quantityRevision()).isEqualTo(3);assertThat(adopted.quantity()).isEqualByComparingTo("10");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND outcome='ADOPTED'",Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE point_id='P0' AND version_no=1 AND outcome='ADOPTED'",String.class)).contains("10","0.5");
+    }
+    @Test void recognizedMessageReplayCannotRollBackLaterValueAfterServiceRestart() {
+        automatic("P0",from,"BOOT",100L,"A","10","0.5","DEVICE_FIELDS");
+        automatic("P0",from,"BOOT",101L,"B","12","0.6","DEVICE_FIELDS");
+        live=new DynamicElectricityLiveService(auth,devices,tasks,results,input,queries,users,roles,manager);
+        automatic("P0",from,"BOOT",100L,"A","10","0.5","DEVICE_FIELDS");
+        var adopted=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
+        assertThat(adopted.quantity()).isEqualByComparingTo("12");assertThat(adopted.quantityRevision()).isEqualTo(2);
+        assertThatThrownBy(()->automatic("P0",from,"BOOT",100L,"A","99","0.9","DEVICE_FIELDS")).hasMessageContaining("消息身份");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isEqualTo(3);
+        assertThat(jdbc.queryForObject("SELECT snapshot_json FROM biz_dynamic_interval_evidence WHERE outcome='MESSAGE_CONFLICT'",String.class)).contains("99","conflictWith");
+    }
+    @Test void resetWrapAndPollingCountersAreMetadataAndMixedModesStillReject() {
+        automatic("P0",from,"OLD",4294967295L,null,"10","0.5","DEVICE_FIELDS");
+        automatic("P0",from,"NEW",0L,null,"11","0.4","DEVICE_FIELDS");
+        automatic("P0",from,"POLL",1L,null,"12","0.3","ADAPTER_POLL");
+        var adopted=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
+        assertThat(adopted.quantityRevision()).isEqualTo(3);assertThat(adopted.factor()).isEqualByComparingTo("0.3");
         assertThatThrownBy(()->upload("P0",from,100,"30","0.5")).hasMessageContaining("混用");
         assertThatThrownBy(()->automatic("P0",from.plusSeconds(900),null,null,null,"1",null,null)).hasMessageContaining("同包");
         upload("P0",from.plusSeconds(1800),1,"1","0.5");
         assertThatThrownBy(()->automatic("P0",from.plusSeconds(1800),null,null,null,"1","0.5",null)).hasMessageContaining("显式修订");
+    }
+    @Test void adoptionEvidenceAndTaskRollbackTogether() {
+        automatic("P0",from,null,null,null,"10","0.5",null);
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("task failure")).when(tasks).update(any(),anyMap(),anyLong());
+        assertThatThrownBy(()->automatic("P0",from,null,null,null,"12","0.6",null)).hasMessageContaining("task failure");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isEqualTo(1);
+        assertThat(tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0").quantity()).isEqualByComparingTo("10");
+    }
+    @Test void upgradesCurrentInputAsBaselineWithoutFabricatingOlderVersions() throws Exception {
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        var old=new DynamicElectricityLiveRepository.Reading(new BigDecimal("10"),40,new BigDecimal("0.5"),40,"SIMULATED","legacy","I","MQTT_STANDARD_V1",new SourceOrder(null,null,null,null));
+        String payload=mapper.writeValueAsString(Map.of("P0",old));
+        tx.executeWithoutResult(x->{tasks.locked("B",from,from.plusSeconds(900),0);jdbc.update("UPDATE biz_dynamic_electricity_task SET input_json=?,input_hash=?,revision=99",payload,DynamicElectricityRepository.hash(payload));});
+        automatic("P0",from,null,null,null,"12","0.6",null);
+        assertThat(tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0").quantityRevision()).isEqualTo(41);
+        assertThat(jdbc.queryForList("SELECT outcome FROM biz_dynamic_interval_evidence ORDER BY version_no",String.class)).containsExactly("LEGACY_BASELINE","ADOPTED");
     }
     @Test void mqttUsesRegisteredIdentityScopeAndSystemTasksWithoutUserAccount() {
         tx.executeWithoutResult(s->{

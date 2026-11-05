@@ -15,12 +15,19 @@ import static com.platform.carbon.DynamicElectricityRepository.*;
 public class DynamicElectricityLiveRepository {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
+    private final DynamicElectricityIntervalEvidence evidence;
     public DynamicElectricityLiveRepository(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc,ObjectMapper json) {
-        this.jdbc=jdbc; this.json=json;
+        this.jdbc=jdbc; this.json=json;this.evidence=new DynamicElectricityIntervalEvidence(jdbc,json);
     }
+    DynamicElectricityIntervalEvidence evidence(){return evidence;}
     public record Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,
                           String nature,String reference,String identityId,String transport,
-                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DynamicElectricityContracts.SourceOrder sourceOrder) {
+                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DynamicElectricityContracts.SourceOrder sourceOrder,
+                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) String evidenceId) {
+        public Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,String nature,String reference,String identityId,String transport,DynamicElectricityContracts.SourceOrder sourceOrder) {
+            this(quantity,quantityRevision,factor,factorRevision,nature,reference,identityId,transport,sourceOrder,null);
+        }
+        Reading withEvidence(String id){return new Reading(quantity,quantityRevision,factor,factorRevision,nature,reference,identityId,transport,sourceOrder,id);}
         public Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,String nature,String reference,String identityId,String transport) {
             this(quantity,quantityRevision,factor,factorRevision,nature,reference,identityId,transport,null);
         }
