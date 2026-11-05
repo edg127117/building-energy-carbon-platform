@@ -1,0 +1,5 @@
+export { default as messages } from './locales/zh-CN'
+export { routes } from './routes'
+export { alarmsApi } from './api/alarms'
+export type { AlarmBuilding, AlarmCategory, AlarmEvent, AlarmEventPage, AlarmRule, AlarmRuleRevision, AlarmSummary } from './models/alarms'
+export { default as ScreenAlarmSummary } from './components/ScreenAlarmSummary.vue'

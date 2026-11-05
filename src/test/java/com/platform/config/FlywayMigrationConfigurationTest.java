@@ -33,6 +33,7 @@ class FlywayMigrationConfigurationTest {
                 "V03__init_hvac_schema.sql",
                 "V08__mysql_data_quality_fill.sql",
                 "V10__mysql_data_quality_recalculation.sql",
+                "V110__mysql_alarm_information.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V12__device_identity.sql",
                 "V13__device_onboarding_discovery.sql",
