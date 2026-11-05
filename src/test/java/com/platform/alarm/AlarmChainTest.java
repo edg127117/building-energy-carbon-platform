@@ -57,9 +57,11 @@ class AlarmChainTest {
         jdbc.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32),equip_name VARCHAR(100),building_id VARCHAR(32),space_id VARCHAR(32),type_code VARCHAR(32),equip_category VARCHAR(64),del_flag INT)");
         jdbc.execute("CREATE TABLE biz_data_point(point_id VARCHAR(32),equip_id VARCHAR(32),building_id VARCHAR(32),status VARCHAR(16),point_name VARCHAR(100),unit VARCHAR(20),data_type VARCHAR(20),del_flag INT)");
         jdbc.execute("CREATE TABLE biz_space(space_id VARCHAR(32),building_id VARCHAR(32),space_name VARCHAR(100),del_flag INT)");
-        jdbc.execute("CREATE TABLE biz_daikin_monitoring_target(identity_id VARCHAR(32),equipment_id VARCHAR(32),building_id VARCHAR(32),mapping_version INT,active INT)");
+        jdbc.execute("CREATE TABLE biz_daikin_monitoring_target(identity_id VARCHAR(32),equipment_id VARCHAR(32),building_id VARCHAR(32),mapping_version INT,active INT,source_id VARCHAR(200),last_round_id BIGINT)");
+        jdbc.execute("CREATE TABLE biz_daikin_monitor_round(source_id VARCHAR(200),round_id BIGINT,status VARCHAR(20))");
+        jdbc.execute("CREATE TABLE biz_daikin_current_state(identity_id VARCHAR(32),field_name VARCHAR(100),last_round_id BIGINT,field_status VARCHAR(20),normalized_value VARCHAR(1024),building_id VARCHAR(32),mapping_version INT,last_attempt_building_id VARCHAR(32),last_attempt_mapping_version INT,last_valid_at_ms BIGINT)");
         jdbc.execute("CREATE TABLE biz_device_identity(identity_id VARCHAR(32),equip_id VARCHAR(32),building_id VARCHAR(32),status INT)");
-        jdbc.execute("CREATE TABLE biz_daikin_exception_instance(exception_id BIGINT,identity_id VARCHAR(32),equipment_id VARCHAR(32),building_id VARCHAR(32),mapping_version INT,exception_type VARCHAR(40),scope_type VARCHAR(16),active_key VARCHAR(100),field_name VARCHAR(100),last_detected_at_ms BIGINT)");
+        jdbc.execute("CREATE TABLE biz_daikin_exception_instance(exception_id BIGINT,identity_id VARCHAR(32),equipment_id VARCHAR(32),building_id VARCHAR(32),mapping_version INT,exception_type VARCHAR(40),scope_type VARCHAR(16),active_key VARCHAR(100),field_name VARCHAR(100),last_detected_at_ms BIGINT,last_round_id BIGINT)");
         jdbc.update("INSERT INTO biz_equipment VALUES ('M1','三层电表','A','S1','METER','ELECTRIC_METER',0),('M2','其他建筑设备','B','S2','METER','ELECTRIC_METER',0)");
         jdbc.update("INSERT INTO biz_data_point VALUES ('P1','M1','A','ONLINE','功率','kW','ANALOG',0),('P2','M1','A','ONLINE','运行状态','编码','DIGITAL',0)");
         jdbc.update("INSERT INTO biz_space VALUES ('S1','A','三楼配电间',0),('S3','A','屋顶机房',0)");
@@ -125,9 +127,9 @@ class AlarmChainTest {
 
     @Test
     void primaryGroupingDeduplicatesAndMaintenancePreservesAcknowledgement() {
-        jdbc.update("INSERT INTO biz_daikin_monitoring_target VALUES ('I1','M1','A',1,1)");
+        jdbc.update("INSERT INTO biz_daikin_monitoring_target(identity_id,equipment_id,building_id,mapping_version,active) VALUES ('I1','M1','A',1,1)");
         jdbc.update("INSERT INTO biz_device_identity VALUES ('I1','M1','A',1)");
-        jdbc.update("INSERT INTO biz_daikin_exception_instance VALUES (1,'I1','M1','A',1,'VENDOR_EQUIPMENT','DEVICE','fault1','inEquipmentError',0)");
+        jdbc.update("INSERT INTO biz_daikin_exception_instance(exception_id,identity_id,equipment_id,building_id,mapping_version,exception_type,scope_type,active_key,field_name,last_detected_at_ms) VALUES (1,'I1','M1','A',1,'VENDOR_EQUIPMENT','DEVICE','fault1','inEquipmentError',0)");
         service.evaluate("A");
         assertThat(service.events(1L, ADMIN,"A",false,"DEVICE",1,20).total()).isEqualTo(2);
         var summary = service.summary(1L,ADMIN,"A");

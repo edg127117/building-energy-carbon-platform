@@ -210,6 +210,57 @@ class AlarmEightFeatureContractTest {
         assertThat(f.service.events(1L,ADMIN,"A",true,"DEVICE",1,20).total()).isEqualTo(1);
     }
 
+    @Test void daikinFaultRecoveryRequiresConsecutiveDistinctHealthyRounds() throws Exception {
+        f.service.rules(1L, ADMIN, "A");
+        f.jdbc.update("UPDATE biz_alarm_rule SET enabled=0 WHERE building_id='A' AND rule_type<>'FAULT'");
+        f.jdbc.update("UPDATE biz_alarm_rule SET recovery_cycles=2 WHERE building_id='A' AND rule_type='FAULT'");
+        f.jdbc.update("INSERT INTO biz_device_identity VALUES ('I1','M1','A',1)");
+        var readings = new java.util.concurrent.atomic.AtomicReference<List<AlarmFaultSource.FaultReading>>();
+        AlarmFaultSource source = building -> readings.get();
+        ReflectionTestUtils.setField((Object) AopTestUtils.getTargetObject(f.service), "devices",
+                new CollectedAlarmDeviceSource(f.jdbc, f.runtime, f.raw, f.minutes, json, List.of(source)));
+        long start = f.clock.millis();
+        long cycle = start / 60_000;
+        readings.set(List.of(new AlarmFaultSource.FaultReading("I1", "A", "M1", "VENDOR_EQUIPMENT",
+                true, start, "厂家设备故障", cycle)));
+        f.service.evaluate("A");
+        assertThat(f.service.summary(1L, ADMIN, "A").deviceAnomalies()).isOne();
+
+        f.clock.advance(60_000);
+        var healthy = new AlarmFaultSource.FaultReading("I1", "A", "M1", "VENDOR_OBSERVATION",
+                false, f.clock.millis(), "厂家故障状态观测", cycle + 1);
+        readings.set(List.of(healthy, new AlarmFaultSource.FaultReading("I1", "A", "M1", "VENDOR_COMMUNICATION",
+                true, f.clock.millis(), "厂家通信故障仍存在", cycle + 1)));
+        f.service.evaluate("A");
+        assertThat(f.service.summary(1L, ADMIN, "A").deviceAnomalies()).isOne();
+
+        f.clock.advance(60_000);
+        var firstHealthy = new AlarmFaultSource.FaultReading("I1", "A", "M1", "VENDOR_OBSERVATION",
+                false, f.clock.millis(), "厂家故障状态观测", cycle + 2);
+        readings.set(List.of(firstHealthy));
+        f.service.evaluate("A");
+        f.service.evaluate("A");
+        assertThat(f.service.summary(1L, ADMIN, "A").deviceAnomalies()).isOne();
+
+        f.clock.advance(360_000);
+        f.service.evaluate("A");
+        readings.set(List.of(new AlarmFaultSource.FaultReading("I1", "A", "M1", "VENDOR_OBSERVATION",
+                null, 0, "无有效故障状态", cycle + 8)));
+        f.service.evaluate("A");
+        readings.set(List.of(healthy));
+        f.service.evaluate("A");
+        assertThat(f.service.summary(1L, ADMIN, "A").deviceAnomalies()).isOne();
+
+        for (long next : List.of(cycle + 9, cycle + 10)) {
+            f.clock.advance(60_000);
+            readings.set(List.of(new AlarmFaultSource.FaultReading("I1", "A", "M1", "VENDOR_OBSERVATION",
+                    false, f.clock.millis(), "厂家故障状态观测", next)));
+            f.service.evaluate("A");
+            assertThat(f.service.summary(1L, ADMIN, "A").deviceAnomalies()).isEqualTo(next == cycle + 9 ? 1L : 0L);
+        }
+        assertThat(f.service.events(1L, ADMIN, "A", true, "DEVICE", 1, 20).total()).isOne();
+    }
+
     @Test void jumpAndStuckUseMixedSamplingHistoryAndActuallyRecoverInValueGroup() throws Exception {
         f.service.rules(1L,ADMIN,"A");f.jdbc.update("UPDATE biz_alarm_rule SET enabled=0 WHERE building_id='A'");
         for(String type:List.of("JUMP","STUCK")) {

@@ -35,13 +35,20 @@ public class RelationStagingRepository {
         return jdbc.queryForObject("SELECT COUNT(*) FROM biz_relation_staged_asset WHERE version_id=? AND object_type=? AND status='STAGED'",Integer.class,version,type);
     }
     public Map<String,Object> type(String code) {
-        return one("SELECT type_code,equip_category,asset_code_prefix,status FROM biz_equipment_type WHERE type_code=? FOR UPDATE",code);
+        return oneWithNumericStatus("SELECT type_code,equip_category,asset_code_prefix,status+0 AS status FROM biz_equipment_type WHERE type_code=? FOR UPDATE",code);
     }
     public Map<String,Object> product(String id) {
         return one("SELECT product_id,equipment_type_code,status FROM biz_device_product WHERE product_id=? FOR UPDATE",id);
     }
     public Map<String,Object> rule(String id) {
-        return one("SELECT rule_id,standard_version,family_code,component_code,code_template,standard_source,status FROM biz_point_naming_rule WHERE rule_id=? FOR UPDATE",id);
+        return oneWithNumericStatus("SELECT rule_id,standard_version,family_code,component_code,code_template,standard_source,status+0 AS status FROM biz_point_naming_rule WHERE rule_id=? FOR UPDATE",id);
+    }
+    /** SQL 先将 TINYINT(1) 转为数字，避免 JDBC 将非零状态折叠成 true，再统一审核摘要所用类型。 */
+    private Map<String,Object> oneWithNumericStatus(String sql,String id) {
+        var row=one(sql,id);
+        Object status=row.get("status");
+        if(status instanceof Number flag)row.put("status",flag.intValue());
+        return row;
     }
     private Map<String,Object> one(String sql,String id) {
         var rows=jdbc.queryForList(sql,id);
@@ -120,7 +127,7 @@ public class RelationStagingRepository {
         jdbc.update("UPDATE biz_relation_staged_asset SET status='PUBLISHED',published_at=CURRENT_TIMESTAMP WHERE version_id=? AND status='STAGED'",version);
     }
     public static BizPointNamingRule namingRule(Map<String,Object> values) {
-        var r=new BizPointNamingRule();r.setRuleId(string(values,"rule_id"));r.setFamilyCode(string(values,"family_code"));r.setComponentCode(string(values,"component_code"));r.setCodeTemplate(string(values,"code_template"));r.setStatus(((Number)values.get("status")).intValue());return r;
+        var r=new BizPointNamingRule();r.setRuleId(string(values,"rule_id"));r.setFamilyCode(string(values,"family_code"));r.setComponentCode(string(values,"component_code"));r.setCodeTemplate(string(values,"code_template"));r.setStatus(values.get("status") instanceof Number flag?flag.intValue():null);return r;
     }
     public static String string(Map<String,Object> values,String key) {return Objects.toString(values.get(key),null);}
     public static String fingerprint(Map<String,Object> values) {return sha(encode(new TreeMap<>(values)));}

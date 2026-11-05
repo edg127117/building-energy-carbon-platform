@@ -160,7 +160,8 @@ class AlarmExtendedEvaluationTest {
             org.mockito.Mockito.when(rs.getLong(6)).thenReturn(123L);
             org.mockito.Mockito.when(rs.getString(7)).thenReturn("compressor");
             return List.of(mapper.mapRow(rs, 0));
-        }).when(jdbc).query(anyString(), any(RowMapper.class), any(Object[].class));
+        }).when(jdbc).query(org.mockito.ArgumentMatchers.contains("FROM biz_daikin_exception_instance"),
+                any(RowMapper.class), any(Object[].class));
 
         var rows = new DaikinAlarmFaultSource(jdbc).load("building-a");
 

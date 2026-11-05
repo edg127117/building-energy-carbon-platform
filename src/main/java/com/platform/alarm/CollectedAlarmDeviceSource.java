@@ -158,13 +158,15 @@ public class CollectedAlarmDeviceSource implements AlarmDeviceSource {
                     unavailableReasons.add("故障来源读取失败: " + source.getClass().getSimpleName());
                 }
             }
-            Map<String, AlarmFaultSource.FaultReading> activeReadings = new LinkedHashMap<>();
+            Map<String, AlarmFaultSource.FaultReading> distinctReadings = new LinkedHashMap<>();
+            Set<String> faultedDevices = new LinkedHashSet<>();
             for (var reading : readings) {
                 if (reading == null || !Objects.equals(building, reading.buildingId())
                         || reading.identityId() == null || reading.deviceId() == null) continue;
-                activeReadings.putIfAbsent(reading.identityId() + "|" + reading.deviceId() + "|" + reading.code(), reading);
+                distinctReadings.putIfAbsent(reading.identityId() + "|" + reading.deviceId() + "|" + reading.code(), reading);
+                if (Boolean.TRUE.equals(reading.active())) faultedDevices.add(reading.deviceId());
             }
-            for (var reading : activeReadings.values()) {
+            for (var reading : distinctReadings.values()) {
                 List<PointScope> rows;
                 try {
                     rows = jdbc.query("""
@@ -184,7 +186,15 @@ public class CollectedAlarmDeviceSource implements AlarmDeviceSource {
                 if (rows.isEmpty()) continue;
                 PointScope target = rows.getFirst();
                 covered |= faultRules.stream().anyMatch(rule -> matchesScope(rule, target.spaceId(), target.deviceCategory()));
-                if(!reading.active()) continue;
+                boolean active = Boolean.TRUE.equals(reading.active());
+                if (!active && (faultedDevices.contains(reading.deviceId())
+                        || Boolean.FALSE.equals(reading.active()) && reading.observationCycle() == null)) continue;
+                boolean healthy = Boolean.FALSE.equals(reading.active()) && reading.eventAt() <= now
+                        && now - reading.eventAt() <= 300_000L;
+                String cycle = reading.observationCycle() == null ? null
+                        : "DAIKIN_" + reading.identityId() + ":" + reading.observationCycle();
+                String observationKey = active || healthy
+                        ? reading.identityId() + ":" + reading.code() + ":" + reading.eventAt() : null;
                 for (Rule rule : faultRules) {
                     if (!matchesScope(rule, target.spaceId(), target.deviceCategory())) continue;
                     Map<String, Object> evidence = new LinkedHashMap<>();
@@ -194,8 +204,8 @@ public class CollectedAlarmDeviceSource implements AlarmDeviceSource {
                     evidence.put("sourceMessage", reading.message());
                     candidates.add(new Candidate("FAULT", rule.id(), reading.deviceId(), target.name(), target.spaceId(),
                             target.deviceCategory(), target.space(), null, rule.severity(),
-                            Objects.requireNonNullElse(reading.message(), "设备报告故障"), encode(evidence), true,
-                            reading.eventAt(), reading.identityId() + ":" + reading.code() + ":" + reading.eventAt(), null));
+                            Objects.requireNonNullElse(reading.message(), "设备报告故障"), encode(evidence),
+                            active, reading.eventAt(), observationKey, cycle, healthy));
                 }
             }
         }
