@@ -106,6 +106,9 @@ public class JsonTelemetryParser {
         try {interval=IntervalMappings.extract(activeMappings,metrics,"ADAPTER_V2:"+profile.profileCode()+":"+profile.profileVersion());}
         catch(IllegalArgumentException|ArithmeticException ex){throw error("INVALID_ELECTRICITY_INTERVAL",ex.getMessage());}
         if(interval!=null) {
+            // 只有从设备报文路径提取的序号可作为来源顺序；消息ID的派生方式不能代替该证据。
+            if(interval.revision()==0)interval=new com.platform.adapter.model.ElectricityInterval(interval.metricCode(),interval.startMs(),interval.endMs(),interval.revision(),
+                    interval.electricityKwh(),interval.factorKgCo2PerKwh(),interval.electricityUnit(),interval.factorUnit(),interval.sourceNature(),interval.sourceReference(),"DEVICE_FIELDS");
             var consumed=activeMappings.stream().filter(m->IntervalMappings.interval(m.valueType())).map(ProtocolFieldMapping::metricCode).collect(java.util.stream.Collectors.toSet());
             metrics.removeIf(m->consumed.contains(m.code()));
             // 同一采集时刻的合法修订与拆分报文须拥有不同消息键；周期版本仍由平台独立校验。

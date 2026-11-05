@@ -20,7 +20,23 @@ public final class ProtocolContracts {
             @Size(max=200) String discriminatorPath,
             @Size(max=50) String discriminatorValue,
             @Size(max=200) String timestampPath,
-            @NotEmpty @Size(max=128) List<@NotNull @Valid Mapping> mappings) {}
+            @Size(max=200) String seqPath,
+            @Size(max=200) String messageIdPath,
+            @Size(max=200) String bootIdPath,
+            @Size(max=200) String batchIdPath,
+            @Size(max=200) String retransmittedAtPath,
+            @Size(max=50) String maxAckMode,
+            @Size(max=50) String correlationPolicy,
+            @NotEmpty @Size(max=128) List<@NotNull @Valid Mapping> mappings) {
+
+        /** 兼容未认识可靠性字段的旧客户端；缺省值由运行时适配器按旧规则处理。 */
+        public Configuration(String name,String productId,String profileCode,String sourceTopic,String identityType,
+                String identityPath,String discriminatorPath,String discriminatorValue,String timestampPath,
+                List<Mapping> mappings) {
+            this(name,productId,profileCode,sourceTopic,identityType,identityPath,discriminatorPath,discriminatorValue,
+                    timestampPath,null,null,null,null,null,null,null,mappings);
+        }
+    }
 
     public record Mapping(
             @NotBlank @Size(max=200) String sourcePath,

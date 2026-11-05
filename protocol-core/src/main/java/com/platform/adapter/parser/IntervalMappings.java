@@ -31,7 +31,8 @@ public final class IntervalMappings {
                     ||"CO2_FACTOR".equals(kind)&&(!"kgCO2/kWh".equals(m.targetUnit())||m.sourceUnit().toUpperCase(Locale.ROOT).contains("CO2E")))
                 throw new IllegalArgumentException("INVALID_INTERVAL_UNIT_MAPPING");
         }
-        if(!roles.isEmpty()&&!roles.keySet().containsAll(Set.of("ELECTRICITY_KWH","CO2_FACTOR","INTERVAL_START","INTERVAL_END","INTERVAL_REVISION")))
+        if(!roles.isEmpty()&&(!roles.keySet().containsAll(Set.of("ELECTRICITY_KWH","CO2_FACTOR"))
+                ||!roles.containsKey("INTERVAL_START")&&!roles.containsKey("INTERVAL_END")))
             throw new IllegalArgumentException("INCOMPLETE_INTERVAL_MAPPING");
     }
     public static ElectricityInterval extract(List<ProtocolFieldMapping> mappings,List<StandardMetric> metrics,String reference) {
@@ -43,12 +44,13 @@ public final class IntervalMappings {
         var result=new ElectricityInterval(q.metricCode(),integer(roles,values,"INTERVAL_START"),integer(roles,values,"INTERVAL_END"),
                 integer(roles,values,"INTERVAL_REVISION"),value(values,q),value(values,roles.get("CO2_FACTOR")),
                 "kWh","kgCO2/kWh","SOURCE_LABELLED",reference);
-        result.validate();return result;
+        return result.boundaries(null);
     }
     private static BigDecimal value(Map<String,StandardMetric> values,ProtocolFieldMapping mapping) {
         var value=values.get(mapping.metricCode());return value==null?null:value.value();
     }
     private static long integer(Map<String,ProtocolFieldMapping> roles,Map<String,StandardMetric> values,String role) {
+        if(!roles.containsKey(role))return 0;
         var number=value(values,roles.get(role));
         if(number==null)throw new IllegalArgumentException("INTERVAL_TIME_OR_REVISION_MISSING");
         return number.longValueExact();

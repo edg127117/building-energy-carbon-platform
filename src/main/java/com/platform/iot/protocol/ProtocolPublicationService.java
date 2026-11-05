@@ -84,7 +84,8 @@ public class ProtocolPublicationService {
         for(Entry entry:snapshot.profiles()) {
             var p=entry.profile();
             var mappings=entry.mappings().stream().map(m->new com.platform.iot.protocol.api.ProtocolContracts.Mapping(m.sourcePath(),m.metricCode(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder(),m.valueType())).toList();
-            var c=new Configuration("导入："+p.profileCode(),request.productBindings().get(p.profileId()),p.profileCode(),p.sourceTopic(),p.deviceIdentityType(),p.deviceIdentityPath(),p.protocolVersionPath(),p.expectedProtocolVersion(),p.timestampPath(),mappings);
+            var c=new Configuration("导入："+p.profileCode(),request.productBindings().get(p.profileId()),p.profileCode(),p.sourceTopic(),p.deviceIdentityType(),p.deviceIdentityPath(),p.protocolVersionPath(),p.expectedProtocolVersion(),p.timestampPath(),
+                    p.seqPath(),p.messageIdPath(),p.bootIdPath(),p.batchIdPath(),p.retransmittedAtPath(),p.maxAckMode(),p.correlationPolicy(),mappings);
             drafts.validate(c,roles);
             String key=id();String entryJson=json(entry);
             var version=new ProtocolPublicationRepository.Version(key,key,p.profileVersion(),json(c),entryJson,productHash(c),sha(entryJson),System.currentTimeMillis());
@@ -229,7 +230,8 @@ public class ProtocolPublicationService {
         if(version.entryJson()!=null) return read(version.entryJson(),Entry.class);
         if(version.revision()>Integer.MAX_VALUE) throw ProtocolErrors.invalid("协议修订号超限");
         var profile=new ProtocolProfile(version.id(),c.profileCode(),(int)version.revision(),c.sourceTopic(),c.identityType(),c.identityPath(),
-                c.discriminatorPath(),c.discriminatorValue(),c.timestampPath(),null,null,null,null,null,"EVIDENCE_ONLY","NONE",true);
+                c.discriminatorPath(),c.discriminatorValue(),c.timestampPath(),c.seqPath(),c.messageIdPath(),c.bootIdPath(),
+                c.batchIdPath(),c.retransmittedAtPath(),c.maxAckMode(),c.correlationPolicy(),true);
         var mappings=c.mappings().stream().filter(m->m.enabled()).map(m->new ProtocolFieldMapping(UUID.nameUUIDFromBytes((version.id()+m.sourcePath()).getBytes(StandardCharsets.UTF_8)).toString().replace("-",""),
                 version.id(),m.sourcePath(),m.metricCode(),m.effectiveValueType(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
         return new Entry(profile,mappings);

@@ -42,6 +42,12 @@ def main():
             'mqtt.topics.v2-adapter-ack':broker['ackPrefix']+'/adapter','mqtt.tls.enabled':False,'mqtt.tls.allow-plaintext-for-tests':True})
         backend.write_text(''.join(k+': '+json.dumps(v,ensure_ascii=False)+'\n' for k,v in settings.items()),encoding='utf-8')
     private=root/'private/mqtt.json'
+    def configure_persistence():
+        path=root/'mqtt/config/mosquitto.conf'
+        value=path.read_text(encoding='utf-8')
+        # 每秒全库快照会在Windows绑定目录中阻塞Broker事件循环；保留持久会话及有序停机保存。
+        if 'autosave_interval 1\n' not in value:return False
+        path.write_text(value.replace('autosave_interval 1\n','autosave_interval 60\n'),encoding='utf-8');return True
     def configure_v2(broker):
         if not args.with_v2_adapters:return False
         directory=root/'mqtt/config'
@@ -70,9 +76,11 @@ def main():
         if ports!=[{'HostIp':'127.0.0.1','HostPort':str(saved['port'])}]:raise ValueError('LOOPBACK_PORT_PUBLICATION_REQUIRED')
         network_state=json.loads(docker('network','inspect',saved['network']).stdout)[0]
         if network_state['Labels'].get('codex.purpose')!=purpose:raise ValueError('BROKER_NETWORK_OWNERSHIP_MISMATCH')
+        persistence_changed=configure_persistence()
         changed=configure_v2(saved)
         if changed:docker('restart',name)
         elif not inspected['State']['Running']:docker('start',name)
+        elif persistence_changed:docker('kill','--signal=HUP',name)
         configure_platform(saved)
         print('OWN_INDEPENDENT_BROKER_REUSED');return
     with socket.socket() as probe:
@@ -91,7 +99,7 @@ def main():
     (conf/'acl').write_text('user platform\n'+''.join('topic read '+broker[key]+'\n' for key in ['standardTopic','legacyTopic','v2Topic'])+
                             'topic write '+broker['ackPrefix']+'/#\nuser simulator\ntopic write '+broker['standardTopic']+'\n',encoding='utf-8')
     (conf/'mosquitto.conf').write_text('listener 1883\nallow_anonymous false\npassword_file /mosquitto/config/passwords\nacl_file /mosquitto/config/acl\n'
-                'persistence true\npersistence_location /mosquitto/data/\nautosave_interval 1\nmax_queued_messages 20000\nlog_dest stdout\n',encoding='utf-8')
+                'persistence true\npersistence_location /mosquitto/data/\nautosave_interval 60\nmax_queued_messages 20000\nlog_dest stdout\n',encoding='utf-8')
     if docker('network','inspect',network,check=False).returncode==0:raise ValueError('UNREGISTERED_NETWORK_EXISTS')
     docker('network','create','--label','codex.purpose='+purpose,network)
     container=docker('run','-d','--name',name,'--label','codex.purpose='+purpose,'--network',network,'--memory','256m',

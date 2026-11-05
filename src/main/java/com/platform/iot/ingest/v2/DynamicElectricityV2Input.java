@@ -21,14 +21,15 @@ public class DynamicElectricityV2Input {
         this.live=live;this.points=points;this.source=source;
     }
     public DeviceIntervalRequest prepare(TelemetryV2Message message,DeviceIdentityBinding binding) {
-        var value=message.electricityInterval();value.validate();
+        var value=message.electricityInterval().boundaries("DEVICE_REPORTED".equals(message.timeSource())?message.collectedAt():null);
         if(value.endMs()>System.currentTimeMillis())throw invalid("DYNAMIC_DEVICE_INTERVAL_INVALID");
         var key=new PointAliasKey(binding.buildingId(),source,message.deviceIdentity().type()+":"+message.deviceIdentity().value()+":"+value.metricCode());
         var point=points.find(key).orElseThrow(()->invalid("DYNAMIC_POINT_ALIAS_MISSING"));
         if(!binding.buildingId().equals(point.buildingId())||!binding.equipmentId().equals(point.equipId())
                 ||!"ONLINE".equalsIgnoreCase(point.status())||!"kWh".equalsIgnoreCase(point.unit()))throw invalid("DYNAMIC_DEVICE_SCOPE");
         return new DeviceIntervalRequest(message.deviceIdentity(),message.profileCode(),point.pointId(),Instant.ofEpochMilli(value.startMs()),Instant.ofEpochMilli(value.endMs()),
-                value.revision(),value.electricityKwh(),value.factorKgCo2PerKwh(),value.sourceNature(),value.sourceReference());
+                value.revision(),value.electricityKwh(),value.factorKgCo2PerKwh(),value.sourceNature(),value.sourceReference(),
+                value.revision()==0?new com.platform.carbon.DynamicElectricityContracts.SourceOrder(message.bootId(),message.sourceSeq(),message.sourceMessageId(),value.sequenceSource()):null);
     }
     public void persist(DeviceIntervalRequest request,DeviceIdentityBinding binding) {live.ingestFromMqttV2(request,binding);}
     private static BusinessException invalid(String code){return new BusinessException(409,code,"设备周期点码、单位或归属无效");}

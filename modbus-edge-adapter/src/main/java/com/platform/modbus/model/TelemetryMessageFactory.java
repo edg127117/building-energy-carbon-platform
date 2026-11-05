@@ -49,6 +49,9 @@ public class TelemetryMessageFactory {
         var mappings=intervalMappings(device);
         var interval=com.platform.adapter.parser.IntervalMappings.extract(mappings,metrics.stream().map(m->new com.platform.adapter.model.StandardMetric(m.code(),m.value(),m.unit(),m.sourceField())).toList(),"MODBUS_V2:"+device.getProfileCode());
         if(interval!=null) {
+            // 本进程的轮询序号不证明设备历史数据的新旧，平台不能据此自动覆盖同一时段的异值。
+            if(interval.revision()==0)interval=new com.platform.adapter.model.ElectricityInterval(interval.metricCode(),interval.startMs(),interval.endMs(),interval.revision(),interval.electricityKwh(),interval.factorKgCo2PerKwh(),
+                    interval.electricityUnit(),interval.factorUnit(),interval.sourceNature(),interval.sourceReference(),"ADAPTER_POLL");
             var consumed=mappings.stream().filter(m->com.platform.adapter.parser.IntervalMappings.interval(m.valueType())).map(com.platform.adapter.profile.ProtocolFieldMapping::metricCode).collect(java.util.stream.Collectors.toSet());
             metrics=metrics.stream().filter(m->!consumed.contains(m.code())).toList();
         }

@@ -31,6 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ProtocolPublicationTest {
     @Autowired ProtocolPublicationService service;
     @Autowired ProtocolDraftService drafts;
+    @Autowired ProtocolPreviewService previews;
     @Autowired SensitiveChangeService changes;
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
@@ -51,9 +52,45 @@ class ProtocolPublicationTest {
     private Configuration config(String condition){return new Configuration("测试发布",product,"TEST_PUBLICATION","device/raw/publication","SN","/SN","/kind",condition,null,
             List.of(new Mapping("/P","POWER","kW","kW",BigDecimal.ONE,BigDecimal.ZERO,true,true,1)));}
     private VersionView version(String condition){var d=drafts.create(config(condition),1L,ProtocolPublicationService.ADMIN);return service.freeze(d.id(),d.revision(),1,ProtocolPublicationService.ADMIN);}
-    private TargetCreated target(){return service.register(new TargetRequest("隔离目标","V1",List.of("device/raw/publication")),1,ProtocolPublicationService.ADMIN);}
+    private TargetCreated target(){return target("V1");}
+    private TargetCreated target(String output){return service.register(new TargetRequest("隔离目标",output,List.of("device/raw/publication")),1,ProtocolPublicationService.ADMIN);}
     private FrozenCommand command(TargetCreated target,VersionView version,long sequence){return service.prepare(new PublishRequest(target.target().targetId(),sequence,List.of(version.versionId()),UUID.randomUUID().toString()),ProtocolPublicationService.ADMIN);}
     private void approve(FrozenCommand command){var r=changes.createDraft(1,"PUBLISH_PROTOCOL_CONFIGURATION",mapper.valueToTree(command),UUID.randomUUID().toString());changes.submit(1,r.requestId());changes.approve(2,r.requestId(),"独立测试审核");changes.execute(2,r.requestId());}
+
+    @Test void forwardsReliabilityFieldsThroughPreviewPublicationAndImport() throws Exception {
+        var advanced=new Configuration("高级可靠性",product,"TEST_PUBLICATION","device/raw/publication","SN","/SN",null,null,
+                "/eventAt","/seq","/messageId","/bootId","/batchId","/retransmittedAt","ADAPTER_PROXY","SOURCE_MESSAGE_ID",
+                List.of(new Mapping("/P","POWER","kW","kW",BigDecimal.ONE,BigDecimal.ZERO,true,true,1)));
+        var preview=previews.preview(new com.platform.iot.protocol.api.ProtocolContracts.PreviewRequest(advanced,
+                "{\"SN\":\"D-1\",\"eventAt\":1790784000000,\"seq\":7,\"messageId\":\"M-7\",\"bootId\":\"B-1\",\"batchId\":\"BT-1\",\"retransmittedAt\":1790784010000,\"P\":2.5}",
+                1790785000000L),ProtocolPublicationService.ADMIN);
+        assertThat(preview.success()).isTrue();
+        assertThat(preview.eventTime()).isEqualTo(1790784000000L);
+
+        var version=service.freeze(drafts.create(advanced,1L,ProtocolPublicationService.ADMIN).id(),1,1,ProtocolPublicationService.ADMIN);
+        var v2=target("V2");
+        service.pull(v2.target().targetId(),1,"V2");
+        var command=command(v2,version,0);
+        var profile=mapper.readTree(command.contentJson()).path("profiles").get(0).path("profile");
+        assertThat(profile.path("timestampPath").asText()).isEqualTo("/eventAt");
+        assertThat(profile.path("seqPath").asText()).isEqualTo("/seq");
+        assertThat(profile.path("messageIdPath").asText()).isEqualTo("/messageId");
+        assertThat(profile.path("bootIdPath").asText()).isEqualTo("/bootId");
+        assertThat(profile.path("batchIdPath").asText()).isEqualTo("/batchId");
+        assertThat(profile.path("retransmittedAtPath").asText()).isEqualTo("/retransmittedAt");
+        assertThat(profile.path("maxAckMode").asText()).isEqualTo("ADAPTER_PROXY");
+        assertThat(profile.path("correlationPolicy").asText()).isEqualTo("SOURCE_MESSAGE_ID");
+
+        String profileId=profile.path("profileId").asText();
+        var imported=service.importLegacy(new ImportRequest(command.contentJson(),null,Map.of(profileId,product)),1,ProtocolPublicationService.ADMIN);
+        assertThat(imported).hasSize(1);
+        var importedCommand=command(v2,imported.getFirst(),0);
+        assertThat(importedCommand.contentJson()).isEqualTo(command.contentJson());
+
+        var v1=target("V1");
+        service.pull(v1.target().targetId(),1,"V1");
+        assertThatThrownBy(()->command(v1,version,0)).isInstanceOf(BusinessException.class);
+    }
     @Test void publicationRequiresContactAndApprovalThenExactReceiptAndRollback() {
         var t=target();var v=version("INDOOR");String id=t.target().targetId();
         assertThatThrownBy(()->command(t,v,0)).isInstanceOf(BusinessException.class);

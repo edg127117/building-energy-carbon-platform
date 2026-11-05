@@ -53,6 +53,19 @@ class StandardDynamicElectricityIngestionServiceTest {
         body=payload();interval(body).remove("electricityKwh");assertThat(handle(body).processedMetrics()).isEqualTo(1);
         verify(live,times(2)).ingestFromMqtt(any());
     }
+    @Test void derivesIntervalFromDeviceEventTimeWithoutExtraHardwareFields()throws Exception {
+        var body=payload();interval(body).remove("startInclusive");interval(body).remove("endExclusive");interval(body).remove("revision");
+        body.put("bootId","DEVICE_BOOT");body.put("sourceMessageId","DEVICE_MESSAGE");
+        assertThat(handle(body).outcome()).isEqualTo(StandardTelemetryOutcome.ACCEPTED);
+        var capture=org.mockito.ArgumentCaptor.forClass(DeviceIntervalRequest.class);verify(live).ingestFromMqtt(capture.capture());
+        var request=capture.getValue();assertThat(request.startInclusive()).isEqualTo(from);assertThat(request.endExclusive()).isEqualTo(from.plusSeconds(900));
+        assertThat(request.revision()).isZero();assertThat(request.sourceOrder().bootId()).isEqualTo("DEVICE_BOOT");assertThat(request.sourceOrder().seq()).isEqualTo(1);
+        clearInvocations(live);body.put("timeSource","SERVER_RECEIVED");
+        var missing=handle(body);assertThat(missing.outcome()).isEqualTo(StandardTelemetryOutcome.REJECTED);
+        assertThat(missing.detail()).contains("DEVICE_TIME_MISSING");verifyNoInteractions(live);
+        body.put("timeSource","DEVICE_REPORTED");body.put("eventTime",from.plusSeconds(901).toEpochMilli());
+        assertThat(handle(body).outcome()).isEqualTo(StandardTelemetryOutcome.REJECTED);verifyNoInteractions(live);
+    }
     @Test void rejectsWrongUnitsNegativeValuesMixedMetricsAndBrokenEnvelope()throws Exception {
         var body=payload();interval(body).put("factorUnit","kgCO2e/kWh");assertThat(handle(body).outcome()).isEqualTo(StandardTelemetryOutcome.REJECTED);
         body=payload();interval(body).put("electricityKwh","-1");assertThat(handle(body).outcome()).isEqualTo(StandardTelemetryOutcome.REJECTED);

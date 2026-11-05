@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ThreadLocalRandom;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -54,12 +55,13 @@ import javax.net.ssl.HttpsURLConnection;
         havingValue = "true",
         matchIfMissing = true)
 /**
- * 本地平台旧单点与标准多字段 MQTT 连接入口。
+ * 本地平台旧单点、标准多字段及V2 MQTT连接入口。
  *
- * <p>该配置连接云端 EMQX，并按精确 Topic 把旧单点报文交给
+ * <p>该配置连接指定Broker，并按精确Topic把旧单点报文交给
  * {@link HvacMqttMessageHandler}，把标准多字段报文交给
  * {@link StandardTelemetryMqttMessageHandler}。配置层只负责协议路由和 QoS 1 ACK，
- * 不解析设备归属，也不直接访问 MySQL 或 TDengine。</p>
+ * 不解析设备归属，也不直接访问MySQL或TDengine。V2应用ACK在回调外发布，
+ * 发布成功后才确认原始入站消息；失败保留冻结回执和重投条件。</p>
  *
  * <p>业务拒绝和无法通过重投修复的 JSON 毒消息会确认；本地配置快照不可用、
  * TDengine 写入失败或未分类运行时异常不确认。初次连接失败由独立调度器持续重试，
@@ -81,6 +83,7 @@ public class MqttConfig {
     private final MqttFailureEvidenceRecorder failureEvidenceRecorder;
     private final AtomicBoolean connecting = new AtomicBoolean();
     private final AtomicInteger consecutiveFailures = new AtomicInteger();
+    private final AtomicLong connectionEpoch = new AtomicLong();
 
     @Value("${mqtt.broker-url}")
     private String brokerUrl;
@@ -257,6 +260,7 @@ public class MqttConfig {
 
             @Override
             public void connectionLost(Throwable cause) {
+                connectionEpoch.incrementAndGet();
                 log.warn("MQTT连接断开，等待自动重连: {}",
                         cause == null ? "unknown" : cause.getMessage());
             }
@@ -292,7 +296,8 @@ public class MqttConfig {
                                     v2Result.applicationAck());
                             var result=v2Result;
                             // ACK同步发布也不能占用Paho回调；发布完成后才确认原始V2消息。
-                            scheduler.schedule(()->publishApplicationAck(client,topic,message,result,ackPayload),Instant.now());
+                            long epoch=connectionEpoch.get();
+                            scheduler.schedule(()->publishApplicationAck(client,scheduler,topic,message,result,ackPayload,epoch,1),Instant.now());
                             deferredAck=true;acknowledge=false;
                         }
                         log.debug("V2 MQTT 报文处理完成: resultCode={}, ackMode={}, metrics={}",
@@ -357,17 +362,25 @@ public class MqttConfig {
         };
     }
 
-    private void publishApplicationAck(IMqttClient client,String topic,MqttMessage message,V2ProcessingResult result,byte[] payload) {
+    private void publishApplicationAck(IMqttClient client,TaskScheduler scheduler,String topic,MqttMessage message,V2ProcessingResult result,byte[] payload,long epoch,int attempt) {
+        // 重连可能重新使用包编号；旧连接的延后任务只能由Broker重投恢复，不能确认新连接中的其他消息。
+        if(connectionEpoch.get()!=epoch)return;
         try {
             client.publish(result.ackTopic(),payload,1,false);
             meterRegistry.counter("iot.telemetry.v2.application_ack","result","published").increment();
+            if(connectionEpoch.get()!=epoch)return;
             boolean observed=acknowledge(client,topic,message);
             meterRegistry.counter("iot.telemetry.v2.inbound_ack","result",observed?"completed":"failed").increment();
         } catch(MqttException|RuntimeException failure) {
             meterRegistry.counter("iot.telemetry.v2.application_ack","result","failed").increment();
             meterRegistry.counter("iot.telemetry.v2.inbound_ack","result","failed").increment();
+            // 在线发布窗口暂满时Broker未必立即重投；复用既有调度器有限重试同一冻结ACK，不再执行接入业务。
+            if(attempt<3&&connectionEpoch.get()==epoch)
+                scheduler.schedule(()->publishApplicationAck(client,scheduler,topic,message,result,payload,epoch,attempt+1),
+                        Instant.now().plusMillis(Math.max(1,initialRetryMillis)));
             telemetryV2MqttMessageHandler.recordApplicationAckFailure(result.canonicalMessageId(),"MQTT_QOS1_APPLICATION_ACK_PUBLISH_FAILED");
-            log.error("V2应用ACK发布失败，保留原消息重投: topic={}",topic);
+            log.warn("V2应用ACK发布失败，保留原消息: topic={}, attempt={}, mqttReason={}",topic,attempt,
+                    failure instanceof MqttException mqtt?mqtt.getReasonCode():"RUNTIME");
         }
     }
 

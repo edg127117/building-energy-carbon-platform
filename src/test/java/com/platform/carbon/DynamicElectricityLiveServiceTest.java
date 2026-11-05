@@ -72,7 +72,9 @@ class DynamicElectricityLiveServiceTest {
     }
     private static LocalDateTime local(Instant at){return LocalDateTime.ofInstant(at,ZoneId.of("Asia/Shanghai"));}
 
-    @Test void v2ReceiptFailureRollsBackInputThenFrozenRecoveryPersistsWithoutResolvingAliasAgain() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(longs={0,1})
+    void v2ReceiptFailureRollsBackInputThenFrozenRecoveryPersistsWithoutResolvingAliasAgain(long version) throws Exception {
         jdbc.execute("CREATE TABLE biz_telemetry_message_intent(canonical_message_id VARCHAR(64) PRIMARY KEY,building_id VARCHAR(32),payload_hash VARCHAR(64),snapshot_json CLOB,terminal_json CLOB,state VARCHAR(20) DEFAULT 'PENDING',created_ms BIGINT,retry_count INT DEFAULT 0,next_retry_ms BIGINT DEFAULT 0)");
         jdbc.execute("CREATE TABLE biz_telemetry_conflict_budget(budget_key VARCHAR(30) PRIMARY KEY,used_rows BIGINT DEFAULT 0)");
         jdbc.update("INSERT INTO biz_telemetry_conflict_budget VALUES('PENDING_MESSAGE',0)");
@@ -92,7 +94,7 @@ class DynamicElectricityLiveServiceTest {
         var numeric=mock(com.platform.iot.ingest.standard.StandardTelemetryIngestionService.class);
         var v2=new com.platform.iot.ingest.v2.TelemetryV2IngestionService(devices,mock(UnknownDeviceHandler.class),numeric,receipts,
                 mock(com.platform.iot.reliability.mapper.TelemetryReceiptFailureMapper.class),new com.platform.iot.ingest.v2.AckModeResolver(),new io.micrometer.core.instrument.simple.SimpleMeterRegistry(),"own/ack",journal,helper);
-        var period=new com.platform.adapter.model.ElectricityInterval("Q",from.toEpochMilli(),from.plusSeconds(900).toEpochMilli(),1,BigDecimal.ONE,new BigDecimal("0.5"),"kWh","kgCO2/kWh","SIMULATED","V2_TEST");
+        var period=new com.platform.adapter.model.ElectricityInterval("Q",from.toEpochMilli(),from.plusSeconds(900).toEpochMilli(),version,BigDecimal.ONE,new BigDecimal("0.5"),"kWh","kgCO2/kWh","SIMULATED","V2_TEST",version==0?"DEVICE_FIELDS":null);
         var message=new com.platform.iot.ingest.v2.TelemetryV2Message("2.0","METER",1,key,"PERIOD-M1",null,"BOOT",1L,from.toEpochMilli(),System.currentTimeMillis(),null,null,null,null,"ADAPTER_DERIVED","DEVICE_REPORTED","DERIVED","ADAPTER_PROXY","BOOT_ID_AND_SEQ",List.of(),period);
         assertThatThrownBy(()->v2.ingest(message,System.currentTimeMillis())).isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
@@ -125,6 +127,41 @@ class DynamicElectricityLiveServiceTest {
                 q==null?null:new BigDecimal(q),f==null?null:new BigDecimal(f),"SIMULATED","test-source")));
     }
     private void drain() {jdbc.update("UPDATE biz_dynamic_electricity_task SET next_check=0");live.refresh();}
+    private DeviceIntervalReceipt automatic(String point,Instant at,String boot,Long seq,String message,String q,String f,String sequenceSource) {
+        return tx.execute(s->live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL",point),"METER",point,at,at.plusSeconds(900),0,
+                q==null?null:new BigDecimal(q),f==null?null:new BigDecimal(f),"SIMULATED","automatic-source",new SourceOrder(boot,seq,message,sequenceSource))));
+    }
+    @Test void platformVersionsUseDeviceOrderAndKeepCursorAcrossServiceRestart() {
+        automatic("P0",from,"BOOT",10L,"M10","10","0.5","DEVICE_FIELDS");
+        automatic("P1",from,"BOOT",10L,"P1M10","20","0.8","DEVICE_FIELDS");drain();
+        var first=tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
+        automatic("P0",from,"BOOT",10L,"M10","10","0.5","DEVICE_FIELDS");drain();
+        assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id()).isEqualTo(first.id());
+        automatic("P0",from,"BOOT",12L,"M12","11","0.5","DEVICE_FIELDS");drain();
+        assertThat(tasks.current("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("21.5");
+        // 新建服务实例不丢来源游标；同值高序号也必须挡住随后到达的旧异值。
+        live=new DynamicElectricityLiveService(auth,devices,tasks,results,input,queries,users,roles,manager);
+        automatic("P0",from,"BOOT",15L,"M15","11","0.5","DEVICE_FIELDS");
+        automatic("P0",from,"BOOT",14L,"M14","99","0.9","DEVICE_FIELDS");drain();
+        var retained=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
+        assertThat(retained.quantity()).isEqualByComparingTo("11");assertThat(retained.quantityRevision()).isEqualTo(2);
+        assertThat(retained.sourceOrder().seq()).isEqualTo(15);
+        assertThatThrownBy(()->automatic("P0",from,"OTHER_BOOT",999L,"X","99","0.9","DEVICE_FIELDS")).hasMessageContaining("可比较");
+        assertThatThrownBy(()->automatic("P0",from,"BOOT",15L,"X","99","0.9","DEVICE_FIELDS")).hasMessageContaining("可比较");
+        assertThatThrownBy(()->automatic("P0",from,"BOOT",16L,"M15","99","0.9","DEVICE_FIELDS")).hasMessageContaining("可比较");
+        automatic("P0",from.plusSeconds(900),"OTHER_BOOT",1L,"NEW_PERIOD","1","0.5","DEVICE_FIELDS");
+    }
+    @Test void missingOrderOrAdapterPollOrderNeverSilentlyOverwritesAndMixedModesReject() {
+        automatic("P0",from,null,null,null,"10","0.5",null);
+        automatic("P0",from,null,null,null,"10.0","0.50",null);
+        assertThatThrownBy(()->automatic("P0",from,null,null,null,"11","0.5",null)).hasMessageContaining("可比较");
+        automatic("P1",from,"POLL",1L,null,"20","0.8","ADAPTER_POLL");
+        assertThatThrownBy(()->automatic("P1",from,"POLL",2L,null,"21","0.8","ADAPTER_POLL")).hasMessageContaining("可比较");
+        assertThatThrownBy(()->upload("P0",from,100,"30","0.5")).hasMessageContaining("混用");
+        assertThatThrownBy(()->automatic("P0",from.plusSeconds(900),null,null,null,"1",null,null)).hasMessageContaining("同包");
+        upload("P0",from.plusSeconds(1800),1,"1","0.5");
+        assertThatThrownBy(()->automatic("P0",from.plusSeconds(1800),null,null,null,"1","0.5",null)).hasMessageContaining("显式修订");
+    }
     @Test void mqttUsesRegisteredIdentityScopeAndSystemTasksWithoutUserAccount() {
         tx.executeWithoutResult(s->{
             live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL","P0"),"METER","P0",from,from.plusSeconds(900),1,new BigDecimal("10"),new BigDecimal("0.5"),"SIMULATED","MQTT-test"));

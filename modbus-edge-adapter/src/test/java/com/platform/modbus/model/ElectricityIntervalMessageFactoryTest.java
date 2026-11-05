@@ -26,4 +26,11 @@ class ElectricityIntervalMessageFactoryTest {
         assertThatThrownBy(()->factory.create(device(),Map.of("Q",BigDecimal.ONE))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(()->factory.create(device(),Map.of("Q",BigDecimal.ONE,"F",BigDecimal.ONE,"start",new BigDecimal("1790784000000.5"),"end",new BigDecimal("1790784900000"),"revision",BigDecimal.ONE))).isInstanceOf(ArithmeticException.class);
     }
+    @Test void oneDeviceTimeNeedsNoDeviceRevisionAndDoesNotPromotePollingSequence() {
+        var d=device();d.setPoints(List.of(point("Q","ELECTRICITY_KWH","kWh"),point("F","CO2_FACTOR","kgCO2/kWh"),point("end","INTERVAL_END","ms")));
+        var factory=new TelemetryMessageFactory(Clock.systemUTC());
+        var result=factory.create(d,Map.of("Q",BigDecimal.ONE,"F",new BigDecimal("0.5"),"end",new BigDecimal("1790784900000")));
+        assertThat(result.electricityInterval().revision()).isZero();assertThat(result.electricityInterval().startMs()).isEqualTo(1790784000000L);
+        assertThat(result.electricityInterval().sequenceSource()).isEqualTo("ADAPTER_POLL");assertThat(result.sourceSeq()).isEqualTo(1);
+    }
 }

@@ -408,6 +408,7 @@ public class TelemetryV2IngestionService {
                 String text=value instanceof BigDecimal d?d.stripTrailingZeros().toPlainString():java.util.Objects.toString(value,"<null>");
                 canonical.append(text.length()).append(':').append(text);
             }
+            if(p.sequenceSource()!=null)canonical.append("|sequenceSource|").append(p.sequenceSource());
         }
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")

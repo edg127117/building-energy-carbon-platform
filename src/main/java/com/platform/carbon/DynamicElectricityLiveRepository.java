@@ -19,7 +19,11 @@ public class DynamicElectricityLiveRepository {
         this.jdbc=jdbc; this.json=json;
     }
     public record Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,
-                          String nature,String reference,String identityId,String transport) {
+                          String nature,String reference,String identityId,String transport,
+                          @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) DynamicElectricityContracts.SourceOrder sourceOrder) {
+        public Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,String nature,String reference,String identityId,String transport) {
+            this(quantity,quantityRevision,factor,factorRevision,nature,reference,identityId,transport,null);
+        }
         public Reading(BigDecimal quantity,long quantityRevision,BigDecimal factor,long factorRevision,String nature,String reference) {
             this(quantity,quantityRevision,factor,factorRevision,nature,reference,null,"HTTP");
         }

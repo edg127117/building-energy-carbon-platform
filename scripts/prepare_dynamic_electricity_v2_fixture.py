@@ -16,6 +16,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--execute',action='store_true',required=True)
+    parser.add_argument('--platform-versions',action='store_true',help='Use the existing device timestamp as interval end; omit device revision/start fields.')
     args=parser.parse_args();root=args.root.resolve()
     read=lambda path:json.loads(path.read_text(encoding='utf-8-sig'))
     config=read(root/'private/local.json');broker=read(root/'private/mqtt.json');fixture=read(root/'live-fixture/manifest.json')
@@ -63,6 +64,11 @@ def main():
         sql('INSERT INTO iot_protocol_field_mapping(mapping_id,profile_id,source_path,metric_code,value_type,source_unit,target_unit,required_flag,enabled,sort_order) VALUES ('+
             ','.join(quote(v) for v in ['DYN_V2_'+str(index),profile,'/'+field,code,kind,unit,unit,required,1,index])+
             ') ON DUPLICATE KEY UPDATE value_type=VALUES(value_type);',database)
+    if args.platform_versions:
+        sql("UPDATE iot_protocol_field_mapping SET enabled=0 WHERE profile_id="+quote(profile)+" AND value_type IN ('INTERVAL_START','INTERVAL_REVISION');"+
+            "UPDATE iot_protocol_field_mapping SET source_path='/time' WHERE profile_id="+quote(profile)+" AND value_type='INTERVAL_END';",database)
+    else:
+        sql("UPDATE iot_protocol_field_mapping SET enabled=1 WHERE profile_id="+quote(profile)+"; UPDATE iot_protocol_field_mapping SET source_path='/to' WHERE profile_id="+quote(profile)+" AND value_type='INTERVAL_END';",database)
     source=hashlib.sha256((building+'V2_SIMULATED_ONLY').encode()).hexdigest()[:32]
     statements=["INSERT INTO biz_data_source(source_id,source_code,source_name,building_id,source_category,transport_type,status,config_revision,runtime_revision) VALUES ("+
                 ','.join(quote(v) for v in [source,'DYNAMIC_V2_TEST','SIMULATED_V2_ONLY',building,'DEVICE_ACCESS','MQTT','ENABLED',1,1])+') ON DUPLICATE KEY UPDATE source_id=source_id;']
@@ -87,8 +93,10 @@ def main():
           'modbus-edge.devices[0].name':'SIMULATED_ONLY','modbus-edge.devices[0].identity-type':'SERIAL_NO','modbus-edge.devices[0].identity-value':'DYNAMIC_100_0','modbus-edge.devices[0].profile-code':'DYNAMIC_INTERVAL_TEST',
           'modbus-edge.devices[0].poll-interval':'15s','modbus-edge.devices[0].connection.type':'TCP','modbus-edge.devices[0].connection.host':'127.0.0.1','modbus-edge.devices[0].connection.port':saved['modbusPort'],'modbus-edge.devices[0].connection.unit-id':1}
     for index,(_,code,kind,unit,_) in enumerate(fields):
+        if args.platform_versions and kind in ('INTERVAL_START','INTERVAL_REVISION'):continue
+        if args.platform_versions:index={'ELECTRICITY_KWH':0,'CO2_FACTOR':1,'INTERVAL_END':2}[kind]
         key='modbus-edge.devices[0].points['+str(index)+'].'
-        edge.update({key+'code':code,key+'value-type':kind,key+'unit':unit,key+'address':index*4,key+'function':'HOLDING_REGISTER',key+'data-type':'FLOAT64'})
+        edge.update({key+'code':code,key+'value-type':kind,key+'unit':unit,key+'address':(3 if args.platform_versions and kind=='INTERVAL_END' else index)*4,key+'function':'HOLDING_REGISTER',key+'data-type':'FLOAT64'})
     yaml_file(root/'private/modbus-v2.yml',edge)
     print('OWN_V2_ADAPTER_FIXTURE_PREPARED_NO_PROCESS_STARTED')
 

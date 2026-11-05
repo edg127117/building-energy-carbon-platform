@@ -25,8 +25,14 @@ public record StandardTelemetryMessage(
         Long seq,
         List<StandardMetric> metrics,
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        ElectricityInterval electricityInterval
+        ElectricityInterval electricityInterval,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String bootId,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String sourceMessageId
 ) {
+    public StandardTelemetryMessage(String standardVersion,String profileCode,int profileVersion,DeviceIdentityKey deviceIdentity,long eventTime,long receivedTime,
+            String timeSource,Long seq,List<StandardMetric> metrics,ElectricityInterval electricityInterval) {
+        this(standardVersion,profileCode,profileVersion,deviceIdentity,eventTime,receivedTime,timeSource,seq,metrics,electricityInterval,null,null);
+    }
     public StandardTelemetryMessage(String standardVersion,String profileCode,int profileVersion,
                                     DeviceIdentityKey deviceIdentity,long eventTime,long receivedTime,
                                     String timeSource,Long seq,List<StandardMetric> metrics) {
@@ -36,9 +42,9 @@ public record StandardTelemetryMessage(
     /** 周期电量与CO2因子共享明确区间，单位固定；此载荷与普通metrics互斥。 */
     public record ElectricityInterval(
             @NotBlank @Size(max=80) String pointId,
-            @NotNull Instant startInclusive,
-            @NotNull Instant endExclusive,
-            @Min(1) long revision,
+            Instant startInclusive,
+            Instant endExclusive,
+            @Min(0) long revision,
             @DecimalMin("0") @Digits(integer=12,fraction=12) BigDecimal electricityKwh,
             @DecimalMin("0") @Digits(integer=12,fraction=18) BigDecimal factorKgCo2PerKwh,
             @NotNull @Pattern(regexp="kWh") String electricityUnit,

@@ -42,7 +42,7 @@ public final class DynamicElectricityContracts {
         }
     }
 
-    /** 适配层沿用平台身份认证；同一电表同一时段的修订号递增，两项可分开补齐。 */
+    /** HTTP使用显式修订并可同版本拆包；MQTT内部可携带来源顺序，由平台分配周期业务版本。 */
     @Schema(name = "DynamicElectricityDeviceIntervalRequest")
     public record DeviceIntervalRequest(
             @NotNull @Valid com.platform.iot.identity.DeviceIdentityKey deviceIdentity,
@@ -53,7 +53,21 @@ public final class DynamicElectricityContracts {
             @DecimalMin("0") @Digits(integer=12,fraction=12) BigDecimal electricityKwh,
             @DecimalMin("0") @Digits(integer=12,fraction=18) BigDecimal factorKgCo2PerKwh,
             @NotBlank @Pattern(regexp="SOURCE_LABELLED|SIMULATED") String sourceNature,
-            @NotBlank @Size(max=500) String sourceReference) { }
+            @NotBlank @Size(max=500) String sourceReference,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL) SourceOrder sourceOrder) {
+        public DeviceIntervalRequest(com.platform.iot.identity.DeviceIdentityKey deviceIdentity,String profileCode,String pointId,Instant startInclusive,Instant endExclusive,
+                long revision,BigDecimal electricityKwh,BigDecimal factorKgCo2PerKwh,String sourceNature,String sourceReference) {
+            this(deviceIdentity,profileCode,pointId,startInclusive,endExclusive,revision,electricityKwh,factorKgCo2PerKwh,sourceNature,sourceReference,null);
+        }
+    }
+
+    /** 来源顺序与平台修订分开保存；跨启动不可比较，适配器轮询序号不能当作设备更正顺序。 */
+    public record SourceOrder(String bootId,Long seq,String messageId,String sequenceSource) {
+        public boolean reliable() {return "DEVICE_FIELDS".equals(sequenceSource)&&bootId!=null&&!bootId.isBlank()&&seq!=null;}
+        public boolean comparable(SourceOrder other) {
+            return other!=null&&reliable()&&other.reliable()&&bootId.equals(other.bootId);
+        }
+    }
 
     public record DeviceIntervalReceipt(String buildingId, Instant startInclusive, Instant endExclusive,
                                         long revision, String state) { }

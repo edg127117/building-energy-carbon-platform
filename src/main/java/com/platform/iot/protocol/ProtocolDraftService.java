@@ -46,11 +46,15 @@ public class ProtocolDraftService {
     @Transactional
     public Detail update(String id,UpdateRequest request,Long operator,Set<String> roles) {
         var existing=repository.find(id).orElseThrow(ProtocolErrors::notFound);
-        // 旧页面不认识周期角色，未传类型时保留原映射角色，防止普通编辑静默降级运行契约。
+        // 旧客户端不会回传新增运行元数据；未传字段沿用已保存值，避免普通编辑静默降级运行契约。
         Configuration config=request.configuration();
         var previous=view(existing).configuration();
         config=new Configuration(config.name(),config.productId(),config.profileCode(),config.sourceTopic(),config.identityType(),config.identityPath(),
-                config.discriminatorPath(),config.discriminatorValue(),config.timestampPath(),config.mappings().stream().map(m->{
+                config.discriminatorPath(),config.discriminatorValue(),config.timestampPath(),
+                preserve(config.seqPath(),previous.seqPath()),preserve(config.messageIdPath(),previous.messageIdPath()),
+                preserve(config.bootIdPath(),previous.bootIdPath()),preserve(config.batchIdPath(),previous.batchIdPath()),
+                preserve(config.retransmittedAtPath(),previous.retransmittedAtPath()),preserve(config.maxAckMode(),previous.maxAckMode()),
+                preserve(config.correlationPolicy(),previous.correlationPolicy()),config.mappings().stream().map(m->{
                     if(m.valueType()!=null)return m;
                     var prior=previous.mappings().stream().filter(p->p.metricCode().equals(m.metricCode())&&p.sourcePath().equals(m.sourcePath())).findFirst().orElse(null);
                     return prior==null?m:new Mapping(m.sourcePath(),m.metricCode(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder(),prior.valueType());
@@ -68,7 +72,8 @@ public class ProtocolDraftService {
         if(c.sourceTopic().contains("+") || c.sourceTopic().contains("#") || c.sourceTopic().chars().anyMatch(Character::isISOControl)
                 || !c.sourceTopic().equals(c.sourceTopic().trim())) throw ProtocolErrors.invalid("Topic 必须是无通配符的精确主题");
         pointer(c.identityPath());
-        if(has(c.timestampPath())) pointer(c.timestampPath());
+        for(String path:new String[]{c.timestampPath(),c.seqPath(),c.messageIdPath(),c.bootIdPath(),c.batchIdPath(),c.retransmittedAtPath()})
+            if(has(path)) pointer(path);
         if(has(c.discriminatorPath())!=has(c.discriminatorValue())) throw ProtocolErrors.invalid("判别路径与取值必须同时填写");
         if(has(c.discriminatorPath())) pointer(c.discriminatorPath());
         var product=products.detail(c.productId(),roles);
@@ -101,6 +106,7 @@ public class ProtocolDraftService {
         if(value==null || !value.startsWith("/") || value.chars().anyMatch(Character::isISOControl)
                 || value.matches(".*~(?![01]).*")) throw ProtocolErrors.invalid("字段路径必须是正确转义的 JSON Pointer");
     }
+    private static String preserve(String current,String previous) { return current==null?previous:current; }
     private String encode(Configuration config) {
         try {return mapper.writeValueAsString(config);} catch(JsonProcessingException e) {throw ProtocolErrors.invalid("配置无法序列化");}
     }
