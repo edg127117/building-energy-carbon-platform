@@ -13,15 +13,22 @@ export function validateDailyTrends(view: DailyTrends, building: string, month: 
   view.days.forEach((day, index) => {
     const start = Date.UTC(year, m - 1, index + 1) - 8 * 3600000
     if (day.date !== `${month}-${String(index + 1).padStart(2, '0')}` || Date.parse(day.startInclusive) !== start
-      || Date.parse(day.endExclusive) !== start + 86400000) throw new Error('DAILY_TREND_WINDOW_MISMATCH')
+      || Date.parse(day.endExclusive) !== start + 86400000
+      || (day.gasBasis !== undefined && !['CO2_ONLY', 'GHG_CO2E', 'UNKNOWN'].includes(day.gasBasis))) throw new Error('DAILY_TREND_WINDOW_MISMATCH')
   })
 }
 function available(status: string, value: string | null): number | null {
   const parsed = status === 'AVAILABLE' ? decimalValue(value) : null
   return parsed !== null && parsed >= 0 ? parsed : null
 }
+function staticCo2Only(days: DailyTrends['days']): boolean {
+  const values = days.filter(day => available(day.staticCarbonStatus, day.staticEmissionTco2e) !== null
+    || available(day.factorStatus, day.staticFactorKgCo2ePerKwh) !== null)
+  return values.length > 0 && values.every(day => day.gasBasis === 'CO2_ONLY')
+}
 export function dailyScreenData(view: DailyTrends, usage: ScreenPeriod, mirror: ScreenPeriod): ScreenRedesignData {
   const data: ScreenRedesignData = {}
+  const staticUnitsAreCo2Only = staticCo2Only(view.days)
   if (usage.kind === 'month' && view.month === usage.value) data.usage = { period: usage, data: {
     electricity: view.days.map(day => available(day.electricityStatus, day.electricityKwh)),
     temperature: view.days.map(() => null), electricityUnit: 'kWh', temperatureUnit: '°C',
@@ -30,7 +37,8 @@ export function dailyScreenData(view: DailyTrends, usage: ScreenPeriod, mirror: 
     staticEmissions: view.days.map(day => available(day.staticCarbonStatus, day.staticEmissionTco2e)),
     staticFactors: view.days.map(day => available(day.factorStatus, day.staticFactorKgCo2ePerKwh)),
     dynamicEmissions: view.days.map(() => null), dynamicFactors: view.days.map(() => null),
-    emissionUnit: 'tCO₂e', factorUnit: 'kgCO₂e/kWh',
+    // 摘要按日声明气体口径；仅每个有值静态日均为 CO2-only 时才能和动态 CO2 共用坐标轴。
+    emissionUnit: staticUnitsAreCo2Only ? 'tCO₂' : 'tCO₂e', factorUnit: staticUnitsAreCo2Only ? 'kgCO₂/kWh' : 'kgCO₂e/kWh',
   } }
   return data
 }

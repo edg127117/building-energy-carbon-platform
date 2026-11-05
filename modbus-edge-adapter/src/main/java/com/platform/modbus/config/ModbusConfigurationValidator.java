@@ -50,6 +50,8 @@ public class ModbusConfigurationValidator {
             require(positive(device.getPollInterval()), "poll-interval必须为正数");
             validateConnection(device.getName(), device.getConnection());
             validatePoints(device);
+            try {com.platform.adapter.parser.IntervalMappings.validate(com.platform.modbus.model.TelemetryMessageFactory.intervalMappings(device));}
+            catch(IllegalArgumentException ex){throw new ModbusConfigurationException("周期点表无效: "+ex.getMessage());}
             readPlanBuilder.build(device.getPoints());
         }
     }

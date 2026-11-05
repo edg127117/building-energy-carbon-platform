@@ -30,9 +30,17 @@ public interface TelemetryReceiptMapper extends BaseMapper<TelemetryReceipt> {
                          @Param("batchId") String batchId,
                          @Param("retransmittedAt") java.time.LocalDateTime retransmittedAt);
 
+    /**
+     * 周期输入的两种成功终态按首次 {@code persisted_at} 保留 7 天；其余无异常回执
+     * 保持普通热窗口，重投时间不参与截止计算。
+     */
     @Delete("""
             DELETE FROM biz_telemetry_receipt
-            WHERE persisted_at < #{before}
+            WHERE persisted_at < GREATEST(#{before}, #{periodBefore})
+              AND (
+                (receipt_status NOT IN ('PERIOD_INPUT_PERSISTED', 'DUPLICATE_PERIOD_INPUT') AND persisted_at < #{before})
+                OR (receipt_status IN ('PERIOD_INPUT_PERSISTED', 'DUPLICATE_PERIOD_INPUT') AND persisted_at < #{periodBefore})
+              )
               AND NOT EXISTS (
                 SELECT 1
                 FROM biz_telemetry_receipt_failure f
@@ -43,6 +51,7 @@ public interface TelemetryReceiptMapper extends BaseMapper<TelemetryReceipt> {
             LIMIT #{limit}
             """)
     int deleteExpiredWithoutFailure(@Param("before") LocalDateTime before,
+                                    @Param("periodBefore") LocalDateTime periodBefore,
                                     @Param("limit") int limit);
 
     @Delete("""
@@ -71,6 +80,7 @@ public interface TelemetryReceiptMapper extends BaseMapper<TelemetryReceipt> {
             SELECT MIN(persisted_at)
             FROM biz_telemetry_receipt
             WHERE persisted_at < #{before}
+              AND receipt_status NOT IN ('PERIOD_INPUT_PERSISTED', 'DUPLICATE_PERIOD_INPUT')
               AND NOT EXISTS (
                 SELECT 1
                 FROM biz_telemetry_receipt_failure f
@@ -79,4 +89,19 @@ public interface TelemetryReceiptMapper extends BaseMapper<TelemetryReceipt> {
               )
             """)
     LocalDateTime selectOldestDeletablePersistedAt(@Param("before") LocalDateTime before);
+
+    @Select("""
+            SELECT MIN(persisted_at)
+            FROM biz_telemetry_receipt
+            WHERE persisted_at < #{before}
+              AND receipt_status IN ('PERIOD_INPUT_PERSISTED', 'DUPLICATE_PERIOD_INPUT')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM biz_telemetry_receipt_failure f
+                WHERE f.canonical_message_id =
+                      biz_telemetry_receipt.canonical_message_id
+              )
+            """)
+    LocalDateTime selectOldestPeriodInputDeletablePersistedAt(
+            @Param("before") LocalDateTime before);
 }

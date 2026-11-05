@@ -23,7 +23,7 @@ public class DailyTrendSummaryRepository {
         var from=Timestamp.from(month.atDay(1).atStartOfDay(zone).toInstant());
         var to=Timestamp.from(month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant());
         var version=new ArrayList<Object>();
-        version.add(List.of("DAILY_SUMMARY_ALGORITHM_1",building,month.toString(),month.isBefore(YearMonth.now(zone))?"CLOSED":LocalDate.now(zone).toString()));
+        version.add(List.of("DAILY_SUMMARY_ALGORITHM_2",building,month.toString(),month.isBefore(YearMonth.now(zone))?"CLOSED":LocalDate.now(zone).toString()));
         add(version,"SELECT version_id,revision,effective_from,effective_to FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' ORDER BY version_id",building);
         // 人工批次审核后不可变；按建筑核对全部有效批次头，避免扫描数十万条小时事实或漏掉跨月修订。
         add(version,"SELECT batch_id,payload_hash,revision,reviewed_at FROM biz_energy_manual_batch WHERE building_id=? AND status='APPROVED' ORDER BY batch_id",building);

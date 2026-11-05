@@ -70,6 +70,7 @@ public class JsonTelemetryParser {
                 .sorted(Comparator.comparingInt(ProtocolFieldMapping::sortOrder))
                 .toList();
         validateUniqueMetricCodes(activeMappings);
+        try {IntervalMappings.validate(activeMappings);}catch(IllegalArgumentException ex){throw error(ex.getMessage(),"周期字段映射无效");}
 
         List<StandardMetric> metrics = new ArrayList<>();
         for (ProtocolFieldMapping mapping : activeMappings) {
@@ -101,6 +102,25 @@ public class JsonTelemetryParser {
                 ? TimeSource.ADAPTER_RECEIVED : TimeSource.DEVICE_REPORTED;
         MessageIdentity messageIdentity = createIdentity(
                 identity, sourceMessageId, bootId, seq, deviceTime);
+        com.platform.adapter.model.ElectricityInterval interval;
+        try {interval=IntervalMappings.extract(activeMappings,metrics,"ADAPTER_V2:"+profile.profileCode()+":"+profile.profileVersion());}
+        catch(IllegalArgumentException|ArithmeticException ex){throw error("INVALID_ELECTRICITY_INTERVAL",ex.getMessage());}
+        if(interval!=null) {
+            // 保留真实来源字段用于追溯，设备计数器不直接充当业务修订号。
+            if(interval.revision()==0)interval=new com.platform.adapter.model.ElectricityInterval(interval.metricCode(),interval.startMs(),interval.endMs(),interval.revision(),
+                    interval.electricityKwh(),interval.factorKgCo2PerKwh(),interval.electricityUnit(),interval.factorUnit(),interval.sourceNature(),interval.sourceReference(),"DEVICE_FIELDS");
+            var consumed=activeMappings.stream().filter(m->IntervalMappings.interval(m.valueType())).map(ProtocolFieldMapping::metricCode).collect(java.util.stream.Collectors.toSet());
+            metrics.removeIf(m->consumed.contains(m.code()));
+            if(interval.revision()==0&&sourceMessageId==null) {
+                // 无独立来源消息ID时，每次适配是新受理事件。不能用时段或内容作键，否则 A→B→A 的第三次会被吞掉。
+                // UUID只关联适配器回执；平台仍保留计量时段，并独立维护采用版本。
+                messageIdentity=new MessageIdentity(UUID.randomUUID().toString(),IdSource.ADAPTER_GENERATED,DedupMode.NONE);
+            } else {
+                // 显式修订的旧键保持兼容；拆分的电量和因子仍独立受理。
+                messageIdentity=new MessageIdentity(hash(messageIdentity.canonicalMessageId()+"|interval|"+interval.metricCode()+"|"+interval.startMs()+"|"+interval.endMs()+"|"+interval.revision()
+                        +"|"+(interval.electricityKwh()!=null)+"|"+(interval.factorKgCo2PerKwh()!=null)),messageIdentity.idSource(),messageIdentity.dedupMode());
+            }
+        }
         return new StandardTelemetryMessage(
                 "2.0",
                 requiredText(profile.profileCode(), "profileCode"),
@@ -121,7 +141,7 @@ public class JsonTelemetryParser {
                 messageIdentity.dedupMode(),
                 defaultText(profile.maxAckMode(), "EVIDENCE_ONLY"),
                 defaultText(profile.correlationPolicy(), "NONE"),
-                metrics);
+                metrics,interval);
     }
 
     private MessageIdentity createIdentity(

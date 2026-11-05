@@ -3,6 +3,13 @@ import { carbonHourlyApi } from './api/carbon-hourly'
 
 export { queryEnergyFlow } from './api/energy-flow'
 export type { EnergyFlowView, EnergyFlowGraph, EnergyFlowOption, EnergyFlowSelection } from './api/energy-flow'
+export { readDynamicElectricity } from './api/dynamic-electricity'
+export type {
+  DynamicElectricityPeriodType,
+  DynamicElectricityPoint,
+  DynamicElectricityPointStatus,
+  DynamicElectricityView,
+} from './api/dynamic-electricity'
 
 export { routes } from './routes'
 export { default as messages } from './locales/zh-CN'
@@ -39,7 +46,7 @@ export type {
   HourlyCarbonView,
 } from './api/carbon-hourly'
 
-/** 大屏只公开既有结果、冻结证据和分类报告读取，不暴露计算、发布或审批写操作。 */
+/** 大屏只公开既有结果、冻结证据、动态监测和分类报告读取，不暴露计算、发布或审批写操作。 */
 export const screenCarbonQueries = Object.freeze({
   getCalculation: carbonResultsApi.getCalculation,
   getEvidence: carbonResultsApi.getEvidence,

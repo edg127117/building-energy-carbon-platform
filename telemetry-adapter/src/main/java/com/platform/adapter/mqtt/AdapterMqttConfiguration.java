@@ -19,12 +19,20 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
         matchIfMissing = true)
 public class AdapterMqttConfiguration {
 
-    @Bean
+    @Bean("adapterMqttClient")
     public IMqttClient adapterMqttClient(AdapterMqttProperties properties) throws MqttException {
-        return new MqttClient(
+        var client=new MqttClient(
                 properties.getBrokerUrl(),
                 properties.getClientId(),
                 new MemoryPersistence());
+        client.setTimeToWait(10000);return client;
+    }
+
+    /** ACK独占订阅窗口，防止待确认原始消息占满同一连接后阻断释放它们所需的应用ACK。 */
+    @Bean("adapterAckMqttClient")
+    public IMqttClient adapterAckMqttClient(AdapterMqttProperties properties) throws MqttException {
+        var client=new MqttClient(properties.getBrokerUrl(),properties.getClientId()+"-ack",new MemoryPersistence());
+        client.setTimeToWait(10000);return client;
     }
 
     @Bean("adapterMqttTaskScheduler")

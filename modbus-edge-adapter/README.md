@@ -17,6 +17,8 @@ Modbus TCP/RTU 设备
 
 ## 当前能力与边界
 
+- 点表可选`value-type`默认为`DECIMAL`；显式周期角色从设备寄存器读取区间电量、CO2因子、时界和修订，组成V2的electricityInterval。时界和修订不能由轮询时钟补造。周期字段不再重复作为普通metrics写入。配置角色及单位见[动态用电监测](../docs/development/dynamic-electricity-monitoring.md#现有适配器与v2周期载荷)，厂家寄存器含义仍须按实际点表对接。
+
 - 支持只读功能码 01、02、03、04；没有写寄存器、写线圈或设备控制入口。
 - 支持 `BOOLEAN`、`INT16`、`UINT16`、`INT32`、`UINT32`、`FLOAT32`、
   `FLOAT64`，字节序、字序、倍率、偏移和单位均由部署配置声明。

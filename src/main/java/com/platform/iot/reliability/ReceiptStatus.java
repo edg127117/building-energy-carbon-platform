@@ -4,6 +4,8 @@ package com.platform.iot.reliability;
 public enum ReceiptStatus {
     PLATFORM_PERSISTED,
     DUPLICATE_PERSISTED,
+    PERIOD_INPUT_PERSISTED,
+    DUPLICATE_PERIOD_INPUT,
     MESSAGE_CONFLICT,
     PLATFORM_REJECTED,
     DISCOVERED_NOT_ACTIVE

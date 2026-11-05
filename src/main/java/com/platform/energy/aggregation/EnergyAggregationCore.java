@@ -387,6 +387,15 @@ public class EnergyAggregationCore {
         }
     }
 
+    /** 已固定建筑/测点和源周期的设备量复用周期覆盖与求和算法，无需模拟正式核算上下文。 */
+    public BigDecimal aggregateNativePeriodTotal(AggregationQuery query, List<ActivityFact> facts) {
+        if (query == null || query.startInclusive() == null || query.endExclusive() == null
+                || !query.startInclusive().isBefore(query.endExclusive()) || facts == null
+                || facts.stream().anyMatch(f -> f == null || f.rawValue() == null || f.rawValue().signum() < 0))
+            throw error(INPUT_INCOMPLETE, "设备周期量及区间无效");
+        return periodTotal(query, facts).quantity();
+    }
+
     private static Computation periodTotal(AggregationQuery query, List<ActivityFact> facts) {
         List<ActivityFact> periods = facts.stream()
                 .filter(v -> v.sourcePeriodStart() != null && v.sourcePeriodEnd() != null)

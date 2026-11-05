@@ -26,9 +26,8 @@ public class TelemetryV2MqttMessageHandler {
             return malformedWithEvidence("V2 MQTT 报文为空");
         }
         try {
-            return ingestionService.ingest(
-                    objectMapper.readValue(payload, TelemetryV2Message.class),
-                    platformReceivedAt);
+            var body=objectMapper.readTree(payload);
+            return ingestionService.ingest(objectMapper.treeToValue(body,TelemetryV2Message.class),platformReceivedAt);
         } catch (IOException | IllegalArgumentException exception) {
             return malformedWithEvidence("V2 MQTT 报文 JSON 无效");
         } catch (RuntimeException exception) {

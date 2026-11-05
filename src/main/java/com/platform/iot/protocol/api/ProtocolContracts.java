@@ -20,7 +20,23 @@ public final class ProtocolContracts {
             @Size(max=200) String discriminatorPath,
             @Size(max=50) String discriminatorValue,
             @Size(max=200) String timestampPath,
-            @NotEmpty @Size(max=128) List<@NotNull @Valid Mapping> mappings) {}
+            @Size(max=200) String seqPath,
+            @Size(max=200) String messageIdPath,
+            @Size(max=200) String bootIdPath,
+            @Size(max=200) String batchIdPath,
+            @Size(max=200) String retransmittedAtPath,
+            @Size(max=50) String maxAckMode,
+            @Size(max=50) String correlationPolicy,
+            @NotEmpty @Size(max=128) List<@NotNull @Valid Mapping> mappings) {
+
+        /** 兼容未认识可靠性字段的旧客户端；缺省值由运行时适配器按旧规则处理。 */
+        public Configuration(String name,String productId,String profileCode,String sourceTopic,String identityType,
+                String identityPath,String discriminatorPath,String discriminatorValue,String timestampPath,
+                List<Mapping> mappings) {
+            this(name,productId,profileCode,sourceTopic,identityType,identityPath,discriminatorPath,discriminatorValue,
+                    timestampPath,null,null,null,null,null,null,null,mappings);
+        }
+    }
 
     public record Mapping(
             @NotBlank @Size(max=200) String sourcePath,
@@ -31,7 +47,14 @@ public final class ProtocolContracts {
             @NotNull @Digits(integer=11,fraction=9) @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal offset,
             @NotNull Boolean required,
             @NotNull Boolean enabled,
-            @NotNull @Min(0) @Max(10000) Integer sortOrder) {}
+            @NotNull @Min(0) @Max(10000) Integer sortOrder,
+            @Pattern(regexp="DECIMAL|ELECTRICITY_KWH|CO2_FACTOR|INTERVAL_START|INTERVAL_END|INTERVAL_REVISION") String valueType) {
+        public Mapping(String sourcePath,String metricCode,String sourceUnit,String targetUnit,BigDecimal scale,BigDecimal offset,
+                Boolean required,Boolean enabled,Integer sortOrder) {
+            this(sourcePath,metricCode,sourceUnit,targetUnit,scale,offset,required,enabled,sortOrder,null);
+        }
+        public String effectiveValueType(){return com.platform.adapter.parser.IntervalMappings.type(valueType);}
+    }
 
     public record UpdateRequest(@NotNull @Min(1) Long revision,
                                 @NotNull @Valid Configuration configuration) {}

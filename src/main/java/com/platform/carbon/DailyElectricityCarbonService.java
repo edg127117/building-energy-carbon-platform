@@ -117,10 +117,14 @@ public class DailyElectricityCarbonService implements AutoCloseable {
                 nativeDay==null?List.of():nativeDay.evidenceIds(),nativeDay==null?null:nativeDay.resultNature(),
                 carbon.emission(),carbon.status(),carbon.factor(),carbon.factorStatus(),
                 stored==null?null:stored.view().calculationBatchId(),stored==null?null:stored.view().revision(),
-                stored==null?null:stored.view().declaredSourceNature(),carbon.versions(),stored==null?null:stored.view().evidenceHash());
+                stored==null?null:stored.view().declaredSourceNature(),carbon.versions(),stored==null?null:stored.view().evidenceHash(),carbon.gasBasis());
     }
 
-    private record Carbon(BigDecimal emission,String status,BigDecimal factor,String factorStatus,List<String> versions) { }
+    private record Carbon(BigDecimal emission,String status,BigDecimal factor,String factorStatus,List<String> versions,String gasBasis) {
+        private Carbon(BigDecimal emission,String status,BigDecimal factor,String factorStatus,List<String> versions) {
+            this(emission,status,factor,factorStatus,versions,"UNKNOWN");
+        }
+    }
     private static Carbon unavailable(String state) { return new Carbon(null,state,null,state,List.of()); }
     private static Carbon staticCarbon(HourlyCarbonRepository.Stored stored,String building,LocalDate date) {
         if(stored==null) return unavailable("HOURLY_RESULT_MISSING");
@@ -133,6 +137,7 @@ public class DailyElectricityCarbonService implements AutoCloseable {
         JsonNode hours=stored.evidenceTree().path("hours");
         if(!hours.isArray() || hours.size()!=24) return unavailable("FROZEN_FACTOR_UNAVAILABLE");
         var values=new TreeSet<BigDecimal>();var versions=new TreeSet<String>();
+        boolean co2Only=true;
         for(int i=0;i<24;i++) {
             var point=view.points().get(i);var trace=hours.get(i);
             if(point.hour()!=i || !"COMPLETE".equals(point.status()) || !start(date).plusSeconds(i*3600L).equals(point.startInclusive())
@@ -147,12 +152,13 @@ public class DailyElectricityCarbonService implements AutoCloseable {
                 String id=calculation.path("factorVersionId").asText();
                 if(value==null || id.isBlank()) return unavailable("FROZEN_FACTOR_UNAVAILABLE");
                 values.add(value);hourVersions.add(id);versions.add(id);
+                co2Only &= "GAS_MASS".equals(calculation.path("factor").path("resultBasis").asText());
             }
             if(point.factorVersionIds()==null || !hourVersions.equals(new TreeSet<>(point.factorVersionIds()))) return unavailable("FROZEN_FACTOR_UNAVAILABLE");
         }
         // 同一天不同固定因子不能伪装为单一静态曲线；不平均因子，也不按日电量重新核算碳。
         if(values.size()!=1) return new Carbon(null,"MULTIPLE_FROZEN_FACTORS",null,"MULTIPLE_FROZEN_FACTORS",List.copyOf(versions));
-        return new Carbon(view.dailyTotal().movePointLeft(3),"AVAILABLE",values.first(),"AVAILABLE",List.copyOf(versions));
+        return new Carbon(view.dailyTotal().movePointLeft(3),"AVAILABLE",values.first(),"AVAILABLE",List.copyOf(versions),co2Only?"CO2_ONLY":"GHG_CO2E");
     }
 
     private static BigDecimal frozenFactor(JsonNode calculation) {

@@ -45,10 +45,23 @@ public class ProtocolDraftService {
     }
     @Transactional
     public Detail update(String id,UpdateRequest request,Long operator,Set<String> roles) {
-        validate(request.configuration(),roles);
         var existing=repository.find(id).orElseThrow(ProtocolErrors::notFound);
+        // 旧客户端不会回传新增运行元数据；未传字段沿用已保存值，避免普通编辑静默降级运行契约。
+        Configuration config=request.configuration();
+        var previous=view(existing).configuration();
+        config=new Configuration(config.name(),config.productId(),config.profileCode(),config.sourceTopic(),config.identityType(),config.identityPath(),
+                config.discriminatorPath(),config.discriminatorValue(),config.timestampPath(),
+                preserve(config.seqPath(),previous.seqPath()),preserve(config.messageIdPath(),previous.messageIdPath()),
+                preserve(config.bootIdPath(),previous.bootIdPath()),preserve(config.batchIdPath(),previous.batchIdPath()),
+                preserve(config.retransmittedAtPath(),previous.retransmittedAtPath()),preserve(config.maxAckMode(),previous.maxAckMode()),
+                preserve(config.correlationPolicy(),previous.correlationPolicy()),config.mappings().stream().map(m->{
+                    if(m.valueType()!=null)return m;
+                    var prior=previous.mappings().stream().filter(p->p.metricCode().equals(m.metricCode())&&p.sourcePath().equals(m.sourcePath())).findFirst().orElse(null);
+                    return prior==null?m:new Mapping(m.sourcePath(),m.metricCode(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder(),prior.valueType());
+                }).toList());
+        validate(config,roles);
         if(existing.revision()!=request.revision() || existing.revision()==Long.MAX_VALUE) throw ProtocolErrors.conflict();
-        var next=new ProtocolDraftRepository.Row(id,existing.revision()+1,encode(request.configuration()),System.currentTimeMillis());
+        var next=new ProtocolDraftRepository.Row(id,existing.revision()+1,encode(config),System.currentTimeMillis());
         if(repository.update(next,request.revision(),operator)!=1) throw ProtocolErrors.conflict();
         audit.record(operator,null,"PROTOCOL_DRAFT_UPDATE","PROTOCOL_DRAFT",id,
                 Map.of("revision",existing.revision()),Map.of("revision",next.revision()));
@@ -59,7 +72,8 @@ public class ProtocolDraftService {
         if(c.sourceTopic().contains("+") || c.sourceTopic().contains("#") || c.sourceTopic().chars().anyMatch(Character::isISOControl)
                 || !c.sourceTopic().equals(c.sourceTopic().trim())) throw ProtocolErrors.invalid("Topic 必须是无通配符的精确主题");
         pointer(c.identityPath());
-        if(has(c.timestampPath())) pointer(c.timestampPath());
+        for(String path:new String[]{c.timestampPath(),c.seqPath(),c.messageIdPath(),c.bootIdPath(),c.batchIdPath(),c.retransmittedAtPath()})
+            if(has(path)) pointer(path);
         if(has(c.discriminatorPath())!=has(c.discriminatorValue())) throw ProtocolErrors.invalid("判别路径与取值必须同时填写");
         if(has(c.discriminatorPath())) pointer(c.discriminatorPath());
         var product=products.detail(c.productId(),roles);
@@ -71,14 +85,19 @@ public class ProtocolDraftService {
         for(var m:c.mappings()) {
             pointer(m.sourcePath());
             if(!paths.add(m.sourcePath()) || !codes.add(m.metricCode())) throw ProtocolErrors.invalid("字段路径或指标编码重复");
+            if(com.platform.adapter.parser.IntervalMappings.parameter(m.valueType())) {if(m.enabled())active.add(m.metricCode());continue;}
             var point=points.get(m.metricCode());
             if(point==null || !point.unit().equals(m.targetUnit())) throw ProtocolErrors.invalid("映射指标及目标单位必须与产品启用测点一致");
             if(m.enabled()) {
                 active.add(m.metricCode());
-                if(point.required() && !m.required()) throw ProtocolErrors.invalid("产品必需测点不可配置为可选");
+                // 周期量允许拆分报文，必需计量输入由任务配对判断；普通遥测仍保持整包必需规则。
+                if(point.required() && !m.required() && "DECIMAL".equals(m.effectiveValueType())) throw ProtocolErrors.invalid("产品必需测点不可配置为可选");
             }
         }
         if(active.isEmpty()) throw ProtocolErrors.invalid("至少启用一个测点映射");
+        try {com.platform.adapter.parser.IntervalMappings.validate(c.mappings().stream().map(m->new com.platform.adapter.profile.ProtocolFieldMapping(
+                m.metricCode(),"DRAFT",m.sourcePath(),m.metricCode(),m.effectiveValueType(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList());}
+        catch(IllegalArgumentException ex){throw ProtocolErrors.invalid(ex.getMessage());}
         if(points.values().stream().anyMatch(p->p.required() && !active.contains(p.metricCode())))
             throw ProtocolErrors.invalid("请映射产品的全部必需测点");
     }
@@ -87,6 +106,7 @@ public class ProtocolDraftService {
         if(value==null || !value.startsWith("/") || value.chars().anyMatch(Character::isISOControl)
                 || value.matches(".*~(?![01]).*")) throw ProtocolErrors.invalid("字段路径必须是正确转义的 JSON Pointer");
     }
+    private static String preserve(String current,String previous) { return current==null?previous:current; }
     private String encode(Configuration config) {
         try {return mapper.writeValueAsString(config);} catch(JsonProcessingException e) {throw ProtocolErrors.invalid("配置无法序列化");}
     }

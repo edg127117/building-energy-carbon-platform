@@ -52,19 +52,30 @@ public class ProtocolPreviewService {
                 return failure("PROFILE_NOT_MATCHED",c.discriminatorPath(),"样例未命中当前协议的判别条件");
         }
         var profile=new ProtocolProfile("PREVIEW",c.profileCode(),1,c.sourceTopic(),c.identityType(),c.identityPath(),
-                c.discriminatorPath(),c.discriminatorValue(),c.timestampPath(),null,null,null,null,null,"EVIDENCE_ONLY","NONE",true);
-        var mappings=c.mappings().stream().map(m->new ProtocolFieldMapping("PREVIEW", "PREVIEW",m.sourcePath(),m.metricCode(),
-                "DECIMAL",m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
+                c.discriminatorPath(),c.discriminatorValue(),c.timestampPath(),c.seqPath(),c.messageIdPath(),c.bootIdPath(),
+                c.batchIdPath(),c.retransmittedAtPath(),c.maxAckMode(),c.correlationPolicy(),true);
+        var mappings=c.mappings().stream().map(m->new ProtocolFieldMapping("PREVIEW:"+m.metricCode(), "PREVIEW",m.sourcePath(),m.metricCode(),
+                m.effectiveValueType(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
         try {
+            // 预览与发布共用静态能力校验，不能仅因样例可解析就宣称缺少关联字段的ACK能力有效。
+            com.platform.adapter.publication.SnapshotValidator.validate(new com.platform.adapter.publication.ProtocolSnapshotContracts.Snapshot(1,"V2",
+                    List.of(new com.platform.adapter.publication.ProtocolSnapshotContracts.Entry(profile,mappings.stream().filter(ProtocolFieldMapping::enabled).toList()))),"V2");
             var parsed=parser.adapt(c.sourceTopic(),request.samplePayload().getBytes(StandardCharsets.UTF_8),request.receivedTime(),profile,mappings);
             var values=new HashMap<String,String>();
             parsed.metrics().forEach(m->values.put(m.code(),m.value().toPlainString()));
+            if(parsed.electricityInterval()!=null)for(var m:c.mappings()) {
+                var raw=root.at(m.sourcePath());
+                if(com.platform.adapter.parser.IntervalMappings.interval(m.valueType())&&raw.isNumber())
+                    values.put(m.metricCode(),raw.decimalValue().multiply(m.scale()).add(m.offset()).toPlainString());
+            }
             var result=c.mappings().stream().filter(Mapping::enabled).sorted(Comparator.comparingInt(Mapping::sortOrder))
                     .map(m->{var raw=root.at(m.sourcePath()); var value=values.get(m.metricCode());
                         return new PreviewMetric(m.metricCode(),m.sourcePath(),raw.isNumber()?raw.decimalValue().toPlainString():null,
                                 value,m.targetUnit(),value==null?"MISSING_OPTIONAL":"PRESENT");}).toList();
             return new Preview(true,List.of(),parsed.deviceIdentity().type(),parsed.deviceIdentity().value(),
                     parsed.timeSource().name(),parsed.collectedAt()==null?parsed.adapterReceivedAt():parsed.collectedAt(),result);
+        } catch(com.platform.adapter.publication.SnapshotValidationException e) {
+            return failure(e.getErrorCode(),"",e.getMessage());
         } catch(TelemetryAdaptationException e) {
             String path="";
             if(e.code().equals("DEVICE_IDENTITY_MISSING")) path=c.identityPath();

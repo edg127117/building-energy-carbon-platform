@@ -369,8 +369,16 @@ public class ClassificationService {
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public IntervalContext intervalContext(long user,Collection<String> roles,String building,String versionId,
             Instant from,Instant to,String energy) {
-        read(user,roles,building);window(from,to);
         if(!Duration.between(from,to).equals(Duration.ofHours(1)))throw error(400,"小时计量上下文必须为完整一小时");
+        return monitoringIntervalContext(user,roles,building,versionId,from,to,energy);
+    }
+
+    /** 设备时段监测复用同一计量树和历史适用期，调用方必须提供至多一小时的完整输入区间。 */
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public IntervalContext monitoringIntervalContext(long user,Collection<String> roles,String building,String versionId,
+            Instant from,Instant to,String energy) {
+        read(user,roles,building);window(from,to);
+        if(Duration.between(from,to).compareTo(Duration.ofHours(1))>0)throw error(400,"设备监测时段超过一小时");
         var version=resolveEffectiveVersion(building,from,to,versionId);
         Configuration original=decode(version.json(),Configuration.class);
         var rules=original.boundaryRules().stream().filter(r->energy.equals(r.energyItemCode())).toList();

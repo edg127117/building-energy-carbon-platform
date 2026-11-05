@@ -43,7 +43,13 @@ public class TelemetryMessageJournal {
         tx.setTimeout(60);
     }
     public record Snapshot(TelemetryV2Message message,DeviceIdentityBinding binding,AckModeResolution mode,
-            long receivedAt,List<RawTelemetryEvent> events) { }
+            long receivedAt,List<RawTelemetryEvent> events,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            com.platform.carbon.DynamicElectricityContracts.DeviceIntervalRequest intervalRequest) {
+        public Snapshot(TelemetryV2Message message,DeviceIdentityBinding binding,AckModeResolution mode,long receivedAt,List<RawTelemetryEvent> events) {
+            this(message,binding,mode,receivedAt,events,null);
+        }
+    }
     public record Entry(String id,String hash,Snapshot snapshot,String state,V2ProcessingResult terminal) { }
 
     public Entry find(String id) {
@@ -63,9 +69,13 @@ public class TelemetryMessageJournal {
         return Objects.requireNonNull(find(snapshot.message().canonicalMessageId()));
     }
     public Entry freezeLegacy(String hash,Snapshot snapshot,V2ProcessingResult proof) {
+        Long persistedAt=proof.applicationAck()==null?null:proof.applicationAck().persistedAtEpochMillis();
+        // V2周期回执去重窗口从首次持久化起算，重建热快照不得把旧消息的保留时间向后推。
+        long created=snapshot.intervalRequest()!=null||snapshot.message().electricityInterval()!=null
+                ?Objects.requireNonNullElse(persistedAt,System.currentTimeMillis()):System.currentTimeMillis();
         tx.executeWithoutResult(status->{
             try {jdbc.update("INSERT INTO biz_telemetry_message_intent (canonical_message_id,building_id,payload_hash,snapshot_json,terminal_json,state,created_ms) VALUES (?,?,?,?,?,'COMPLETE',?)",
-                    snapshot.message().canonicalMessageId(),snapshot.binding().buildingId(),hash,encode(snapshot),encode(proof),System.currentTimeMillis());}
+                    snapshot.message().canonicalMessageId(),snapshot.binding().buildingId(),hash,encode(snapshot),encode(proof),created);}
             catch(DuplicateKeyException exists) { }
         });
         return Objects.requireNonNull(find(snapshot.message().canonicalMessageId()));

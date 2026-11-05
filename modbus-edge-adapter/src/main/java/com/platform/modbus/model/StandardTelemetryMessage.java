@@ -25,7 +25,17 @@ public record StandardTelemetryMessage(
         String dedupMode,
         String declaredAckMode,
         String correlationPolicy,
-        List<StandardMetric> metrics) {
+        List<StandardMetric> metrics,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        com.platform.adapter.model.ElectricityInterval electricityInterval) {
+
+    public StandardTelemetryMessage(String standardVersion,String profileCode,int profileVersion,DeviceIdentity deviceIdentity,
+            String canonicalMessageId,String sourceMessageId,String bootId,Long sourceSeq,Long collectedAt,long adapterReceivedAt,
+            Long retransmittedAt,String batchId,Integer batchItemIndex,Integer batchItemCount,String idSource,String timeSource,
+            String dedupMode,String declaredAckMode,String correlationPolicy,List<StandardMetric> metrics) {
+        this(standardVersion,profileCode,profileVersion,deviceIdentity,canonicalMessageId,sourceMessageId,bootId,sourceSeq,collectedAt,
+                adapterReceivedAt,retransmittedAt,batchId,batchItemIndex,batchItemCount,idSource,timeSource,dedupMode,declaredAckMode,correlationPolicy,metrics,null);
+    }
 
     public StandardTelemetryMessage {
         metrics = List.copyOf(metrics);

@@ -302,6 +302,9 @@ public class ModbusEdgeProperties {
     }
 
     public static class Point {
+        private String valueType="DECIMAL";
+        public String getValueType(){return valueType;}
+        public void setValueType(String valueType){this.valueType=valueType;}
         private String code;
         private ReadFunction function;
         private int address;
