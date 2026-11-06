@@ -124,12 +124,17 @@ public class DynamicElectricityRepository {
             var quality=jdbc.queryForList("SELECT config_revision FROM biz_quality_usage_config_revision ORDER BY singleton_id");
             return hash(encode(List.of(facts,quality,jdbc.queryForList("SELECT point_id,config_revision FROM biz_energy_point_profile WHERE building_id=? ORDER BY point_id",building))));
         }
+        // 先按建筑和区间筛选事实，再用替代关系索引检查修订，避免后台复核反复扫描整楼历史。
         var facts=jdbc.queryForList("""
-                SELECT r.fact_id,r.point_id,r.reading_json,r.normalized_quantity,b.revision,b.reviewed_at
+                SELECT /*+ INDEX(r idx_energy_manual_point_period) NO_SEMIJOIN(@dynamic_manual_replacement) */
+                       r.fact_id,r.point_id,r.reading_json,r.normalized_quantity,b.revision,b.reviewed_at
                 FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>? AND b.status='APPROVED'
-                  AND NOT EXISTS (SELECT 1 FROM biz_energy_manual_reading s JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
-                    WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
+                  AND NOT EXISTS (
+                    SELECT /*+ QB_NAME(dynamic_manual_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
+                    WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id
+                      AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
                 ORDER BY r.fact_id
                 """,building,to.toEpochMilli(),from.toEpochMilli());
         return hash(encode(facts));

@@ -108,13 +108,14 @@ public class ClassificationRepository {
     }
     /** 小时计算按实际审批时间冻结来源；迁移前没有审批时刻的旧批次不能冒充水位之前已审核。 */
     public List<StoredReading> approvedReadingsAsOf(String building,Instant from,Instant to,Instant asOf,int limit) {
+        // 按候选事实走替代关系索引，避免 MySQL 每个小时都物化整楼的历史替代记录。
         return jdbc.query("""
-                SELECT r.*,b.status AS batch_status FROM biz_energy_manual_reading r
+                SELECT /*+ NO_SEMIJOIN(@hourly_replacement) */ r.*,b.status AS batch_status FROM biz_energy_manual_reading r
                 JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED' AND b.created_at<=? AND b.reviewed_at<=?
                   AND NOT EXISTS (
-                    SELECT 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(hourly_replacement) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id
                       AND sb.status='APPROVED' AND sb.created_at<=? AND sb.reviewed_at<=?)

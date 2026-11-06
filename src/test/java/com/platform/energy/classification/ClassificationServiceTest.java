@@ -2,6 +2,7 @@ package com.platform.energy.classification;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.audit.*;
+import com.platform.carbon.DynamicElectricityRepository;
 import com.platform.energy.catalog.EnergyCatalogService;
 import com.platform.energy.catalog.api.EnergyCatalogContracts.BindingVersionView;
 import com.platform.energy.period.EnergyPeriodAuthorization;
@@ -174,6 +175,22 @@ class ClassificationServiceTest {
         assertThat(service.reviewedIntervalReadings(1,ROLES,BUILDING,FROM,end,cutoff.plusSeconds(60))).extracting(ReadingView::factId).containsExactly("hour-next");
         jdbc.update("UPDATE biz_energy_manual_batch SET reviewed_at=NULL");
         assertThat(service.reviewedIntervalReadings(1,ROLES,BUILDING,FROM,end,cutoff.plusSeconds(60))).isEmpty();
+    }
+
+    @Test void dynamicSourceVersionChangesOnlyWhenTheReplacementIsApproved() throws Exception {
+        insertApproved("DYN_OLD",BUILDING,"dyn-old",reading("A","10",null),BigDecimal.TEN);
+        var sources=new DynamicElectricityRepository(jdbc,mapper);
+        String initial=sources.electricityVersion(BUILDING,FROM,TO,"REVIEWED_INTERVAL");
+        var correction=reading("A","12","dyn-old");
+        repository.insertBatch("DYN_NEXT",BUILDING,"dyn-next","c".repeat(64),"test",1);
+        repository.insertReading("dyn-next","DYN_NEXT",BUILDING,correction,mapper.writeValueAsString(correction),new BigDecimal("12"),1);
+        assertThat(sources.electricityVersion(BUILDING,FROM,TO,"REVIEWED_INTERVAL")).isEqualTo(initial);
+
+        assertThat(repository.approveBatch(BUILDING,"DYN_NEXT",0,2)).isEqualTo(1);
+        String revised=sources.electricityVersion(BUILDING,FROM,TO,"REVIEWED_INTERVAL");
+        assertThat(revised).isNotEqualTo(initial);
+        jdbc.update("UPDATE biz_energy_manual_batch SET revision=revision+1 WHERE batch_id='DYN_OLD'");
+        assertThat(sources.electricityVersion(BUILDING,FROM,TO,"REVIEWED_INTERVAL")).isEqualTo(revised);
     }
 
     @Test void hourlyContextKeepsTheActualMeterTreeAndRejectsPartialHourOrClassificationSwitch() {
