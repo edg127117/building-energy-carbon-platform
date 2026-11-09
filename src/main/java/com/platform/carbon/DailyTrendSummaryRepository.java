@@ -19,11 +19,25 @@ public class DailyTrendSummaryRepository {
 
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public String sourceVersion(String building,YearMonth month) {
+        var version=inputParts(building,month);
+        add(version,"""
+                SELECT batch_id,revision,calculation_as_of,view_hash,evidence_hash FROM biz_carbon_hourly_batch
+                WHERE building_id=? AND day_date>=? AND day_date<? ORDER BY batch_id
+                """,building,java.sql.Date.valueOf(month.atDay(1)),java.sql.Date.valueOf(month.plusMonths(1).atDay(1)));
+        add(version,"SELECT batch_id,revision,calculation_as_of,source_version,view_hash,evidence_hash FROM biz_carbon_daily_static_batch WHERE building_id=? AND day_date>=? AND day_date<? ORDER BY batch_id",
+                building,java.sql.Date.valueOf(month.atDay(1)),java.sql.Date.valueOf(month.plusMonths(1).atDay(1)));
+        return CarbonCalculationCore.sha256(CarbonEvidence.canonical(CarbonEvidence.tree(version)));
+    }
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public String inputVersion(String building,YearMonth month) {
+        return CarbonCalculationCore.sha256(CarbonEvidence.canonical(CarbonEvidence.tree(inputParts(building,month))));
+    }
+    private ArrayList<Object> inputParts(String building,YearMonth month) {
         var zone=ZoneId.of("Asia/Shanghai");
         var from=Timestamp.from(month.atDay(1).atStartOfDay(zone).toInstant());
         var to=Timestamp.from(month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant());
         var version=new ArrayList<Object>();
-        version.add(List.of("DAILY_SUMMARY_ALGORITHM_2",building,month.toString(),month.isBefore(YearMonth.now(zone))?"CLOSED":LocalDate.now(zone).toString()));
+        version.add(List.of("DAILY_SUMMARY_ALGORITHM_3",building,month.toString(),month.isBefore(YearMonth.now(zone))?"CLOSED":LocalDate.now(zone).toString()));
         add(version,"SELECT version_id,revision,effective_from,effective_to FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' ORDER BY version_id",building);
         // 人工批次审核后不可变；按建筑核对全部有效批次头，避免扫描数十万条小时事实或漏掉跨月修订。
         add(version,"SELECT batch_id,payload_hash,revision,reviewed_at FROM biz_energy_manual_batch WHERE building_id=? AND status='APPROVED' ORDER BY batch_id",building);
@@ -36,11 +50,8 @@ public class DailyTrendSummaryRepository {
                 FROM biz_energy_period_result_snapshot s LEFT JOIN biz_energy_recalculation_batch b ON b.batch_id=s.source_batch_id
                 WHERE s.building_id=? AND s.period_type='DAY' AND s.period_start>=? AND s.period_end<=? ORDER BY s.snapshot_id
                 """,building,from,to);
-        add(version,"""
-                SELECT batch_id,revision,calculation_as_of,view_hash,evidence_hash FROM biz_carbon_hourly_batch
-                WHERE building_id=? AND day_date>=? AND day_date<? ORDER BY batch_id
-                """,building,java.sql.Date.valueOf(month.atDay(1)),java.sql.Date.valueOf(month.plusMonths(1).atDay(1)));
-        return CarbonCalculationCore.sha256(CarbonEvidence.canonical(CarbonEvidence.tree(version)));
+        add(version,"SELECT version_id,revision,status,effective_from,effective_to FROM biz_carbon_project_version WHERE building_id=? ORDER BY version_id",building);
+        return version;
     }
     private void add(List<Object> target,String sql,Object... args) {
         var values=new ArrayList<Object>(Arrays.asList(args));values.add(properties.getMaximumVersionRows()+1);
@@ -70,20 +81,30 @@ public class DailyTrendSummaryRepository {
     public String claim(Head h,long now) {
         String token=UUID.randomUUID().toString().replace("-","");
         int changed=jdbc.update("""
-                UPDATE biz_daily_trend_read_model SET state='RUNNING',lease_token=?,lease_until=?,attempts=attempts+1,updated_at=?
-                WHERE building_id=? AND month_key=? AND source_version=? AND (state<>'RUNNING' OR lease_until<?)
-                """,token,now+properties.getLease().toMillis(),now,h.building(),h.month(),h.sourceVersion(),now);
+                UPDATE biz_daily_trend_read_model SET state='RUNNING',lease_token=?,lease_until=?,attempts=LEAST(attempts,2147483646)+1,updated_at=?
+                WHERE building_id=? AND month_key=? AND source_version=? AND next_check<=? AND (state<>'RUNNING' OR lease_until<?)
+                """,token,now+properties.getLease().toMillis(),now,h.building(),h.month(),h.sourceVersion(),now,now);
         return changed==1?token:null;
     }
     public boolean publish(Head h,String token,String payload,String hash,long now) {
         return jdbc.update("""
-                UPDATE biz_daily_trend_read_model SET state='READY',built_version=?,summary_json=?,summary_hash=?,lease_token=NULL,lease_until=0,last_error=NULL,next_check=?,updated_at=?
+                UPDATE biz_daily_trend_read_model SET state='READY',attempts=0,built_version=?,summary_json=?,summary_hash=?,lease_token=NULL,lease_until=0,last_error=NULL,next_check=?,updated_at=?
                 WHERE building_id=? AND month_key=? AND source_version=? AND lease_token=? AND state='RUNNING' AND lease_until>=?
                 """,h.sourceVersion(),payload,hash,now+properties.getRecheckInterval().toMillis(),now,h.building(),h.month(),h.sourceVersion(),token,now)==1;
     }
     public void checked(Head h,long now){jdbc.update("UPDATE biz_daily_trend_read_model SET next_check=? WHERE building_id=? AND month_key=? AND source_version=? AND state='READY'",now+properties.getRecheckInterval().toMillis(),h.building(),h.month(),h.sourceVersion());}
     public void defer(Head h,String reason,long now){jdbc.update("UPDATE biz_daily_trend_read_model SET last_error=?,next_check=? WHERE building_id=? AND month_key=? AND source_version=? AND (state<>'RUNNING' OR lease_until<?)",reason,now+properties.getRecheckInterval().toMillis(),h.building(),h.month(),h.sourceVersion(),now);}
-    public void failed(Head h,String token,String reason,long now){jdbc.update("UPDATE biz_daily_trend_read_model SET state='FAILED',last_error=?,lease_token=NULL,lease_until=0,next_check=?,updated_at=? WHERE building_id=? AND month_key=? AND lease_token=?",reason,now+properties.getRecheckInterval().toMillis(),now,h.building(),h.month(),token);}
+    public void failed(Head h,String token,String reason,long now) {
+        // Only repeated rebuild failures back off, capped at 32 recheck intervals; retries never stop.
+        // A changed source resets attempts in request(), while READY freshness keeps its normal cadence.
+        // Compute from the claimed row, not the stale Head, and guard the token against superseded workers.
+        // Exact decimal casts prevent SQL parameter inference from narrowing epoch milliseconds to INT.
+        jdbc.update("""
+                UPDATE biz_daily_trend_read_model SET state='FAILED',last_error=?,lease_token=NULL,lease_until=0,
+                next_check=CAST(? AS DECIMAL(20,0)) + CAST(? AS DECIMAL(20,0)) * CASE attempts WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 4 WHEN 4 THEN 8 WHEN 5 THEN 16 ELSE 32 END,
+                updated_at=? WHERE building_id=? AND month_key=? AND lease_token=? AND state='RUNNING'
+                """,reason,now,properties.getRecheckInterval().toMillis(),now,h.building(),h.month(),token);
+    }
     public record Candidate(String building,String month,long user) { }
     public void registerDiscovered(Candidate c,long now) {
         // 全零仅表示待解析的任务版本；插入冲突绝不覆盖用户已经登记或发布的有效版本。

@@ -479,4 +479,10 @@ class CarbonCalculationServiceTest {
         return YearMonth.parse(month).plusMonths(1).atDay(1)
                 .atStartOfDay(ZoneId.of("Asia/Shanghai")).toInstant();
     }
+    @Test void nativeDayCannotFallThroughIntoMonthReportCalculation() {
+        assertThatThrownBy(()->service.run(11L,Set.of("PLATFORM_ADMIN"),new RunCalculationRequest("BLD001","DAY",START,START.plusSeconds(86400),"Asia/Shanghai","FORMAL","day")))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("daily-static-calculations");
+        org.mockito.Mockito.verifyNoInteractions(input,ruleRepository,repository);
+    }
+
 }

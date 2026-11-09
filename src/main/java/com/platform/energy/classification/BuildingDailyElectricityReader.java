@@ -9,6 +9,9 @@ import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.YearMonth;
+import java.time.Duration;
+import java.util.function.Supplier;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
@@ -25,6 +28,28 @@ public class BuildingDailyElectricityReader {
 
     @Transactional(readOnly=true, isolation=Isolation.REPEATABLE_READ)
     public QueryView read(long user, Collection<String> roles, String building, LocalDate date) {
+        return readWithinDay(user,roles,building,date,null);
+    }
+
+    /** Keep file ownership outside the monthly scan transaction so commit failure also cleans up. */
+    public MonthlyReadingWindow prepareMonth(long user,Collection<String> roles,String building,YearMonth month,LocalDate completedBefore,Supplier<Duration> remaining) {
+        authorization.requireReader(roles);
+        authorization.checkBuilding(user,roles,building);
+        return MonthlyReadingWindow.prepare(repository,building,month,completedBefore,remaining);
+    }
+
+    public MonthlyReadingWindow prepareDay(long user,Collection<String> roles,String building,LocalDate date,Supplier<Duration> remaining) {
+        authorization.requireReader(roles);
+        authorization.checkBuilding(user,roles,building);
+        return MonthlyReadingWindow.prepareDay(repository,building,date,remaining);
+    }
+
+    @Transactional(readOnly=true, isolation=Isolation.REPEATABLE_READ)
+    public QueryView readPrepared(long user,Collection<String> roles,String building,LocalDate date,MonthlyReadingWindow sources) {
+        return readWithinDay(user,roles,building,date,java.util.Objects.requireNonNull(sources));
+    }
+
+    private QueryView readWithinDay(long user,Collection<String> roles,String building,LocalDate date,MonthlyReadingWindow sources) {
         authorization.requireReader(roles);
         authorization.checkBuilding(user, roles, building);
         var zone = ZoneId.of("Asia/Shanghai");
@@ -44,6 +69,8 @@ public class BuildingDailyElectricityReader {
         if(units.size()!=1 || !"KWH".equalsIgnoreCase(units.getFirst()))
             throw new BusinessException(409,"DAILY_ELECTRICITY_UNIT_REQUIRED","日用电量需要唯一明确的千瓦时计量边界");
         // 单位码按目录规范忽略大小写；分类匹配保留已审核边界的原标识，不更改来源或用量。
-        return classification.query(user, roles, building, new QueryRequest(start, end, "DAY", "ELECTRICITY", units.getFirst(), scheme.code(), version.id(), List.of()));
+        var request=new QueryRequest(start, end, "DAY", "ELECTRICITY", units.getFirst(), scheme.code(), version.id(), List.of());
+        return sources==null?classification.query(user,roles,building,request)
+                :classification.queryUsingMonthSource(user,roles,building,request,sources);
     }
 }

@@ -19,7 +19,18 @@ public final class DailyElectricityCarbonContracts {
             String staticCarbonStatus,
             @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal staticFactorKgCo2ePerKwh,
             String factorStatus, String hourlyBatchId, Integer hourlyRevision,
-            String hourlySourceNature, List<String> factorVersionIds, String hourlyEvidenceHash, String gasBasis) {
+            String hourlySourceNature, List<String> factorVersionIds, String hourlyEvidenceHash, String gasBasis, StaticSource staticSource) {
+        public Day(LocalDate date, Instant startInclusive, Instant endExclusive,
+            BigDecimal electricityKwh,String electricityStatus,String electricityReasonCode,String classificationVersionId,
+            String relationVersionId,List<String> electricityEvidenceIds,String electricitySourceNature,
+            BigDecimal staticEmissionTco2e,String staticCarbonStatus,BigDecimal staticFactorKgCo2ePerKwh,
+            String factorStatus,String hourlyBatchId,Integer hourlyRevision,String hourlySourceNature,
+            List<String> factorVersionIds,String hourlyEvidenceHash,String gasBasis) {
+            this(date,startInclusive,endExclusive,electricityKwh,electricityStatus,electricityReasonCode,classificationVersionId,
+                    relationVersionId,electricityEvidenceIds,electricitySourceNature,staticEmissionTco2e,staticCarbonStatus,
+                    staticFactorKgCo2ePerKwh,factorStatus,hourlyBatchId,hourlyRevision,hourlySourceNature,factorVersionIds,hourlyEvidenceHash,gasBasis,
+                    hourlyBatchId==null?null:new StaticSource("HOUR",hourlyBatchId,hourlyRevision,hourlyEvidenceHash,hourlySourceNature,null));
+        }
         /** 旧调用不携带气体覆盖证据，保守标记为未知。 */
         public Day(LocalDate date, Instant startInclusive, Instant endExclusive,
             BigDecimal electricityKwh,
@@ -33,6 +44,8 @@ public final class DailyElectricityCarbonContracts {
             this(date, startInclusive, endExclusive, electricityKwh, electricityStatus, electricityReasonCode, classificationVersionId, relationVersionId, electricityEvidenceIds, electricitySourceNature, staticEmissionTco2e, staticCarbonStatus, staticFactorKgCo2ePerKwh, factorStatus, hourlyBatchId, hourlyRevision, hourlySourceNature, factorVersionIds, hourlyEvidenceHash, "UNKNOWN");
         }
     }
+    public record StaticSource(String grain,String calculationBatchId,Integer revision,String evidenceHash,
+                               String declaredSourceNature,String sourceVersion) { }
     @Schema(name="DailyElectricityStaticCarbonView")
     public record View(String buildingId, String month, String timezoneId, String state,
             String electricityUnit, String emissionUnit, String factorUnit, String resultNature,

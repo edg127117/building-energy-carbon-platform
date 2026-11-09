@@ -113,6 +113,9 @@ class ClassificationApiContractTest {
         var docs=mvc.perform(get("/v3/api-docs").header("Authorization","Bearer "+token))
                 .andExpect(status().isOk()).andReturn();
         var specification=json.readTree(docs.getResponse().getContentAsString());
+        var readingSchema=specification.path("components").path("schemas").path("EnergyClassificationReading");
+        assertThat(readingSchema.path("properties").has("refinementMode")).isTrue();
+        assertThat(readingSchema.path("required").toString()).doesNotContain("refinementMode");
         var paths=specification.path("paths");
         assertThat(paths.has("/v1/energy-classification/buildings/{buildingId}/query")).isTrue();
         assertThat(paths.has("/v1/energy-classification/buildings/{buildingId}/readings/batches/{id}/approve")).isTrue();

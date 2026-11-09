@@ -4,6 +4,9 @@ import com.platform.iot.daikin.model.*;
 import com.platform.iot.ingest.*;
 import com.platform.iot.quality.*;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -22,9 +25,10 @@ class DaikinTemperatureIngestionTest {
             new DaikinDeviceKey("s", "site", "c", DaikinDeviceKey.Kind.INDOOR, "u"), "p", "i", "identity",
             "DAIKIN_INDOOR_V2", "e", "EC", "b", null, null, 1);
 
-    @Test
-    void confirmedBoundTemperatureUsesOriginalTimestampAndImmutableIngestion() {
-        when(points.find(any())).thenReturn(Optional.of(point()));
+    @ParameterizedTest
+    @ValueSource(strings = {"AI", "ANALOG"})
+    void confirmedBoundTemperatureUsesOriginalTimestampAndImmutableIngestion(String dataType) {
+        when(points.find(any())).thenReturn(Optional.of(point(dataType, "°C", 0, "b", "e", "ONLINE")));
         when(ingestion.ingestImmutable(anyMap(), anyLong(), eq("DAIKIN_V2"))).thenReturn(HvacIngestionResult.of(IngestionOutcome.ACCEPTED));
         var observation = observation(DaikinFieldValue.Status.PRESENT);
         assertThat(service.persist(target, observation).fields().get("roomTemp").status()).isEqualTo(DaikinFieldValue.Status.PRESENT);
@@ -49,7 +53,25 @@ class DaikinTemperatureIngestionTest {
         assertThat(service.persist(target, observation(DaikinFieldValue.Status.PRESENT)).fields().get("roomTemp").status()).isEqualTo(DaikinFieldValue.Status.INVALID);
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "DIGITAL,°C,0,b,e,ONLINE", "ACCUMULATE,°C,0,b,e,ONLINE",
+            "ANALOG,°C,1,b,e,ONLINE", "ANALOG,kWh,0,b,e,ONLINE",
+            "ANALOG,°C,0,other,e,ONLINE", "ANALOG,°C,0,b,other,ONLINE",
+            "ANALOG,°C,0,b,e,OFFLINE"
+    })
+    void incompatiblePointsCannotReachNumericStorage(String type, String unit, int forCalc,
+                                                     String building, String equipment, String status) {
+        when(points.find(any())).thenReturn(Optional.of(point(type, unit, forCalc, building, equipment, status)));
+        assertThat(service.persist(target, observation(DaikinFieldValue.Status.PRESENT)).fields().get("roomTemp").status())
+                .isEqualTo(DaikinFieldValue.Status.UNCONFIRMED);
+        verifyNoInteractions(ingestion);
+    }
+
     private PointRuntimeConfig point() { return new PointRuntimeConfig("point", "PC", "温度", "b", null, "e", "EC", "AHU", "MAIN", "T", "AI", "°C", "ONLINE", 0, null, null); }
+    private PointRuntimeConfig point(String type, String unit, int forCalc, String building, String equipment, String status) {
+        return new PointRuntimeConfig("point", "PC", "温度", building, null, equipment, "EC", "AHU", "MAIN", "T", type, unit, status, forCalc, null, null);
+    }
     private DaikinDeviceObservation observation(DaikinFieldValue.Status status) {
         return new DaikinDeviceObservation(target.key(), null, null, null, Instant.parse("2026-09-16T00:00:00Z"), null,
                 Map.of("roomTemp", new DaikinFieldValue(status, "23.5", status == DaikinFieldValue.Status.PRESENT ? "23.5" : null)));

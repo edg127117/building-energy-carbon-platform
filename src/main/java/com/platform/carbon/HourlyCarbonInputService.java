@@ -43,25 +43,38 @@ public class HourlyCarbonInputService {
 
     /** 缓存只活在一次命令中；同一测点整日事实只取一次，规则切换仍逐小时核验。 */
     public static final class Capture {
+        final boolean reviewedDayCache;
         final Map<String,Raw> raw=new HashMap<>();
         final Map<String,BindingVersionView> bindings=new HashMap<>();
         final Map<String,EnergyCatalogLookup.ApprovedEnergyItem> items=new HashMap<>();
         final Map<String,EnergyCatalogLookup.UnitConversion> units=new HashMap<>();
         final Map<String,JsonNode> contexts=new TreeMap<>();
         int factCount;
+        private ReviewedScope reviewedScope;
+        private List<ReadingView> reviewedReadings;
+        public Capture(){this(false);}
+        Capture(boolean reviewedDayCache){this.reviewedDayCache=reviewedDayCache;}
         public Map<String,JsonNode> contexts() { return Map.copyOf(contexts); }
     }
+    private record ReviewedScope(long user,Set<String> roles,String building,Instant asOf,Instant from,Instant to) { }
 
     public Input read(long user,Collection<String> roles,HourlyCarbonContracts.Request request,
                       Instant from,Instant to,Instant readFrom,Instant readTo,Capture capture,CarbonCalculationDeadline deadline) {
         deadline.requireRemaining();
+        if(capture.reviewedDayCache && "REVIEWED_INTERVAL".equals(request.sourceKind())) {
+            var scope=new ReviewedScope(user,Set.copyOf(roles),request.buildingId(),request.calculationAsOf(),readFrom,readTo);
+            if(capture.reviewedScope!=null&&!capture.reviewedScope.equals(scope)
+                    ||from.isBefore(readFrom)||to.isAfter(readTo))
+                throw error(409,ACTIVITY_INCOMPLETE,"审核日来源捕获不能跨用户、角色、建筑、水位或日期复用");
+            capture.reviewedScope=scope;
+        }
         var project=projects.effective(request.buildingId(),from,to);
         if(project==null)throw error(409,DEPENDENCY_UNAVAILABLE,"该小时没有生效碳项目配置");
         var codes=project.configuration().energies().stream().filter(e->"ENABLED".equals(e.capability())&&"PURCHASED_ELECTRICITY".equals(e.pathway()))
                 .map(CarbonProjectContracts.Energy::energyItemCode).distinct().toList();
         if(codes.isEmpty()||codes.size()>16)throw error(409,DEPENDENCY_UNAVAILABLE,"外购电力未启用或超过16种能源");
         var manual="REVIEWED_INTERVAL".equals(request.sourceKind())
-                ? classifications.reviewedIntervalReadings(user,roles,request.buildingId(),from,to,request.calculationAsOf()):List.<ReadingView>of();
+                ? reviewedReadings(user,roles,request,from,to,readFrom,readTo,capture,deadline):List.<ReadingView>of();
         List<Activity> results=new ArrayList<>();
         Set<String> sourceIds=new TreeSet<>(),qualityIds=new TreeSet<>(),relations=new TreeSet<>();
         var trace=CarbonEvidence.object();
@@ -161,6 +174,20 @@ public class HourlyCarbonInputService {
             energyTrace.add(energy);results.add(new Activity(code,applied.included(),energy));
         }
         return new Input(List.copyOf(results),List.copyOf(sourceIds),List.copyOf(qualityIds),List.of(project.versionId()),List.copyOf(relations),trace);
+    }
+
+    private List<ReadingView> reviewedReadings(long user,Collection<String> roles,HourlyCarbonContracts.Request request,
+            Instant from,Instant to,Instant readFrom,Instant readTo,Capture capture,CarbonCalculationDeadline deadline) {
+        if(!capture.reviewedDayCache)
+            return classifications.reviewedIntervalReadings(user,roles,request.buildingId(),from,to,request.calculationAsOf());
+        if(capture.reviewedReadings==null)
+            capture.reviewedReadings=List.copyOf(classifications.reviewedDayIntervalReadings(user,roles,request.buildingId(),
+                    readFrom,readTo,request.calculationAsOf(),deadline::remaining));
+        // 保留原完整重叠判断；跨日/月事实仍交给下游精确小时校验，不能裁剪或按比例分摊。
+        var values=capture.reviewedReadings.stream().filter(value->value.reading().startInclusive().isBefore(to)
+                && value.reading().endExclusive().isAfter(from)).toList();
+        if(values.size()>5000)throw error(409,LIMIT_EXCEEDED,"该小时审核来源超过5000条有界查询上限");
+        return values;
     }
 
     private BindingVersionView binding(long user,Collection<String> roles,String building,String point,Instant from,Instant to,Capture capture) {

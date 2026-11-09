@@ -30,6 +30,7 @@ public class DynamicElectricityLiveService {
     private final SysUserMapper users;
     private final SysRoleMapper roleMapper;
     private final PlatformTransactionManager transactionManager;
+    private final DynamicElectricitySourceChecks sourceChecks;
 
     @Transactional(rollbackFor=Exception.class)
     public DeviceIntervalReceipt ingest(long user,Collection<String> roles,String building,DeviceIntervalRequest request) {
@@ -177,16 +178,124 @@ public class DynamicElectricityLiveService {
 
     void refresh() {
         var capture=new DynamicElectricityLiveInput.Capture();
+        var due = new ArrayList<DynamicElectricityLiveRepository.Task>();
+        var sourceVersions=new HashMap<DynamicElectricityLiveRepository.Task,String>();
         for(var task:tasks.due(System.currentTimeMillis())) {
-            String token=tasks.claim(task,System.currentTimeMillis());
-            if(token==null)continue;
-            try {process(task,token,capture);}
-            catch(RuntimeException ex) {
-                String code=ex instanceof BusinessException b?Objects.toString(b.getErrorCode(),"DYNAMIC_COMPUTE_FAILED"):"DYNAMIC_COMPUTE_FAILED";
-                tasks.failed(task,token,code);
-                org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dynamic interval awaiting calculation: building={}, start={}, code={}",task.building(),task.from(),code);
+            String source=sourceChecks.capture(task);
+            if(sourceChecks.unchanged(task,source))continue;
+            due.add(task);sourceVersions.put(task,source);
+        }
+        for (int index = 0; index < due.size();) {
+            var task = due.get(index);
+            int end = index + 1;
+            // Preserve due priority/order. Sparse or interleaved scopes keep the original path;
+            // widening a two-hour batch to a whole day would increase rather than reduce raw I/O.
+            while (end < due.size() && end - index < CurrentReviewedHourBatch.MAX_HOURS
+                    && CurrentReviewedHourBatch.sameGroup(task, due.get(end))
+                    && due.get(end - 1).to() == due.get(end).from()) end++;
+            if (end - index > 1) refreshReviewedGroup(due.subList(index, end), capture);
+            else refreshTask(task, capture);
+            for(var checked:due.subList(index,end))sourceChecks.completed(checked,sourceVersions.get(checked));
+            index = end;
+        }
+    }
+
+    private void refreshTask(DynamicElectricityLiveRepository.Task task, DynamicElectricityLiveInput.Capture capture) {
+        String token=tasks.claim(task,System.currentTimeMillis());
+        if(token==null)return;
+        try {process(task,token,capture);}
+        catch(RuntimeException ex) {
+            failed(task, token, ex);
+        }
+    }
+
+    private Set<String> currentReviewedRoles(DynamicElectricityLiveRepository.Task task) {
+        if (!AuthenticationStateService.isEnabled(users.selectSecurityState(task.user())))
+            throw problem("DYNAMIC_ACTOR_DISABLED", "Dynamic calculation actor is disabled");
+        var roles = Set.copyOf(roleMapper.selectRoleKeysByUserId(task.user()));
+        authorization.requireCalculationRunner(task.user(), roles, task.building());
+        return roles;
+    }
+
+    private void refreshReviewedGroup(List<DynamicElectricityLiveRepository.Task> group,
+            DynamicElectricityLiveInput.Capture capture) {
+        Set<String> roles;
+        Optional<CurrentReviewedHourBatch.Versions> versions;
+        try {
+            roles = currentReviewedRoles(group.getFirst());
+            versions = CurrentReviewedHourBatch.read(results, transactionManager, group, (task, source) ->
+                    calculations.sourceVersionWithReviewedSnapshot(task.building(), Instant.ofEpochMilli(task.from()),
+                            Instant.ofEpochMilli(task.to()), source));
+        } catch (RuntimeException failure) {
+            // A failed SQL/snapshot is a failed check, never a cached CURRENT or a silent old-path retry.
+            for (var task : group) {
+                String token = tasks.claimReviewedCheck(task, System.currentTimeMillis());
+                if (token != null) failed(task, token, failure);
+            }
+            return;
+        }
+        if (versions.isEmpty()) {
+            for (var task : group) refreshTask(task, capture);
+            return;
+        }
+        boolean snapshotUsable = true;
+        for (int index = 0; index < group.size(); index++) {
+            var task = group.get(index);
+            String token = tasks.claimReviewedCheck(task, System.currentTimeMillis());
+            if (token == null) continue;
+            try {
+                // Authorization is reloaded outside the old RR snapshot for every task. Changed
+                // roles or source versions take the original path, including final publish checks.
+                Set<String> currentRoles = currentReviewedRoles(task);
+                if (snapshotUsable && versions.get().usable(reviewedCheckNanoTime()) && roles.equals(currentRoles)
+                        && task.metadata().equals(versions.get().values().get(index))) {
+                    snapshotUsable = completeReviewedCheck(task, token, versions.get());
+                } else {
+                    // Never use an old precheck after a possibly long calculation or after this
+                    // background batch's lifecycle expires. This does not limit any GET or calculate.
+                    snapshotUsable = false;
+                    process(task, token, capture);
+                }
+            } catch (RuntimeException failure) {
+                snapshotUsable = false;
+                failed(task, token, failure);
             }
         }
+    }
+
+    private boolean completeReviewedCheck(DynamicElectricityLiveRepository.Task task, String token,
+            CurrentReviewedHourBatch.Versions versions) {
+        int remaining = versions.remainingSeconds(reviewedCheckNanoTime());
+        if (remaining == 0)
+            throw new org.springframework.dao.QueryTimeoutException("Background source check expired before completion");
+        var transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+        transaction.setTimeout(remaining);
+        return Boolean.TRUE.equals(transaction.execute(status -> {
+            Long leaseUntil = tasks.lockReviewedCheck(task, token);
+            long now = reviewedCheckTimeMillis();
+            // No matching row means ownership changed; never rewrite another worker's task.
+            // Expiry while we still own the token is a failed check, not a silent RUNNING lease.
+            if (leaseUntil == null) return false;
+            if (now > leaseUntil || !versions.usable(reviewedCheckNanoTime()))
+                throw new org.springframework.dao.QueryTimeoutException("Background source check expired after task lock");
+            boolean checked = tasks.checkedReviewedBatch(task, token, now);
+            // UPDATE may itself wait on an index lock. Roll back, rather than committing a READY
+            // transition based on the pre-wait time. Commit/fsync is not a hard real-time boundary.
+            if (reviewedCheckTimeMillis() > leaseUntil || !versions.usable(reviewedCheckNanoTime()))
+                throw new org.springframework.dao.QueryTimeoutException("Background source check expired before commit");
+            return checked;
+        }));
+    }
+
+    long reviewedCheckTimeMillis() { return System.currentTimeMillis(); }
+    long reviewedCheckNanoTime() { return System.nanoTime(); }
+
+    private void failed(DynamicElectricityLiveRepository.Task task, String token, RuntimeException failure) {
+        String code = failure instanceof BusinessException b ? Objects.toString(b.getErrorCode(), "DYNAMIC_COMPUTE_FAILED") : "DYNAMIC_COMPUTE_FAILED";
+        tasks.failed(task, token, code);
+        org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dynamic interval awaiting calculation: building={}, start={}, code={}", task.building(), task.from(), code);
     }
     void refreshMetadata() {
         for(String building:tasks.buildings())tasks.metadataChanged(building,tasks.metadataVersion(building,results));

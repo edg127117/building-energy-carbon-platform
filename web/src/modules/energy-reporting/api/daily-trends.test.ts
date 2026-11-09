@@ -14,9 +14,11 @@ it('polls a preparing summary and returns its ready result without arithmetic', 
   vi.useFakeTimers()
   const ready = { ...preparing, state: 'COMPLETE', days: [{ electricityKwh: '12.3400' }] }
   vi.mocked(requestApi).mockResolvedValueOnce(preparing).mockResolvedValueOnce(ready)
-  const result = readDailyTrends('B', '2026-01')
+  const onPreparing = vi.fn()
+  const result = readDailyTrends('B', '2026-01', undefined, onPreparing)
   await vi.advanceTimersByTimeAsync(2000)
   expect(await result).toBe(ready)
+  expect(onPreparing).toHaveBeenCalledTimes(1)
   expect(requestApi).toHaveBeenCalledTimes(2)
 })
 it('cancels preparation polling when its card scope is aborted', async () => {

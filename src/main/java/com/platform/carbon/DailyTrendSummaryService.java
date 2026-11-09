@@ -34,9 +34,25 @@ public class DailyTrendSummaryService {
         repository.request(building,month,user,version,System.currentTimeMillis());
         return preparing(building,month,version);
     }
+    /** 详细取证保持原 View，但与摘要重建使用相同的请求级月源和前后版本门禁。 */
+    public DailyElectricityCarbonContracts.View queryDetail(long user,Collection<String> roles,String building,String month) {
+        YearMonth selected=DailyElectricityCarbonService.validateQuery(building,month);
+        authorization.requireReader(user,roles,building);
+        String before=repository.sourceVersion(building,selected);
+        if(before==null||before.isBlank())throw new BusinessException(503,"DAILY_SUMMARY_INTEGRITY","日趋势源版本不可用");
+        var result=detailed.queryPrepared(user,roles,building,month);
+        if(!Objects.equals(before,repository.sourceVersion(building,selected)))
+            throw new BusinessException(409,"DAILY_TREND_SOURCE_CHANGED","日趋势来源在读取期间变化，请重试");
+        return result;
+    }
     boolean rebuild(DailyTrendSummaryRepository.Head head,String token,Collection<String> roles) {
+        String before=repository.sourceVersion(head.building(),YearMonth.parse(head.month()));
+        if(!head.sourceVersion().equals(before)) {
+            repository.request(head.building(),head.month(),head.user(),before,System.currentTimeMillis());
+            return false;
+        }
         // 仍调用既有授权、独立日事务、总分表去重及冻结因子校验，不从月总量或图形反推结果。
-        var result=detailed.query(head.user(),roles,head.building(),head.month());
+        var result=detailed.queryPrepared(head.user(),roles,head.building(),head.month());
         String current=repository.sourceVersion(head.building(),YearMonth.parse(head.month()));
         if(!head.sourceVersion().equals(current)) {
             repository.request(head.building(),head.month(),head.user(),current,System.currentTimeMillis());

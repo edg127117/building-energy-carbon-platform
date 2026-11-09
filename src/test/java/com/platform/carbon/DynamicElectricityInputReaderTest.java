@@ -76,6 +76,51 @@ class DynamicElectricityInputReaderTest {
     }
 
     @Test
+    void sequentialCalculationCanReleasePriorDayCapturesWithoutChangingFrozenEvidence() {
+        when(hourlyInputs.read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),any(),any()))
+                .thenReturn(hourlyInput("12",List.of(slice("MAIN","12","MAIN"))));
+        var session=reader.session();
+        var frozen=session.read(1,ROLES,"B",DAY_ONE,DAY_ONE.plusSeconds(3600),"HOUR");
+        String digest=frozen.evidenceHash();
+        session.releaseHourlyCapturesBefore(DAY_ONE.plusSeconds(86400));
+        session.read(1,ROLES,"B",DAY_ONE.plusSeconds(86400),DAY_ONE.plusSeconds(90000),"HOUR");
+        session.read(1,ROLES,"B",DAY_ONE,DAY_ONE.plusSeconds(3600),"HOUR");
+        session.releaseHourlyCaptures();
+        session.read(1,ROLES,"B",DAY_ONE,DAY_ONE.plusSeconds(3600),"HOUR");
+        var captures=ArgumentCaptor.forClass(HourlyCarbonInputService.Capture.class);
+        verify(hourlyInputs,times(4)).read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),captures.capture(),any());
+        assertThat(captures.getAllValues().get(2)).isNotSameAs(captures.getAllValues().get(0));
+        assertThat(captures.getAllValues().get(3)).isNotSameAs(captures.getAllValues().get(2));
+        assertThat(CarbonCalculationCore.sha256(CarbonEvidence.canonical(frozen.evidence()))).isEqualTo(digest);
+    }
+
+    @Test void onlyCompleteRequestedReviewedDaysEnableTheDaySourceCache() {
+        when(hourlyInputs.read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),any(),any()))
+                .thenReturn(hourlyInput("12",List.of(slice("MAIN","12","MAIN"))));
+        var session=reader.session();
+        session.cacheReviewedDays(DAY_ONE.plusSeconds(3600),DAY_ONE.plusSeconds(3*86400L-3600));
+        session.read(1,ROLES,"B",DAY_ONE.plusSeconds(3600),DAY_ONE.plusSeconds(7200),"HOUR");
+        session.read(1,ROLES,"B",DAY_ONE.plusSeconds(86400),DAY_ONE.plusSeconds(90000),"HOUR");
+        session.read(1,ROLES,"B",DAY_ONE.plusSeconds(2*86400),DAY_ONE.plusSeconds(2*86400+3600),"HOUR");
+        var captures=ArgumentCaptor.forClass(HourlyCarbonInputService.Capture.class);
+        verify(hourlyInputs,times(3)).read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),captures.capture(),any());
+        assertThat(captures.getAllValues()).extracting(value->value.reviewedDayCache).containsExactly(false,true,false);
+        assertThatThrownBy(()->session.cacheReviewedDays(DAY_ONE,DAY_ONE.plusSeconds(86400)))
+                .hasMessageContaining("不能改变缓存范围");
+    }
+
+    @Test void rawAndStandaloneSessionsKeepTheirOriginalHourlySourceReadBoundary() {
+        when(hourlyInputs.read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),any(),any()))
+                .thenReturn(hourlyInput("12",List.of(slice("MAIN","12","MAIN"))));
+        reader.session().read(1,ROLES,"B",DAY_ONE,DAY_ONE.plusSeconds(3600),"HOUR");
+        var raw=reader.session("RAW_CUMULATIVE");raw.cacheReviewedDays(DAY_ONE,DAY_ONE.plusSeconds(86400));
+        raw.read(1,ROLES,"B",DAY_ONE,DAY_ONE.plusSeconds(3600),"HOUR");
+        var captures=ArgumentCaptor.forClass(HourlyCarbonInputService.Capture.class);
+        verify(hourlyInputs,times(2)).read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),captures.capture(),any());
+        assertThat(captures.getAllValues()).allMatch(value->!value.reviewedDayCache);
+    }
+
+    @Test
     void dayUsesClassificationProjectionThenAppliesProjectExclusionToDeduplicatedSlices() {
         Instant from = DAY_ONE;
         Instant to = from.plusSeconds(86400);

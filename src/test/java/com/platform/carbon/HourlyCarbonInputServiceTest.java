@@ -117,6 +117,82 @@ class HourlyCarbonInputServiceTest {
         assertThatThrownBy(()->service.read(1,ROLES,hourly,START,START.plusSeconds(3600),START,END,new HourlyCarbonInputService.Capture(),CarbonCalculationDeadline.start(Duration.ofSeconds(20))))
                 .isInstanceOf(BusinessException.class).extracting(ex->((BusinessException)ex).getErrorCode()).isEqualTo(CarbonErrors.ACTIVITY_INCOMPLETE);
     }
+
+    @Test void reviewed219PointDayReadsOnceAndKeepsAllHourlyEvidenceIdentical() {
+        var meters=new ArrayList<ClassificationCore.Meter>();meters.add(meter("main",null));
+        for(int i=1;i<219;i++)meters.add(meter("p"+i,"main"));
+        configure(meters);
+        var rows=new ArrayList<ClassificationContracts.ReadingView>();
+        for(int hour=0;hour<24;hour++)for(var meter:meters)
+            rows.add(reviewed(meter.pointId(),START.plusSeconds(hour*3600L),START.plusSeconds((hour+1)*3600L),
+                    "main".equals(meter.pointId())?"219":"1"));
+        when(classifications.reviewedDayIntervalReadings(eq(1L),eq(ROLES),eq("TEST"),eq(START),eq(END),eq(ASOF),any()))
+                .thenReturn(rows);
+        when(classifications.reviewedIntervalReadings(eq(1L),eq(ROLES),eq("TEST"),any(),any(),eq(ASOF)))
+                .thenAnswer(call->rows.stream().filter(row->row.reading().startInclusive().isBefore(call.getArgument(4))
+                        &&row.reading().endExclusive().isAfter(call.getArgument(3))).toList());
+        var hourly=reviewedRequest(ASOF);var cached=new HourlyCarbonInputService.Capture(true);
+        var original=new HourlyCarbonInputService.Capture();
+        for(int hour=0;hour<24;hour++) {
+            Instant from=START.plusSeconds(hour*3600L),to=from.plusSeconds(3600);
+            var expected=service.read(1,ROLES,hourly,from,to,START,END,original,CarbonCalculationDeadline.start(Duration.ofMinutes(1)));
+            var actual=service.read(1,ROLES,hourly,from,to,START,END,cached,CarbonCalculationDeadline.start(Duration.ofMinutes(1)));
+            assertThat(CarbonEvidence.canonical(CarbonEvidence.tree(actual))).isEqualTo(CarbonEvidence.canonical(CarbonEvidence.tree(expected)));
+            assertThat(actual.activities().getFirst().quantityKwh()).isEqualByComparingTo("219");
+        }
+        verify(classifications).reviewedDayIntervalReadings(eq(1L),eq(ROLES),eq("TEST"),eq(START),eq(END),eq(ASOF),any());
+        verify(classifications,times(24)).reviewedIntervalReadings(eq(1L),eq(ROLES),eq("TEST"),any(),any(),eq(ASOF));
+        assertThat(CarbonEvidence.canonical(CarbonEvidence.tree(cached.contexts())))
+                .isEqualTo(CarbonEvidence.canonical(CarbonEvidence.tree(original.contexts())));
+    }
+
+    @Test void reviewedDayCapturePinsIdentityCutoffAndNaturalDayBeforeAnySourceRead() {
+        configure(List.of(meter("main",null)));
+        when(classifications.reviewedDayIntervalReadings(anyLong(),anyCollection(),anyString(),any(),any(),any(),any()))
+                .thenReturn(List.of(reviewed("main",START,START.plusSeconds(3600),"12")));
+        var capture=new HourlyCarbonInputService.Capture(true);
+        service.read(1,ROLES,reviewedRequest(ASOF),START,START.plusSeconds(3600),START,END,capture,CarbonCalculationDeadline.start(Duration.ofMinutes(1)));
+        clearInvocations(classifications,projects);
+        assertThatThrownBy(()->service.read(2,ROLES,reviewedRequest(ASOF),START,START.plusSeconds(3600),START,END,capture,CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                .hasMessageContaining("不能跨用户");
+        assertThatThrownBy(()->service.read(1,Set.of("ENERGY_MANAGER"),reviewedRequest(ASOF),START,START.plusSeconds(3600),START,END,capture,CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                .hasMessageContaining("不能跨用户");
+        var foreign=new HourlyCarbonContracts.Request("OTHER",request.date(),ASOF,"manual","REVIEWED_INTERVAL","SIMULATED","manifest","FORMAL");
+        assertThatThrownBy(()->service.read(1,ROLES,foreign,START,START.plusSeconds(3600),START,END,capture,CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                .hasMessageContaining("不能跨用户");
+        assertThatThrownBy(()->service.read(1,ROLES,reviewedRequest(ASOF.plusSeconds(1)),START,START.plusSeconds(3600),START,END,capture,CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                .hasMessageContaining("不能跨用户");
+        assertThatThrownBy(()->service.read(1,ROLES,reviewedRequest(ASOF),END,END.plusSeconds(3600),END,END.plusSeconds(86400),capture,CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                .hasMessageContaining("不能跨用户");
+        verifyNoInteractions(classifications,projects);
+    }
+
+    @Test void cachedCrossDayAndMonthFactsStillFailExactHourValidationAndHourlyCountRemainsBounded() {
+        configure(List.of(meter("main",null)));
+        for(Instant from:List.of(START.minusSeconds(3600),START.minusSeconds(31*86400L))) {
+            when(classifications.reviewedDayIntervalReadings(anyLong(),anyCollection(),anyString(),any(),any(),any(),any()))
+                    .thenReturn(List.of(reviewed("main",from,END,"288")));
+            assertThatThrownBy(()->service.read(1,ROLES,reviewedRequest(ASOF),START,START.plusSeconds(3600),START,END,
+                    new HourlyCarbonInputService.Capture(true),CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                    .isInstanceOf(BusinessException.class).extracting(ex->((BusinessException)ex).getErrorCode()).isEqualTo(CarbonErrors.ACTIVITY_INCOMPLETE);
+        }
+        var over=new ArrayList<ClassificationContracts.ReadingView>();
+        for(int i=0;i<5001;i++)over.add(reviewed("p"+i,START,START.plusSeconds(3600),"1"));
+        when(classifications.reviewedDayIntervalReadings(anyLong(),anyCollection(),anyString(),any(),any(),any(),any())).thenReturn(over);
+        assertThatThrownBy(()->service.read(1,ROLES,reviewedRequest(ASOF),START,START.plusSeconds(3600),START,END,
+                new HourlyCarbonInputService.Capture(true),CarbonCalculationDeadline.start(Duration.ofMinutes(1))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("5000");
+    }
+
+    private HourlyCarbonContracts.Request reviewedRequest(Instant asOf) {
+        return new HourlyCarbonContracts.Request("TEST",request.date(),asOf,"manual","REVIEWED_INTERVAL","SIMULATED","manifest","FORMAL");
+    }
+
+    private static ClassificationContracts.ReadingView reviewed(String point,Instant from,Instant to,String quantity) {
+        var reading=new ClassificationContracts.Reading(point,from,to,"ELECTRICITY","KWH","PERIOD_TOTAL",null,null,
+                new BigDecimal(quantity),BigDecimal.ONE,true,"CONFIRMED","manifest","EXACT",null);
+        return new ClassificationContracts.ReadingView(point+"@"+from,"batch",reading,new BigDecimal(quantity),1,"APPROVED",null);
+    }
     @Test void complete225PointDayProducesBoundedFrozenEvidenceThroughTheHourlyCommand() {
         List<ClassificationCore.Meter> meters=new ArrayList<>();Map<String,Integer> values=new HashMap<>();
         meters.add(meter("main",null));values.put("main",225);

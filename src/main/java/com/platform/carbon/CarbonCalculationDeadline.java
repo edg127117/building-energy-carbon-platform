@@ -86,7 +86,7 @@ final class CarbonCalculationDeadline {
                     && transaction.getApplicationException() != current
                     && causedByDatabaseTimeout(transaction.getApplicationException())) return true;
             if (current instanceof SQLException sql
-                    && (sql.getErrorCode() == 1205 || sql.getErrorCode() == 1317
+                    && (sql.getErrorCode() == 1205 || sql.getErrorCode() == 1317 || sql.getErrorCode() == 3024
                     || "70100".equals(sql.getSQLState()))) {
                 return true;
             }

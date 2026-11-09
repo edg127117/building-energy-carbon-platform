@@ -757,6 +757,7 @@ public class CarbonCalculationService {
 
     private static PeriodWindow period(PeriodType type, Instant start, Instant end,
                                        String timezoneId) {
+        if(type==PeriodType.DAY)validation("Daily monitoring calculations require the daily-static-calculations endpoint");
         if(type==PeriodType.HOUR)validation("小时监测计算须使用独立小时接口，不写入月季年正式批次");
         if (start == null || end == null || !end.isAfter(start)) validation("周期边界无效");
         ZoneId zone;

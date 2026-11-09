@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import io.swagger.v3.oas.annotations.media.Schema;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -74,7 +75,19 @@ public final class ClassificationContracts {
                           String energyItemCode, String unit, String semantics,
                           @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal startReading, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal endReading, @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal quantity,
                           @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal multiplier, boolean alreadyScaled, String status,
-                          String sourceReference, String timePrecision, String supersedesFactId) {}
+                          String sourceReference, String timePrecision, String supersedesFactId,
+                          @JsonInclude(JsonInclude.Include.NON_NULL)
+                          @Schema(description="仅显式MONTH_TO_DAY允许整月守恒细化为同批完整自然日；不改变封账证据")
+                          String refinementMode) {
+        // 旧调用及旧JSON不增加空字段，避免改变既有导入幂等摘要和固定证据。
+        public Reading(String pointId, Instant startInclusive, Instant endExclusive,
+                       String energyItemCode, String unit, String semantics, BigDecimal startReading,
+                       BigDecimal endReading, BigDecimal quantity, BigDecimal multiplier, boolean alreadyScaled,
+                       String status, String sourceReference, String timePrecision, String supersedesFactId) {
+            this(pointId,startInclusive,endExclusive,energyItemCode,unit,semantics,startReading,endReading,
+                    quantity,multiplier,alreadyScaled,status,sourceReference,timePrecision,supersedesFactId,null);
+        }
+    }
     @Schema(name="EnergyClassificationImportRequest")
     public record ImportRequest(@NotBlank String idempotencyKey, @NotNull @Size(min=1,max=500)
                                  List<Reading> readings, @NotBlank String reason) {}

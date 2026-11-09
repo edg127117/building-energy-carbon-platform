@@ -18,6 +18,8 @@ class DailyTrendSummaryRepositoryTest {
     @BeforeEach void setup() throws Exception {
         data=new DriverManagerDataSource("jdbc:h2:mem:summary-"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1","sa","");
         jdbc=new JdbcTemplate(data);repo=new DailyTrendSummaryRepository(jdbc,new DailyTrendSummaryProperties());
+        jdbc.execute("CREATE TABLE biz_carbon_project_version(version_id VARCHAR,building_id VARCHAR,revision BIGINT,status VARCHAR,effective_from BIGINT,effective_to BIGINT)");
+        jdbc.execute("CREATE TABLE biz_carbon_daily_static_batch(batch_id VARCHAR,building_id VARCHAR,day_date DATE,revision INT,calculation_as_of BIGINT,source_version VARCHAR,view_hash VARCHAR,evidence_hash VARCHAR)");
         String ddl=java.nio.file.Files.readString(java.nio.file.Path.of("src/env/init/V102__mysql_daily_trend_read_model.sql"));
         jdbc.execute(ddl.replaceAll("(?s)ENGINE=InnoDB.*?;",";"));
         jdbc.execute("CREATE TABLE biz_energy_classification_version(version_id VARCHAR,building_id VARCHAR,revision BIGINT,effective_from BIGINT,effective_to BIGINT,status VARCHAR)");
@@ -82,4 +84,118 @@ class DailyTrendSummaryRepositoryTest {
         assertThat(repo.head("B","2026-01").sourceVersion()).isEqualTo("current");
         assertThat(repo.head("B","2026-01").user()).isEqualTo(1);
     }
+    @Test void repeatedFailuresBackOffButNeverStopAndCannotBeClaimedEarly() {
+        repo.request("B","2026-01",1,"v1",1000);
+        long now=1000;
+        long[] delays={30000,60000,120000,240000,480000,960000,960000,960000};
+        for(long delay:delays) {
+            var h=repo.head("B","2026-01");
+            String token=repo.claim(h,now);assertThat(token).isNotNull();
+            repo.failed(h,token,"TIMEOUT",now+1);
+            long next=now+1+delay;
+            assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(next);
+            assertThat(repo.due(next-1)).isEmpty();
+            assertThat(repo.claim(h,next-1)).isNull();
+            assertThat(repo.due(next)).hasSize(1);
+            now=next;
+        }
+    }
+    @Test void changedSourceResetsBackoffAndOldFailureCannotOverwriteIt() {
+        repo.request("B","2026-01",1,"v1",1000);
+        var old=repo.head("B","2026-01");String token=repo.claim(old,1000);
+        repo.failed(old,token,"TIMEOUT",1001);
+        repo.request("B","2026-01",1,"v1",1002);
+        assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(31001);
+        repo.request("B","2026-01",1,"v2",1003);
+        repo.failed(old,token,"LATE_FAILURE",1004);
+        var fresh=repo.head("B","2026-01");
+        assertThat(fresh.state()).isEqualTo("PENDING");
+        assertThat(fresh.nextCheck()).isEqualTo(1003);
+        String freshToken=repo.claim(fresh,1004);assertThat(freshToken).isNotNull();
+        repo.failed(fresh,freshToken,"TIMEOUT",1005);
+        assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(31005);
+    }
+    @Test void successResetsFailuresAndRetainsReadyRecheckInterval() {
+        repo.request("B","2026-01",1,"v1",1000);
+        var h=repo.head("B","2026-01");String first=repo.claim(h,1000);
+        repo.failed(h,first,"TIMEOUT",1001);
+        String second=repo.claim(h,31001);
+        assertThat(repo.publish(h,second,"{}","hash",31002)).isTrue();
+        assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(61002);
+        assertThat(jdbc.queryForObject("SELECT attempts FROM biz_daily_trend_read_model",Integer.class)).isZero();
+        repo.checked(repo.head("B","2026-01"),61002);
+        assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(91002);
+    }
+
+    @Test void repeatedPublicQueriesDoNotBypassBackoffButApprovalChangeDoes() {
+        var auth=org.mockito.Mockito.mock(CarbonAuthorization.class);
+        var cache=org.mockito.Mockito.mock(DailyTrendSummaryCache.class);
+        var detailed=org.mockito.Mockito.mock(DailyElectricityCarbonService.class);
+        var service=new DailyTrendSummaryService(auth,repo,cache,detailed,
+                new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules());
+        long now=System.currentTimeMillis();
+        String version=repo.sourceVersion("B",YearMonth.of(2026,1));
+        repo.request("B","2026-01",1,version,now);
+        var h=repo.head("B","2026-01");String token=repo.claim(h,now);
+        repo.failed(h,token,"TIMEOUT",now);
+        long retry=repo.head("B","2026-01").nextCheck();
+        for(int i=0;i<3;i++) {
+            assertThat(service.query(1,java.util.List.of("ENERGY_MANAGER"),"B","2026-01").state()).isEqualTo("PREPARING");
+            assertThat(repo.head("B","2026-01").state()).isEqualTo("FAILED");
+            assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(retry);
+        }
+        jdbc.update("INSERT INTO biz_energy_manual_batch VALUES ('M','B','hash',1,1,'APPROVED')");
+        service.query(1,java.util.List.of("ENERGY_MANAGER"),"B","2026-01");
+        var changed=repo.head("B","2026-01");
+        assertThat(changed.state()).isEqualTo("PENDING");
+        assertThat(changed.sourceVersion()).isNotEqualTo(version);
+        assertThat(changed.nextCheck()).isLessThan(retry);
+        assertThat(repo.claim(changed,System.currentTimeMillis())).isNotNull();
+        org.mockito.Mockito.verifyNoInteractions(cache,detailed);
+    }
+    @Test void expiredWorkerCannotFailOrPublishTheRecoveredLease() {
+        repo.request("B","2026-01",1,"v1",1000);
+        var h=repo.head("B","2026-01");String old=repo.claim(h,1000);
+        String recovery=repo.claim(h,200000);assertThat(recovery).isNotNull().isNotEqualTo(old);
+        repo.failed(h,old,"LATE_FAILURE",200001);
+        assertThat(repo.head("B","2026-01").state()).isEqualTo("RUNNING");
+        assertThat(repo.head("B","2026-01").token()).isEqualTo(recovery);
+        assertThat(repo.publish(h,old,"old","hash",200002)).isFalse();
+        repo.failed(h,recovery,"TIMEOUT",200003);
+        assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(260003);
+    }
+    @Test void attemptCounterSaturatesInsteadOfDisablingFutureRecovery() {
+        repo.request("B","2026-01",1,"v1",1000);
+        jdbc.update("UPDATE biz_daily_trend_read_model SET attempts=2147483647");
+        var h=repo.head("B","2026-01");String token=repo.claim(h,1000);
+        assertThat(token).isNotNull();
+        repo.failed(h,token,"TIMEOUT",1001);
+        assertThat(repo.head("B","2026-01").nextCheck()).isEqualTo(961001);
+    }
+
+    @Test void dayResultInvalidatesSummaryButNotItsOwnInputVersion() {
+        var month=YearMonth.of(2026,9);
+        String input=repo.inputVersion("B",month),summary=repo.sourceVersion("B",month);
+        jdbc.update("INSERT INTO biz_carbon_daily_static_batch VALUES ('DAY','B','2026-09-01',1,1,?,'view','evidence')",input);
+        assertThat(repo.inputVersion("B",month)).isEqualTo(input);
+        assertThat(repo.sourceVersion("B",month)).isNotEqualTo(summary);
+        jdbc.update("INSERT INTO biz_carbon_project_version VALUES ('P','B',1,'EFFECTIVE',1,NULL)");
+        assertThat(repo.inputVersion("B",month)).isNotEqualTo(input);
+    }
+
+    @Test void failedRetryUsesExactWideArithmeticForEpochAndSignedLongBoundary() {
+        long[] instants={1794150133835L,Long.MAX_VALUE-2000000L};
+        for(int i=0;i<instants.length;i++) {
+            long now=instants[i];String building="B"+i;
+            repo.request(building,"2026-01",1,"v1",now);
+            jdbc.update("UPDATE biz_daily_trend_read_model SET attempts=5 WHERE building_id=?",building);
+            var h=repo.head(building,"2026-01");String token=repo.claim(h,now);
+            assertThat(token).isNotNull();
+            repo.failed(h,token,"TIMEOUT",now);
+            assertThat(repo.head(building,"2026-01").nextCheck()).isEqualTo(Math.addExact(now,960000L));
+            assertThat(repo.claim(h,now+959999L)).isNull();
+            assertThat(repo.claim(h,now+960000L)).isNotNull();
+        }
+    }
+
 }

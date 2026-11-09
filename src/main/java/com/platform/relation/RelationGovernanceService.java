@@ -1337,8 +1337,7 @@ public class RelationGovernanceService {
     private QueryMetadata metadata(ModelRow model, VersionRow version, int depth, boolean truncated) {
         List<ValidationIssueView> issues = repository.listIssues(version.versionId()).stream()
                 .map(this::toView).toList();
-        int unassigned = (int) repository.listMeteringAssignments(version.versionId()).stream()
-                .filter(v -> "UNASSIGNED".equals(v.allocationStatus())).count();
+        int unassigned = (int) repository.countUnassignedMeteringAssignments(version.versionId());
         return new QueryMetadata(model.buildingId(), version.versionId(), version.versionNo(),
                 version.effectiveAt(), model.configRevision(), depth, truncated, unassigned,
                 count(issues, "PENDING_EXPERT"), count(issues, "ERROR"), count(issues, "WARNING"),

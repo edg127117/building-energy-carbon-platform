@@ -1985,3 +1985,50 @@ CREATE TABLE biz_dynamic_interval_evidence (
  PRIMARY KEY (event_id),
  KEY idx_dynamic_interval_version(building_id,point_id,start_ms,end_ms,version_no)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 动态图表仅读经过完整证据校验的轻量投影。
+DROP TABLE IF EXISTS biz_carbon_display_source_revision;
+DROP TABLE IF EXISTS biz_carbon_display_read_model;
+CREATE TABLE biz_carbon_display_read_model (
+ query_key VARCHAR(64) PRIMARY KEY,building_id VARCHAR(32) NOT NULL,query_kind VARCHAR(24) NOT NULL,
+ query_json VARCHAR(2000) NOT NULL,requested_by BIGINT NOT NULL,source_version VARCHAR(64) NOT NULL,
+ built_version VARCHAR(64),state VARCHAR(16) DEFAULT 'PENDING' NOT NULL,result_json CLOB,result_hash VARCHAR(64),
+ lease_token VARCHAR(32),lease_until BIGINT DEFAULT 0 NOT NULL,next_check BIGINT DEFAULT 0 NOT NULL,
+ last_error VARCHAR(64),error_status INT,updated_at BIGINT NOT NULL
+);
+CREATE TABLE biz_carbon_display_source_revision (
+ building_id VARCHAR(32) NOT NULL,
+ domain_key VARCHAR(32) NOT NULL,
+ scope_key VARCHAR(16) NOT NULL,
+ revision BIGINT NOT NULL DEFAULT 0,
+ updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY(building_id,domain_key,scope_key)
+);
+DROP TABLE IF EXISTS biz_dynamic_input_check;
+CREATE TABLE biz_dynamic_input_check (
+ building_id VARCHAR(32) NOT NULL,start_ms BIGINT NOT NULL,end_ms BIGINT NOT NULL,
+ task_revision BIGINT NOT NULL,metadata_version VARCHAR(64) NOT NULL,source_version VARCHAR(64) NOT NULL,
+ PRIMARY KEY(building_id,start_ms,end_ms)
+);
+DROP TABLE IF EXISTS biz_daily_evidence_verification;
+CREATE TABLE biz_daily_evidence_verification (
+ evidence_kind VARCHAR(8) NOT NULL,batch_id VARCHAR(32) NOT NULL,building_id VARCHAR(32) NOT NULL,
+ day_date DATE NOT NULL,last_verified_at BIGINT NOT NULL DEFAULT 0,integrity_error VARCHAR(64),
+ PRIMARY KEY(evidence_kind,batch_id)
+);
+DROP TABLE IF EXISTS biz_dynamic_electricity_chart_projection;
+CREATE TABLE biz_dynamic_electricity_chart_projection (
+ result_id VARCHAR(64) PRIMARY KEY,
+ building_id VARCHAR(32) NOT NULL,
+ grain VARCHAR(8) NOT NULL,
+ start_ms BIGINT NOT NULL,
+ end_ms BIGINT NOT NULL,
+ source_version VARCHAR(64) NOT NULL,
+ source_kind VARCHAR(32) NOT NULL,
+ evidence_hash VARCHAR(64) NOT NULL,
+ chart_json CLOB NOT NULL,
+ chart_hash VARCHAR(64) NOT NULL,
+ last_verified_at BIGINT NOT NULL DEFAULT 0,
+ integrity_error VARCHAR(64),
+ created_at BIGINT NOT NULL
+);

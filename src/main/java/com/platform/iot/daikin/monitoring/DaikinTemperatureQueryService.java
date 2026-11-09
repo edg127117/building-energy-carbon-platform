@@ -5,6 +5,7 @@ import com.platform.iot.daikin.monitoring.query.DaikinMonitoringQueryService;
 import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.quality.PointAliasKey;
 import com.platform.iot.quality.PointRuntimeConfig;
+import com.platform.iot.temperature.TemperaturePointTypes;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
@@ -104,7 +105,7 @@ public class DaikinTemperatureQueryService {
         var point = points.find(new PointAliasKey(building, DaikinTemperatureIngestion.SOURCE_SYSTEM,
                 "DAIKIN_UNIT:" + identities.getFirst() + ":" + field)).orElseThrow(DaikinTemperatureQueryService::missing);
         if (!equipment.equals(point.equipId()) || !building.equals(point.buildingId()) || point.isForCalc() != 0
-                || !"°C".equals(point.unit()) || !"AI".equals(point.dataType())) throw missing();
+                || !"°C".equals(point.unit()) || !TemperaturePointTypes.isAnalog(point.dataType())) throw missing();
         return point;
     }
 

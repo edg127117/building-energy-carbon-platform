@@ -228,7 +228,17 @@ export function useScreenDynamicElectricity(buildingId: Readonly<Ref<string>>, p
     abort = controller
     if (!preserveCurrent || !data.value) status.value = 'loading'
     try {
-      const result = await readDynamicElectricity(currentBuildingId, periodType(currentPeriod), currentPeriod.value, controller.signal)
+      const result = await readDynamicElectricity(
+        currentBuildingId,
+        periodType(currentPeriod),
+        currentPeriod.value,
+        controller.signal,
+        () => {
+          if (!isCurrent(owner, key, controller)) return
+          clear()
+          status.value = 'loading'
+        },
+      )
       if (!isCurrent(owner, key, controller)) return
       const validated = validateScreenDynamicElectricityView(result, currentBuildingId, currentPeriod)
       if (!validated) {

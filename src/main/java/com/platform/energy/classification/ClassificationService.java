@@ -34,6 +34,8 @@ public class ClassificationService {
     private static final int MONTHLY_MANUAL_PAGE_SIZE=5_000;
     private static final int MONTHLY_MANUAL_MAX=20_000;
     private static final int SEALED_MANUAL_SCAN_MAX=400_000;
+    private static final String MONTH_TO_DAY="MONTH_TO_DAY";
+    private static final ZoneId REFINEMENT_ZONE=ZoneId.of("Asia/Shanghai");
     private final ClassificationRepository repository;
     private final EnergyPeriodAuthorization authorization;
     private final RelationGovernanceService relations;
@@ -210,6 +212,9 @@ public class ClassificationService {
             }catch(com.platform.framework.exception.BusinessException exception) { issues.add(new Issue("ERROR","INVALID_READING",String.valueOf(row),exception.getMessage())); }
         }
         var nonNull=request.readings().stream().filter(Objects::nonNull).filter(r->r.startInclusive()!=null&&r.endExclusive()!=null&&r.pointId()!=null).toList();
+        if(nonNull.stream().anyMatch(r->r.refinementMode()!=null)
+                &&nonNull.stream().anyMatch(r->!MONTH_TO_DAY.equals(r.refinementMode())))
+            issues.add(new Issue("ERROR","MIXED_REFINEMENT",null,"细化批次不能混入普通读数或修订"));
         for(int i=0;i<nonNull.size();i++)for(int j=i+1;j<nonNull.size();j++) {
             var a=nonNull.get(i);var b=nonNull.get(j);
             if(a.pointId().equals(b.pointId())&&a.startInclusive().isBefore(b.endExclusive())&&b.startInclusive().isBefore(a.endExclusive())) issues.add(new Issue("ERROR","OVERLAPPING_PERIOD",String.valueOf(j+1),"同文件同测点期间重叠"));
@@ -231,12 +236,18 @@ public class ClassificationService {
         log(user,building,"IMPORT_ENERGY_READINGS",batch,request.reason());
         return new ImportView(batch,"PENDING_REVIEW",request.readings().size(),preview.issues());
     }
-    @Transactional(rollbackFor=Exception.class)
+    // 授权读取在建筑锁之前；READ_COMMITTED保证等待锁的竞审者看到已提交的新来源，而非旧一致性快照。
+    @Transactional(rollbackFor=Exception.class,isolation=Isolation.READ_COMMITTED)
     public ImportView approveReadings(long user,Collection<String> roles,String building,String batchId,TransitionRequest request) {
         read(user,roles,building);authorization.requireExceptionReviewer(user,roles);text(request.reason(),500);repository.lock(building);
         var batch=repository.batch(building,batchId,false);if(batch==null) throw error(404,"导入批次不存在");
         authorization.requireSeparation(batch.author(),user);
-        for(var row:repository.batchReadings(building,batchId)) {
+        var rows=repository.batchReadings(building,batchId);
+        if(!"PENDING_REVIEW".equals(batch.status())||request.expectedRevision()==null
+                ||batch.revision()!=request.expectedRevision())throw error(409,"批次状态或版本冲突");
+        boolean refinement=rows.stream().anyMatch(row->decode(row.json(),Reading.class).refinementMode()!=null);
+        if(refinement)validateRefinementBatch(building,rows);
+        for(var row:rows) {
             Reading r=decode(row.json(),Reading.class);
             if("CONFIRMED".equals(r.status())) {
                 var binding=catalog.effectiveBinding(user,roles,building,r.pointId(),LocalDateTime.ofInstant(r.startInclusive(),ZoneOffset.ofHours(8)));
@@ -244,6 +255,7 @@ public class ClassificationService {
                 if(!r.energyItemCode().equals(binding.energyItemCode())||!r.unit().equals(binding.rawUnit())
                         ||!binding.bindingVersionId().equals(endBinding.bindingVersionId())) fail("人工读数品种、单位或有效期与已确认测点绑定不符");
             }
+            if(refinement)continue;
             var overlaps=repository.currentApprovedReadings(building,r.pointId(),r.startInclusive(),r.endExclusive(),2);
             if(blank(r.supersedesFactId())) {if(!overlaps.isEmpty())throw error(409,"已有审核通过的同测点重叠期间，请提交明确修订");}
             else {
@@ -254,7 +266,7 @@ public class ClassificationService {
             }
         }
         if(repository.approveBatch(building,batchId,request.expectedRevision(),user)!=1) throw error(409,"批次状态或版本冲突");
-        log(user,building,"APPROVE_ENERGY_READINGS",batchId,request.reason());return new ImportView(batchId,"APPROVED",0,List.of());
+        log(user,building,refinement?"APPROVE_ENERGY_READING_REFINEMENT":"APPROVE_ENERGY_READINGS",batchId,request.reason());return new ImportView(batchId,"APPROVED",0,List.of());
     }
     public ReadingBatchView readingBatch(long user, Collection<String> roles,
                                          String building, String batchId) {
@@ -280,6 +292,25 @@ public class ClassificationService {
 
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public QueryProjection queryProjection(long user,Collection<String> roles,String building,QueryRequest request) {
+        return project(user,roles,building,request,null);
+    }
+
+    /** 月源只替换人工事实读取；日授权、有效配置、封存去重及分类算法仍在当前日事务内执行。 */
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public QueryView queryUsingMonthSource(long user,Collection<String> roles,String building,QueryRequest request,MonthlyReadingWindow sources) {
+        if(!"DAY".equals(request.periodType()))throw error(400,"Prepared monthly sources require a daily query");
+        return project(user,roles,building,request,Objects.requireNonNull(sources)).view();
+    }
+
+    /** Uses the caller-owned verified day spool without dropping the normal source slices or project evidence. */
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public QueryProjection queryProjectionUsingMonthSource(long user,Collection<String> roles,String building,
+            QueryRequest request,MonthlyReadingWindow sources) {
+        if(!"DAY".equals(request.periodType()))throw error(400,"Prepared monthly sources require a daily query");
+        return project(user,roles,building,request,Objects.requireNonNull(sources));
+    }
+
+    private QueryProjection project(long user,Collection<String> roles,String building,QueryRequest request,MonthlyReadingWindow sources) {
         read(user,roles,building);window(request.startInclusive(),request.endExclusive());
         if(!Set.of("DAY","MONTH","YEAR").contains(request.periodType())) fail("统计周期无效");
         if("MONTH".equals(request.periodType())&&Duration.between(request.startInclusive(),request.endExclusive()).compareTo(Duration.ofDays(31))>0)
@@ -307,12 +338,14 @@ public class ClassificationService {
         for(var snapshot:periods)sealedManualFacts.addAll(com.platform.energy.period.ManualPeriodInputService.sealedFactIds(json,snapshot.evidenceJson()));
         // 日视图可能读取整楼24小时来源；已封账的来源先去重，再计入未封账来源上限。
         boolean pagedManual=Set.of("MONTH","DAY").contains(request.periodType());
-        var manual=pagedManual
+        var manual=sources!=null?sources.readDay(building,request.startInclusive(),request.endExclusive(),sealedManualFacts):pagedManual
                 ? monthlyCurrentApprovedReadings(building,request.startInclusive(),request.endExclusive(),sealedManualFacts)
                 : repository.readings(building,request.startInclusive(),request.endExclusive(),true);
         if(!pagedManual)limit(manual.size());
+        Set<String> sealedRefinements="MONTH".equals(request.periodType())
+                ? sealedRefinementFacts(building,periods,manual,request):Set.of();
         for(var value:manual) {
-            if(sealedManualFacts.contains(value.id()))continue;
+            if(sealedManualFacts.contains(value.id())||sealedRefinements.contains(value.id()))continue;
             Reading r=decode(value.json(),Reading.class);
             if(!request.energyItemCode().equals(r.energyItemCode())||!request.unit().equals(r.unit())||value.quantity()==null) continue;
             if(!"CONFIRMED".equals(r.status())||("CUMULATIVE".equals(r.semantics())&&!"EXACT".equals(r.timePrecision()))) continue;
@@ -422,6 +455,26 @@ public class ClassificationService {
             if(value.quantity()==null || normalize(reading).compareTo(value.quantity())!=0)throw error(409,"已审核小时来源的固定用量证据不一致");
             return new ReadingView(value.id(),value.batchId(),reading,value.quantity(),value.author(),value.batchStatus(),null);
         }).toList();
+    }
+
+    /** 请求私有的完整北京自然日来源；保留跨日事实，由小时调用者执行原始相交与精确区间校验。 */
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ,
+            propagation=org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
+    public List<ReadingView> reviewedDayIntervalReadings(long user,Collection<String> roles,String building,
+            Instant from,Instant to,Instant asOf,java.util.function.Supplier<Duration> remaining) {
+        ReviewedDayReadings.checkRemaining(remaining);
+        read(user,roles,building);window(from,to);
+        LocalDate day=from.atZone(REFINEMENT_ZONE).toLocalDate();
+        if(!day.atStartOfDay(REFINEMENT_ZONE).toInstant().equals(from)
+                ||!day.plusDays(1).atStartOfDay(REFINEMENT_ZONE).toInstant().equals(to)
+                ||asOf==null||asOf.isBefore(to))throw error(400,"日来源或接收截止无效");
+        return ReviewedDayReadings.read(repository,building,from,to,asOf,remaining,value->{
+            var reading=decode(value.json(),Reading.class);
+            BigDecimal quantity=normalize(reading);
+            if(value.quantity()==null||quantity==null||quantity.compareTo(value.quantity())!=0)
+                throw error(409,"已审核小时来源的固定用量证据不一致");
+            return new ReadingView(value.id(),value.batchId(),reading,value.quantity(),value.author(),value.batchStatus(),null);
+        });
     }
 
     public record SealedProjection(String classificationVersionId,String relationVersionId,
@@ -569,8 +622,104 @@ public class ClassificationService {
             cursorStart=last.startInclusive();cursorFactId=last.id();
         }
     }
+    /** 建筑锁内整组验证，唯一一次批次状态变更使整月同时退出当前来源，不能逐日审核。 */
+    private void validateRefinementBatch(String building,List<ClassificationRepository.StoredReading> rows) {
+        if(rows.isEmpty()||rows.size()>500)fail("细化批次应为1至500条且包含完整自然日组");
+        Map<String,List<ClassificationRepository.StoredReading>> groups=new LinkedHashMap<>();
+        for(var row:rows) {
+            Reading r=decode(row.json(),Reading.class);
+            if(!MONTH_TO_DAY.equals(r.refinementMode())||blank(r.supersedesFactId()))
+                fail("细化批次不能混入普通读数或修订");
+            groups.computeIfAbsent(r.supersedesFactId(),ignored->new ArrayList<>()).add(row);
+        }
+        for(var entry:groups.entrySet()) {
+            var parent=repository.approvedReading(building,entry.getKey());
+            if(parent==null)throw error(409,"细化目标不是同建筑已审核事实");
+            Reading previous=validateRefinementGroup(parent,entry.getValue());
+            var current=repository.currentApprovedReadings(building,previous.pointId(),previous.startInclusive(),previous.endExclusive(),2);
+            if(current.size()!=1||!current.getFirst().id().equals(parent.id()))
+                throw error(409,"细化目标不是唯一当前有效记录");
+        }
+    }
+
+    /** 整月边界精确不代表日来源精确；允许整组降为DATE_ONLY，禁止升级或混用精度。 */
+    private Reading validateRefinementGroup(ClassificationRepository.StoredReading parent,
+                                            List<ClassificationRepository.StoredReading> children) {
+        Reading previous=decode(parent.json(),Reading.class);
+        BigDecimal original=normalize(previous);
+        LocalDate first=previous.startInclusive().atZone(REFINEMENT_ZONE).toLocalDate();
+        Instant monthStart=first.withDayOfMonth(1).atStartOfDay(REFINEMENT_ZONE).toInstant();
+        Instant monthEnd=first.withDayOfMonth(1).plusMonths(1).atStartOfDay(REFINEMENT_ZONE).toInstant();
+        if(!"APPROVED".equals(parent.batchStatus())||!"CONFIRMED".equals(previous.status())
+                ||!"PERIOD_TOTAL".equals(previous.semantics())||original==null||parent.quantity()==null
+                ||original.compareTo(parent.quantity())!=0||!monthStart.equals(previous.startInclusive())
+                ||!monthEnd.equals(previous.endExclusive())||children.size()!=first.lengthOfMonth())
+            fail("细化需要已确认整自然月及同批完整自然日组");
+        var ordered=children.stream().sorted(Comparator.comparing(row->decode(row.json(),Reading.class).startInclusive())).toList();
+        Instant cursor=monthStart;BigDecimal total=BigDecimal.ZERO;String batch=ordered.getFirst().batchId();
+        String precision=decode(ordered.getFirst().json(),Reading.class).timePrecision();
+        if("DATE_ONLY".equals(previous.timePrecision())&&!"DATE_ONLY".equals(precision))
+            fail("细化不能把日期精度来源升级为精确读数");
+        for(var child:ordered) {
+            Reading r=decode(child.json(),Reading.class);
+            BigDecimal quantity=normalize(r);
+            Instant dayEnd=cursor.atZone(REFINEMENT_ZONE).toLocalDate().plusDays(1).atStartOfDay(REFINEMENT_ZONE).toInstant();
+            if(!MONTH_TO_DAY.equals(r.refinementMode())||!parent.id().equals(r.supersedesFactId())
+                    ||!batch.equals(child.batchId())||!previous.pointId().equals(r.pointId())
+                    ||!previous.energyItemCode().equals(r.energyItemCode())||!previous.unit().equals(r.unit())
+                    ||!Objects.equals(precision,r.timePrecision())||!"CONFIRMED".equals(r.status())
+                    ||!"PERIOD_TOTAL".equals(r.semantics())||!cursor.equals(r.startInclusive())
+                    ||!dayEnd.equals(r.endExclusive())||quantity==null||child.quantity()==null
+                    ||quantity.compareTo(child.quantity())!=0)
+                fail("细化必须同点、品种、单位、时间精度且连续覆盖完整自然日，归一量与证据一致");
+            cursor=dayEnd;total=total.add(quantity);
+        }
+        if(!monthEnd.equals(cursor)||total.compareTo(original)!=0)fail("细化日用量之和必须与原月用量精确守恒");
+        return previous;
+    }
+
+    /** 只去重完整、未再修订的直接细化组；后续更正须走正式月修订，不能由旧封账静默遮蔽。 */
+    private Set<String> sealedRefinementFacts(String building,List<PeriodSnapshot> periods,
+            List<ClassificationRepository.StoredReading> manual,QueryRequest request) {
+        Map<String,PeriodSnapshot> sealedParents=new HashMap<>();
+        for(var snapshot:periods) {
+            if(!"MONTH".equals(snapshot.periodType())||!building.equals(snapshot.buildingId())
+                    ||!request.energyItemCode().equals(snapshot.energyItemCode())||!request.unit().equals(snapshot.nativeUnitCode())
+                    ||!"Asia/Shanghai".equals(snapshot.timezoneId())
+                    ||!Set.of("LOCKED_COMPLETE","LOCKED_NATIVE_COMPLETE").contains(snapshot.status())
+                    ||snapshot.startInclusive().isBefore(request.startInclusive())||snapshot.endExclusive().isAfter(request.endExclusive()))continue;
+            var ids=com.platform.energy.period.ManualPeriodInputService.sealedFactIds(json,snapshot.evidenceJson());
+            if(ids.size()==1)sealedParents.put(ids.iterator().next(),snapshot);
+        }
+        Map<String,List<ClassificationRepository.StoredReading>> groups=new HashMap<>();
+        for(var row:manual) {
+            Reading r=decode(row.json(),Reading.class);
+            if(MONTH_TO_DAY.equals(r.refinementMode())&&sealedParents.containsKey(r.supersedesFactId()))
+                groups.computeIfAbsent(r.supersedesFactId(),ignored->new ArrayList<>()).add(row);
+        }
+        Set<String> suppressed=new HashSet<>();
+        for(var entry:groups.entrySet()) {
+            var parent=repository.approvedReading(building,entry.getKey());
+            if(parent==null)throw error(409,"封账细化的原始事实缺失，请核对固定证据");
+            Reading previous;
+            try {previous=validateRefinementGroup(parent,entry.getValue());}
+            catch(com.platform.framework.exception.BusinessException exception) {
+                throw error(409,"完整日细化来源已变化，请走正式月度修订，不能覆盖原封账");
+            }
+            var snapshot=sealedParents.get(parent.id());
+            if(!snapshot.pointId().equals(previous.pointId())||!snapshot.energyItemCode().equals(previous.energyItemCode())
+                    ||!snapshot.nativeUnitCode().equals(previous.unit())||!snapshot.startInclusive().equals(previous.startInclusive())
+                    ||!snapshot.endExclusive().equals(previous.endExclusive())||snapshot.nativeQuantity()==null
+                    ||snapshot.nativeQuantity().compareTo(parent.quantity())!=0)continue;
+            entry.getValue().forEach(row->suppressed.add(row.id()));
+        }
+        return suppressed;
+    }
+
     private BigDecimal normalize(Reading r) {
         text(r.pointId(),80);text(r.energyItemCode(),64);text(r.unit(),32);text(r.sourceReference(),500);window(r.startInclusive(),r.endExclusive());
+        if(r.refinementMode()!=null&&(!MONTH_TO_DAY.equals(r.refinementMode())||blank(r.supersedesFactId())))
+            fail("细化模式无效或缺少被替代的整月事实");
         if(r.status()==null||r.timePrecision()==null||!Set.of("CONFIRMED","PENDING_EXPERT").contains(r.status())||!Set.of("EXACT","DATE_ONLY").contains(r.timePrecision())) fail("读数确认状态或时间精度无效");
         BigDecimal quantity;
         if("CUMULATIVE".equals(r.semantics())) {

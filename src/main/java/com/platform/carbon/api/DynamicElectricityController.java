@@ -21,6 +21,7 @@ import java.util.List;
 public class DynamicElectricityController {
     private final DynamicElectricityService service;
     private final com.platform.carbon.DynamicElectricityLiveService live;
+    private final com.platform.carbon.PeriodElectricityQueryService prepared;
 
     @PostMapping("/intervals")
     @PreAuthorize("hasAnyRole('ENERGY_MANAGER','PLATFORM_ADMIN')")
@@ -44,12 +45,12 @@ public class DynamicElectricityController {
 
     @GetMapping
     public Result<View> query(Authentication auth, @PathVariable String buildingId, @RequestParam String periodType, @RequestParam String period) {
-        return Result.success(service.query(SecurityUser.userId(auth), SecurityUser.roles(auth), buildingId, periodType, period));
+        return Result.success(prepared.dynamic(SecurityUser.userId(auth), SecurityUser.roles(auth), buildingId, periodType, period));
     }
 
     @GetMapping("/hourly")
     public Result<View> hourly(Authentication auth, @PathVariable String buildingId, @RequestParam java.time.LocalDate date) {
-        return Result.success(service.query(SecurityUser.userId(auth), SecurityUser.roles(auth), buildingId, "DAY", date.toString()));
+        return Result.success(prepared.dynamic(SecurityUser.userId(auth), SecurityUser.roles(auth), buildingId, "DAY", date.toString()));
     }
 
     @GetMapping("/results/{resultId}/evidence")

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { DailyStaticEvidenceLinks } from '@/modules/energy-reporting/public'
 import { ElButton } from '@/shared/ui'
 import { t } from '@/locales'
 import IndexPage from './IndexPage.vue'
@@ -20,6 +21,7 @@ const code = String(import.meta.env.VITE_SCREEN_BUILDING_CODE ?? '')
 const state = useFinalBData(code)
 const annual = useFinalBAnnual(state.buildingId, computed(() => state.periods.value.composition))
 const daily = useFinalBDaily(state.buildingId, computed(() => state.periods.value.usage), computed(() => state.periods.value.mirror))
+const dailyEvidenceViews = computed(() => [...daily.views.value.values()])
 const dynamic = useScreenDynamicElectricity(state.buildingId, computed(() => state.periods.value.mirror))
 const plan = useScreenCarbonPlan(() => state.buildingId.value, () => Number(state.periods.value.plan.value.slice(0, 4)), () => state.periods.value.plan.kind === 'month' ? state.periods.value.plan.value : undefined)
 const flow = useJointFlow(state.buildingId, computed(() => state.periods.value.flow))
@@ -102,6 +104,7 @@ const s = (key: string, params?: Record<string, string | number>) => t('largeScr
       <ElButton :loading="dynamic.loading.value" @click="dynamic.reload()">{{ s('finalBDynamicRetry') }}</ElButton>
       <p>{{ s('finalBPendingCards') }}</p>
       <p>{{ s('finalBDailyRule') }}</p>
+      <DailyStaticEvidenceLinks :views="dailyEvidenceViews" />
       <p v-if="daily.failedMonths.value.length">{{ s('finalBDailyFailed', { months: daily.failedMonths.value.join('、') }) }}</p>
       <ElButton v-if="state.periods.value.usage.kind === 'month' || state.periods.value.mirror.kind === 'month'" :loading="daily.loading.value" @click="daily.reload()">{{ s('finalBDailyRetry') }}</ElButton>
       <p v-if="annual.result.value">{{ s('finalBAnnualContext', { year: annual.result.value.year, month: annual.result.value.throughMonth }) }}</p>

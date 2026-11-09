@@ -36,4 +36,17 @@ class CarbonDisplayQueryRepositoryTest {
         repo.failed(h,token,"REVOKED",403,1001);repo.request(q,"{}",2,"v",1002);
         assertThat(repo.head(q.key()).state()).isEqualTo("PENDING");assertThat(repo.head(q.key()).user()).isEqualTo(2);
     }
+    @Test void readyInternalLeavesStayIdleUntilParentRequestsChangedSourceButUnfinishedLeavesRecover(){
+        for(String kind:List.of("DAILY_TREND_DAY","ELECTRICITY_YEAR_MONTH","DAILY_TREND_DETAIL","ELECTRICITY_YEAR")) {
+            repo.request(kind,"B",kind,"{}",1,"v1",1000);
+            var head=repo.head(kind);String token=repo.claim(head,1000);
+            assertThat(repo.publish(head,token,"{}","hash",1001)).isTrue();
+        }
+        assertThat(repo.duePeriods(40000)).extracting(CarbonDisplayQueryRepository.Head::kind)
+                .containsExactlyInAnyOrder("DAILY_TREND_DETAIL","ELECTRICITY_YEAR");
+        repo.request("DAILY_TREND_DAY","B","DAILY_TREND_DAY","{}",1,"v2",40001);
+        var changed=repo.head("DAILY_TREND_DAY");repo.claim(changed,40001);
+        assertThat(repo.duePeriods(40002)).extracting(CarbonDisplayQueryRepository.Head::kind).doesNotContain("DAILY_TREND_DAY");
+        assertThat(repo.duePeriods(200002)).extracting(CarbonDisplayQueryRepository.Head::kind).contains("DAILY_TREND_DAY");
+    }
 }

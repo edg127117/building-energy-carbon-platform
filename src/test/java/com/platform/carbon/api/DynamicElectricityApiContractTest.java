@@ -33,6 +33,7 @@ class DynamicElectricityApiContractTest {
     @MockBean TokenCacheService tokens;
     @MockBean DynamicElectricityService service;
     @MockBean com.platform.carbon.DynamicElectricityLiveService live;
+    @MockBean com.platform.carbon.PeriodElectricityQueryService prepared;
 
     @BeforeEach void setup() {
         when(tokens.validateActiveToken(anyLong(), anyString())).thenReturn(TokenValidationResult.ACTIVE);
@@ -82,13 +83,13 @@ class DynamicElectricityApiContractTest {
     }
 
     @Test void queryAndEvidenceNeverInvokeCalculation() throws Exception {
-        when(service.query(anyLong(), anyCollection(), anyString(), anyString(), anyString()))
+        when(prepared.dynamic(anyLong(), anyCollection(), anyString(), anyString(), anyString()))
                 .thenReturn(new View("B", "YEAR", "2025", "Asia/Shanghai", "tCO2", "kgCO2/kWh", "MONITORING", List.of()));
         mvc.perform(get(BASE).with(role("BUILDING_OWNER")).param("periodType", "YEAR").param("period", "2025"))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.data.factorUnit").value("kgCO2/kWh"));
         mvc.perform(get(BASE + "/hourly").with(role("BUILDING_OWNER")).param("date", "2025-01-01"))
                 .andExpect(status().isOk());
-        verify(service).query(1L, Set.of("BUILDING_OWNER"), "B", "DAY", "2025-01-01");
+        verify(prepared).dynamic(1L, Set.of("BUILDING_OWNER"), "B", "DAY", "2025-01-01");
         mvc.perform(get(BASE + "/results/id/evidence").with(role("BUILDING_OWNER"))).andExpect(status().isOk());
         verify(service).evidence(1L, Set.of("BUILDING_OWNER"), "B", "id");
         verify(service, never()).calculate(anyLong(), anyCollection(), anyString(), any());

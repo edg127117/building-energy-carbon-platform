@@ -1,12 +1,13 @@
 import { effectScope, ref } from 'vue'
 import { flushPromises } from '@vue/test-utils'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { readDailyTrends, type DailyTrends } from '@/modules/energy-reporting/public'
 import type { ScreenPeriod } from '../models/screen-period'
 import { dailyFixture } from '../models/final-b-daily.test-fixture'
 import { useFinalBDaily } from './use-final-b-daily'
 vi.mock('@/modules/energy-reporting/api/daily-trends', () => ({ readDailyTrends: vi.fn() }))
 beforeEach(() => { vi.mocked(readDailyTrends).mockReset(); vi.mocked(readDailyTrends).mockImplementation(async (building, month) => dailyFixture(building, month)) })
+afterEach(() => { vi.useRealTimers() })
 
 it('shares a month across two cards, independently supports different months and keeps year inputs untouched', async () => {
   const scope = effectScope(), building = ref('B'), usage = ref<ScreenPeriod>({ kind: 'year', value: '2026' }), mirror = ref<ScreenPeriod>({ kind: 'year', value: '2026' })
@@ -48,6 +49,74 @@ it('reuses completed same-building months across staggered card changes but refr
   await state.reload()
   expect(readDailyTrends).toHaveBeenCalledTimes(3)
   scope.stop()
+})
+
+it('clears a cached month as soon as its refreshed summary reports PREPARING', async () => {
+  vi.useFakeTimers()
+  let resolvePrepared!: (view: DailyTrends) => void
+  const pending = new Promise<DailyTrends>(resolve => { resolvePrepared = resolve })
+  const scope = effectScope(), building = ref('B')
+  const period = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  const state = scope.run(() => useFinalBDaily(building, period, period))!
+  await flushPromises()
+  expect(state.data.value.usage?.period.value).toBe('2026-01')
+
+  vi.mocked(readDailyTrends).mockImplementationOnce(async (_building, _month, _signal, preparing) => {
+    preparing?.()
+    return pending
+  })
+  await vi.advanceTimersByTimeAsync(5000)
+  await flushPromises()
+  expect(state.views.value.has('2026-01')).toBe(false)
+  expect(state.data.value.usage).toBeUndefined()
+  expect(state.loading.value).toBe(true)
+
+  resolvePrepared(dailyFixture('B', '2026-01'))
+  await flushPromises()
+  expect(state.data.value.usage?.period.value).toBe('2026-01')
+  expect(state.loading.value).toBe(false)
+  scope.stop()
+})
+
+it('keeps the current chart during normal background refresh and skips refresh ticks while its request is in flight', async () => {
+  vi.useFakeTimers()
+  let resolveRefresh!: (view: DailyTrends) => void
+  vi.mocked(readDailyTrends).mockImplementationOnce(async (building, month) => dailyFixture(building, month))
+    .mockImplementationOnce(() => new Promise(resolve => { resolveRefresh = resolve }))
+  const scope = effectScope(), building = ref('B')
+  const period = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  const state = scope.run(() => useFinalBDaily(building, period, period))!
+  await flushPromises()
+  expect(state.data.value.usage?.period.value).toBe('2026-01')
+
+  await vi.advanceTimersByTimeAsync(5000)
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(2)
+  expect(state.data.value.usage?.period.value).toBe('2026-01')
+  const refreshSignal = vi.mocked(readDailyTrends).mock.calls[1]?.[2]
+  await vi.advanceTimersByTimeAsync(15000)
+  expect(readDailyTrends).toHaveBeenCalledTimes(2)
+  expect(refreshSignal?.aborted).toBe(false)
+
+  resolveRefresh(dailyFixture('B', '2026-01'))
+  await flushPromises()
+  await vi.advanceTimersByTimeAsync(5000)
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(3)
+  scope.stop()
+})
+
+it('stops the periodic refresh timer when the composable is disposed', async () => {
+  vi.useFakeTimers()
+  const scope = effectScope(), building = ref('B')
+  const period = ref<ScreenPeriod>({ kind: 'month', value: '2026-01' })
+  scope.run(() => useFinalBDaily(building, period, period))
+  await flushPromises()
+  expect(readDailyTrends).toHaveBeenCalledTimes(1)
+
+  scope.stop()
+  await vi.advanceTimersByTimeAsync(20000)
+  expect(readDailyTrends).toHaveBeenCalledTimes(1)
 })
 
 it('commits each month as soon as it completes', async () => {
@@ -117,7 +186,7 @@ it('does not commit a removed month response and reload replaces a current in-fl
 
   period.value = { kind: 'month', value: '2026-02' }
   await flushPromises()
-  expect(pending[0].signal?.aborted).toBe(false)
+  expect(pending[0].signal?.aborted).toBe(true)
   pending[0].resolve(dailyFixture('B', '2026-01'))
   await flushPromises()
   expect(state.views.value.has('2026-01')).toBe(false)

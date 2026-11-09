@@ -1,6 +1,7 @@
 package com.platform.carbon;
 
 import com.platform.energy.classification.BuildingDailyElectricityReader;
+import com.platform.energy.classification.MonthlyReadingWindow;
 import com.platform.energy.classification.ClassificationContracts.QueryView;
 import com.platform.framework.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,6 +31,14 @@ class DailyElectricityCarbonServiceTest {
         when(hourly.byDate(any(),any(),isNull())).thenAnswer(c->stored(c.getArgument(1),"0.56",false));
     }
     @AfterEach void closeReaders() { service.close(); }
+    @Test void backgroundDayUsesBoundedSourcesAndClosesThemWithoutLegacyFallback() {
+        var date=LocalDate.of(2026,1,2);var sources=mock(MonthlyReadingWindow.class);
+        when(electricity.prepareDay(eq(1L),eq(roles),eq("B"),eq(date),any())).thenReturn(sources);
+        when(electricity.readPrepared(1,roles,"B",date,sources)).thenReturn(quantity(date));
+        assertThat(service.prepareDay(1,roles,"B",date).date()).isEqualTo(date);
+        verify(electricity,never()).read(anyLong(),anyCollection(),any(),any());
+        verify(sources).close();
+    }
     @ParameterizedTest @CsvSource({"2024-02,29","2026-02,28","2026-04,30","2026-01,31"})
     void returnsEveryCalendarDayAndPreservesZero(String month,int count) {
         var view=service.query(1,roles,"B",month);
@@ -125,6 +134,73 @@ class DailyElectricityCarbonServiceTest {
         assertThat(service.query(1,roles,"B","2026-11").state()).isEqualTo("NOT_STARTED");
         verifyNoInteractions(electricity,hourly);
     }
+    @Test void preparedSummaryPreservesEveryDailyResultAndClosesRequestSources() {
+        var source=mock(MonthlyReadingWindow.class);
+        when(electricity.prepareMonth(eq(1L),anyCollection(),eq("B"),eq(YearMonth.of(2026,1)),any(),any())).thenReturn(source);
+        when(electricity.readPrepared(eq(1L),anyCollection(),eq("B"),any(),eq(source)))
+                .thenAnswer(c->quantity(c.getArgument(3)));
+        var original=service.query(1,roles,"B","2026-01");
+        clearInvocations(electricity,hourly);
+        var prepared=service.queryPrepared(1,roles,"B","2026-01");
+        assertThat(prepared).isEqualTo(original);
+        verify(electricity,times(1)).prepareMonth(eq(1L),anyCollection(),eq("B"),eq(YearMonth.of(2026,1)),eq(LocalDate.of(2026,10,31)),any());
+        verify(electricity,times(31)).readPrepared(eq(1L),anyCollection(),eq("B"),any(),eq(source));
+        verify(electricity,never()).read(anyLong(),anyCollection(),any(),any());verify(source).close();
+    }
+    @Test void preparedSummaryDoesNotScanUnendedMonthAndBoundsCurrentMonthPreparation() {
+        assertThat(service.queryPrepared(1,roles,"B","2026-11").state()).isEqualTo("NOT_STARTED");
+        verifyNoInteractions(electricity,hourly);
+        var source=mock(MonthlyReadingWindow.class);
+        when(electricity.prepareMonth(anyLong(),anyCollection(),any(),any(),any(),any())).thenReturn(source);
+        when(electricity.readPrepared(anyLong(),anyCollection(),any(),any(),eq(source))).thenAnswer(c->quantity(c.getArgument(3)));
+        var value=service.queryPrepared(1,roles,"B","2026-10");
+        assertThat(value.days().get(30).electricityStatus()).isEqualTo("NOT_ENDED");
+        verify(electricity).prepareMonth(eq(1L),anyCollection(),eq("B"),eq(YearMonth.of(2026,10)),eq(LocalDate.of(2026,10,31)),any());
+        verify(electricity,never()).readPrepared(anyLong(),anyCollection(),any(),eq(LocalDate.of(2026,10,31)),any());
+        verify(source).close();
+    }
+    @Test void preparedSummaryKeepsDayConflictsIndependentButCleansUpOnInfrastructureFailure() {
+        var source=mock(MonthlyReadingWindow.class);
+        when(electricity.prepareMonth(anyLong(),anyCollection(),any(),any(),any(),any())).thenReturn(source);
+        when(electricity.readPrepared(anyLong(),anyCollection(),any(),any(),eq(source))).thenAnswer(c->quantity(c.getArgument(3)));
+        when(electricity.readPrepared(eq(1L),anyCollection(),eq("B"),eq(LocalDate.of(2026,1,2)),eq(source)))
+                .thenThrow(new BusinessException(409,"OVERLAP","overlap"));
+        var result=service.queryPrepared(1,roles,"B","2026-01");
+        assertThat(result.days().get(1).electricityStatus()).isEqualTo("BLOCKED");
+        assertThat(result.days().get(2).electricityStatus()).isEqualTo("AVAILABLE");
+        assertThat(result.days().get(1).staticCarbonStatus()).isEqualTo("AVAILABLE");verify(source).close();
+        clearInvocations(source);
+        doThrow(new BusinessException(503,"SOURCE_FAILURE","unavailable")).when(electricity)
+                .readPrepared(eq(1L),anyCollection(),eq("B"),eq(LocalDate.of(2026,1,2)),eq(source));
+        assertThatThrownBy(()->service.queryPrepared(1,roles,"B","2026-01"))
+                .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getCode()).isEqualTo(503));
+        verify(source).close();
+    }
+    @Test void preparedSourceDatabaseTimeoutIsReportedAsBudgetTimeout() {
+        when(electricity.prepareMonth(anyLong(),anyCollection(),any(),any(),any(),any()))
+                .thenThrow(new org.springframework.dao.QueryTimeoutException("bounded JDBC scan"));
+        assertThatThrownBy(()->service.queryPrepared(1,roles,"B","2026-01"))
+                .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("CARBON_CALCULATION_TIMEOUT"));
+        verifyNoInteractions(hourly);
+    }
+    @Test void cancellingPreparedReadClosesSourcesOnTheOwningWorker() throws Exception {
+        var source=mock(MonthlyReadingWindow.class);var entered=new CountDownLatch(1);var closed=new CountDownLatch(1);
+        var owner=new java.util.concurrent.atomic.AtomicReference<Thread>();
+        when(electricity.prepareMonth(anyLong(),anyCollection(),any(),any(),any(),any())).thenAnswer(c->{owner.set(Thread.currentThread());return source;});
+        when(electricity.readPrepared(anyLong(),anyCollection(),any(),any(),eq(source))).thenAnswer(c->{
+            entered.countDown();try{Thread.sleep(10000);}catch(InterruptedException e){Thread.currentThread().interrupt();throw new org.springframework.dao.QueryTimeoutException("cancelled");}
+            return quantity(c.getArgument(3));
+        });
+        doAnswer(c->{assertThat(Thread.currentThread()).isSameAs(owner.get());closed.countDown();return null;}).when(source).close();
+        var properties=new CarbonProperties();properties.setDailyTrendQueryTimeout(Duration.ofSeconds(1));
+        try(var reader=new DailyElectricityCarbonService(auth,electricity,hourly,properties,Clock.fixed(Instant.parse("2026-10-30T17:00:00Z"),ZoneOffset.UTC));
+                var callers=Executors.newVirtualThreadPerTaskExecutor()) {
+            var future=callers.submit(()->reader.queryPrepared(1,roles,"B","2026-01"));
+            assertThat(entered.await(5,TimeUnit.SECONDS)).isTrue();
+            assertThatThrownBy(()->future.get(5,TimeUnit.SECONDS)).hasCauseInstanceOf(BusinessException.class);
+            assertThat(closed.await(5,TimeUnit.SECONDS)).isTrue();
+        }
+    }
     @Test void deniesBuildingBeforeReadingAndDoesNotSwallowFailures() {
         doThrow(new BusinessException(403,"DENIED","无权限")).when(auth).requireReader(1,roles,"C");
         assertThatThrownBy(()->service.query(1,roles,"C","2026-01")).isInstanceOf(BusinessException.class);
@@ -165,4 +241,14 @@ class DailyElectricityCarbonServiceTest {
                 incomplete?"PARTIAL":"COMPLETE","batch",2,start(date.plusDays(1)),start(date.plusDays(1)),"source watermark",24,incomplete?23:24,new BigDecimal("1.234567890123456789"),points,start(date.plusDays(1)),"hash");
         return new HourlyCarbonRepository.Stored(view,CarbonEvidence.canonical(root));
     }
+    @Test void existingHourlyResultKeepsPriorityAndNeverAddsDayCarbon() {
+        service.close();var daily=mock(DailyStaticCarbonService.class);
+        service=new DailyElectricityCarbonService(auth,electricity,hourly,new CarbonProperties(),
+                Clock.fixed(Instant.parse("2026-10-30T17:00:00Z"),ZoneOffset.UTC),daily);
+        var day=service.query(1,roles,"B","2026-01").days().getFirst();
+        assertThat(day.staticEmissionTco2e()).isEqualByComparingTo("0.001234567890123456789");
+        assertThat(day.staticSource().grain()).isEqualTo("HOUR");
+        verifyNoInteractions(daily);
+    }
+
 }

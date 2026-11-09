@@ -14,7 +14,16 @@ public final class DailyTrendSummaryContracts {
             String classificationVersionId,String relationVersionId,String electricitySourceNature,
             @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal staticEmissionTco2e,String staticCarbonStatus,
             @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal staticFactorKgCo2ePerKwh,String factorStatus,
-            String hourlyBatchId,Integer hourlyRevision,String hourlySourceNature,List<String> factorVersionIds,String hourlyEvidenceHash, String gasBasis) {
+            String hourlyBatchId,Integer hourlyRevision,String hourlySourceNature,List<String> factorVersionIds,String hourlyEvidenceHash, String gasBasis, DailyElectricityCarbonContracts.StaticSource staticSource) {
+        public Day(LocalDate date,Instant startInclusive,Instant endExclusive,BigDecimal electricityKwh,
+            String electricityStatus,String electricityReasonCode,String classificationVersionId,String relationVersionId,String electricitySourceNature,
+            BigDecimal staticEmissionTco2e,String staticCarbonStatus,BigDecimal staticFactorKgCo2ePerKwh,String factorStatus,
+            String hourlyBatchId,Integer hourlyRevision,String hourlySourceNature,List<String> factorVersionIds,String hourlyEvidenceHash,String gasBasis) {
+            this(date,startInclusive,endExclusive,electricityKwh,electricityStatus,electricityReasonCode,classificationVersionId,relationVersionId,
+                    electricitySourceNature,staticEmissionTco2e,staticCarbonStatus,staticFactorKgCo2ePerKwh,factorStatus,hourlyBatchId,hourlyRevision,
+                    hourlySourceNature,factorVersionIds,hourlyEvidenceHash,gasBasis,
+                    hourlyBatchId==null?null:new DailyElectricityCarbonContracts.StaticSource("HOUR",hourlyBatchId,hourlyRevision,hourlyEvidenceHash,hourlySourceNature,null));
+        }
         /** 旧调用不携带气体覆盖证据，保守标记为未知。 */
         public Day(LocalDate date,Instant startInclusive,Instant endExclusive,
             BigDecimal electricityKwh,String electricityStatus,String electricityReasonCode,
@@ -32,7 +41,7 @@ public final class DailyTrendSummaryContracts {
         return new View(v.buildingId(),v.month(),v.timezoneId(),v.state(),v.electricityUnit(),v.emissionUnit(),v.factorUnit(),v.resultNature(),CONTRACT,
                 v.days().stream().map(d->new Day(d.date(),d.startInclusive(),d.endExclusive(),d.electricityKwh(),d.electricityStatus(),d.electricityReasonCode(),
                         d.classificationVersionId(),d.relationVersionId(),d.electricitySourceNature(),d.staticEmissionTco2e(),d.staticCarbonStatus(),
-                        d.staticFactorKgCo2ePerKwh(),d.factorStatus(),d.hourlyBatchId(),d.hourlyRevision(),d.hourlySourceNature(),d.factorVersionIds(),d.hourlyEvidenceHash(),d.gasBasis())).toList(),
+                        d.staticFactorKgCo2ePerKwh(),d.factorStatus(),d.hourlyBatchId(),d.hourlyRevision(),d.hourlySourceNature(),d.factorVersionIds(),d.hourlyEvidenceHash(),d.gasBasis(),d.staticSource())).toList(),
                 v.capturedAt(),v.evidenceHash(),version,detail(v.buildingId()),0);
     }
     static View preparing(String building,String month,String version) {

@@ -9,6 +9,9 @@ import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
@@ -77,6 +80,42 @@ class DaikinTemperatureQueryServiceTest {
         when(access.requireEquipment(any(), any(), any())).thenThrow(new IllegalStateException("forbidden"));
         assertThatThrownBy(() -> service.history(1L, Set.of("OPS"), "e", "roomTemp", NOW - 60000, NOW, null, 5)).hasMessage("forbidden");
         verifyNoInteractions(raw);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"AI", "ANALOG"})
+    void bothAnalogRepresentationsRetainHistoryAndCurrentQualityPolicies(String type) {
+        when(points.find(any())).thenReturn(Optional.of(point(type, "°C", 0, "b", "e")));
+        when(raw.findPointHistory("b", "e", "p", NOW - 600000, NOW - 600000 + 1, null, 1))
+                .thenReturn(List.of(event(NOW - 600000)));
+        when(quality.resolve(eq("p"), eq("POINT_REALTIME_VIEW"), anyLong(), eq(0)))
+                .thenReturn(resolution("POINT_REALTIME_VIEW", Decision.ALLOW));
+        assertThat(service.current(1L, Set.of("OPS"), "e", "roomTemp").reading().value()).isEqualTo(23.5);
+        when(raw.findPointHistory("b", "e", "p", NOW - 900000, NOW, null, 6))
+                .thenReturn(List.of(event(NOW - 600000)));
+        when(quality.resolve(any(), eq("p"), eq("POINT_HISTORY_VIEW"), anyLong(), eq(0)))
+                .thenReturn(resolution("POINT_HISTORY_VIEW", Decision.BLOCK));
+        assertThat(service.history(1L, Set.of("OPS"), "e", "roomTemp", NOW - 900000, NOW, null, 5)
+                .items().getFirst().value()).isNull();
+    }
+
+    @ParameterizedTest
+    @CsvSource({
+            "DIGITAL,°C,0,b,e", "ACCUMULATE,°C,0,b,e", "ANALOG,°C,1,b,e",
+            "ANALOG,kWh,0,b,e", "ANALOG,°C,0,other,e", "ANALOG,°C,0,b,other"
+    })
+    void incompatiblePointCannotReachCurrentOrHistoryStorage(String type, String unit, int forCalc,
+                                                           String building, String equipment) {
+        when(points.find(any())).thenReturn(Optional.of(point(type, unit, forCalc, building, equipment)));
+        assertThatThrownBy(() -> service.current(1L, Set.of("OPS"), "e", "roomTemp"))
+                .hasMessageContaining("未配置");
+        assertThatThrownBy(() -> service.history(1L, Set.of("OPS"), "e", "roomTemp", NOW - 60000, NOW, null, 5))
+                .hasMessageContaining("未配置");
+        verifyNoInteractions(raw, quality);
+    }
+
+    private PointRuntimeConfig point(String type, String unit, int forCalc, String building, String equipment) {
+        return new PointRuntimeConfig("p", "PC", "温度", building, null, equipment, "EC", "AHU", "MAIN", "T", type, unit, "ONLINE", forCalc, null, null);
     }
 
     private Resolution resolution(String scenario, Decision decision) { return new Resolution(decision, 0, scenario, PolicySource.PUBLISHED_POLICY, 1, 1, "TEST"); }

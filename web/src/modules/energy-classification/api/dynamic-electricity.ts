@@ -30,17 +30,41 @@ export interface DynamicElectricityView {
   points: DynamicElectricityPoint[]
 }
 
-/** 只读取已保存的动态电力监测结果；此 GET 不触发因子计算或任何写操作。 */
-export function readDynamicElectricity(
+const PREPARATION_TIMEOUT_MS = 120_000
+const PREPARATION_POLL_INTERVAL_MS = 2_000
+
+/** 服务端准备期间只重试明确的准备状态；权限、完整性和来源错误立即交给页面。 */
+export async function readDynamicElectricity(
   buildingId: string,
   periodType: DynamicElectricityPeriodType,
   period: string,
   signal?: AbortSignal,
+  onPreparing?: () => void,
 ) {
-  return requestApi<DynamicElectricityView>({
-    method: 'get',
-    url: `/v1/carbon-management/buildings/${encodeURIComponent(buildingId)}/dynamic-electricity`,
-    params: { periodType, period },
-    signal,
-  })
+  const deadline = Date.now() + PREPARATION_TIMEOUT_MS
+  for (;;) {
+    if (Date.now() >= deadline) throw new Error('DYNAMIC_DISPLAY_PREPARATION_TIMEOUT')
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+    try {
+      return await requestApi<DynamicElectricityView>({
+        method: 'get',
+        url: `/v1/carbon-management/buildings/${encodeURIComponent(buildingId)}/dynamic-electricity`,
+        params: { periodType, period },
+        timeout: Math.max(1, deadline - Date.now()),
+        signal,
+      })
+    } catch (error) {
+      if (Date.now() >= deadline) throw new Error('DYNAMIC_DISPLAY_PREPARATION_TIMEOUT')
+      if (!(error instanceof Error) || !('status' in error) || error.status !== 503
+        || !('errorCode' in error) || error.errorCode !== 'PERIOD_DISPLAY_PREPARING') throw error
+      onPreparing?.()
+      const waitMs = Math.min(PREPARATION_POLL_INTERVAL_MS, deadline - Date.now())
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new DOMException('Aborted', 'AbortError')) }
+        const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, waitMs)
+        signal?.addEventListener('abort', abort, { once: true })
+        if (signal?.aborted) abort()
+      })
+    }
+  }
 }

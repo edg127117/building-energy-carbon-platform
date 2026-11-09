@@ -4,7 +4,9 @@ import { dailyScreenData, validateDailyTrends } from '../models/final-b-daily'
 import { validScreenPeriod, type ScreenPeriod } from '../models/screen-period'
 import type { ScreenRedesignData } from '../models/screen-redesign'
 
-/** 两卡同建筑同月共享请求；期间切换只接纳当前月份结果，换建筑或销毁时中止请求。 */
+const REFRESH_INTERVAL_MS = 5_000
+
+/** 两卡共享当前所选月；每五秒复查来源，在途不重启，准备中或失败时撤下旧月数据。 */
 export function useFinalBDaily(buildingId: Ref<string>, usage: Ref<ScreenPeriod>, mirror: Ref<ScreenPeriod>) {
   const views = shallowRef<ReadonlyMap<string, DailyTrends>>(new Map())
   const failedMonths = ref<string[]>([]), loading = ref(false)
@@ -12,6 +14,7 @@ export function useFinalBDaily(buildingId: Ref<string>, usage: Ref<ScreenPeriod>
   const months = computed(() => [...new Set([usage.value, mirror.value]
     .filter(p => p.kind === 'month' && validScreenPeriod(p)).map(p => p.value))].sort())
   let activeBuilding = buildingId.value, disposed = false
+  let refreshTimer: ReturnType<typeof setInterval> | null = null
   const requestKey = (building: string, month: string) => `${building}\u0000${month}`
 
   function updateLoading() {
@@ -31,13 +34,23 @@ export function useFinalBDaily(buildingId: Ref<string>, usage: Ref<ScreenPeriod>
       const current = () => !disposed && inFlight.get(key) === request && building === activeBuilding
         && building === buildingId.value && months.value.includes(month)
       try {
-        const view = await readDailyTrends(building, month, controller.signal)
+        const view = await readDailyTrends(building, month, controller.signal, () => {
+          if (!current()) return
+          const currentViews = new Map(views.value)
+          currentViews.delete(month)
+          views.value = currentViews
+        })
         validateDailyTrends(view, building, month)
         if (!current()) return
         views.value = new Map([...views.value, [month, view]])
         failedMonths.value = failedMonths.value.filter(item => item !== month)
       } catch {
-        if (current() && !failedMonths.value.includes(month)) failedMonths.value = [...failedMonths.value, month]
+        if (current()) {
+          const currentViews = new Map(views.value)
+          currentViews.delete(month)
+          views.value = currentViews
+          if (!failedMonths.value.includes(month)) failedMonths.value = [...failedMonths.value, month]
+        }
       } finally {
         if (inFlight.get(key) === request) inFlight.delete(key)
         updateLoading()
@@ -54,6 +67,13 @@ export function useFinalBDaily(buildingId: Ref<string>, usage: Ref<ScreenPeriod>
       activeBuilding = building
       views.value = new Map()
       failedMonths.value = []
+    } else {
+      const requestedKeys = new Set(requested.map(month => requestKey(building, month)))
+      for (const [key, request] of inFlight) {
+        if (requestedKeys.has(key)) continue
+        request.controller.abort()
+        inFlight.delete(key)
+      }
     }
 
     const retained = new Map([...views.value].filter(([month, view]) => requested.includes(month) && view.buildingId === building))
@@ -83,9 +103,27 @@ export function useFinalBDaily(buildingId: Ref<string>, usage: Ref<ScreenPeriod>
     await Promise.all(pending)
   }
 
+  async function refreshSelectedMonths() {
+    const building = buildingId.value
+    if (!building || disposed || building !== activeBuilding) return
+    const pending: Promise<void>[] = []
+    for (const month of months.value) {
+      const key = requestKey(building, month)
+      if (inFlight.has(key)) continue
+      pending.push(startRequest(building, month))
+    }
+    await Promise.all(pending)
+  }
+
   const reload = () => load(true)
   watch([buildingId, () => months.value.join(',')], () => { void load() }, { immediate: true })
-  onScopeDispose(() => { disposed = true; abortAll() })
+  refreshTimer = setInterval(() => { void refreshSelectedMonths() }, REFRESH_INTERVAL_MS)
+  onScopeDispose(() => {
+    disposed = true
+    if (refreshTimer !== null) clearInterval(refreshTimer)
+    refreshTimer = null
+    abortAll()
+  })
   const data = computed<ScreenRedesignData>(() => {
     let result: ScreenRedesignData = {}
     // 月视图读取失败也清空对应月输入，绝不回用另一个期间的值或原型静态数据。

@@ -120,7 +120,7 @@ describe('useScreenDynamicElectricity', () => {
     const wrapper = mountDynamic()
     await settle()
 
-    expect(readDynamicElectricity).toHaveBeenCalledWith('B-1', 'YEAR', '2026', expect.any(AbortSignal))
+    expect(readDynamicElectricity).toHaveBeenCalledWith('B-1', 'YEAR', '2026', expect.any(AbortSignal), expect.any(Function))
     expect(dynamic.data.value).toMatchObject({ period: YEAR, emissionUnit: 'tCO₂', factorUnit: 'kgCO₂/kWh', sourceNatures: ['SOURCE_LABELLED', 'SIMULATED'], hasSimulatedSource: true })
     expect(dynamic.data.value?.dynamicEmissions.slice(0, 3)).toEqual([0, null, 0.3])
     expect(dynamic.data.value?.dynamicFactors.slice(0, 3)).toEqual([null, null, 0.5])
@@ -263,6 +263,30 @@ describe('useScreenDynamicElectricity', () => {
     wrapper.unmount()
   })
 
+  it('后台刷新进入服务端准备态时立即清空旧值并恢复加载态', async () => {
+    const second = deferred<DynamicElectricityView>()
+    vi.mocked(readDynamicElectricity)
+      .mockResolvedValueOnce(yearView())
+      .mockImplementationOnce(async (_building, _type, _period, _signal, onPreparing) => {
+        onPreparing?.()
+        return second.promise
+      })
+    const wrapper = mountDynamic()
+    await settle()
+    expect(dynamic.data.value).not.toBeNull()
+
+    const refresh = dynamic.reload()
+    await settleMicrotasks()
+    expect(dynamic.data.value).toBeNull()
+    expect(dynamic.status.value).toBe('loading')
+
+    second.resolve(yearView())
+    await refresh
+    expect(dynamic.data.value).not.toBeNull()
+    expect(dynamic.status.value).toBe('ready')
+    wrapper.unmount()
+  })
+
   it('卸载时停止待执行的自动刷新', async () => {
     vi.useFakeTimers()
     vi.mocked(readDynamicElectricity).mockImplementation(async requestedBuildingId => yearView(requestedBuildingId))
@@ -290,7 +314,7 @@ describe('useScreenDynamicElectricity', () => {
     expect(readDynamicElectricity).toHaveBeenCalledTimes(2)
     await vi.advanceTimersByTimeAsync(1)
     expect(readDynamicElectricity).toHaveBeenCalledTimes(3)
-    expect(readDynamicElectricity).toHaveBeenLastCalledWith('B-2', 'YEAR', '2026', expect.any(AbortSignal))
+    expect(readDynamicElectricity).toHaveBeenLastCalledWith('B-2', 'YEAR', '2026', expect.any(AbortSignal), expect.any(Function))
     wrapper.unmount()
   })
 })

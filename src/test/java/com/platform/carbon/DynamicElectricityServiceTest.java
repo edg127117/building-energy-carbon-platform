@@ -39,6 +39,7 @@ class DynamicElectricityServiceTest {
             ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/env/init/V104__mysql_dynamic_electricity_carbon.sql"));
             ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/env/init/V105__mysql_dynamic_electricity_tasks.sql"));
             ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/env/init/V106__mysql_dynamic_interval_evidence.sql"));
+            ScriptUtils.executeSqlScript(connection, new FileSystemResource("src/test/resources/dynamic-chart-projection-test-schema.sql"));
         }
         jdbc.execute("CREATE TABLE biz_data_point(building_id VARCHAR(32),point_id VARCHAR(80),del_flag INT,unit VARCHAR(32))");
         jdbc.execute("ALTER TABLE biz_data_point ADD COLUMN equip_id VARCHAR(32)");
@@ -131,8 +132,10 @@ class DynamicElectricityServiceTest {
         var january = service.query(1, ROLES, "B", "YEAR", "2025").points().getFirst();
         assertThat(january.electricityKwh()).isEqualByComparingTo("100");
         assertThat(january.resultIds()).hasSize(1);
+        assertThat(service.queryYearMonth(1,ROLES,"B",YearMonth.of(2025,1))).isEqualTo(january);
         doThrow(new com.platform.framework.exception.BusinessException(403, "DENIED", "拒绝")).when(authorization).requireReader(9, ROLES, "B");
         assertThatThrownBy(() -> service.query(9, ROLES, "B", "YEAR", "2025")).hasMessageContaining("拒绝");
+        assertThatThrownBy(() -> service.queryYearMonth(9,ROLES,"B",YearMonth.of(2025,1))).hasMessageContaining("拒绝");
     }
 
     @Test void rejectsSourceRevisionDuringCalculationWithoutPublishing() {
@@ -141,6 +144,116 @@ class DynamicElectricityServiceTest {
         assertThatThrownBy(() -> service.calculate(1, ROLES, "B", new CalculationRequest("MONTH", FROM, TO)))
                 .hasMessageContaining("来源已修订");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_result WHERE grain<>'LOCK'", Integer.class)).isZero();
+    }
+
+    @Test void initialVersionsPrecedeTheWatermarkAndFactorsAreRecheckedAtPublication() {
+        ingest("factor-snapshot","*","0.5",FROM,TO);
+        clearInvocations(repository,reader);
+        var ids=service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(7200)));
+        assertThat(ids).hasSize(2);
+        verify(repository,times(3)).factors("B",FROM,FROM.plusSeconds(3600));
+        verify(repository,times(3)).factors("B",FROM.plusSeconds(3600),FROM.plusSeconds(7200));
+        var ordered=inOrder(repository,reader);
+        ordered.verify(repository).electricityVersion("B",FROM,FROM.plusSeconds(3600),"REVIEWED_INTERVAL");
+        ordered.verify(repository).electricityVersion("B",FROM.plusSeconds(3600),FROM.plusSeconds(7200),"REVIEWED_INTERVAL");
+        ordered.verify(reader).session("REVIEWED_INTERVAL");
+        assertThat(repository.byId("B",ids.getFirst()).values().emissionKgCo2()).isEqualByComparingTo("50");
+    }
+
+    @Test void approvalJustAfterTheInputWatermarkCannotBeMistakenForTheCapturedSourceVersion() {
+        ingest("watermark-race","*","0.5",FROM,TO);
+        var current=new java.util.concurrent.atomic.AtomicReference<>("source-before-watermark");
+        doAnswer(call->current.get()).when(repository).electricityVersion(anyString(),any(),any(),eq("REVIEWED_INTERVAL"));
+        var session=reader.session("REVIEWED_INTERVAL");
+        when(reader.session("REVIEWED_INTERVAL")).thenAnswer(call->{
+            // A real Session fixes asOf on construction; an approval immediately afterward is excluded by its input.
+            current.set("approved-after-watermark");
+            return session;
+        });
+        assertThatThrownBy(()->service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(7200))))
+                .hasMessageContaining("来源已修订");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_result WHERE grain<>'LOCK'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+        assertThat(audits).hasSize(1);
+    }
+
+    @Test void approvalBeforeALaterInitialVersionIsIncludedByTheLaterWatermark() {
+        ingest("approval-before-watermark","*","0.5",FROM,TO);
+        Instant second=FROM.plusSeconds(3600);
+        var approved=new java.util.concurrent.atomic.AtomicBoolean();
+        var inputAtWatermark=new java.util.concurrent.atomic.AtomicBoolean();
+        doAnswer(call->{
+            if(FROM.equals(call.getArgument(1))) {approved.set(true);return "first-unchanged";}
+            return approved.get()?"second-approved":"second-old";
+        }).when(repository).electricityVersion(anyString(),any(),any(),eq("REVIEWED_INTERVAL"));
+        var session=reader.session("REVIEWED_INTERVAL");
+        when(reader.session("REVIEWED_INTERVAL")).thenAnswer(call->{inputAtWatermark.set(approved.get());return session;});
+        when(session.read(anyLong(),anyCollection(),anyString(),any(),any(),anyString())).thenAnswer(call->{
+            BigDecimal quantity=second.equals(call.getArgument(3))&&inputAtWatermark.get()?new BigDecimal("200"):new BigDecimal("100");
+            var evidence=CarbonEvidence.tree(Map.of("quantityAtWatermark",quantity));
+            return new DynamicElectricityInputReader.Input(List.of(new DynamicElectricityInputReader.Contribution("P",Set.of("P"),quantity,List.of("approved-source"))),
+                    DynamicElectricityRepository.hash(CarbonEvidence.canonical(evidence)),evidence);
+        });
+        var ids=service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(7200)));
+        assertThat(repository.byId("B",ids.get(1)).values().quantity()).isEqualByComparingTo("200");
+        assertThat(repository.byId("B",ids.get(1)).values().emissionKgCo2()).isEqualByComparingTo("100");
+    }
+
+    @Test void revisionOfAnEarlierPeriodDuringLaterVersionCaptureStillRejectsPublication() {
+        ingest("cross-period-revision","*","0.5",FROM,TO);
+        var revised=new java.util.concurrent.atomic.AtomicBoolean();
+        doAnswer(call->{
+            if(FROM.equals(call.getArgument(1)))return revised.get()?"first-new":"first-old";
+            revised.set(true);return "second-unchanged";
+        }).when(repository).electricityVersion(anyString(),any(),any(),eq("REVIEWED_INTERVAL"));
+        assertThatThrownBy(()->service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(7200))))
+                .hasMessageContaining("来源已修订");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_result WHERE grain<>'LOCK'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+    }
+
+    @Test void initialVersionFailureNeverCreatesAnInputWatermarkSession() {
+        ingest("initial-version-failure","*","0.5",FROM,TO);
+        doThrow(new IllegalStateException("initial-version-read-failed")).when(repository)
+                .electricityVersion(anyString(),any(),any(),eq("REVIEWED_INTERVAL"));
+        clearInvocations(reader);
+        assertThatThrownBy(()->service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(3600))))
+                .hasMessage("initial-version-read-failed");
+        verify(reader,never()).session(anyString());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+    }
+
+    @Test void factorRevisionAfterFreezingTheCalculationStillRejectsTheEntirePublication() {
+        ingest("factor-guard","*","0.5",FROM,TO);
+        var before=repository.factors("B",FROM,TO);
+        var old=before.getFirst();
+        var revised=new DynamicElectricityRepository.FactorRow(old.factor(),old.revision()+1,old.importId(),
+                old.requestHash(),DynamicElectricityRepository.hash("new-factor-content"));
+        doReturn(before,List.of(revised)).when(repository).factors(eq("B"),eq(FROM),eq(FROM.plusSeconds(3600)));
+        assertThatThrownBy(()->service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(3600))))
+                .hasMessageContaining("来源已修订");
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_result WHERE grain<>'LOCK'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+        assertThat(audits).hasSize(1);
+    }
+
+    @Test void failureWhilePublishingSecondSpooledResultRollsBackTheWholeCommand() {
+        ingest("spool-rollback","*","0.5",FROM,TO);
+        var writes=new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(call->{
+            if(writes.incrementAndGet()==2)throw new IllegalStateException("second-result-write-failed");
+            return call.callRealMethod();
+        }).when(repository).saveStaged(anyString(),anyString());
+
+        assertThatThrownBy(()->service.calculate(1,ROLES,"B",
+                new CalculationRequest("HOUR",FROM,FROM.plusSeconds(7200))))
+                .hasMessage("second-result-write-failed");
+
+        assertThat(writes.get()).isEqualTo(2);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_result WHERE grain<>'LOCK'",Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_electricity_task",Integer.class)).isZero();
+        assertThat(audits).hasSize(1);
+        verify(reader.session("REVIEWED_INTERVAL"),times(2)).releaseHourlyCaptures();
     }
 
     @Test void rawReceiptAndSelectionRevisionsInvalidateRawResults() {
@@ -193,7 +306,7 @@ class DynamicElectricityServiceTest {
         when(users.selectSecurityState(1L)).thenReturn(user);when(roles.selectRoleKeysByUserId(1L)).thenReturn(new ArrayList<>(ROLES));
         var live=new DynamicElectricityLiveService(authorization,mock(com.platform.iot.identity.DeviceIdentityProvider.class),
                 new DynamicElectricityLiveRepository(jdbc,new ObjectMapper().findAndRegisterModules()),repository,mock(DynamicElectricityLiveInput.class),service,users,roles,
-                new DataSourceTransactionManager(jdbc.getDataSource()));
+                new DataSourceTransactionManager(jdbc.getDataSource()),mock(DynamicElectricitySourceChecks.class));
         live.refresh();
         var points=service.query(1,ROLES,"B","MONTH","2025-01").points();
         assertThat(points.getFirst().emissionTco2()).isEqualByComparingTo("0.06");

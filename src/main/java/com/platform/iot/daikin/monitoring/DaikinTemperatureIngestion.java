@@ -6,6 +6,7 @@ import com.platform.iot.ingest.HvacIngestionService;
 import com.platform.iot.ingest.IngestionOutcome;
 import com.platform.iot.quality.DataPointConfigProvider;
 import com.platform.iot.quality.PointAliasKey;
+import com.platform.iot.temperature.TemperaturePointTypes;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -50,7 +51,7 @@ public class DaikinTemperatureIngestion {
             if (point == null || !target.equipmentId().equals(point.equipId())
                     || !target.buildingId().equals(point.buildingId()) || point.isForCalc() != 0
                     || !"ONLINE".equals(point.status()) || !"°C".equals(point.unit())
-                    || !"AI".equals(point.dataType())) {
+                    || !TemperaturePointTypes.isAnalog(point.dataType())) {
                 // 未配置点或配置不匹配不能以厂家字段替代正式测点，也不能刷新温度的成功观测时间。
                 fields.put(field, new DaikinFieldValue(DaikinFieldValue.Status.UNCONFIRMED, value.rawJson(), null));
                 continue;

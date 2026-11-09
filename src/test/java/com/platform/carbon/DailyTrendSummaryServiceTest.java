@@ -54,13 +54,21 @@ class DailyTrendSummaryServiceTest {
         verifyNoInteractions(detailed);
     }
     @Test void concurrentSourceChangeCannotPublishOldReadModel() {
-        when(detailed.query(1,List.of("ENERGY_MANAGER"),"B","2026-01")).thenReturn(full());
-        when(repo.sourceVersion("B",YearMonth.of(2026,1))).thenReturn("b".repeat(64));
+        when(detailed.queryPrepared(1,List.of("ENERGY_MANAGER"),"B","2026-01")).thenReturn(full());
+        when(repo.sourceVersion("B",YearMonth.of(2026,1))).thenReturn(version,"b".repeat(64));
         assertThat(service.rebuild(head,"lease",List.of("ENERGY_MANAGER"))).isFalse();
         verify(repo,never()).publish(any(),any(),any(),any(),anyLong());verifyNoInteractions(cache);
+        verify(detailed).queryPrepared(1,List.of("ENERGY_MANAGER"),"B","2026-01");
+    }
+    @Test void sourceChangedBeforePreparationAvoidsScanningAndQueuesFreshVersion() {
+        when(repo.sourceVersion("B",YearMonth.of(2026,1))).thenReturn("b".repeat(64));
+        assertThat(service.rebuild(head,"lease",List.of("ENERGY_MANAGER"))).isFalse();
+        verifyNoInteractions(detailed,cache);
+        verify(repo).request(eq("B"),eq("2026-01"),eq(1L),eq("b".repeat(64)),anyLong());
+        verify(repo,never()).publish(any(),any(),any(),any(),anyLong());
     }
     @Test void lostLeaseCannotPopulateCache() {
-        when(detailed.query(1,List.of("ENERGY_MANAGER"),"B","2026-01")).thenReturn(full());
+        when(detailed.queryPrepared(1,List.of("ENERGY_MANAGER"),"B","2026-01")).thenReturn(full());
         assertThat(service.rebuild(head,"old-lease",List.of("ENERGY_MANAGER"))).isFalse();verifyNoInteractions(cache);
     }
     @Test void summaryPreservesPrecisionAndPointersButOmitsLargeEvidenceList() throws Exception {
@@ -74,6 +82,37 @@ class DailyTrendSummaryServiceTest {
         when(repo.payload(head)).thenReturn(payload.replace("\"B\"","\"OTHER\""));
         assertThatThrownBy(()->service.query(1,List.of("ENERGY_MANAGER"),"B","2026-01"))
                 .isInstanceOf(BusinessException.class).extracting(e->((BusinessException)e).getErrorCode()).isEqualTo("DAILY_SUMMARY_INTEGRITY");
+    }
+    @Test void detailedWrapperReturnsOriginalFullContractOnlyAfterStableSourceVersion() {
+        var expected=full();when(detailed.queryPrepared(1,List.of("ENERGY_MANAGER"),"B","2026-01")).thenReturn(expected);
+        assertThat(service.queryDetail(1,List.of("ENERGY_MANAGER"),"B","2026-01")).isSameAs(expected);
+        var ordered=inOrder(auth,repo,detailed);
+        ordered.verify(auth).requireReader(1,List.of("ENERGY_MANAGER"),"B");
+        ordered.verify(repo).sourceVersion("B",YearMonth.of(2026,1));
+        ordered.verify(detailed).queryPrepared(1,List.of("ENERGY_MANAGER"),"B","2026-01");
+        ordered.verify(repo).sourceVersion("B",YearMonth.of(2026,1));
+        verify(repo,never()).request(anyString(),anyString(),anyLong(),anyString(),anyLong());
+        verify(repo,never()).publish(any(),any(),any(),any(),anyLong());verifyNoInteractions(cache);
+    }
+    @Test void detailedWrapperRejectsChangedVersionRatherThanReturningMixedDetails() {
+        when(repo.sourceVersion("B",YearMonth.of(2026,1))).thenReturn(version,"b".repeat(64));
+        when(detailed.queryPrepared(1,List.of("ENERGY_MANAGER"),"B","2026-01")).thenReturn(full());
+        assertThatThrownBy(()->service.queryDetail(1,List.of("ENERGY_MANAGER"),"B","2026-01"))
+                .isInstanceOfSatisfying(BusinessException.class,e->{assertThat(e.getCode()).isEqualTo(409);assertThat(e.getErrorCode()).isEqualTo("DAILY_TREND_SOURCE_CHANGED");});
+        verifyNoInteractions(cache);verify(repo,never()).publish(any(),any(),any(),any(),anyLong());
+    }
+    @Test void detailedWrapperValidatesAndAuthorizesBeforeAnySourceRead() {
+        assertThatThrownBy(()->service.queryDetail(1,List.of("ENERGY_MANAGER"),"B","2026-13"))
+                .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("DAILY_TREND_QUERY_INVALID"));
+        doThrow(new BusinessException(403,"denied")).when(auth).requireReader(1,List.of("ENERGY_MANAGER"),"B");
+        assertThatThrownBy(()->service.queryDetail(1,List.of("ENERGY_MANAGER"),"B","2026-01")).isInstanceOf(BusinessException.class);
+        verifyNoInteractions(repo,detailed,cache);
+    }
+    @Test void detailedWrapperCannotAcceptTwoAbsentVersionsAsConsistent() {
+        when(repo.sourceVersion("B",YearMonth.of(2026,1))).thenReturn(null);
+        assertThatThrownBy(()->service.queryDetail(1,List.of("ENERGY_MANAGER"),"B","2026-01"))
+                .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("DAILY_SUMMARY_INTEGRITY"));
+        verifyNoInteractions(detailed,cache);
     }
     static DailyElectricityCarbonContracts.View full() {
         var start=Instant.parse("2025-12-31T16:00:00Z");

@@ -20,6 +20,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -40,8 +41,13 @@ import static com.platform.carbon.CarbonErrors.error;
 @Repository
 public class HourlyCarbonRepository {
     private static final int MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
+    private static final int MAX_COMPRESSED_VIEW_BYTES = 16 * 1024 * 1024;
     private static final String INTEGRITY_VIOLATION = "HOURLY_CARBON_INTEGRITY_VIOLATION";
     private static final String IDEMPOTENCY_CONFLICT = "HOURLY_CARBON_IDEMPOTENCY_CONFLICT";
+
+    // Opt-in transport only: the authoritative LONGTEXT is read and verified on every request.
+    @org.springframework.beans.factory.annotation.Value("${carbon.hourly.read-compression:false}")
+    private boolean readCompression;
 
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
@@ -94,18 +100,42 @@ public class HourlyCarbonRepository {
     }
 
     public Stored byDate(String building, LocalDate date, Integer revision) {
-        if (revision == null) {
-            return stored(one("""
-                    SELECT * FROM biz_carbon_hourly_batch
-                    WHERE building_id=? AND day_date=?
-                    ORDER BY calculation_as_of DESC, revision DESC
-                    LIMIT 1
-                    """, building, java.sql.Date.valueOf(date)));
+        boolean timed = CarbonCalculationDeadline.currentRemaining() != null;
+        ReadMetrics metrics = timed ? new ReadMetrics() : null;
+        boolean completed = false;
+        long jdbcStarted = System.nanoTime(), jdbcNanos = 0, verificationStarted = 0;
+        Row row = null;
+        try {
+            try {
+                row = revision == null ? oneDaily("""
+                        SELECT * FROM biz_carbon_hourly_batch
+                        WHERE building_id=? AND day_date=?
+                        ORDER BY calculation_as_of DESC, revision DESC
+                        LIMIT 1
+                        """, metrics, building, java.sql.Date.valueOf(date)) : oneDaily("""
+                        SELECT * FROM biz_carbon_hourly_batch
+                        WHERE building_id=? AND day_date=? AND revision=?
+                        """, metrics, building, java.sql.Date.valueOf(date), revision);
+            } finally {
+                jdbcNanos = System.nanoTime() - jdbcStarted;
+            }
+            verificationStarted = System.nanoTime();
+            Stored result = stored(row);
+            if (timed) requireReadBudget();
+            completed = true;
+            return result;
+        } finally {
+            if (timed) {
+                long verificationMillis = verificationStarted == 0 ? -1 : (System.nanoTime() - verificationStarted) / 1_000_000;
+                // One event per requested day; evidence contents and hashes never enter timing diagnostics.
+                org.slf4j.LoggerFactory.getLogger(HourlyCarbonRepository.class).info(
+                        "Hourly carbon read building={} date={} jdbcMs={} verificationMs={} viewChars={} evidenceChars={} readCompression={} outcome={} metrics={}",
+                        building, date, jdbcNanos / 1_000_000, verificationMillis,
+                        row == null || row.viewJson() == null ? 0 : row.viewJson().length(),
+                        row == null || row.evidenceJson() == null ? 0 : row.evidenceJson().length(), readCompression,
+                        completed ? (row == null ? "EMPTY" : "COMPLETE") : "FAILED", metrics);
+            }
         }
-        return stored(one("""
-                SELECT * FROM biz_carbon_hourly_batch
-                WHERE building_id=? AND day_date=? AND revision=?
-                """, building, java.sql.Date.valueOf(date), revision));
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -243,7 +273,7 @@ public class HourlyCarbonRepository {
         }
         try {
             JsonNode evidence = CarbonEvidence.parse(row.evidenceJson());
-            if (evidence == null || !row.evidenceJson().equals(CarbonEvidence.canonical(evidence))) {
+            if (evidence == null || !CarbonEvidence.canonicalEquals(evidence,row.evidenceJson())) {
                 throw integrity();
             }
             HourlyCarbonContracts.View view = mapper.readValue(row.viewJson(), HourlyCarbonContracts.View.class);
@@ -272,17 +302,179 @@ public class HourlyCarbonRepository {
         return stored(existing);
     }
 
+    private Row oneDaily(String sql, ReadMetrics metrics, Object... values) {
+        if (metrics != null) metrics.projection = readCompression ? "COMPRESSED" : "RAW";
+        if (!readCompression) return oneMapped(sql, false, metrics, values);
+        // Preserve the selector and both authoritative bodies. The view has no publication size cap:
+        // only originally oversized views use the legacy raw path; a bad compressed body never does.
+        String viewBytes = "OCTET_LENGTH(CONVERT(view_json USING utf8mb4))";
+        String projection = "SELECT batch_id,building_id,day_date,revision,request_hash,calculation_as_of,"
+                + viewBytes + " AS view_utf8_bytes,CASE WHEN " + viewBytes + "<=" + MAX_COMPRESSED_VIEW_BYTES
+                + " THEN COMPRESS(CONVERT(view_json USING utf8mb4)) END AS view_compressed,"
+                + "CASE WHEN " + viewBytes + ">" + MAX_COMPRESSED_VIEW_BYTES + " THEN view_json END AS view_json,"
+                + "view_hash,COMPRESS(CONVERT(evidence_json USING utf8mb4)) AS evidence_compressed,evidence_hash";
+        return oneMapped(sql.replace("SELECT *", projection), true, metrics, values);
+    }
+
     private Row one(String sql, Object... values) {
-        List<Row> rows = jdbc.query(sql, this::row, values);
+        return oneMapped(sql, false, null, values);
+    }
+
+    private Row oneMapped(String sql, boolean compressed, ReadMetrics metrics, Object... values) {
+        org.springframework.jdbc.core.RowMapper<Row> rowMapper = (result, index) -> {
+            if (metrics != null) metrics.rowReached();
+            Row row = row(result, compressed, metrics);
+            if (metrics != null) metrics.mappedRows++;
+            return row;
+        };
+        List<Row> rows;
+        if (CarbonCalculationDeadline.currentRemaining() == null) {
+            rows = jdbc.query(sql, rowMapper, values);
+        } else {
+            requireReadBudget();
+            if (metrics != null) metrics.queryEntered();
+            rows = jdbc.query(connection -> {
+                if (metrics != null) metrics.prepareCallbackReached();
+                // Connection acquisition consumes the same request budget; never reuse a pre-acquisition timeout.
+                Duration remaining = requireReadBudget();
+                String select = sql.stripLeading();
+                if (!select.startsWith("SELECT ")) throw new IllegalArgumentException("Hourly read requires SELECT");
+                long millis = Math.min(Integer.MAX_VALUE, remaining.toMillis());
+                return connection.prepareStatement("SELECT /*+ MAX_EXECUTION_TIME(" + millis + ") */ "
+                        + select.substring("SELECT ".length()));
+            }, statement -> {
+                // This setter runs after JdbcTemplate settings and must not enlarge a shorter transaction timeout.
+                Duration remaining = requireReadBudget();
+                int existing = statement.getQueryTimeout();
+                int requested = CarbonCalculationDeadline.timeoutSeconds(remaining);
+                statement.setQueryTimeout(existing > 0 ? Math.min(existing, requested) : requested);
+                for (int index = 0; index < values.length; index++) statement.setObject(index + 1, values[index]);
+                if (metrics != null) metrics.statementReady();
+            }, new org.springframework.jdbc.core.RowMapperResultSetExtractor<>(rowMapper));
+            if (metrics != null) metrics.jdbcReturned = true;
+            requireReadBudget();
+        }
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
-    private Row row(ResultSet result, int ignored) throws SQLException {
+    private static Duration requireReadBudget() {
+        Duration remaining = CarbonCalculationDeadline.currentRemaining();
+        // Sub-millisecond budgets fail closed: MAX_EXECUTION_TIME(0) would disable the server-side limit.
+        if (remaining == null || remaining.isNegative() || remaining.toMillis() < 1 || Thread.currentThread().isInterrupted()) {
+            throw CarbonCalculationDeadline.timeout();
+        }
+        return remaining;
+    }
+
+    private Row row(ResultSet result, boolean compressed) throws SQLException {
+        return row(result, compressed, null);
+    }
+
+    private Row row(ResultSet result, boolean compressed, ReadMetrics metrics) throws SQLException {
         return new Row(result.getString("batch_id"), result.getString("building_id"),
                 result.getDate("day_date").toLocalDate(), result.getInt("revision"),
                 result.getString("request_hash"), result.getLong("calculation_as_of"),
-                result.getString("view_json"), result.getString("view_hash"),
-                result.getString("evidence_json"), result.getString("evidence_hash"));
+                readView(result, compressed, metrics), result.getString("view_hash"),
+                readEvidence(result, compressed, metrics),
+                result.getString("evidence_hash"));
+    }
+
+    private static String compressedView(ResultSet result) throws SQLException {
+        return compressedView(result, null);
+    }
+
+    private static String compressedView(ResultSet result, ReadMetrics metrics) throws SQLException {
+        // Source UTF-8 bytes, not Java character counts, select the bounded transport.
+        long utf8Bytes = result.getLong("view_utf8_bytes");
+        if (result.wasNull() || utf8Bytes < 0) throw integrity();
+        if (utf8Bytes > MAX_COMPRESSED_VIEW_BYTES) {
+            if (metrics != null) metrics.viewBranch = "OVERSIZED_RAW";
+            return result.getString("view_json");
+        }
+        if (metrics != null) metrics.viewBranch = "COMPRESSED";
+        String view = decodeText(frame(result, "view_compressed", metrics), MAX_COMPRESSED_VIEW_BYTES, metrics);
+        if (view == null || view.getBytes(StandardCharsets.UTF_8).length != utf8Bytes) throw integrity();
+        return view;
+    }
+
+    private static String readView(ResultSet result, boolean compressed, ReadMetrics metrics) throws SQLException {
+        if (compressed) return compressedView(result, metrics);
+        if (metrics != null) metrics.viewBranch = "RAW";
+        return result.getString("view_json");
+    }
+
+    private static String readEvidence(ResultSet result, boolean compressed, ReadMetrics metrics) throws SQLException {
+        if (metrics != null) metrics.evidenceBranch = compressed ? "COMPRESSED" : "RAW";
+        return compressed ? decodeText(frame(result, "evidence_compressed", metrics), MAX_EVIDENCE_BYTES, metrics)
+                : result.getString("evidence_json");
+    }
+
+    private static byte[] frame(ResultSet result, String column, ReadMetrics metrics) throws SQLException {
+        if (metrics == null) return result.getBytes(column);
+        metrics.getBytesCalls++;
+        long started = System.nanoTime();
+        boolean returned = false;
+        try {
+            byte[] bytes = result.getBytes(column);
+            returned = true;
+            if (bytes == null) metrics.nullFrames++;
+            else { metrics.frames++; metrics.frameBytes += bytes.length; }
+            return bytes;
+        } finally {
+            metrics.getBytesNanos += System.nanoTime() - started;
+            if (!returned) metrics.getBytesFailures++;
+        }
+    }
+
+    private static String decodeText(byte[] compressed, int maximumBytes, ReadMetrics metrics) {
+        long started = metrics == null ? 0 : System.nanoTime();
+        if (metrics != null) metrics.decodeCalls++;
+        boolean decoded = false;
+        try {
+            String result = MysqlCompressedText.decode(compressed, maximumBytes);
+            decoded = true;
+            return result;
+        } catch (IllegalArgumentException exception) {
+            throw integrity();
+        } finally {
+            if (metrics != null) {
+                metrics.decodeNanos += System.nanoTime() - started;
+                if (!decoded) metrics.decodeFailures++;
+            }
+        }
+    }
+
+    /** Per-day counters only; appended to the existing one-line event, never a new event or ThreadLocal. */
+    private static final class ReadMetrics {
+        String projection = "NOT_SELECTED", viewBranch = "NOT_REACHED", evidenceBranch = "NOT_REACHED";
+        boolean queryEntered, prepareReached, statementReady, firstRowReached, jdbcReturned;
+        long queryAt, prepareAt, readyAt, firstRowAt, getBytesNanos, decodeNanos, frameBytes;
+        int rowCallbacks, mappedRows, getBytesCalls, getBytesFailures, decodeCalls, decodeFailures, frames, nullFrames;
+
+        void queryEntered() { queryEntered = true; queryAt = System.nanoTime(); }
+        void prepareCallbackReached() { prepareReached = true; prepareAt = System.nanoTime(); }
+        void statementReady() { statementReady = true; readyAt = System.nanoTime(); }
+        void rowReached() {
+            rowCallbacks++;
+            if (!firstRowReached) { firstRowReached = true; firstRowAt = System.nanoTime(); }
+        }
+        private static long millis(boolean reached, long nanos) { return reached ? Math.max(0, nanos) / 1_000_000 : -1; }
+
+        @Override public String toString() {
+            // Spans overlap jdbcMs and each other; do not add them. Entry->prepare covers acquisition/transaction binding/framework scheduling.
+            // Entry->ready also covers statement preparation/parameter binding; ready->first covers execute/server/driver buffering/next.
+            // getBytes may only copy a driver buffer; decode includes inflate/UTF-8/copies. Frame bytes are not wire totals.
+            return "projection=" + projection + ",viewBranch=" + viewBranch + ",evidenceBranch=" + evidenceBranch
+                    + ",queryEntered=" + queryEntered + ",prepareReached=" + prepareReached + ",statementReady=" + statementReady
+                    + ",firstRowReached=" + firstRowReached + ",jdbcReturned=" + jdbcReturned
+                    + ",queryEntryToPrepareCallbackMs=" + millis(queryEntered && prepareReached, prepareAt - queryAt)
+                    + ",queryEntryToStatementReadyMs=" + millis(queryEntered && statementReady, readyAt - queryAt)
+                    + ",statementReadyToFirstRowMs=" + millis(statementReady && firstRowReached, firstRowAt - readyAt)
+                    + ",rowCallbacks=" + rowCallbacks + ",mappedRows=" + mappedRows
+                    + ",getBytesMs=" + millis(getBytesCalls > 0, getBytesNanos) + ",getBytesCalls=" + getBytesCalls + ",getBytesFailures=" + getBytesFailures
+                    + ",compressedDecodeMs=" + millis(decodeCalls > 0, decodeNanos) + ",decodeCalls=" + decodeCalls + ",decodeFailures=" + decodeFailures
+                    + ",frameBytes=" + (frames + nullFrames > 0 ? frameBytes : -1) + ",frames=" + frames + ",nullFrames=" + nullFrames;
+        }
     }
 
     private String canonicalJson(Object value) {

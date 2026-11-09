@@ -8,6 +8,13 @@ import com.platform.iot.daikin.onboarding.DaikinDirectoryService;
 import com.platform.iot.onboarding.*;
 import com.platform.iot.onboarding.api.*;
 import com.platform.iot.quality.MySqlDataPointConfigProvider;
+import com.platform.iot.collection.api.CollectionPolicyContracts.AliasCreateRequest;
+import com.platform.iot.collection.api.CollectionPolicyContracts.InitialPolicyRequest;
+import com.platform.iot.collection.api.CollectionPolicyContracts.SourceCreateRequest;
+import com.platform.relation.RelationAssetStagingService;
+import com.platform.relation.RelationGovernanceService;
+import com.platform.relation.RelationStagingContracts.PointRequest;
+import com.platform.relation.api.RelationContracts.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -37,6 +44,8 @@ class TemperatureBindingIntegrationTest {
     @Autowired MySqlDataPointConfigProvider cache;
     @Autowired org.mybatis.spring.SqlSessionTemplate sqlSession;
     @Autowired TemperatureInitializationService initialization;
+    @Autowired RelationGovernanceService relations;
+    @Autowired RelationAssetStagingService staging;
     @Autowired org.springframework.transaction.PlatformTransactionManager transactionManager;
     @org.springframework.boot.test.mock.mockito.SpyBean
     com.platform.iot.collection.CollectionPolicyService collection;
@@ -104,6 +113,111 @@ class TemperatureBindingIntegrationTest {
         var again = service.createJob(1L, ADMIN, new BatchRequest("again" + suffix, List.of(item(pending, repeated))));
         approve(again.items().getFirst().requestId());
         assertThat(countPoints()).isEqualTo(2);
+    }
+
+    @Test void governedAnalogPointsPublishBeforeTemperatureApprovalAndPreserveExistingAssets() {
+        var bound = onboarding.bindTyped(pending, binding("STATE_ONLY", null), 1L, ADMIN);
+        Set<String> maintainer = Set.of("PLATFORM_ADMIN", "ENERGY_MANAGER");
+        var baseline = relations.initialize(1L, maintainer, "BLD001", "init-" + suffix, "隔离测试关系初始化");
+        publishRelations(baseline.versionId(), baseline.revision(), maintainer);
+        var originalPoints = pointDefinitions();
+        var originalAssignments = assignments(baseline.versionId());
+        var draft = relations.createVersion(1L, maintainer, "BLD001", "draft-" + suffix,
+                new CreateVersionRequest("仅新增非计量温度点", baseline.versionId(),
+                        relations.model(1L, ADMIN, "BLD001").modelRevision()));
+        var room = staging.point(1L, maintainer, "BLD001", draft.versionId(),
+                new PointRequest(draft.revision(), "非计量室温", "室内温度", "TPR" + suffix, null,
+                        "roomTemp", bound.equipmentId(), "GROUP001", "ANALOG", "°C", 0, "ONLINE"));
+        var both = staging.point(1L, maintainer, "BLD001", draft.versionId(),
+                new PointRequest(room.revision(), "非计量设温", "设定温度", "TPR" + suffix, null,
+                        "temperature", bound.equipmentId(), "GROUP001", "ANALOG", "°C", 0, "ONLINE"));
+        assertThat(countPoints()).isZero();
+        publishRelations(draft.versionId(), both.revision(), maintainer);
+        assertThat(pointDefinitions()).containsAll(originalPoints).hasSize(originalPoints.size() + 2);
+        assertThat(assignments(draft.versionId())).containsAll(originalAssignments).hasSize(originalAssignments.size() + 2);
+        var ids = new LinkedHashMap<String, String>();
+        for (var point : both.assets()) {
+            ids.put(point.code().endsWith("_roomTemp") ? "roomTemp" : "temperature", point.objectId());
+        }
+        // 普通 HTTP 来源配置包先审核别名和策略，温度审批再登记专用绑定快照。
+        var sourceDraft = collection.createSource(1L, ADMIN,
+                new SourceCreateRequest("DAIKIN_V2", "测试温度来源", "BLD001", "HTTP", "隔离测试", "治理温度接入"));
+        String numericSource = sourceDraft.sourceId();
+        assertThatThrownBy(() -> collection.submitSource(1L, ADMIN, numericSource, "空包不得发布"))
+                .isInstanceOf(BusinessException.class);
+        var policy = new InitialPolicyRequest(60, 60, "FIXED_DAYS", 90, "FIXED_DAYS", 90, true);
+        var device = plans.requirePending(pending);
+        ids.forEach((metric, id) -> collection.createAlias(1L, ADMIN, numericSource,
+                new AliasCreateRequest("DAIKIN_UNIT:" + device.getIdentityValue() + ":" + metric,
+                        id, policy, "仅新增温度别名")));
+        var input = new Input(pending, "MANUAL", template, numericSource, ids, null);
+        assertThatThrownBy(() -> plans.preview(input)).isInstanceOf(BusinessException.class);
+        var sourceReview = collection.submitSource(1L, ADMIN, numericSource, "发布完整温度来源配置包");
+        jdbc.update("INSERT INTO sys_user_backend_duty(assignment_id,user_id,duty_key,status,effective_at,created_by,created_at) VALUES(?,2,?,'ACTIVE',?,1,?)",
+                TemperaturePlanService.id(), BackendDuty.BACKOFFICE_CHANGE_REVIEWER.name(), LocalDateTime.now().minusMinutes(1), LocalDateTime.now());
+        collection.approveReview(2L, ADMIN, sourceReview.requestId(), "隔离测试独立批准");
+        sqlSession.clearCache();
+        var preview = plans.preview(input);
+        assertThat(preview.points()).extracting(PointPlan::action).containsOnly("REUSE");
+        var job = service.createJob(1L, ADMIN, new BatchRequest("governed-" + suffix,
+                List.of(new Item(pending, "MANUAL", template, numericSource, ids, preview.digest()))));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_temperature_binding WHERE identity_id=?",
+                Integer.class, bound.identityId())).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_point_alias WHERE point_id IN (?,?)",
+                Integer.class, ids.get("roomTemp"), ids.get("temperature"))).isEqualTo(2);
+        approve(job.items().getFirst().requestId());
+        cache.refreshAll();
+        assertThat(service.job(1L, ADMIN, job.jobId()).items().getFirst().configurationStatus()).isEqualTo("CONFIGURED");
+        assertThat(service.job(1L, ADMIN, job.jobId()).items().getFirst().samplingStatus()).isEqualTo("WAITING_ACTIVATION");
+        assertThat(jdbc.queryForList("SELECT data_type FROM biz_data_point WHERE family_code='TPT'", String.class)).containsOnly("ANALOG");
+        assertThat(jdbc.queryForObject("SELECT product_id FROM biz_equipment WHERE equip_id=?", String.class, bound.equipmentId())).isEqualTo(asset);
+        assertThat(plans.preview(input).points()).extracting(PointPlan::pointId).containsExactlyInAnyOrderElementsOf(ids.values());
+        assertThat(pointDefinitions()).containsAll(originalPoints).hasSize(originalPoints.size() + 2);
+    }
+
+    @Test void manualReuseRejectsWrongTypeCalculationUnitStatusOrOwnership() {
+        var bound = onboarding.bindTyped(pending, binding(null, null), 1L, ADMIN);
+        var first = plans.preview(new Input(pending, "AUTO", null, null, Map.of(), null));
+        var job = service.createJob(1L, ADMIN, new BatchRequest("negative-" + suffix, List.of(item(pending, first))));
+        approve(job.items().getFirst().requestId());
+        String point = jdbc.queryForObject("SELECT point_id FROM biz_temperature_binding WHERE identity_id=? AND metric_code='roomTemp'",
+                String.class, bound.identityId());
+        // 测试尚未绑定的候选点；不破坏数据库对已绑定点建筑归属的外键保护。
+        jdbc.update("DELETE FROM biz_temperature_binding WHERE point_id=?", point);
+        jdbc.update("DELETE FROM biz_point_alias WHERE point_id=?", point);
+        var input = new Input(pending, "MANUAL", template, http, Map.of("roomTemp", point), null);
+        var badValues = List.of(
+                new Object[]{"DIGITAL", "°C", 0, "BLD001", bound.equipmentId(), "GROUP001", "ONLINE"},
+                new Object[]{"ACCUMULATE", "°C", 0, "BLD001", bound.equipmentId(), "GROUP001", "ONLINE"},
+                new Object[]{"ANALOG", "°C", 1, "BLD001", bound.equipmentId(), "GROUP001", "ONLINE"},
+                new Object[]{"ANALOG", "kWh", 0, "BLD001", bound.equipmentId(), "GROUP001", "ONLINE"},
+                new Object[]{"ANALOG", "°C", 0, "BLD002", bound.equipmentId(), "GROUP001", "ONLINE"},
+                new Object[]{"ANALOG", "°C", 0, "BLD001", "other", "GROUP001", "ONLINE"},
+                new Object[]{"ANALOG", "°C", 0, "BLD001", bound.equipmentId(), "other", "ONLINE"},
+                new Object[]{"ANALOG", "°C", 0, "BLD001", bound.equipmentId(), "GROUP001", "OFFLINE"});
+        for (var invalid : badValues) {
+            var args = new ArrayList<>(Arrays.asList(invalid)); args.add(point);
+            jdbc.update("UPDATE biz_data_point SET data_type=?,unit=?,is_for_calc=?,building_id=?,equip_id=?,system_group_id=?,status=? WHERE point_id=?", args.toArray());
+            sqlSession.clearCache();
+            assertThatThrownBy(() -> plans.preview(input)).isInstanceOf(BusinessException.class).hasMessageContaining("不兼容");
+        }
+        assertThat(countPoints()).isEqualTo(2);
+    }
+
+    private void publishRelations(String version, long revision, Set<String> maintainer) {
+        var review = relations.submit(1L, maintainer, version, "submit-" + version,
+                new RevisionReasonRequest(revision, "隔离测试提交"));
+        relations.approve(2L, ADMIN, review.requestId(), "approve-" + version, new ReviewDecisionRequest("独立审核"));
+        relations.activate(2L, ADMIN, version, "activate-" + version,
+                new ActivationRequest(relations.model(2L, ADMIN, "BLD001").modelRevision(), "发布档案"));
+    }
+
+    private List<Map<String, Object>> pointDefinitions() {
+        return jdbc.queryForList("SELECT point_id,point_code,building_id,equip_id,system_group_id,data_type,unit,is_for_calc,suffix_code FROM biz_data_point WHERE building_id='BLD001'");
+    }
+
+    private List<Map<String, Object>> assignments(String version) {
+        return jdbc.queryForList("SELECT object_type,object_id,space_id,system_group_id,equipment_id,source_type FROM biz_asset_assignment_version_item WHERE version_id=?", version);
     }
 
     @Test void approvalRejectsChangedRuleAndPreviewHasNoSideEffects() {

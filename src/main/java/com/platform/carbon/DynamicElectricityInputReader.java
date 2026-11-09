@@ -84,10 +84,29 @@ public class DynamicElectricityInputReader {
         private Long sessionUser;
         private Set<String> sessionRoles;
         private String sessionBuilding;
+        private Instant reviewedCacheFrom;
+        private Instant reviewedCacheTo;
 
         private Session(String sourceKind) {
             this.sourceKind = sourceKind;
         }
+
+        /** 仅正式动态命令中完整覆盖的已结束自然日可共享审核来源；零散小时保留原读取边界。 */
+        void cacheReviewedDays(Instant from,Instant to) {
+            if(sessionUser!=null || reviewedCacheFrom!=null)
+                throw problem("DYNAMIC_ELECTRICITY_SESSION_IDENTITY","动态电量会话读取开始后不能改变缓存范围");
+            if(from==null || to==null || !to.isAfter(from))
+                throw problem("DYNAMIC_ELECTRICITY_SESSION_IDENTITY","动态电量缓存范围无效");
+            reviewedCacheFrom=from;reviewedCacheTo=to;
+        }
+
+        /** 顺序批量计算已经封存前一日证据后释放日捕获；同一日的逐小时读取仍复用同一快照。 */
+        void releaseHourlyCapturesBefore(Instant from) {
+            LocalDate day=from.atZone(ZONE).toLocalDate();
+            hourlyCaptures.keySet().removeIf(value->value.isBefore(day));
+        }
+
+        void releaseHourlyCaptures(){hourlyCaptures.clear();}
 
         public Input read(long user, Collection<String> roles, String building,
                           Instant from, Instant to, String grain) {
@@ -116,8 +135,10 @@ public class DynamicElectricityInputReader {
             LocalDate day = from.atZone(ZONE).toLocalDate();
             Instant dayStart = day.atStartOfDay(ZONE).toInstant();
             Instant dayEnd = day.plusDays(1).atStartOfDay(ZONE).toInstant();
+            boolean cacheWholeDay="REVIEWED_INTERVAL".equals(sourceKind) && reviewedCacheFrom!=null
+                    && !dayStart.isBefore(reviewedCacheFrom) && !dayEnd.isAfter(reviewedCacheTo) && !dayEnd.isAfter(asOf);
             HourlyCarbonInputService.Capture capture = hourlyCaptures.computeIfAbsent(day,
-                    ignored -> new HourlyCarbonInputService.Capture());
+                    ignored -> new HourlyCarbonInputService.Capture(cacheWholeDay));
             var request = new HourlyCarbonContracts.Request(building, day, asOf,
                     "dynamic-electricity-read-" + day, sourceKind, "SOURCE_LABELLED",
                     "DYNAMIC_ELECTRICITY_READ", "DEVELOPMENT_REFERENCE");

@@ -106,6 +106,7 @@ public class DynamicElectricityLiveRepository {
                 System.currentTimeMillis(),building,metadata);
     }
     public String metadataVersion(String building,DynamicElectricityRepository repository) {
+        DynamicElectricityQueryBudget.check();
         var values=new ArrayList<Object>();
         values.add(repository.inputMetadataVersion(building,"DEVICE_INTERVAL"));values.add(repository.projectVersion(building));
         values.add(jdbc.queryForList("SELECT version_id,revision,status,effective_from,effective_to FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' ORDER BY version_id",building));
@@ -131,23 +132,59 @@ public class DynamicElectricityLiveRepository {
         jdbc.update("UPDATE biz_dynamic_electricity_task SET state='READY',lease_token=NULL,lease_until=0,next_check=? WHERE building_id=? AND start_ms=? AND end_ms=? AND lease_token=?",
                 System.currentTimeMillis()+5000,task.building(),task.from(),task.to(),token);
     }
+
+    String claimReviewedCheck(Task task, long now) {
+        String token = UUID.randomUUID().toString().replace("-", "");
+        // Registration can replace metadata/requested_by without incrementing revision. Guard
+        // all captured identity fields, not only revision, before using an earlier group snapshot.
+        int count = jdbc.update("""
+                UPDATE biz_dynamic_electricity_task SET state='RUNNING',lease_token=?,lease_until=?
+                WHERE building_id=? AND start_ms=? AND end_ms=? AND revision=? AND state='READY'
+                  AND requested_by=? AND source_kind='REVIEWED_INTERVAL' AND grain='HOUR'
+                  AND metadata_version=? AND result_id=? AND next_check<=?
+                """, token, now + 30000, task.building(), task.from(), task.to(), task.revision(),
+                task.user(), task.metadata(), task.resultId(), now);
+        return count == 1 ? token : null;
+    }
+
+    Long lockReviewedCheck(Task task, String token) {
+        return jdbc.query("""
+                SELECT lease_until FROM biz_dynamic_electricity_task
+                WHERE building_id=? AND start_ms=? AND end_ms=? AND state='RUNNING'
+                  AND revision=? AND lease_token=? AND requested_by=?
+                  AND source_kind='REVIEWED_INTERVAL' AND grain='HOUR' AND metadata_version=? AND result_id=?
+                FOR UPDATE
+                """, (row, index) -> row.getLong(1), task.building(), task.from(), task.to(), task.revision(),
+                token, task.user(), task.metadata(), task.resultId()).stream().findFirst().orElse(null);
+    }
+
+    // Called under the exact task row lock; the service checks the real clock after lock acquisition
+    // and again after this statement. A timestamp bound before a lock wait cannot enforce a lease.
+    boolean checkedReviewedBatch(Task task, String token, long now) {
+        return jdbc.update("""
+                UPDATE biz_dynamic_electricity_task SET state='READY',lease_token=NULL,lease_until=0,next_check=?
+                WHERE building_id=? AND start_ms=? AND end_ms=? AND state='RUNNING'
+                  AND revision=? AND lease_token=? AND lease_until>=?
+                  AND requested_by=? AND source_kind='REVIEWED_INTERVAL' AND grain='HOUR'
+                  AND metadata_version=? AND result_id=?
+                """, now + 5000, task.building(), task.from(), task.to(), task.revision(), token, now,
+                task.user(), task.metadata(), task.resultId()) == 1;
+    }
     /** 任一设备输入（含待配齐）声明该准确时段，重叠的人工粗周期结果不再作为设备缺口的兜底。 */
     public List<Instant[]> deviceCoverage(String building,Instant from,Instant to) {
+        DynamicElectricityQueryBudget.check();
         var windows=jdbc.query("SELECT start_ms,end_ms FROM biz_dynamic_electricity_task WHERE building_id=? AND source_kind='DEVICE_INTERVAL' AND start_ms<? AND end_ms>? ORDER BY start_ms",
                 (r,n)->new Instant[]{Instant.ofEpochMilli(r.getLong(1)),Instant.ofEpochMilli(r.getLong(2))},building,to.toEpochMilli(),from.toEpochMilli());
         var merged=new ArrayList<Instant[]>();
         for(var window:windows) {
+            DynamicElectricityQueryBudget.check();
             if(!merged.isEmpty()&&!window[0].isAfter(merged.getLast()[1]))merged.getLast()[1]=window[1];
             else merged.add(window);
         }
         return merged;
     }
     public boolean hasData(String building,Instant from,Instant to) {
+        DynamicElectricityQueryBudget.check();
         return !jdbc.queryForList("SELECT start_ms FROM biz_dynamic_electricity_task WHERE building_id=? AND source_kind='DEVICE_INTERVAL' AND start_ms>=? AND end_ms<=? LIMIT 1",building,from.toEpochMilli(),to.toEpochMilli()).isEmpty();
-    }
-    /** 只载入轻量当前值；原始每表证据保存在不可变结果中，年查询不加载数百万条设备输入。 */
-    public List<Result> current(String building,Instant from,Instant to,String metadata) {
-        return jdbc.query("SELECT summary_json FROM biz_dynamic_electricity_task WHERE building_id=? AND start_ms>=? AND end_ms<=? AND source_kind='DEVICE_INTERVAL' AND state='READY' AND metadata_version=? ORDER BY start_ms",
-                (r,n)->{try{return json.readValue(r.getString(1),Result.class);}catch(Exception e){throw new IllegalStateException(e);}},building,from.toEpochMilli(),to.toEpochMilli(),metadata);
     }
 }

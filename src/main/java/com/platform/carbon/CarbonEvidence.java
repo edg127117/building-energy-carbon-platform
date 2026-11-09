@@ -43,6 +43,50 @@ public final class CarbonEvidence {
         }
     }
 
+    /** Hash exactly the canonical UTF-8 text without retaining a second full JSON string and byte array. */
+    public static String canonicalHash(JsonNode value) {
+        try {
+            var digest=java.security.MessageDigest.getInstance("SHA-256");
+            // Writer encoding matches canonical(value).getBytes(UTF_8), including malformed surrogate replacement.
+            try(var output=new java.io.OutputStreamWriter(new java.security.DigestOutputStream(
+                    java.io.OutputStream.nullOutputStream(),digest),java.nio.charset.StandardCharsets.UTF_8)) {
+                JSON.writeValue(output,canonicalOrder(value)?value:ordered(value));
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch(java.io.IOException | java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Canonical evidence digest failed",exception);
+        }
+    }
+
+    /** Compare every canonical character without allocating another complete evidence string. */
+    public static boolean canonicalEquals(JsonNode value,String expected) {
+        if(expected==null)return false;
+        var comparison=new java.io.Writer() {
+            private int position;
+            private boolean matches=true;
+            private void compare(char character) {
+                if(position>=expected.length()||expected.charAt(position)!=character)matches=false;
+                if(position<expected.length())position++;
+            }
+            @Override public void write(char[] chars,int offset,int length) {
+                for(int i=offset;i<offset+length;i++)compare(chars[i]);
+            }
+            @Override public void write(String text,int offset,int length) {
+                for(int i=offset;i<offset+length;i++)compare(text.charAt(i));
+            }
+            @Override public void write(int character) { compare((char)character); }
+            @Override public void flush() { }
+            @Override public void close() { }
+            boolean complete(){return matches&&position==expected.length();}
+        };
+        try {
+            JSON.writeValue(comparison,canonicalOrder(value)?value:ordered(value));
+            return comparison.complete();
+        } catch(java.io.IOException exception) {
+            throw new IllegalStateException("Canonical evidence comparison failed",exception);
+        }
+    }
+
     private static boolean canonicalOrder(JsonNode value) {
         if (value.isObject()) {
             String previous = null;
