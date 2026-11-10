@@ -142,7 +142,7 @@ public class MqttConfig {
         this.failureEvidenceRecorder = failureEvidenceRecorder;
     }
 
-    /** 连接重试与应用ACK发布共用单线程；业务计算不在这里执行，发布有独立超时。 */
+    /** 连接、订阅重试与应用 ACK 共用单线程；同步网络等待不占用 Paho 回调。 */
     @Bean(name = "mqttTaskScheduler", destroyMethod = "shutdown")
     public ThreadPoolTaskScheduler mqttTaskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
@@ -180,10 +180,7 @@ public class MqttConfig {
         try {
             MqttConnectOptions options = connectOptions();
             client.connect(options);
-            subscribeUpstream(client);
-            consecutiveFailures.set(0);
-            log.info("本地MQTT客户端已连接云端EMQX: broker={}, topics={}",
-                    brokerUrl, configuredTopics());
+            restoreSubscriptions(client, scheduler, connectionEpoch.get());
         } catch (MqttException | MqttTlsException exception) {
             MqttFailureCategory category = failureClassifier.classify(exception);
             meterRegistry.counter("iot.mqtt.connection.failure", "category", category.name())
@@ -250,12 +247,10 @@ public class MqttConfig {
                 if (!reconnect) {
                     return;
                 }
-                try {
-                    subscribeUpstream(client);
-                    log.info("MQTT自动重连后已恢复上行订阅: {}", configuredTopics());
-                } catch (MqttException exception) {
-                    log.error("MQTT自动重连后恢复上行订阅失败", exception);
-                }
+                // 持久会话的积压消息可能先于 SUBACK 到达。回调内等待订阅会阻塞消费，
+                // 队列满后接收线程也无法读取 SUBACK/PINGRESP，造成持续超时重连。
+                long epoch = connectionEpoch.get();
+                scheduler.schedule(() -> restoreSubscriptions(client, scheduler, epoch), Instant.now());
             }
 
             @Override
@@ -362,6 +357,34 @@ public class MqttConfig {
         };
     }
 
+    private void restoreSubscriptions(IMqttClient client, TaskScheduler scheduler, long epoch) {
+        // 断线后由新的 connectComplete 恢复订阅，旧连接的重试不能跨代继续排队。
+        if (connectionEpoch.get() != epoch || !client.isConnected()) {
+            return;
+        }
+        try {
+            subscribeUpstream(client);
+            if (connectionEpoch.get() != epoch) {
+                return;
+            }
+            consecutiveFailures.set(0);
+            log.info("MQTT上行订阅已确认: topics={}", configuredTopics());
+        } catch (MqttException exception) {
+            if (connectionEpoch.get() != epoch) {
+                return;
+            }
+            MqttFailureCategory category = exception.getReasonCode() == 128
+                    ? MqttFailureCategory.SUBSCRIBE_DENIED : failureClassifier.classify(exception);
+            long retryMillis = retryDelay(category);
+            meterRegistry.counter("iot.mqtt.subscription.failure", "category", category.name()).increment();
+            // 先保留恢复任务，诊断落库失败不能使在线但未订阅的连接永久停留。
+            scheduler.schedule(() -> restoreSubscriptions(client, scheduler, epoch),
+                    Instant.now().plusMillis(retryMillis));
+            log.warn("MQTT上行订阅失败，等待重试: category={}, retryMillis={}", category, retryMillis);
+            failureEvidenceRecorder.record("PLATFORM", category, brokerUrl);
+        }
+    }
+
     private void publishApplicationAck(IMqttClient client,TaskScheduler scheduler,String topic,MqttMessage message,V2ProcessingResult result,byte[] payload,long epoch,int attempt) {
         // 重连可能重新使用包编号；旧连接的延后任务只能由Broker重投恢复，不能确认新连接中的其他消息。
         if(connectionEpoch.get()!=epoch)return;
@@ -389,6 +412,10 @@ public class MqttConfig {
         int[] qos = new int[topics.length];
         Arrays.fill(qos, 1);
         client.subscribe(topics, qos);
+        // Paho 的批量订阅把 SUBACK 授权值写回 qos；部分主题被拒绝不会自动抛异常。
+        if (Arrays.stream(qos).anyMatch(granted -> granted == 128)) {
+            throw new MqttException(128);
+        }
     }
 
     private boolean routingConfigurationValid() {
