@@ -271,6 +271,8 @@ abstract class QueryDayCacheFixture {
                 CREATE TABLE biz_telemetry_raw_intent(building_id VARCHAR(32),point_id VARCHAR(80),event_ms BIGINT,
                     payload_hash VARCHAR(64),storage_state VARCHAR(20),conflict_revision INT,selection_version INT)
                 """);
+        // 本夹具只验证查询缓存的适用边界；没有已绑定的原始电量候选测点。
+        jdbc.execute("CREATE TABLE biz_dynamic_raw_electricity_point(building_id VARCHAR(32),point_id VARCHAR(80))");
         jdbc.execute("CREATE TABLE biz_quality_usage_config_revision(singleton_id INT,config_revision BIGINT)");
         jdbc.execute("CREATE TABLE biz_energy_point_profile(building_id VARCHAR(32),point_id VARCHAR(80),config_revision INT)");
         try (var connection = dataSource.getConnection()) {

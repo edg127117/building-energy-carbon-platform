@@ -49,6 +49,7 @@ class FlywayMigrationConfigurationTest {
                 "V115__mysql_dynamic_chart_projection.sql",
                 "V116__mysql_electricity_display_verification.sql",
                 "V117__mysql_dynamic_raw_source_revision.sql",
+                "V118__mysql_raw_electricity_invalidation_scope.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V12__device_identity.sql",
                 "V13__device_onboarding_discovery.sql",

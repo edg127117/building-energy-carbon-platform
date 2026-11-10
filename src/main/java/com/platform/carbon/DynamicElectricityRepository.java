@@ -153,7 +153,16 @@ public class DynamicElectricityRepository {
         return observe(Phase.CURRENT_SOURCE_LEGACY, () -> {
         DynamicElectricityQueryBudget.check();
         if("RAW_CUMULATIVE".equals(sourceKind)) {
-            var facts=jdbc.queryForList("SELECT point_id,event_ms,payload_hash,storage_state,conflict_revision,selection_version FROM biz_telemetry_raw_intent WHERE building_id=? AND event_ms>=? AND event_ms<=? ORDER BY point_id,event_ms",building,from.toEpochMilli(),to.toEpochMilli());
+            // 与事务水位使用同一外购电力候选集；温度上报不能在计算期间改变输入指纹。
+            // 不按最新绑定或当前有效期裁剪，历史补传及两小时共用的右锚点仍须参与核对。
+            var facts=jdbc.queryForList("""
+                    SELECT r.point_id,r.event_ms,r.payload_hash,r.storage_state,r.conflict_revision,r.selection_version
+                    FROM biz_telemetry_raw_intent r
+                    WHERE r.building_id=? AND r.event_ms>=? AND r.event_ms<=?
+                      AND EXISTS (SELECT 1 FROM biz_dynamic_raw_electricity_point p
+                                  WHERE p.building_id=r.building_id AND p.point_id=r.point_id)
+                    ORDER BY r.point_id,r.event_ms
+                    """,building,from.toEpochMilli(),to.toEpochMilli());
             countRows(Count.CURRENT_RAW_ROWS, facts);
             var quality=jdbc.queryForList("SELECT config_revision FROM biz_quality_usage_config_revision ORDER BY singleton_id");
             return hash(encode(List.of(facts,quality,jdbc.queryForList("SELECT point_id,config_revision FROM biz_energy_point_profile WHERE building_id=? ORDER BY point_id",building))));

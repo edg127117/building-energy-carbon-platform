@@ -257,6 +257,7 @@ class DynamicElectricityServiceTest {
     }
 
     @Test void rawReceiptAndSelectionRevisionsInvalidateRawResults() {
+        rawElectricityScope();
         jdbc.execute("CREATE TABLE biz_telemetry_receipt(building_id VARCHAR(32),persisted_at TIMESTAMP)");
         jdbc.execute("CREATE TABLE biz_quality_usage_config_revision(singleton_id INT,config_revision BIGINT)");
         jdbc.update("INSERT INTO biz_quality_usage_config_revision VALUES (1,1)");
@@ -314,6 +315,7 @@ class DynamicElectricityServiceTest {
     }
 
     @Test void rawBoundaryRevisionAffectsBothAdjacentHoursButKeepsTheFollowingHour() {
+        rawElectricityScope();
         jdbc.execute("CREATE TABLE biz_quality_usage_config_revision(singleton_id INT,config_revision BIGINT)");
         jdbc.update("INSERT INTO biz_quality_usage_config_revision VALUES (1,1)");
         for(int i=0;i<4;i++)jdbc.update("INSERT INTO biz_telemetry_raw_intent VALUES ('B','P',?,'raw','PERSISTED',0,0)",FROM.plusSeconds(i*3600L).toEpochMilli());
@@ -322,6 +324,71 @@ class DynamicElectricityServiceTest {
         jdbc.update("UPDATE biz_telemetry_raw_intent SET selection_version=1 WHERE event_ms=?",FROM.plusSeconds(3600).toEpochMilli());
         var points=service.query(1,ROLES,"B","DAY","2025-01-01").points();
         assertThat(points.subList(0,3).stream().map(Point::status)).containsExactly("STALE","STALE","COMPLETE");
+    }
+
+    @Test void unrelatedRawTrafficKeepsCalculatedElectricityCurrentButMeterCorrectionInvalidatesIt() {
+        rawElectricityScope();
+        jdbc.execute("CREATE TABLE biz_quality_usage_config_revision(singleton_id INT,config_revision BIGINT)");
+        jdbc.update("INSERT INTO biz_quality_usage_config_revision VALUES (1,1)");
+        jdbc.update("INSERT INTO biz_telemetry_raw_intent VALUES ('B','P',?,'meter','PERSISTED',0,0)",FROM.toEpochMilli());
+        ingest("raw-factor","*","0.5",FROM,TO);
+        var ids=service.calculate(1,ROLES,"B",new CalculationRequest("HOUR",FROM,FROM.plusSeconds(3600),"RAW_CUMULATIVE"));
+        for(int i=0;i<60;i++) {
+            jdbc.update("INSERT INTO biz_telemetry_raw_intent VALUES ('B','TEMPERATURE',?,'temperature','PERSISTED',0,0)",FROM.plusSeconds(i*60L).toEpochMilli());
+        }
+        jdbc.update("UPDATE biz_telemetry_raw_intent SET selection_version=1,payload_hash='corrected-temperature' WHERE point_id='TEMPERATURE'");
+        var point=service.query(1,ROLES,"B","DAY","2025-01-01").points().getFirst();
+        assertThat(point.status()).isEqualTo("COMPLETE");
+        assertThat(point.resultIds()).containsExactlyElementsOf(ids);
+        jdbc.update("DELETE FROM biz_telemetry_raw_intent WHERE point_id='TEMPERATURE'");
+        assertThat(service.query(1,ROLES,"B","DAY","2025-01-01").points().getFirst().status()).isEqualTo("COMPLETE");
+        jdbc.update("UPDATE biz_telemetry_raw_intent SET selection_version=1 WHERE point_id='P'");
+        assertThat(service.query(1,ROLES,"B","DAY","2025-01-01").points().getFirst().status()).isEqualTo("STALE");
+    }
+
+    @Test void historicalConfirmedBindingIsRetainedAndNewConfirmationIncludesPreviouslyReceivedFacts() {
+        rawElectricityScope();
+        jdbc.execute("CREATE TABLE biz_quality_usage_config_revision(singleton_id INT,config_revision BIGINT)");
+        jdbc.update("UPDATE biz_energy_point_item_binding_version SET effective_to=TIMESTAMP '2025-02-01 00:00:00'");
+        assertThat(jdbc.queryForList("SELECT DISTINCT point_id FROM biz_dynamic_raw_electricity_point",String.class)).containsExactly("P");
+        jdbc.update("INSERT INTO biz_energy_point_item_binding VALUES ('pending','B','NEW_METER')");
+        jdbc.update("INSERT INTO biz_energy_point_item_binding_version VALUES ('pending','pending-v',1,'PENDING_EXPERT',NULL,NULL,'iv')");
+        jdbc.update("INSERT INTO biz_telemetry_raw_intent VALUES ('B','NEW_METER',?,'late','PERSISTED',0,0)",FROM.toEpochMilli());
+        String before=repository.electricityVersion("B",FROM,FROM.plusSeconds(3600),"RAW_CUMULATIVE");
+        jdbc.update("UPDATE biz_energy_point_item_binding_version SET confirmation_status='CONFIRMED' WHERE binding_id='pending'");
+        assertThat(repository.electricityVersion("B",FROM,FROM.plusSeconds(3600),"RAW_CUMULATIVE")).isNotEqualTo(before);
+    }
+
+    @Test void scopeRequiresApprovedElectricityAndPurchasedUsageButNotCurrentWallClock() {
+        rawElectricityScope();
+        for(String change:List.of(
+                "UPDATE biz_energy_item_version SET compatible_category='HEAT'",
+                "UPDATE biz_energy_item_version SET status='DRAFT'",
+                "UPDATE biz_energy_item_version_scope SET usage_scope='PURCHASED_HEAT'",
+                "UPDATE biz_energy_point_item_binding_version SET confirmation_status='PENDING_EXPERT'")) {
+            transactions.executeWithoutResult(status->{
+                jdbc.update(change);
+                assertThat(jdbc.queryForList("SELECT point_id FROM biz_dynamic_raw_electricity_point",String.class)).isEmpty();
+                status.setRollbackOnly();
+            });
+        }
+        jdbc.update("UPDATE biz_energy_point_item_binding_version SET effective_to=TIMESTAMP '2025-02-01 00:00:00'");
+        assertThat(jdbc.queryForList("SELECT point_id FROM biz_dynamic_raw_electricity_point",String.class)).containsExactly("P");
+        jdbc.update("INSERT INTO biz_energy_point_item_binding_version VALUES ('raw-binding','duplicate',2,'CONFIRMED',NULL,NULL,'iv')");
+        assertThat(jdbc.queryForList("SELECT DISTINCT point_id FROM biz_dynamic_raw_electricity_point",String.class)).containsExactly("P");
+    }
+
+    private void rawElectricityScope() {
+        jdbc.execute("ALTER TABLE biz_energy_point_item_binding_version ADD COLUMN energy_item_version_id VARCHAR(32)");
+        jdbc.execute("ALTER TABLE biz_energy_item_version ADD COLUMN compatible_category VARCHAR(32)");
+        jdbc.update("INSERT INTO biz_energy_point_item_binding VALUES ('raw-binding','B','P')");
+        jdbc.update("INSERT INTO biz_energy_point_item_binding_version VALUES ('raw-binding','raw-v',1,'CONFIRMED',NULL,NULL,'iv')");
+        jdbc.update("INSERT INTO biz_energy_item_version VALUES ('item','iv',1,'APPROVED',NULL,NULL,'ELECTRICITY')");
+        jdbc.update("INSERT INTO biz_energy_item_version_scope VALUES ('iv','PURCHASED_ELECTRICITY')");
+        try {
+            String migration=java.nio.file.Files.readString(java.nio.file.Path.of("src/env/init/V118__mysql_raw_electricity_invalidation_scope.sql"));
+            jdbc.execute(migration.substring(migration.indexOf("CREATE VIEW"),migration.indexOf("DELIMITER")));
+        } catch(java.io.IOException failure) {throw new java.io.UncheckedIOException(failure);}
     }
 
     private ImportReceipt ingest(String key, String point, String value, Instant from, Instant to) {
