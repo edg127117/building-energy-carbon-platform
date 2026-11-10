@@ -21,6 +21,11 @@ vi.mock('@/locales', () => ({
       'largeScreen.mirrorChartLabel': '镜像图表',
       'largeScreen.mirrorTooltipItem': '{name}：{value} {unit}',
       'largeScreen.mirrorEmpty': '暂无动态与静态碳排放数据',
+      'largeScreen.hourActualWindow': '实际时段：{value}',
+      'largeScreen.hourCutoff': '实际截止：{value}',
+      'largeScreen.hourApproximate': '近似值',
+      'largeScreen.hourGasCo2': '静态口径：CO₂',
+      'largeScreen.hourGasCo2e': '静态口径：CO₂e',
     })[key] ?? key
     return value.replace(/\{(\w+)\}/g, (_, name: string) => String(params[name] ?? ''))
   },
@@ -130,6 +135,26 @@ describe('ScreenMirrorChart', () => {
     expect(option.series.every(series => series.xAxisIndex === undefined)).toBe(true)
     expect(option.series[2].data.slice(0, 2)).toEqual([0.52, 0.54])
     expect(option.series[3].data.slice(0, 2)).toEqual([-0.56, -0.56])
+    wrapper.unmount()
+  })
+
+  it('日模式为 CO2 与 CO2e 序列分别声明坐标单位并在 tooltip 展示实际时段', () => {
+    const wrapper = mount(ScreenMirrorChart, { props: {
+      period: { kind: 'day', value: '2026-09-22' },
+      data: {
+        dynamicEmissions: [0.2], staticEmissions: [0.3], dynamicFactors: [0.4], staticFactors: [0.5],
+        emissionUnit: 'tCO₂e', factorUnit: 'kgCO₂e/kWh', dynamicEmissionUnit: 'tCO₂', staticEmissionUnit: 'tCO₂e',
+        dynamicFactorUnit: 'kgCO₂/kWh', staticFactorUnit: 'kgCO₂e/kWh',
+        hourDetails: [{ actualStart: '2026-09-22T00:00:00+08:00', actualEnd: '2026-09-22T00:55:00+08:00', status: 'COMPLETE', approximate: true, gasCoverage: 'CO2_ONLY_ELECTRICITY', reasonCode: null }],
+      },
+    } })
+    const option = wrapper.findComponent(ChartView).props('option') as { yAxis: Array<{ name: string }>; series: Array<{ yAxisIndex: number }>; tooltip: { formatter: (params: unknown) => string } }
+    expect(option.yAxis.map(axis => axis.name)).toEqual(['tCO₂', 'kgCO₂/kWh', 'tCO₂e', 'kgCO₂e/kWh'])
+    expect(option.series.map(series => series.yAxisIndex)).toEqual([0, 2, 1, 3])
+    const tooltip = option.tooltip.formatter([{ axisValueLabel: '00:00', dataIndex: 0, seriesId: 'static-emissions', seriesName: '静态碳排放量', value: -0.3 }])
+    expect(tooltip).toContain('tCO₂e')
+    expect(tooltip).toContain('2026-09-22T00:55:00+08:00')
+    expect(tooltip).toContain('静态口径：CO₂')
     wrapper.unmount()
   })
 

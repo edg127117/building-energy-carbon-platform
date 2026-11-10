@@ -4,7 +4,7 @@ export default {
   redesignPlatform: '创新港大楼 · 建筑能碳监测管理平台',
   previousMonthCarbon: '上月累计碳排放', previousMonthIntensity: '上月碳排放强度',
   currentYearCarbon: '当年累计碳排放', currentYearIntensity: '当年碳排放强度',
-  yearShort: '年', periodType: '统计期间', periodMonthTick: '{value}月', periodDayTick: '{value}日',
+  yearShort: '年', dayShort: '日', periodType: '统计期间', periodMonthTick: '{value}月', periodDayTick: '{value}日',
   redesignComposition: '碳排放构成', redesignFlow: '能碳流向', redesignPlan: '碳排放计划与配额',
   redesignMirror: '碳排放趋势', redesignUsage: '用电趋势', redesignDevices: '设备实时状态',
   redesignElectricityShare: '100%',

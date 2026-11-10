@@ -7,6 +7,7 @@ import IndexPage from './IndexPage.vue'
 import { useFinalBData } from '../../composables/use-final-b-data'
 import { useFinalBAnnual } from '../../composables/use-final-b-annual'
 import { useFinalBDaily } from '../../composables/use-final-b-daily'
+import { useFinalBHourly } from '../../composables/use-final-b-hourly'
 import { useScreenDynamicElectricity } from '../../composables/use-screen-dynamic-electricity'
 import { withScreenMirror } from '../../models/final-b-mirror'
 import { useScreenCarbonPlan } from '../../composables/use-screen-carbon-plan'
@@ -21,12 +22,14 @@ const code = String(import.meta.env.VITE_SCREEN_BUILDING_CODE ?? '')
 const state = useFinalBData(code)
 const annual = useFinalBAnnual(state.buildingId, computed(() => state.periods.value.composition))
 const daily = useFinalBDaily(state.buildingId, computed(() => state.periods.value.usage), computed(() => state.periods.value.mirror))
+const hourly = useFinalBHourly(state.buildingId, computed(() => state.periods.value.usage), computed(() => state.periods.value.mirror))
 const dailyEvidenceViews = computed(() => [...daily.views.value.values()])
 const dynamic = useScreenDynamicElectricity(state.buildingId, computed(() => state.periods.value.mirror))
 const plan = useScreenCarbonPlan(() => state.buildingId.value, () => Number(state.periods.value.plan.value.slice(0, 4)), () => state.periods.value.plan.kind === 'month' ? state.periods.value.plan.value : undefined)
 const flow = useJointFlow(state.buildingId, computed(() => state.periods.value.flow))
 const temperature = useOutdoorTemperature(state.buildingId, computed(() => state.periods.value.usage))
-const intensity = useCarbonIntensity(computed(() => intensityQuery(state.buildingId.value, state.periods.value.intensity)), computed(() => state.periods.value.intensity))
+const intensityPeriod = computed(() => ({ kind: state.periods.value.intensity.kind === 'year' ? 'year' as const : 'month' as const, value: state.periods.value.intensity.value }))
+const intensity = useCarbonIntensity(computed(() => intensityQuery(state.buildingId.value, intensityPeriod.value)), intensityPeriod)
 const monitoring = useBuildingMonitoring(state.buildingId)
 const runtimeContext = computed(() => {
   const view = monitoring.rankingContext.value
@@ -60,15 +63,18 @@ const summaryContext = computed(() => {
 })
 const data = computed(() => {
   const base = withOutdoorTemperature(withScreenMirror({ ...state.data.value, ...annual.data.value, ...daily.data.value, ...flow.data.value, plan: plan.data.value ? { period: { kind: 'year' as const, value: state.periods.value.plan.value.slice(0, 4) }, data: plan.data.value } : undefined, intensity: intensity.data.value?.intensity, intensityBenchmarks: intensity.data.value?.intensityBenchmarks, devices: monitoring.devices.value, deviceSummaryUpdatedAt: monitoring.updatedAt.value, runtimeRanking: monitoring.runtimeRanking.value }, state.periods.value.mirror), state.periods.value.usage, temperature.values.value)
-  const mirror = base.mirror
+  const hourlyData = hourly.data.value
+  const withHourlyUsage = hourlyData.usage ? { ...base, usage: hourlyData.usage } : base
+  const mirror = withHourlyUsage.mirror
   const dynamicData = dynamic.data.value
-  if (!mirror || !dynamicData || mirror.period.kind !== dynamicData.period.kind || mirror.period.value !== dynamicData.period.value) return base
+  if (state.periods.value.mirror.kind === 'day') return { ...withHourlyUsage, ...hourlyData }
+  if (!mirror || !dynamicData || mirror.period.kind !== dynamicData.period.kind || mirror.period.value !== dynamicData.period.value) return withHourlyUsage
   const staticValues = [...mirror.data.staticEmissions, ...mirror.data.staticFactors]
     .some(value => typeof value === 'number' && Number.isFinite(value))
   const staticUsesCo2Only = mirror.data.emissionUnit === dynamicData.emissionUnit && mirror.data.factorUnit === dynamicData.factorUnit
   // 单张双轴卡没有每条静态/动态序列的独立单位标签；静态 CO2e 值存在时不能混入动态 CO2。
-  if (staticValues && !staticUsesCo2Only) return base
-  return { ...base, mirror: { ...mirror, data: {
+  if (staticValues && !staticUsesCo2Only) return withHourlyUsage
+  return { ...withHourlyUsage, mirror: { ...mirror, data: {
     ...mirror.data,
     dynamicEmissions: dynamicData.dynamicEmissions,
     dynamicFactors: dynamicData.dynamicFactors,
@@ -78,11 +84,11 @@ const data = computed(() => {
 })
 const building = computed(() => state.buildings.value.find(item => item.buildingId === state.buildingId.value))
 const renderData = computed(() => ({ ...data.value, loading: {
-  usage: state.periods.value.usage.kind === 'month' && daily.loading.value && !daily.data.value.usage,
-  mirror: state.periods.value.mirror.kind === 'month' && daily.loading.value && !daily.data.value.mirror,
+  usage: state.periods.value.usage.kind === 'day' ? hourly.loading.value.usage : state.periods.value.usage.kind === 'month' && daily.loading.value && !daily.data.value.usage,
+  mirror: state.periods.value.mirror.kind === 'day' ? hourly.loading.value.mirror : state.periods.value.mirror.kind === 'month' && daily.loading.value && !daily.data.value.mirror,
 }, failed: {
-  usage: state.periods.value.usage.kind === 'month' && daily.failedMonths.value.includes(state.periods.value.usage.value),
-  mirror: state.periods.value.mirror.kind === 'month' && daily.failedMonths.value.includes(state.periods.value.mirror.value),
+  usage: state.periods.value.usage.kind === 'day' ? hourly.failed.value.usage : state.periods.value.usage.kind === 'month' && daily.failedMonths.value.includes(state.periods.value.usage.value),
+  mirror: state.periods.value.mirror.kind === 'day' ? hourly.failed.value.mirror : state.periods.value.mirror.kind === 'month' && daily.failedMonths.value.includes(state.periods.value.mirror.value),
 } }))
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 </script>

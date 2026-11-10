@@ -18,14 +18,18 @@ const dynamicFactors = computed(() => valuesFor(props.data?.dynamicFactors, buck
 const staticFactors = computed(() => valuesFor(props.data?.staticFactors, buckets.value.length))
 const mirroredStaticEmissions = computed(() => staticEmissions.value.map(mirrorCoordinate))
 const mirroredStaticFactors = computed(() => staticFactors.value.map(mirrorCoordinate))
-const emissionExtent = computed(() => symmetricExtent([...dynamicEmissions.value, ...staticEmissions.value]))
-const factorExtent = computed(() => symmetricExtent([...dynamicFactors.value, ...staticFactors.value]))
+const dynamicEmissionExtent = computed(() => symmetricExtent(dynamicEmissions.value))
+const staticEmissionExtent = computed(() => symmetricExtent(staticEmissions.value))
+const dynamicFactorExtent = computed(() => symmetricExtent(dynamicFactors.value))
+const staticFactorExtent = computed(() => symmetricExtent(staticFactors.value))
+const separateEmissionUnits = computed(() => !!props.data?.dynamicEmissionUnit && !!props.data?.staticEmissionUnit && props.data.dynamicEmissionUnit !== props.data.staticEmissionUnit)
+const separateFactorUnits = computed(() => !!props.data?.dynamicFactorUnit && !!props.data?.staticFactorUnit && props.data.dynamicFactorUnit !== props.data.staticFactorUnit)
 const hasChartData = computed(() => [dynamicEmissions.value, staticEmissions.value, dynamicFactors.value, staticFactors.value]
   .some(values => values.some(isFiniteValue)))
 
 const option = computed<ChartOption>(() => ({
   animation: false,
-  grid: props.expanded ? { top: 54, right: 46, bottom: 34, left: 40 } : { top: '22%', right: '11%', bottom: '12%', left: '11%', containLabel: true },
+  grid: props.expanded ? { top: 54, right: separateEmissionUnits.value || separateFactorUnits.value ? 170 : 46, bottom: 34, left: 40 } : { top: '22%', right: separateEmissionUnits.value || separateFactorUnits.value ? '25%' : '11%', bottom: '12%', left: '11%', containLabel: true },
   legend: { top: 0, left: 'center', itemWidth: 10, itemHeight: 8 },
   tooltip: {
     trigger: 'axis',
@@ -37,21 +41,34 @@ const option = computed<ChartOption>(() => ({
   yAxis: [
     {
       type: 'value',
-      name: displayUnit(props.data?.emissionUnit ?? 'tCO₂e'),
+      name: displayUnit(props.data?.dynamicEmissionUnit ?? props.data?.emissionUnit ?? 'tCO₂e'),
       position: 'left',
-      ...extentOptions(emissionExtent.value),
+      ...extentOptions(dynamicEmissionExtent.value),
       axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
       axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
     },
     {
       type: 'value',
-      name: displayUnit(props.data?.factorUnit ?? 'kgCO₂e/kWh'),
-      position: 'right',
-      ...extentOptions(factorExtent.value),
+      name: displayUnit(props.data?.dynamicFactorUnit ?? props.data?.factorUnit ?? 'kgCO₂e/kWh'),
+      position: 'right', offset: separateEmissionUnits.value ? 42 : 0,
+      ...extentOptions(dynamicFactorExtent.value),
       splitLine: { show: false },
       axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
       axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
     },
+    ...(separateEmissionUnits.value ? [{
+      type: 'value', name: displayUnit(props.data?.staticEmissionUnit ?? props.data?.emissionUnit ?? 'tCO₂e'),
+      position: 'right', ...extentOptions(staticEmissionExtent.value),
+      axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
+      axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
+    }] : []),
+    ...(separateFactorUnits.value ? [{
+      type: 'value', name: displayUnit(props.data?.staticFactorUnit ?? props.data?.factorUnit ?? 'kgCO₂e/kWh'),
+      position: 'right', offset: separateEmissionUnits.value ? 84 : 42, ...extentOptions(staticFactorExtent.value),
+      splitLine: { show: false },
+      axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
+      axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
+    }] : []),
   ],
   series: [
     {
@@ -68,7 +85,7 @@ const option = computed<ChartOption>(() => ({
       name: t('largeScreen.mirrorStaticEmissions'),
       type: 'bar',
       data: mirroredStaticEmissions.value,
-      yAxisIndex: 0,
+      yAxisIndex: separateEmissionUnits.value ? 2 : 0,
       barGap: '-100%',
       barMaxWidth: 18,
       itemStyle: { color: 'var(--bec-screen-cyan)' },
@@ -93,7 +110,7 @@ const option = computed<ChartOption>(() => ({
       name: t('largeScreen.mirrorStaticFactors'),
       type: 'line',
       data: mirroredStaticFactors.value,
-      yAxisIndex: 1,
+      yAxisIndex: separateFactorUnits.value ? separateEmissionUnits.value ? 3 : 2 : 1,
       z: 5,
       smooth: false,
       showSymbol: true,
@@ -152,6 +169,8 @@ function formatMirrorTooltip(params: unknown): string {
     ? params.filter((item): item is TooltipItem => typeof item === 'object' && item !== null)
     : []
   const axis = items.length ? String(items[0].axisValueLabel ?? items[0].axisValue ?? '') : ''
+  const index = Number(items[0]?.dataIndex)
+  const detail = Number.isInteger(index) ? props.data?.hourDetails?.[index] : undefined
   const rows = items.map((item) => {
     const value = tooltipValue(item)
     if (!isFiniteValue(value)) return ''
@@ -163,7 +182,10 @@ function formatMirrorTooltip(params: unknown): string {
       unit: tooltipUnit(seriesId),
     })
   }).filter(Boolean)
-  return [axis, ...rows].filter(Boolean).join('\n')
+  const actual = detail?.actualStart && detail.actualEnd ? `${detail.actualStart} — ${detail.actualEnd}` : ''
+  const gas = detail ? t(detail.gasCoverage === 'CO2_ONLY_ELECTRICITY' || detail.gasCoverage === 'CO2_ONLY' ? 'largeScreen.hourGasCo2' : 'largeScreen.hourGasCo2e') : ''
+  const notes = detail ? [actual ? t('largeScreen.hourActualWindow', { value: actual }) : '', detail.actualEnd ? t('largeScreen.hourCutoff', { value: detail.actualEnd }) : '', detail.approximate ? t('largeScreen.hourApproximate') : '', gas, detail.reasonCode ?? ''].filter(Boolean) : []
+  return [axis, ...rows, ...notes].filter(Boolean).join('\n')
 }
 
 function tooltipValue(item: TooltipItem): number | null {
@@ -176,16 +198,17 @@ function isStaticSeries(seriesId: string): boolean {
 }
 
 function tooltipUnit(seriesId: string): string {
-  return seriesId.endsWith('factors')
-    ? displayUnit(props.data?.factorUnit ?? 'kgCO₂e/kWh')
-    : displayUnit(props.data?.emissionUnit ?? 'tCO₂e')
+  if (seriesId === 'dynamic-factors') return displayUnit(props.data?.dynamicFactorUnit ?? props.data?.factorUnit ?? 'kgCO₂e/kWh')
+  if (seriesId === 'static-factors') return displayUnit(props.data?.staticFactorUnit ?? props.data?.factorUnit ?? 'kgCO₂e/kWh')
+  if (seriesId === 'dynamic-emissions') return displayUnit(props.data?.dynamicEmissionUnit ?? props.data?.emissionUnit ?? 'tCO₂e')
+  return displayUnit(props.data?.staticEmissionUnit ?? props.data?.emissionUnit ?? 'tCO₂e')
 }
 </script>
 
 <template>
   <section class="mirror-chart" :aria-label="t('largeScreen.mirrorChartLabel')">
     <ChartView :option="option" :accessible-label="t('largeScreen.mirrorChartLabel')" />
-    <p v-if="failed" class="chart-state" role="alert">{{ t('largeScreen.failed') }}</p>
+    <p v-if="failed" class="chart-state" role="alert">{{ t(data?.hourDetails ? 'largeScreen.failedStale' : 'largeScreen.failed') }}</p>
     <p v-else-if="loading" class="chart-state" role="status">{{ t('common.loading') }}</p>
     <p v-else-if="!hasChartData" class="chart-state" data-test="mirror-empty">{{ t('largeScreen.mirrorEmpty') }}</p>
   </section>

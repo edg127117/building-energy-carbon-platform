@@ -24,6 +24,7 @@ vi.mock('@/modules/energy-classification/public', async original => ({
   ...await original<typeof import('@/modules/energy-classification/public')>(), carbonPlanApi: { query: vi.fn() },
 }))
 vi.mock('../../composables/use-final-b-data', () => ({ useFinalBData: () => state }))
+vi.mock('../../composables/use-final-b-hourly', () => ({ useFinalBHourly: () => hourly }))
 vi.mock('../../composables/use-screen-dynamic-electricity', () => ({ useScreenDynamicElectricity: () => dynamic }))
 vi.mock('../../composables/use-joint-flow', () => ({ useJointFlow: () => ({
   data: ref<ScreenRedesignData>({ carbonFlow: { period: { kind: 'year', value: '2026' }, data: {
@@ -54,6 +55,7 @@ function initialState() {
   }
 }
 let state: ReturnType<typeof initialState>
+let hourly: { data: ReturnType<typeof ref<ScreenRedesignData>>; failed: ReturnType<typeof ref<{ usage: boolean; mirror: boolean }>>; loading: ReturnType<typeof ref<{ usage: boolean; mirror: boolean }>> }
 function initialDynamic() {
   return {
     data: ref<ScreenDynamicElectricityData | null>(null), status: ref<ScreenDynamicElectricityStatus>('unavailable'),
@@ -64,6 +66,7 @@ let dynamic: ReturnType<typeof initialDynamic>
 
 beforeEach(() => {
   dynamic = initialDynamic()
+  hourly = { data: ref<ScreenRedesignData>({}), failed: ref({ usage: false, mirror: false }), loading: ref({ usage: false, mirror: false }) }
   vi.mocked(readDailyTrends).mockReset()
   vi.mocked(readDailyTrends).mockImplementation(async (building, month) => dailyFixture(building, month))
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-10-31T10:00:00+08:00'))
@@ -102,6 +105,21 @@ describe('final B intensity integration', () => {
     expect(wrapper.text()).toContain('中高档 1')
     expect(wrapper.text()).toContain('缺少观测 1')
     expect(data.deviceSummaryUpdatedAt).toBe(123)
+    wrapper.unmount()
+  })
+
+  it('keeps hourly usage when only the usage card switches to day and mirror stays monthly', async () => {
+    vi.mocked(readCarbonIntensity).mockResolvedValue(intensityView())
+    const period = { kind: 'day' as const, value: '2026-10-30' }
+    hourly.data.value = { usage: { period, data: { electricity: Array(24).fill(0), temperature: Array(24).fill(null), electricityUnit: 'kWh', temperatureUnit: '°C' } } }
+    const wrapper = mount(FinalBPage), page = wrapper.findComponent(IndexPage)
+    const mirror = { kind: 'month' as const, value: '2026-09' }
+    page.vm.$emit('periodChange', { ...state.periods.value, usage: period, mirror })
+    await flushPromises()
+    const data = page.props('data') as ScreenRedesignData
+    expect(data.usage?.period).toEqual(period)
+    expect(data.usage?.data.electricity).toHaveLength(24)
+    expect(data.mirror?.period).toEqual(mirror)
     wrapper.unmount()
   })
 

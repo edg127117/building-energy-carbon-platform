@@ -44,16 +44,19 @@ public class HourlyCarbonInputService {
     /** 缓存只活在一次命令中；同一测点整日事实只取一次，规则切换仍逐小时核验。 */
     public static final class Capture {
         final boolean reviewedDayCache;
+        final boolean monitoringBoundaries;
         final Map<String,Raw> raw=new HashMap<>();
         final Map<String,BindingVersionView> bindings=new HashMap<>();
         final Map<String,EnergyCatalogLookup.ApprovedEnergyItem> items=new HashMap<>();
         final Map<String,EnergyCatalogLookup.UnitConversion> units=new HashMap<>();
         final Map<String,JsonNode> contexts=new TreeMap<>();
+        final Set<String> monitoringContexts=new HashSet<>();
         int factCount;
         private ReviewedScope reviewedScope;
         private List<ReadingView> reviewedReadings;
         public Capture(){this(false);}
-        Capture(boolean reviewedDayCache){this.reviewedDayCache=reviewedDayCache;}
+        Capture(boolean reviewedDayCache){this(reviewedDayCache,false);}
+        Capture(boolean reviewedDayCache,boolean monitoringBoundaries){this.reviewedDayCache=reviewedDayCache;this.monitoringBoundaries=monitoringBoundaries;}
         public Map<String,JsonNode> contexts() { return Map.copyOf(contexts); }
     }
     private record ReviewedScope(long user,Set<String> roles,String building,Instant asOf,Instant from,Instant to) { }
@@ -81,7 +84,7 @@ public class HourlyCarbonInputService {
         var energyTrace=trace.putArray("energies");
         Set<String> hourPoints=new HashSet<>();
         for(String code:codes) {
-            var context=classifications.intervalContext(user,roles,request.buildingId(),project.configuration().classificationVersionId(),from,to,code);
+            var context=context(user,roles,request.buildingId(),project.configuration().classificationVersionId(),from,to,code,capture.monitoringBoundaries);
             for(var meter:context.meters())if(!hourPoints.add(meter.pointId()))
                 throw error(409,ACTIVITY_INCOMPLETE,"同一测点被多个外购电力来源重复引用");
             if(hourPoints.size()>500)throw error(409,LIMIT_EXCEEDED,"小时来源超过500个测点");
@@ -126,15 +129,36 @@ public class HourlyCarbonInputService {
                         var snapshot=raw.snapshot();
                         if(!"CUMULATIVE".equals(snapshot.valueSemantics()) || !"CONFIRMED".equals(snapshot.confirmationStatus())
                                 || !binding.rawUnit().equalsIgnoreCase(snapshot.sourceUnit()))throw error(409,ACTIVITY_INCOMPLETE,"小时原始来源须为已确认累计量，单位与绑定一致");
-                        var used=snapshot.items().stream().filter(v->v.eventTime()>=from.toEpochMilli()&&v.eventTime()<=to.toEpochMilli()).toList();
+                        var approximate=capture.monitoringBoundaries?HourlyMonitoringBoundary.select(snapshot.items(),from,to,to.isBefore(from.plusSeconds(3600))):null;
+                        Instant actualFrom=approximate==null?from:approximate.from(),actualTo=approximate==null?to:approximate.to();
+                        var used=approximate==null?snapshot.items().stream().filter(v->v.eventTime()>=from.toEpochMilli()&&v.eventTime()<=to.toEpochMilli()).toList():approximate.items();
+                        if(approximate!=null) {
+                            if(!covers(item.effectiveFrom(),item.effectiveTo(),actualFrom,actualTo))
+                                throw error(409,DEPENDENCY_UNAVAILABLE,"邻近读数跨越能源目录有效边界");
+                            // 邻近读数不能跨已生效的项目、关系或绑定边界偷用旧表；冲突仍交由缺失逻辑处理。
+                            String contextKey=code+":"+actualFrom+":"+actualTo;
+                            if((!actualFrom.equals(from)||!actualTo.equals(to))&&!capture.monitoringContexts.contains(contextKey)) {
+                                var actualProject=projects.effective(request.buildingId(),actualFrom,actualTo);
+                                if(actualProject==null||!actualProject.versionId().equals(project.versionId()))
+                                    throw error(409,ACTIVITY_INCOMPLETE,"邻近读数跨越项目有效边界");
+                                var actualContext=context(user,roles,request.buildingId(),project.configuration().classificationVersionId(),actualFrom,actualTo,code,true);
+                                if(!actualContext.relationVersionId().equals(context.relationVersionId()))
+                                    throw error(409,ACTIVITY_INCOMPLETE,"邻近读数跨越计量关系边界");
+                                capture.monitoringContexts.add(contextKey);
+                            }
+                            if(!binding(user,roles,request.buildingId(),meter.pointId(),actualFrom,actualTo,capture).bindingVersionId().equals(binding.bindingVersionId()))
+                                throw error(409,ACTIVITY_INCOMPLETE,"邻近读数跨越计量关系或能源绑定边界");
+                            point.put("actualStart",actualFrom.toString());point.put("actualEnd",actualTo.toString());
+                            point.put("boundaryPolicy","PRECEDING_SIX_MINUTES_V1");
+                        }
                         var sourceFacts=used.stream().map(v->new ActivityFact(v.pointId()+"@"+v.eventTime(),BigDecimal.valueOf(v.rawValue()),Instant.ofEpochMilli(v.eventTime()),
                                 Instant.ofEpochMilli(v.receivedTime()),v.qualityLevel(),v.policySource()+":"+v.policyVersion()+":"+v.policyConfigRevision(),v.late(),null,null,null,null)).toList();
                         var factIds=sourceFacts.stream().map(ActivityFact::factIdentity).collect(java.util.stream.Collectors.toSet());
-                        var governed=new GovernedEvidence(raw.governed().meterEvents().stream().filter(e->e.occurredAt().isAfter(from)&&!e.occurredAt().isAfter(to)).toList(),
+                        var governed=new GovernedEvidence(raw.governed().meterEvents().stream().filter(e->e.occurredAt().isAfter(actualFrom)&&!e.occurredAt().isAfter(actualTo)).toList(),
                                 raw.governed().corrections().stream().filter(c->factIds.contains(c.originalFactIdentity())).toList());
-                        var result=nativeQuantities.aggregateCumulative(new NativeCumulativeRequest(new NativeScope(request.buildingId(),meter.pointId(),from,to,
+                        var result=nativeQuantities.aggregateCumulative(new NativeCumulativeRequest(new NativeScope(request.buildingId(),meter.pointId(),actualFrom,actualTo,
                                 request.calculationAsOf(),request.calculationAsOf()),snapshot.sourceUnit(),sourceFacts,governed.meterEvents(),governed.corrections()));
-                        var converted=conversion(result.quantity(),snapshot.sourceUnit(),from,to,capture);quantity=converted.convertedQuantity();
+                        var converted=conversion(result.quantity(),snapshot.sourceUnit(),actualFrom,actualTo,capture);quantity=converted.convertedQuantity();
                         conversionEvidence(point,converted,capture);
                         used.forEach(v->qualityIds.add(v.policySource()+":"+v.policyVersion()+":"+v.policyConfigRevision()));
                         point.set("facts",CarbonEvidence.tree(used));point.set("governed",CarbonEvidence.tree(governed));
@@ -178,6 +202,7 @@ public class HourlyCarbonInputService {
 
     private List<ReadingView> reviewedReadings(long user,Collection<String> roles,HourlyCarbonContracts.Request request,
             Instant from,Instant to,Instant readFrom,Instant readTo,Capture capture,CarbonCalculationDeadline deadline) {
+        if(capture.monitoringBoundaries&&!Duration.between(from,to).equals(Duration.ofHours(1)))return List.of();
         if(!capture.reviewedDayCache)
             return classifications.reviewedIntervalReadings(user,roles,request.buildingId(),from,to,request.calculationAsOf());
         if(capture.reviewedReadings==null)
@@ -188,6 +213,21 @@ public class HourlyCarbonInputService {
                 && value.reading().endExclusive().isAfter(from)).toList();
         if(values.size()>5000)throw error(409,LIMIT_EXCEEDED,"该小时审核来源超过5000条有界查询上限");
         return values;
+    }
+
+    private ClassificationService.IntervalContext context(long user,Collection<String> roles,String building,String version,
+            Instant from,Instant to,String energy,boolean monitoring) {
+        if(!monitoring)return classifications.intervalContext(user,roles,building,version,from,to,energy);
+        var split=from.plusSeconds(3600);
+        var first=classifications.monitoringIntervalContext(user,roles,building,version,from,to.isAfter(split)?split:to,energy);
+        if(to.isAfter(split)) {
+            // 两个邻近锚点可能覆盖略多于一小时；分段核验同一配置，不放宽正式小时端口。
+            var last=classifications.monitoringIntervalContext(user,roles,building,version,split,to,energy);
+            if(!first.classificationVersionId().equals(last.classificationVersionId())
+                    ||!first.relationVersionId().equals(last.relationVersionId())||first.modelRevision()!=last.modelRevision())
+                throw error(409,ACTIVITY_INCOMPLETE,"邻近读数跨越计量配置版本");
+        }
+        return first;
     }
 
     private BindingVersionView binding(long user,Collection<String> roles,String building,String point,Instant from,Instant to,Capture capture) {

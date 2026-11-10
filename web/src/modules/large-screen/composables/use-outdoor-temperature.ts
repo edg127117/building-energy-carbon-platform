@@ -12,6 +12,7 @@ export function useOutdoorTemperature(buildingId: Ref<string>, period: Ref<Scree
     abort?.abort(); view.value = null; loading.value = false
     const building = buildingId.value, selected = { ...period.value }
     if (!building) { state.value = 'UNCONFIGURED'; return }
+    if (selected.kind === 'day') { state.value = 'UNSUPPORTED_PERIOD'; return }
     const type = selected.kind === 'year' ? 'YEAR' : 'MONTH'
     try { temperaturePeriodDates(type, selected.value) } catch { state.value = 'UNSUPPORTED_PERIOD'; return }
     abort = new AbortController(); const signal = abort.signal
@@ -28,6 +29,7 @@ export function useOutdoorTemperature(buildingId: Ref<string>, period: Ref<Scree
   onScopeDispose(() => { disposed = true; generation++; abort?.abort() })
   const values = computed(() => {
     const current = view.value, selected = period.value, type = selected.kind === 'year' ? 'YEAR' : 'MONTH'
+    if (selected.kind === 'day') return undefined
     if (!current || current.buildingId !== buildingId.value || current.periodType !== type || current.period !== selected.value) return undefined
     return temperatureTrendValues(current, buildingId.value, type, selected.value)
   })

@@ -46,7 +46,15 @@ class HourlyCarbonInputServiceTest {
                 List.of(new ClassificationContracts.Node("use","all","全部",null)),List.of(),
                 List.of(new ClassificationContracts.BoundaryRule("boundary","MAIN_WITH_SUBMETER_BREAKDOWN","CONFIRMED","test","ELECTRICITY","KWH")));
         when(classifications.intervalContext(anyLong(),anyCollection(),eq("TEST"),eq("class-v1"),any(),any(),eq("ELECTRICITY")))
-                .thenReturn(new ClassificationService.IntervalContext("class-v1","relation-v1",1,config,meters,Map.of(),null));
+                .thenAnswer(call->{
+                    assertThat(Duration.between(call.getArgument(4),call.getArgument(5))).isEqualTo(Duration.ofHours(1));
+                    return new ClassificationService.IntervalContext("class-v1","relation-v1",1,config,meters,Map.of(),null);
+                });
+        when(classifications.monitoringIntervalContext(anyLong(),anyCollection(),eq("TEST"),eq("class-v1"),any(),any(),eq("ELECTRICITY")))
+                .thenAnswer(call->{
+                    assertThat(Duration.between(call.getArgument(4),call.getArgument(5))).isPositive().isLessThanOrEqualTo(Duration.ofHours(1));
+                    return new ClassificationService.IntervalContext("class-v1","relation-v1",1,config,meters,Map.of(),null);
+                });
     }
     private static ClassificationCore.Meter meter(String id,String parent) {return new ClassificationCore.Meter(id,parent,"boundary",parent==null?"MAIN":"SUB","INBOUND","CONFIRMED");}
     private void raw(Map<String,Integer> increments) {
@@ -92,6 +100,48 @@ class HourlyCarbonInputServiceTest {
                 .thenReturn(new AggregationActivitySnapshot("TEST","main","KWH","CUMULATIVE","CONFIRMED",1,START.toEpochMilli(),END.toEpochMilli(),ASOF.toEpochMilli(),ASOF.toEpochMilli(),"POINT_EVENT","GOVERNED",List.of(fact("main",0,0),fact("main",2,20))));
         assertThatThrownBy(()->read(0,new HourlyCarbonInputService.Capture())).isInstanceOf(BusinessException.class)
                 .extracting(ex->((BusinessException)ex).getErrorCode()).isEqualTo(CarbonErrors.ACTIVITY_INCOMPLETE);
+    }
+    @Test void monitoringUsesPrecedingReadingsWhileFormalCalculationStillRequiresExactAnchors() {
+        configure(List.of(meter("main",null)));
+        var begin=START.minusSeconds(120);var finish=START.plusSeconds(3480);
+        var values=List.of(monitorFact(begin,100),monitorFact(finish,110));
+        monitoringRaw(values);
+        var result=service.read(1,ROLES,request,START,START.plusSeconds(3600),START.minusSeconds(360),START.plusSeconds(3600),
+                new HourlyCarbonInputService.Capture(false,true),CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+        assertThat(result.activities().getFirst().quantityKwh()).isEqualByComparingTo("10");
+        assertThat(result.evidence().at("/energies/0/pointInputs/main/actualStart").asText()).isEqualTo(begin.toString());
+        assertThatThrownBy(()->service.read(1,ROLES,request,START,START.plusSeconds(3600),START.minusSeconds(360),START.plusSeconds(3600),
+                new HourlyCarbonInputService.Capture(),CarbonCalculationDeadline.start(Duration.ofSeconds(30)))).isInstanceOf(BusinessException.class);
+    }
+    @Test void monitoringCannotSubtractAcrossAnUngovernedCounterReset() {
+        configure(List.of(meter("main",null)));
+        monitoringRaw(List.of(monitorFact(START.minusSeconds(120),100),monitorFact(START.plusSeconds(120),1),monitorFact(START.plusSeconds(3480),110)));
+        assertThatThrownBy(()->service.read(1,ROLES,request,START,START.plusSeconds(3600),START.minusSeconds(360),START.plusSeconds(3600),
+                new HourlyCarbonInputService.Capture(false,true),CarbonCalculationDeadline.start(Duration.ofSeconds(30)))).isInstanceOf(BusinessException.class);
+    }
+    @Test void currentPartialHourUsesMonitoringContextAndNotFormalFullHourPort() {
+        configure(List.of(meter("main",null)));
+        monitoringRaw(List.of(monitorFact(START,100),monitorFact(START.plusSeconds(1800),110)));
+        var result=service.read(1,ROLES,request,START,START.plusSeconds(1900),START.minusSeconds(360),START.plusSeconds(1900),
+                new HourlyCarbonInputService.Capture(false,true),CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+        assertThat(result.activities().getFirst().quantityKwh()).isEqualByComparingTo("10");
+        verify(classifications,never()).intervalContext(anyLong(),anyCollection(),anyString(),anyString(),any(),any(),anyString());
+    }
+    @Test void precedingAnchorsLongerThanOneHourValidateBothContextSegments() {
+        configure(List.of(meter("main",null)));
+        monitoringRaw(List.of(monitorFact(START.minusSeconds(360),100),monitorFact(START.plusSeconds(3600),110)));
+        var result=service.read(1,ROLES,request,START,START.plusSeconds(3600),START.minusSeconds(360),START.plusSeconds(3600),
+                new HourlyCarbonInputService.Capture(false,true),CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+        assertThat(result.activities().getFirst().quantityKwh()).isEqualByComparingTo("10");
+        verify(classifications).monitoringIntervalContext(1,ROLES,"TEST","class-v1",START.plusSeconds(3240),START.plusSeconds(3600),"ELECTRICITY");
+    }
+    private void monitoringRaw(List<RawActivityDataView> values) {
+        when(activities.aggregationSnapshot(anyLong(),anyCollection(),anyString(),anyString(),anyLong(),anyLong(),anyLong())).thenAnswer(call->
+                new AggregationActivitySnapshot("TEST","main","KWH","CUMULATIVE","CONFIRMED",1,call.getArgument(4),call.getArgument(5),ASOF.toEpochMilli(),ASOF.toEpochMilli(),"POINT_EVENT","GOVERNED",values));
+    }
+    private RawActivityDataView monitorFact(Instant at,double value) {
+        return new RawActivityDataView("main","main","KWH","ELECTRICITY","PURCHASED_ELECTRICITY","CUMULATIVE","CONFIRMED",1,
+                "SIMULATOR","main","device",value,at.toEpochMilli(),END.toEpochMilli(),"Q0",false,"BUILDING",1,1);
     }
     @Test void equalAnchorsRemainTrueZeroAndWrongSourceCutoffIsRejected() {
         configure(List.of(meter("main",null)));raw(Map.of("main",0));

@@ -23,4 +23,7 @@ export default {
   usageTemperature: '室外温度',
   usageChartLabel: '用电趋势图表',
   usageEmpty: '暂无总用电量与室外温度数据',
+  usageTemperatureHistory: '历史气象温度', usageTemperatureForecast: '预报温度',
+  hourActualWindow: '实际时段：{value}', hourApproximate: '近似值', hourGasCo2: '静态口径：CO₂', hourGasCo2e: '静态口径：CO₂e',
+  hourCutoff: '实际截止：{value}', failedStale: '刷新失败，当前展示本建筑、日期上次成功数据。',
 } as const

@@ -33,6 +33,7 @@ class HourlyCarbonApiContractTest {
     @Autowired com.platform.security.JwtService jwt;
     @MockBean TokenCacheService tokens;
     @MockBean HourlyCarbonService service;
+    @MockBean com.platform.carbon.HourlyMonitoringService monitoring;
     @BeforeEach void setup() {when(tokens.validateActiveToken(anyLong(),anyString())).thenReturn(TokenValidationResult.ACTIVE);}
     private org.springframework.test.web.servlet.request.RequestPostProcessor role(String role) {
         return request->{request.addHeader("Authorization","Bearer "+jwt.generateToken(1L,"isolated",List.of(role),1L));return request;};
@@ -70,5 +71,21 @@ class HourlyCarbonApiContractTest {
         assertThat(root.path("components").path("schemas").path("HourlyCarbonCalculationRequest").path("properties").has("calculationAsOf")).isTrue();
         assertThat(root.path("components").path("schemas").path("HourlyCarbonPoint").path("properties").has("roundingPolicyVersionIds")).isTrue();
         assertThat(root.path("paths").has("/v1/carbon-management/buildings/{buildingId}/hourly")).isTrue();
+        assertThat(root.path("components").path("schemas").has("HourlyMonitoringPoint")).isTrue();
+    }
+
+    @Test void monitoringQueryRequiresAuthenticationAndUsesSeparateBuildingScopedEvidence() throws Exception {
+        String route="/v1/carbon-management/buildings/BLD001/hourly-monitoring";
+        mvc.perform(get(route).param("date","2026-11-10")).andExpect(status().isUnauthorized());
+        mvc.perform(get(route).with(role("BUILDING_OWNER")).param("date","2026-11-10")).andExpect(status().isOk());
+        verify(monitoring).query(1L,Set.of("BUILDING_OWNER"),"BLD001",LocalDate.of(2026,11,10));
+        mvc.perform(get(route).with(role("BUILDING_OWNER")).param("date","bad")).andExpect(status().isBadRequest());
+        mvc.perform(get(route+"/evidence/"+"a".repeat(64)).with(role("ENERGY_MANAGER"))).andExpect(status().isOk());
+        verify(monitoring).evidence(1L,Set.of("ENERGY_MANAGER"),"BLD001","a".repeat(64));
+        doThrow(new com.platform.framework.exception.BusinessException(403,"DENIED","outside building"))
+                .when(monitoring).query(anyLong(),anyCollection(),eq("OTHER"),any());
+        mvc.perform(get("/v1/carbon-management/buildings/OTHER/hourly-monitoring").with(role("BUILDING_OWNER")).param("date","2026-11-10"))
+                .andExpect(status().isForbidden());
+        verify(service,never()).calculate(anyLong(),anyCollection(),any());
     }
 }
