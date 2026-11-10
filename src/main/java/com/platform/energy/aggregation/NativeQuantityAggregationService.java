@@ -60,7 +60,7 @@ public class NativeQuantityAggregationService {
         authorization.requireRunner(userId, roles);
         authorization.checkBuilding(userId, roles, buildingId);
         List<MeterEventEvidence> events = governanceService
-                .approvedEvents(buildingId, pointId, fromInclusive, toExclusive,
+                .approvedEventsAt(buildingId, pointId, fromInclusive, toExclusive, calculationAsOf,
                         MAX_GOVERNED_EVIDENCE_PER_TYPE + 1);
         List<CorrectionEvidence> corrections = governanceService
                 .approvedCorrections(buildingId, pointId, calculationAsOf);

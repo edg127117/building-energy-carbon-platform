@@ -8,6 +8,9 @@ import com.platform.carbon.CarbonModels.CalculationDetail;
 import com.platform.carbon.CarbonModels.CalculationResult;
 import com.platform.carbon.CarbonModels.PeriodType;
 import com.platform.carbon.CarbonModels.ResultNature;
+import com.platform.carbon.CarbonModels.ScopeType;
+import com.platform.carbon.CarbonModels.StoredCalculationItem;
+import com.platform.carbon.CarbonModels.SummaryMetric;
 import com.platform.carbon.api.CarbonContracts.RunCalculationRequest;
 import com.platform.framework.exception.BusinessException;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +21,8 @@ import org.springframework.dao.QueryTimeoutException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.YearMonth;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Supplier;
@@ -91,6 +96,14 @@ class CarbonCalculationServiceTest {
                 .filteredOn(value -> "TOTAL_EMISSION".equals(value.metricCode()))
                 .singleElement().satisfies(value -> assertThat(value.finalValue())
                         .isEqualByComparingTo("0.000000"));
+    }
+
+    @Test void hourlyMonitoringCannotEnterFormalMonthQuarterYearCalculation() {
+        assertThatThrownBy(()->service.run(11L,Set.of("PLATFORM_ADMIN"),new RunCalculationRequest("BLD001","HOUR",START,START.plusSeconds(3600),"Asia/Shanghai","FORMAL","hour")))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("小时");
+        assertThatThrownBy(()->service.run(11L,Set.of("PLATFORM_ADMIN"),request(ResultNature.MONITORING)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("小时");
+        org.mockito.Mockito.verifyNoInteractions(input,ruleRepository,repository);
     }
 
     @Test void fullyExcludedActivityIsRecordedWithoutMatchingAnEmissionFactor() {
@@ -221,6 +234,89 @@ class CarbonCalculationServiceTest {
         verify(persistence).timeout(eq("EXPIRED"), any(LocalDateTime.class));
         verify(persistence, never()).create(any());
         verify(input, never()).read(anyString(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    void readsFrozenMonthDetailOnlyAfterBuildingAuthorizationWithoutRecoveryWrite() {
+        CalculationBatch batch = monthlyBatch("MONTH_202610", "2026-10", "PUBLISHED",
+                "COMPLETED_COMPLETE", 1);
+        CalculationDetail detail = monthlyDetail(batch);
+        when(repository.findCurrentFormalMonth("BLD001", batch.periodStart(), batch.periodEnd()))
+                .thenReturn(List.of(batch));
+        when(repository.detail("MONTH_202610")).thenReturn(detail);
+
+        var result = service.monthResults(11L, Set.of("PLATFORM_ADMIN"), "BLD001",
+                List.of("2026-10"));
+
+        assertThat(result).singleElement().satisfies(value -> {
+            assertThat(value.state()).isEqualTo(CarbonCalculationService.MonthlyCalculationState.READY);
+            assertThat(value.reason()).isNull();
+            assertThat(value.detail().items()).singleElement().satisfies(item -> {
+                assertThat(item.factorVersionId()).isEqualTo("FACTOR_FROZEN");
+                assertThat(item.formulaVersionId()).isEqualTo("FORMULA_FROZEN");
+                assertThat(item.gwpVersionId()).isEqualTo("GWP_FROZEN");
+            });
+            assertThat(value.detail().summaries()).singleElement()
+                    .satisfies(summary -> assertThat(summary.unitCode()).isEqualTo("KG_CO2E"));
+            assertThat(value.detail().batch().roundingPolicyVersionId())
+                    .isEqualTo("ROUNDING_FROZEN");
+        });
+        var order = org.mockito.Mockito.inOrder(authorization, repository);
+        order.verify(authorization).requireReader(11L, Set.of("PLATFORM_ADMIN"), "BLD001");
+        order.verify(repository).findCurrentFormalMonth("BLD001", batch.periodStart(), batch.periodEnd());
+        order.verify(repository).detail("MONTH_202610");
+        verify(persistence, never()).timeout(anyString(), any(LocalDateTime.class));
+        verify(ruleRepository, never()).findFactorVersion(anyString());
+    }
+
+    @Test
+    void rejectsMonthReadOutsideTheAuthorizedBuildingBeforeQueryingCandidates() {
+        org.mockito.Mockito.doThrow(CarbonErrors.error(403, "CARBON_FORBIDDEN", "无建筑权限"))
+                .when(authorization).requireReader(11L, Set.of("PLATFORM_ADMIN"), "BLD001");
+
+        assertThatThrownBy(() -> service.monthResults(11L, Set.of("PLATFORM_ADMIN"), "BLD001",
+                List.of("2026-10"))).hasMessageContaining("无建筑权限");
+
+        verify(repository, never()).findCurrentFormalMonth(anyString(), any(), any());
+    }
+
+    @Test
+    void rejectsDuplicateMonthRequestsWithoutQueryingCandidates() {
+        assertThatThrownBy(() -> service.monthResults(11L, Set.of("PLATFORM_ADMIN"), "BLD001",
+                List.of("2026-10", "2026-10")))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(CarbonErrors.VALIDATION_FAILED);
+
+        verify(repository, never()).findCurrentFormalMonth(anyString(), any(), any());
+    }
+
+    @Test
+    void returnsMissingAmbiguousAndFailedPerRequestedMonthWithoutSelectingAConflict() {
+        CalculationBatch first = monthlyBatch("CONFLICT_A", "2026-09", "DIRECT",
+                "COMPLETED_COMPLETE", 1);
+        CalculationBatch second = monthlyBatch("CONFLICT_B", "2026-09", "PUBLISHED",
+                "COMPLETED_COMPLETE", 1);
+        CalculationBatch inconsistent = monthlyBatch("INCONSISTENT", "2026-10", "DIRECT",
+                "COMPLETED_COMPLETE", 1);
+        when(repository.findCurrentFormalMonth("BLD001", monthStart("2026-08"), monthEnd("2026-08")))
+                .thenReturn(List.of());
+        when(repository.findCurrentFormalMonth("BLD001", first.periodStart(), first.periodEnd()))
+                .thenReturn(List.of(first, second));
+        when(repository.findCurrentFormalMonth("BLD001", inconsistent.periodStart(), inconsistent.periodEnd()))
+                .thenReturn(List.of(inconsistent));
+        when(repository.detail("INCONSISTENT"))
+                .thenReturn(new CalculationDetail(inconsistent, List.of(), List.of(), List.of()));
+
+        var results = service.monthResults(11L, Set.of("PLATFORM_ADMIN"), "BLD001",
+                List.of("2026-08", "2026-09", "2026-10"));
+
+        assertThat(results).extracting(CarbonCalculationService.MonthlyCalculationResult::state)
+                .containsExactly(CarbonCalculationService.MonthlyCalculationState.MISSING,
+                        CarbonCalculationService.MonthlyCalculationState.AMBIGUOUS,
+                        CarbonCalculationService.MonthlyCalculationState.FAILED);
+        assertThat(results.get(1).conflictBatchIds()).containsExactly("CONFLICT_A", "CONFLICT_B");
+        assertThat(results.get(1).detail()).isNull();
+        assertThat(results.get(2).reason()).isEqualTo("固定结果详情不完整");
     }
 
     @Test
@@ -355,4 +451,38 @@ class CarbonCalculationServiceTest {
                 1, 1, false, null, null, 11L, now);
         return new CalculationDetail(batch, List.of(), List.of(), List.of());
     }
+
+    private static CalculationBatch monthlyBatch(String id, String month, String publication,
+                                                 String status, int detailCount) {
+        LocalDateTime now = LocalDateTime.of(2026, 10, 1, 12, 0);
+        return new CalculationBatch(id, "BLD001", PeriodType.MONTH, monthStart(month), monthEnd(month),
+                "Asia/Shanghai", ResultNature.FORMAL, publication, status, "source-" + id,
+                "HASH", null, "ROUNDING_FROZEN", null, now, now.plusSeconds(20), now,
+                1L, 1, detailCount, false, null, null, 11L, now);
+    }
+
+    private static CalculationDetail monthlyDetail(CalculationBatch batch) {
+        StoredCalculationItem item = new StoredCalculationItem("ITEM_" + batch.batchId(), batch.batchId(),
+                "SNAPSHOT", "ELECTRICITY", ScopeType.SCOPE_2, BigDecimal.TEN, "KWH",
+                "FACTOR_FROZEN", "FORMULA_FROZEN", "GWP_FROZEN", new BigDecimal("5.000000"),
+                "LOCKED", "e".repeat(64));
+        SummaryMetric summary = new SummaryMetric("TOTAL_EMISSION", "ALL", new BigDecimal("5"),
+                new BigDecimal("5.000000"), "KG_CO2E", null, null, "s".repeat(64));
+        return new CalculationDetail(batch, List.of(item), List.of(), List.of(summary));
+    }
+
+    private static Instant monthStart(String month) {
+        return YearMonth.parse(month).atDay(1).atStartOfDay(ZoneId.of("Asia/Shanghai")).toInstant();
+    }
+
+    private static Instant monthEnd(String month) {
+        return YearMonth.parse(month).plusMonths(1).atDay(1)
+                .atStartOfDay(ZoneId.of("Asia/Shanghai")).toInstant();
+    }
+    @Test void nativeDayCannotFallThroughIntoMonthReportCalculation() {
+        assertThatThrownBy(()->service.run(11L,Set.of("PLATFORM_ADMIN"),new RunCalculationRequest("BLD001","DAY",START,START.plusSeconds(86400),"Asia/Shanghai","FORMAL","day")))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("daily-static-calculations");
+        org.mockito.Mockito.verifyNoInteractions(input,ruleRepository,repository);
+    }
+
 }

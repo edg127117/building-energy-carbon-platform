@@ -1,0 +1,15 @@
+export default {
+  title: '碳排放计划与配额', description: '每栋建筑每年维护一份计划，生效后自动读取正式月度核算。',
+  year: '计划年度', version: '计划版本', sourceYear: '已有基准年', previewYear: '读取全年基准',
+  sourceMode: '基准来源', formal: '选择已有基准年', imported: '一次导入基准表', source: '来源说明',
+  boundary: '核算边界', nature: '资料性质', external: '经专业确认的外部资料', test: '隔离测试模拟资料',
+  upload: '选择基准表', fileHint: '单张.xlsx表，表头：月份、月碳排、单位、来源；随后1至12月，单位tCO2e，不接受公式。',
+  reduction: '计划消减率（%）', annual: '固定年基准（tCO2e）', month: '月份', value: '月基准（tCO2e）',
+  create: '新建或修订年度计划', save: '保存计划', submit: '提交审核', approve: '审核通过', activate: '生效', reject: '退回', withdraw: '撤回',
+  reason: '操作说明', empty: '尚无年度计划，请选择建筑与年度后新建。', noBaseline: '读取或导入完整基准后预览。',
+  refresh: '刷新', restore: '还原', evidence: '来源证据', scope: '仅保存基准与目标，不生成或封账实际月排放。',
+  cutoff: '实际累计截至 {month}', noCompleted: '尚无已结束月',
+  sourceContext: '{source} · {boundary}',
+  readStatus: { NO_ACTIVE_PLAN: '尚无生效计划', NO_COMPLETED_MONTH: '尚无已结束月', PERIOD_NOT_ENDED: '所选期间尚未结束', INCOMPLETE_ACTUAL: '实际结果缺月，累计与剩余配额不可用', COMPLETE: '截止期间结果完整' },
+  status: { DRAFT: '草稿', PENDING_REVIEW: '待独立审核', APPROVED: '已审核待生效', ACTIVE: '已生效', RETIRED: '历史版本' },
+}

@@ -184,6 +184,12 @@ public final class CarbonContracts {
             String roundingPolicyVersionId) {
     }
 
+    /** 单个北京自然月的正式固定结果；冲突和失败不返回任意一个批次。 */
+    public record MonthlyCalculationResultView(
+            String month, String state, String reason, List<String> conflictBatchIds,
+            CalculationBatchView batch) {
+    }
+
     public record RecalculationItemView(
             String recalculationItemId, String buildingId, int accountingYear,
             String oldCalculationBatchId, String candidateCalculationBatchId,

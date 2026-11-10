@@ -3,6 +3,7 @@ export { routes } from './routes'
 export { useAssetManagement } from './composables/use-asset-management'
 export { useEquipmentReadings } from './composables/use-equipment-readings'
 export { useMeterCoverage } from './composables/use-meter-coverage'
+export { listAssetLedger } from './api/assets'
 export { flattenSpaces } from './models/assets'
 export { default as MeterRealtimeBoard } from './components/meter/MeterRealtimeBoard.vue'
 export {
@@ -15,6 +16,7 @@ export {
   isMeterEquipment,
 } from './components/meter/meter-display'
 export type { MeterCoverageUpdate, MeterCoverageView, MeterTarget } from './models/meter-coverage'
+export type { AssetLedgerPage, AssetLedgerQuery } from './models/ledger'
 export type {
   AssetBuilding,
   AssetEquipment,

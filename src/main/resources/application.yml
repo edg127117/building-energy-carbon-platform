@@ -319,6 +319,13 @@ audit-governance:
   retention-cleanup-batch-size: ${AUDIT_RETENTION_CLEANUP_BATCH_SIZE:500}
   retention-cleanup-max-batches: ${AUDIT_RETENTION_CLEANUP_MAX_BATCHES:20}
 
+carbon-display-query:
+  # 与前端VITE_SCREEN_BUILDING_CODE使用同一建筑编码；未指定时不启用主动预热。
+  # 账号复用既有授权，建议专用BUILDING_OWNER只读账号；不创建账号或自动授予职责。
+  prewarm-targets:
+    - building-code: ${SCREEN_BUILDING_CODE:}
+      actor-id: ${SCREEN_TASK_ACTOR_ID:0}
+
 # 天气候选模块默认关闭；启用前确认建筑坐标/区县映射和执行账号的现有职责。
 weather:
   enabled: ${WEATHER_ENABLED:false}

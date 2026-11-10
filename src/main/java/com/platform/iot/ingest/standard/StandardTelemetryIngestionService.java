@@ -213,21 +213,23 @@ public class StandardTelemetryIngestionService {
     }
 
     private String validateEnvelope(StandardTelemetryMessage message, long localReceivedTime) {
-        if (message == null
-                || !"1.0".equals(message.standardVersion())
-                || message.profileCode() == null || message.profileCode().isBlank()
-                || message.profileVersion() <= 0
-                || message.deviceIdentity() == null
-                || message.eventTime() < MIN_MILLISECOND_TIMESTAMP
-                || message.eventTime() >= MAX_MILLISECOND_TIMESTAMP_EXCLUSIVE
-                || message.receivedTime() <= 0
-                || localReceivedTime <= 0
-                || !("DEVICE_REPORTED".equals(message.timeSource())
-                || "SERVER_RECEIVED".equals(message.timeSource()))
-                || message.seq() != null && message.seq() < 0
-                || message.metrics() == null || message.metrics().isEmpty() || message.metrics().size()>500) {
+        String problem=validateIdentityEnvelope(message,localReceivedTime);
+        if(problem!=null)return problem;
+        if(message.electricityInterval()!=null||message.metrics()==null||message.metrics().isEmpty()||message.metrics().size()>500)
+            return "标准报文指标列表无效或包含未路由的周期载荷";
+        return null;
+    }
+
+    /** 数值遥测和设备周期量共用身份信封校验，后续载荷校验分别执行。 */
+    static String validateIdentityEnvelope(StandardTelemetryMessage message,long localReceivedTime) {
+        if(message==null||!"1.0".equals(message.standardVersion())
+                ||message.profileCode()==null||message.profileCode().isBlank()||message.profileCode().length()>64
+                ||message.profileVersion()<=0||message.deviceIdentity()==null
+                ||message.eventTime()<MIN_MILLISECOND_TIMESTAMP||message.eventTime()>=MAX_MILLISECOND_TIMESTAMP_EXCLUSIVE
+                ||message.receivedTime()<=0||localReceivedTime<=0
+                ||!("DEVICE_REPORTED".equals(message.timeSource())||"SERVER_RECEIVED".equals(message.timeSource()))
+                ||message.seq()!=null&&message.seq()<0)
             return "标准报文结构、版本或时间字段无效";
-        }
         return null;
     }
 

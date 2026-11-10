@@ -116,7 +116,7 @@ class NativeQuantityAggregationServiceTest {
         CorrectionEvidence correction = new CorrectionEvidence("CORRECTION", "CORRECTION_V1", "end",
                 new BigDecimal("90"), new BigDecimal("140"), "校正", EvidenceStatus.APPROVED,
                 "审核校正依据", 101, 202L, true);
-        when(governance.approvedEvents("BLD001", "POINT001", START, END, 1_001))
+        when(governance.approvedEventsAt(eq("BLD001"), eq("POINT001"), eq(START), eq(END), any(Instant.class), eq(1_001)))
                 .thenReturn(List.of(event));
         when(governance.approvedCorrections(eq("BLD001"), eq("POINT001"), any(Instant.class))).thenReturn(List.of(correction));
 
@@ -125,7 +125,7 @@ class NativeQuantityAggregationServiceTest {
 
         verify(authorization).requireRunner(7L, List.of("ENERGY_MANAGER"));
         verify(authorization).checkBuilding(7L, List.of("ENERGY_MANAGER"), "BLD001");
-        verify(governance).approvedEvents("BLD001", "POINT001", START, END, 1_001);
+        verify(governance).approvedEventsAt(eq("BLD001"), eq("POINT001"), eq(START), eq(END), any(Instant.class), eq(1_001));
         verify(governance).approvedCorrections(eq("BLD001"), eq("POINT001"), any(Instant.class));
         assertThat(evidence.meterEvents()).containsExactly(event);
         assertThat(evidence.corrections()).containsExactly(correction);
@@ -133,7 +133,7 @@ class NativeQuantityAggregationServiceTest {
 
     @Test
     void rejectsGovernedEvidenceThatExceedsTheSingleReadLimit() {
-        when(governance.approvedEvents("BLD001", "POINT001", START, END, 1_001))
+        when(governance.approvedEventsAt(eq("BLD001"), eq("POINT001"), eq(START), eq(END), any(Instant.class), eq(1_001)))
                 .thenReturn(Collections.nCopies(1_001,
                         event(MeterEventType.RESET, START.plusSeconds(1_800), "110", "0", null)));
         when(governance.approvedCorrections(eq("BLD001"), eq("POINT001"), any(Instant.class))).thenReturn(List.of());

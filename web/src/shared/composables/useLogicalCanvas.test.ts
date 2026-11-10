@@ -68,20 +68,29 @@ describe('useLogicalCanvas', () => {
     })
   })
 
-  it('letterboxes non-16:9 containers while preserving one scale', async () => {
+  it('fills non-16:9 containers by extending layout while preserving one scale', async () => {
     const wrapper = mount(LogicalCanvasHarness)
 
     await resize(wrapper, 1000, 1000)
     expect(wrapper.vm.scale).toBeCloseTo(1000 / 1920)
     let canvas = wrapper.get('[data-test="canvas"]').element as HTMLElement
     expect(Number.parseFloat(canvas.style.left)).toBeCloseTo(0)
-    expect(Number.parseFloat(canvas.style.top)).toBeCloseTo(218.75)
+    expect(Number.parseFloat(canvas.style.top)).toBeCloseTo(0)
+    expect(Number.parseFloat(canvas.style.width) * wrapper.vm.scale).toBeCloseTo(1000)
+    expect(Number.parseFloat(canvas.style.height) * wrapper.vm.scale).toBeCloseTo(1000)
 
     await resize(wrapper, 1600, 600)
     expect(wrapper.vm.scale).toBeCloseTo(600 / 1080)
     canvas = wrapper.get('[data-test="canvas"]').element as HTMLElement
-    expect(Number.parseFloat(canvas.style.left)).toBeCloseTo(266.6666666667)
+    expect(Number.parseFloat(canvas.style.left)).toBeCloseTo(0)
     expect(Number.parseFloat(canvas.style.top)).toBeCloseTo(0)
+    expect(Number.parseFloat(canvas.style.width) * wrapper.vm.scale).toBeCloseTo(1600)
+    expect(Number.parseFloat(canvas.style.height) * wrapper.vm.scale).toBeCloseTo(600)
+
+    await resize(wrapper, 1280, 720)
+    expect(wrapper.vm.scale).toBeCloseTo(2 / 3)
+    expect(canvas.style.width).toBe('1920px')
+    expect(canvas.style.height).toBe('1080px')
   })
 
   it('keeps a safe finite default for zero-sized containers and disconnects', async () => {

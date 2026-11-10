@@ -43,6 +43,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.ThreadLocalRandom;
 
 import javax.net.ssl.HttpsURLConnection;
@@ -54,12 +55,13 @@ import javax.net.ssl.HttpsURLConnection;
         havingValue = "true",
         matchIfMissing = true)
 /**
- * 本地平台旧单点与标准多字段 MQTT 连接入口。
+ * 本地平台旧单点、标准多字段及V2 MQTT连接入口。
  *
- * <p>该配置连接云端 EMQX，并按精确 Topic 把旧单点报文交给
+ * <p>该配置连接指定Broker，并按精确Topic把旧单点报文交给
  * {@link HvacMqttMessageHandler}，把标准多字段报文交给
  * {@link StandardTelemetryMqttMessageHandler}。配置层只负责协议路由和 QoS 1 ACK，
- * 不解析设备归属，也不直接访问 MySQL 或 TDengine。</p>
+ * 不解析设备归属，也不直接访问MySQL或TDengine。V2应用ACK在回调外发布，
+ * 发布成功后才确认原始入站消息；失败保留冻结回执和重投条件。</p>
  *
  * <p>业务拒绝和无法通过重投修复的 JSON 毒消息会确认；本地配置快照不可用、
  * TDengine 写入失败或未分类运行时异常不确认。初次连接失败由独立调度器持续重试，
@@ -81,6 +83,7 @@ public class MqttConfig {
     private final MqttFailureEvidenceRecorder failureEvidenceRecorder;
     private final AtomicBoolean connecting = new AtomicBoolean();
     private final AtomicInteger consecutiveFailures = new AtomicInteger();
+    private final AtomicLong connectionEpoch = new AtomicLong();
 
     @Value("${mqtt.broker-url}")
     private String brokerUrl;
@@ -139,7 +142,7 @@ public class MqttConfig {
         this.failureEvidenceRecorder = failureEvidenceRecorder;
     }
 
-    /** 首次连接失败后的单线程重试调度器，不承载 MQTT 消息业务处理。 */
+    /** 连接重试与应用ACK发布共用单线程；业务计算不在这里执行，发布有独立超时。 */
     @Bean(name = "mqttTaskScheduler", destroyMethod = "shutdown")
     public ThreadPoolTaskScheduler mqttTaskScheduler() {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
@@ -151,7 +154,8 @@ public class MqttConfig {
     /** 创建拥有固定 clientId 的本地订阅客户端，稳定会话由 cleanSession=false 保留。 */
     @Bean
     public IMqttClient mqttClient() throws MqttException {
-        return new MqttClient(brokerUrl, clientId, new MemoryPersistence());
+        var client=new MqttClient(brokerUrl, clientId, new MemoryPersistence());
+        client.setTimeToWait(10000);return client;
     }
 
     /** 应用启动后注册回调并尝试连接；连接失败不阻断平台其他模块启动。 */
@@ -164,7 +168,7 @@ public class MqttConfig {
                 return;
             }
             client.setManualAcks(true);
-            client.setCallback(callback(client));
+            client.setCallback(callback(client,scheduler));
             connectOrScheduleRetry(client, scheduler);
         };
     }
@@ -239,7 +243,7 @@ public class MqttConfig {
         };
     }
 
-    private MqttCallbackExtended callback(IMqttClient client) {
+    private MqttCallbackExtended callback(IMqttClient client,TaskScheduler scheduler) {
         return new MqttCallbackExtended() {
             @Override
             public void connectComplete(boolean reconnect, String serverURI) {
@@ -256,6 +260,7 @@ public class MqttConfig {
 
             @Override
             public void connectionLost(Throwable cause) {
+                connectionEpoch.incrementAndGet();
                 log.warn("MQTT连接断开，等待自动重连: {}",
                         cause == null ? "unknown" : cause.getMessage());
             }
@@ -263,6 +268,7 @@ public class MqttConfig {
             @Override
             public void messageArrived(String topic, MqttMessage message) {
                 boolean acknowledge = true;
+                boolean deferredAck=false;
                 V2ProcessingResult v2Result = null;
                 try {
                     byte[] payloadBytes = message.getPayload();
@@ -288,9 +294,11 @@ public class MqttConfig {
                         if (acknowledge && v2Result.requiresApplicationAck()) {
                             byte[] ackPayload = objectMapper.writeValueAsBytes(
                                     v2Result.applicationAck());
-                            client.publish(v2Result.ackTopic(), ackPayload, 1, false);
-                            meterRegistry.counter("iot.telemetry.v2.application_ack",
-                                    "result", "published").increment();
+                            var result=v2Result;
+                            // ACK同步发布也不能占用Paho回调；发布完成后才确认原始V2消息。
+                            long epoch=connectionEpoch.get();
+                            scheduler.schedule(()->publishApplicationAck(client,scheduler,topic,message,result,ackPayload,epoch,1),Instant.now());
+                            deferredAck=true;acknowledge=false;
                         }
                         log.debug("V2 MQTT 报文处理完成: resultCode={}, ackMode={}, metrics={}",
                                 v2Result.resultCode(), v2Result.actualAckMode(),
@@ -323,16 +331,6 @@ public class MqttConfig {
                         return;
                     }
                     log.warn("拒绝未配置路由的MQTT主题并确认丢弃: topic={}", topic);
-                } catch (MqttException exception) {
-                    acknowledge = false;
-                    if (v2Result != null) {
-                        meterRegistry.counter("iot.telemetry.v2.application_ack",
-                                "result", "failed").increment();
-                        telemetryV2MqttMessageHandler.recordApplicationAckFailure(
-                                v2Result.canonicalMessageId(),
-                                "MQTT_QOS1_APPLICATION_ACK_PUBLISH_FAILED");
-                    }
-                    log.error("V2 应用 ACK 发布失败，保留原消息重投: topic={}", topic);
                 } catch (IOException | IllegalArgumentException exception) {
                     log.warn("MQTT报文JSON格式错误，已确认丢弃: topic={}, reason={}",
                             topic, exception.getMessage());
@@ -350,7 +348,7 @@ public class MqttConfig {
                             meterRegistry.counter("iot.telemetry.v2.inbound_ack", "result",
                                     inboundAckObserved ? "completed" : "failed").increment();
                         }
-                    } else if (v2Result != null) {
+                    } else if (v2Result != null&&!deferredAck) {
                         meterRegistry.counter("iot.telemetry.v2.inbound_ack", "result", "failed")
                                 .increment();
                     }
@@ -359,9 +357,31 @@ public class MqttConfig {
 
             @Override
             public void deliveryComplete(IMqttDeliveryToken token) {
-                // 本客户端只订阅设备上行，没有平台下行发布，空实现仅满足 Paho 回调契约。
+                // 应用ACK的完成与入站确认由发布任务处理，此回调不重复确认。
             }
         };
+    }
+
+    private void publishApplicationAck(IMqttClient client,TaskScheduler scheduler,String topic,MqttMessage message,V2ProcessingResult result,byte[] payload,long epoch,int attempt) {
+        // 重连可能重新使用包编号；旧连接的延后任务只能由Broker重投恢复，不能确认新连接中的其他消息。
+        if(connectionEpoch.get()!=epoch)return;
+        try {
+            client.publish(result.ackTopic(),payload,1,false);
+            meterRegistry.counter("iot.telemetry.v2.application_ack","result","published").increment();
+            if(connectionEpoch.get()!=epoch)return;
+            boolean observed=acknowledge(client,topic,message);
+            meterRegistry.counter("iot.telemetry.v2.inbound_ack","result",observed?"completed":"failed").increment();
+        } catch(MqttException|RuntimeException failure) {
+            meterRegistry.counter("iot.telemetry.v2.application_ack","result","failed").increment();
+            meterRegistry.counter("iot.telemetry.v2.inbound_ack","result","failed").increment();
+            // 在线发布窗口暂满时Broker未必立即重投；复用既有调度器有限重试同一冻结ACK，不再执行接入业务。
+            if(attempt<3&&connectionEpoch.get()==epoch)
+                scheduler.schedule(()->publishApplicationAck(client,scheduler,topic,message,result,payload,epoch,attempt+1),
+                        Instant.now().plusMillis(Math.max(1,initialRetryMillis)));
+            telemetryV2MqttMessageHandler.recordApplicationAckFailure(result.canonicalMessageId(),"MQTT_QOS1_APPLICATION_ACK_PUBLISH_FAILED");
+            log.warn("V2应用ACK发布失败，保留原消息: topic={}, attempt={}, mqttReason={}",topic,attempt,
+                    failure instanceof MqttException mqtt?mqtt.getReasonCode():"RUNTIME");
+        }
     }
 
     private void subscribeUpstream(IMqttClient client) throws MqttException {

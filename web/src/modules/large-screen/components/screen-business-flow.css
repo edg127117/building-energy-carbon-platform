@@ -1,0 +1,15 @@
+.business-flow { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.business-flow-head { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--bec-screen-space-6); padding: var(--bec-screen-space-4) 0; text-align: center; color: var(--bec-screen-selected); font-size: var(--bec-screen-font-small); font-weight: var(--bec-screen-weight); }
+.business-flow-head span { padding: var(--bec-screen-space-2) var(--bec-screen-space-6); background: var(--bec-screen-glass-subcard); border: var(--bec-screen-border-width) solid var(--bec-screen-card-outline); border-radius: var(--bec-ref-radius-pill); }
+.business-flow-structure { display: grid; grid-template-columns: 1.2fr .85fr 1fr; gap: var(--bec-screen-space-12); flex: 1; min-height: 0; padding: var(--bec-screen-space-8) 0; }
+.purpose-nodes, .floor-nodes { display: flex; flex-direction: column; justify-content: space-around; gap: var(--bec-screen-space-8); }
+.purpose-nodes span, .floor-nodes span { display: flex; align-items: center; gap: var(--bec-screen-space-6); font-size: var(--bec-screen-font-small); white-space: nowrap; }
+.purpose-nodes i, .floor-nodes i { width: var(--bec-screen-space-6); height: var(--bec-screen-space-18); background: var(--bec-screen-blue-soft); border-radius: var(--bec-screen-radius); }
+.purpose-nodes span:nth-child(2n) i { background: var(--bec-screen-cyan); }
+.floor-nodes { align-items: center; }
+.floor-nodes i { background: var(--bec-screen-divider); }
+.business-flow-total { align-self: center; padding-left: var(--bec-screen-space-12); border-left: var(--bec-screen-space-4) solid var(--bec-screen-divider); display: grid; gap: var(--bec-screen-space-8); font-size: var(--bec-screen-font-small); }
+.business-flow-total strong { font-size: var(--bec-screen-font-number); }
+.flow-pending { color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); margin-top: var(--bec-screen-space-4); }
+.business-flow :deep(.chart-view) { flex: 1; min-height: 0; }
+.business-flow-empty { display: grid; place-items: center; flex: 1; min-height: 0; color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); text-align: center; }

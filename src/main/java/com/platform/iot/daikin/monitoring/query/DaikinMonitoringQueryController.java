@@ -26,6 +26,23 @@ import static com.platform.iot.daikin.monitoring.query.DaikinMonitoringQueryDtos
 /** 只返回平台已绑定设备的范围受控状态；温度沿独立质量门禁接口查询。 */
 public class DaikinMonitoringQueryController {
     private final DaikinMonitoringQueryService service;
+    private final DaikinBuildingMonitoringService buildingMonitoring;
+
+    @GetMapping("/buildings/{buildingId}/device-summary")
+    @Operation(summary = "完整汇总建筑内正式启用大金内机的开关、模式与风速；未知不等于关机")
+    public Result<DaikinBuildingMonitoringDtos.DeviceSummary> deviceSummary(Authentication authentication,
+            @PathVariable String buildingId) {
+        return Result.success(buildingMonitoring.summary(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId));
+    }
+
+    @GetMapping("/buildings/{buildingId}/runtime-ranking")
+    @Operation(summary = "按设备查询指定月的平台观测开机时长排名；缺测不补算，不做房间历史归因")
+    public Result<DaikinBuildingMonitoringDtos.RuntimeRanking> runtimeRanking(Authentication authentication,
+            @PathVariable String buildingId, @RequestParam String month, @RequestParam(defaultValue = "5") int limit) {
+        return Result.success(buildingMonitoring.ranking(SecurityUser.userId(authentication),
+                SecurityUser.roles(authentication), buildingId, month, limit));
+    }
 
     @GetMapping("/buildings/{buildingId}/spaces")
     public Result<java.util.List<SpaceOption>> spaces(Authentication authentication, @PathVariable String buildingId) {

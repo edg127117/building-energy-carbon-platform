@@ -240,7 +240,7 @@ public class TemperaturePlanService {
         if (target == null || !target.getEquipId().equals(point.getEquipId())
                 || !target.getBuildingId().equals(point.getBuildingId())
                 || !Objects.equals(target.getSystemGroupId(), point.getSystemGroupId())
-                || !"AI".equals(point.getDataType()) || !"ONLINE".equals(point.getStatus())
+                || !TemperaturePointTypes.isAnalog(point.getDataType()) || !"ONLINE".equals(point.getStatus())
                 || !Integer.valueOf(0).equals(point.getIsForCalc()) || !template.getUnit().equals(point.getUnit())
                 || !template.getSuffixCode().equals(point.getSuffixCode())) throw invalid("已有测点归属、单位或语义不兼容");
     }
@@ -361,7 +361,7 @@ public class TemperaturePlanService {
                     adapter.alias(pending, b.get("metric_code").toString())));
             if (point.isEmpty() || !point.get().pointId().equals(b.get("point_id"))
                     || !Objects.equals(point.get().equipId(), b.get("equipment_id"))
-                    || !"AI".equals(point.get().dataType()) || !"ONLINE".equals(point.get().status())
+                    || !TemperaturePointTypes.isAnalog(point.get().dataType()) || !"ONLINE".equals(point.get().status())
                     || !adapter.unit().equals(point.get().unit()) || point.get().isForCalc() != 0) return "CACHE_PENDING";
         }
         return "CONFIGURED";

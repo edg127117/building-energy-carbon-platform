@@ -266,6 +266,8 @@ class MqttConfigTest {
             HvacMqttMessageHandler handler,
             StandardTelemetryMqttMessageHandler standardHandler) {
         TaskScheduler scheduler = mock(TaskScheduler.class);
+        org.mockito.Mockito.doAnswer(a->{if(!((Instant)a.getArgument(1)).isAfter(Instant.now().plusMillis(100)))((Runnable)a.getArgument(0)).run();return null;})
+                .when(scheduler).schedule(any(Runnable.class),any(Instant.class));
         TelemetryV2MqttMessageHandler v2Handler =
                 mock(TelemetryV2MqttMessageHandler.class);
         MqttTlsProperties tls = new MqttTlsProperties();
@@ -295,11 +297,67 @@ class MqttConfigTest {
         return new ConfigFixture(config, scheduler, v2Handler, meterRegistry);
     }
 
+    @Test
+    void applicationAckIsPublishedOutsideCallbackAndOnlyThenCompletesInbound() throws Exception {
+        IMqttClient client=mock(IMqttClient.class);
+        var f=configuredConfig(mock(HvacMqttMessageHandler.class),mock(StandardTelemetryMqttMessageHandler.class));
+        var ack=new PlatformApplicationAck("1.0","P1",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",1L,2L,AckMode.ADAPTER_PROXY,"ADAPTER_ONLY");
+        when(f.v2Handler().handle(any(byte[].class),anyLong())).thenReturn(new V2ProcessingResult("P1",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",0,false,AckMode.ADAPTER_PROXY,"own/ack",ack,null));
+        f.config().initMqttClient(client,f.scheduler()).run();org.mockito.Mockito.reset(f.scheduler());
+        capturedCallback(client).messageArrived("platform/telemetry/v2/up",mqttMessage(60,"{}"));
+        verify(client,never()).publish(any(String.class),any(byte[].class),any(Integer.class),any(Boolean.class));
+        verify(client,never()).messageArrivedComplete(60,1);
+        var task=ArgumentCaptor.forClass(Runnable.class);verify(f.scheduler()).schedule(task.capture(),any(Instant.class));task.getValue().run();
+        var ordered=inOrder(client);ordered.verify(client).publish(any(String.class),any(byte[].class),any(Integer.class),any(Boolean.class));ordered.verify(client).messageArrivedComplete(60,1);
+    }
+
     private MqttCallback capturedCallback(IMqttClient client) throws Exception {
         ArgumentCaptor<MqttCallback> captor =
                 ArgumentCaptor.forClass(MqttCallback.class);
         verify(client).setCallback(captor.capture());
         return captor.getValue();
+    }
+    @org.junit.jupiter.api.Test
+    void retriesTemporaryApplicationAckFailureWithoutRepeatingIngestion() throws Exception {
+        var client=mock(IMqttClient.class);var f=configuredConfig(mock(HvacMqttMessageHandler.class),mock(StandardTelemetryMqttMessageHandler.class));
+        var ack=new PlatformApplicationAck("1.0","RETRY",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",1L,2L,AckMode.ADAPTER_PROXY,"ADAPTER_ONLY");
+        when(f.v2Handler().handle(any(byte[].class),anyLong())).thenReturn(new V2ProcessingResult("RETRY",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",0,false,AckMode.ADAPTER_PROXY,"own/ack",ack,null));
+        f.config().initMqttClient(client,f.scheduler()).run();org.mockito.Mockito.reset(f.scheduler());
+        var jobs=new java.util.ArrayList<Runnable>();org.mockito.Mockito.doAnswer(a->{jobs.add(a.getArgument(0));return null;}).when(f.scheduler()).schedule(any(Runnable.class),any(Instant.class));
+        org.mockito.Mockito.doThrow(new MqttException(32202)).doNothing().when(client).publish(any(String.class),any(byte[].class),org.mockito.ArgumentMatchers.eq(1),org.mockito.ArgumentMatchers.eq(false));
+        capturedCallback(client).messageArrived("platform/telemetry/v2/up",mqttMessage(61,"{}"));jobs.getFirst().run();
+        verify(client,never()).messageArrivedComplete(61,1);assertThat(jobs).hasSize(2);
+        jobs.get(1).run();verify(client).messageArrivedComplete(61,1);verify(f.v2Handler()).handle(any(byte[].class),anyLong());
+        verify(client,org.mockito.Mockito.times(2)).publish(any(String.class),any(byte[].class),org.mockito.ArgumentMatchers.eq(1),org.mockito.ArgumentMatchers.eq(false));
+    }
+    @org.junit.jupiter.api.Test
+    void ackRetryIsBoundedAndNeverAcknowledgesOldPacketAfterReconnect() throws Exception {
+        var client=mock(IMqttClient.class);var f=configuredConfig(mock(HvacMqttMessageHandler.class),mock(StandardTelemetryMqttMessageHandler.class));
+        var ack=new PlatformApplicationAck("1.0","RETRY",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",1L,2L,AckMode.ADAPTER_PROXY,"ADAPTER_ONLY");
+        when(f.v2Handler().handle(any(byte[].class),anyLong())).thenReturn(new V2ProcessingResult("RETRY",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",0,false,AckMode.ADAPTER_PROXY,"own/ack",ack,null));
+        f.config().initMqttClient(client,f.scheduler()).run();org.mockito.Mockito.reset(f.scheduler());
+        var jobs=new java.util.ArrayList<Runnable>();org.mockito.Mockito.doAnswer(a->{jobs.add(a.getArgument(0));return null;}).when(f.scheduler()).schedule(any(Runnable.class),any(Instant.class));
+        org.mockito.Mockito.doThrow(new MqttException(32202)).when(client).publish(any(String.class),any(byte[].class),org.mockito.ArgumentMatchers.eq(1),org.mockito.ArgumentMatchers.eq(false));
+        var callback=capturedCallback(client);callback.messageArrived("platform/telemetry/v2/up",mqttMessage(62,"{}"));
+        jobs.get(0).run();callback.connectionLost(new MqttException(32109));jobs.get(1).run();
+        verify(client,org.mockito.Mockito.times(1)).publish(any(String.class),any(byte[].class),org.mockito.ArgumentMatchers.eq(1),org.mockito.ArgumentMatchers.eq(false));verify(client,never()).messageArrivedComplete(62,1);
+        jobs.clear();callback.messageArrived("platform/telemetry/v2/up",mqttMessage(63,"{}"));
+        for(int i=0;i<jobs.size();i++)jobs.get(i).run();assertThat(jobs).hasSize(3);verify(client,never()).messageArrivedComplete(63,1);
+        verify(f.v2Handler(),org.mockito.Mockito.times(2)).handle(any(byte[].class),anyLong());
+    }
+
+    @Test
+    void connectionLostDuringAckPublishDoesNotAcknowledgeOldPacket() throws Exception {
+        var client=mock(IMqttClient.class);var f=configuredConfig(mock(HvacMqttMessageHandler.class),mock(StandardTelemetryMqttMessageHandler.class));
+        var ack=new PlatformApplicationAck("1.0","RECONNECT",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",1L,2L,AckMode.ADAPTER_PROXY,"ADAPTER_ONLY");
+        when(f.v2Handler().handle(any(byte[].class),anyLong())).thenReturn(new V2ProcessingResult("RECONNECT",ReceiptStatus.PERIOD_INPUT_PERSISTED,"PERIOD_INPUT_PERSISTED",0,false,AckMode.ADAPTER_PROXY,"own/ack",ack,null));
+        f.config().initMqttClient(client,f.scheduler()).run();
+        var callback=capturedCallback(client);
+        org.mockito.Mockito.doAnswer(a->{callback.connectionLost(new MqttException(32109));return null;})
+                .when(client).publish(any(String.class),any(byte[].class),org.mockito.ArgumentMatchers.eq(1),org.mockito.ArgumentMatchers.eq(false));
+        callback.messageArrived("platform/telemetry/v2/up",mqttMessage(64,"{}"));
+        verify(client,never()).messageArrivedComplete(64,1);
+        verify(f.v2Handler()).handle(any(byte[].class),anyLong());
     }
 
     private MqttMessage mqttMessage(int id, String payload) {

@@ -33,7 +33,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,8 +91,24 @@ class ManualPeriodInputServiceTest {
         verify(authorization, times(2)).requireReader(ROLES);
         verify(authorization, times(2)).checkBuilding(USER, ROLES, BUILDING);
         verify(manualRepository, times(2)).lock(BUILDING);
-        verify(manualRepository, times(2)).readings(BUILDING, SHANGHAI_START, SHANGHAI_END, true);
+        verify(manualRepository, times(2)).currentApprovedReadings(BUILDING, POINT, SHANGHAI_START, SHANGHAI_END, 1001);
         verify(relations, never()).versions(anyLong(), any(), anyString());
+    }
+
+    @Test
+    void preparesOneThirtyOneDayMonthFromAll744ReviewedHourlyFacts() {
+        List<ClassificationRepository.StoredReading> readings=new java.util.ArrayList<>();
+        for(int hour=0;hour<744;hour++) {
+            Instant start=SHANGHAI_START.plusSeconds(hour*3600L);
+            readings.add(stored("H"+hour,"HOURLY",reading(start,start.plusSeconds(3600),"1","EXACT")));
+        }
+        arrangeFormalShanghai(readings);
+        arrangeConfirmedShanghaiBinding();
+        var request=new ManualPeriodInputService.Request(POINT,MONTH,"POLICY-1","REL-1",
+                readings.stream().map(ClassificationRepository.StoredReading::id).toList(),0L,"完整小时来源");
+        var result=service.prepare(USER,ROLES,BUILDING,request);
+        assertThat(result.nativeQuantity()).isEqualByComparingTo("744");
+        assertThat(result.window().endExclusive()).isEqualTo(SHANGHAI_END);
     }
 
     @Test
@@ -106,7 +123,7 @@ class ManualPeriodInputServiceTest {
         verify(authorization).requireReader(ROLES);
         verify(authorization).checkBuilding(USER, ROLES, BUILDING);
         verify(manualRepository).lock(BUILDING);
-        verify(manualRepository, never()).readings(anyString(), any(), any(), eq(true));
+        verify(manualRepository, never()).currentApprovedReadings(anyString(), anyString(), any(), any(), anyInt());
         verifyNoInteractions(relations, catalog);
     }
 
@@ -135,7 +152,7 @@ class ManualPeriodInputServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(EnergyPeriodErrors.LOCK_BLOCKED);
 
-        verify(manualRepository, never()).readings(anyString(), any(), any(), eq(true));
+        verify(manualRepository, never()).currentApprovedReadings(anyString(), anyString(), any(), any(), anyInt());
         verifyNoInteractions(relations, catalog);
     }
 
@@ -152,6 +169,24 @@ class ManualPeriodInputServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(EnergyPeriodErrors.LOCK_BLOCKED);
 
+        verifyNoInteractions(catalog);
+    }
+
+    @Test
+    void rejectsMoreThanOneThousandCurrentFactsForTheRequestedPointWithoutReadingTheWholeBuilding() {
+        List<ClassificationRepository.StoredReading> tooMany = new java.util.ArrayList<>();
+        for (int index = 0; index <= 1000; index++) {
+            tooMany.add(stored("F" + index, "IMPORT-" + index,
+                    reading(SHANGHAI_START, SHANGHAI_END, "300", "EXACT")));
+        }
+        arrangeFormalShanghai(tooMany);
+
+        assertThatThrownBy(() -> service.prepare(USER, ROLES, BUILDING, request()))
+                .isInstanceOf(BusinessException.class)
+                .extracting("errorCode").isEqualTo(EnergyPeriodErrors.LOCK_BLOCKED);
+
+        verify(manualRepository).currentApprovedReadings(BUILDING, POINT, SHANGHAI_START, SHANGHAI_END, 1001);
+        verify(manualRepository, never()).readings(anyString(), any(), any(), anyBoolean());
         verifyNoInteractions(catalog);
     }
 
@@ -211,7 +246,7 @@ class ManualPeriodInputServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(EnergyPeriodErrors.LOCK_BLOCKED);
 
-        verify(manualRepository, never()).readings(anyString(), any(), any(), eq(true));
+        verify(manualRepository, never()).currentApprovedReadings(anyString(), anyString(), any(), any(), anyInt());
         verifyNoInteractions(catalog);
     }
 
@@ -226,7 +261,7 @@ class ManualPeriodInputServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting("errorCode").isEqualTo(EnergyPeriodErrors.LOCK_BLOCKED);
 
-        verify(manualRepository, times(2)).readings(BUILDING, SHANGHAI_START, SHANGHAI_END, true);
+        verify(manualRepository, times(2)).currentApprovedReadings(BUILDING, POINT, SHANGHAI_START, SHANGHAI_END, 1001);
     }
 
     @Test
@@ -262,7 +297,7 @@ class ManualPeriodInputServiceTest {
         when(policies.periodPolicyVersion("POLICY-1"))
                 .thenReturn(policy("Asia/Shanghai", "APPROVED", "FORMAL", null));
         arrangeRelation(LocalDateTime.of(2019, 12, 1, 0, 0), "REL-1");
-        when(manualRepository.readings(BUILDING, SHANGHAI_START, SHANGHAI_END, true))
+        when(manualRepository.currentApprovedReadings(BUILDING, POINT, SHANGHAI_START, SHANGHAI_END, 1001))
                 .thenReturn(first, second);
     }
 

@@ -60,6 +60,35 @@ class HistoricalConfigurationServiceTest {
         when(carbon.factor(anyLong(), anyCollection(), anyString(), anyString(), anyString(), any(), any(), anyString())).thenReturn("factor");
         when(carbon.area(anyLong(), anyCollection(), anyString(), any(), any(), anyString())).thenReturn("area");
     }
+
+    @Test void expectedDomainFailureReturnsBlockedWithoutPoisoningTheCallerTransaction() {
+        configured();
+        when(conversion.evaluateFormalRules(anyLong(),anyCollection(),any(),any()))
+                .thenThrow(new BusinessException(409,"ENERGY_CONVERSION_RULE_MISSING","没有适用折标参数"));
+        var datasource=new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:"+UUID.randomUUID()+";DB_CLOSE_DELAY=-1","sa","");
+        var transactions=new org.springframework.jdbc.datasource.DataSourceTransactionManager(datasource);
+        var conversionFactory=new org.springframework.aop.framework.ProxyFactory(conversion);
+        conversionFactory.setProxyTargetClass(true);
+        conversionFactory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+        var target=new HistoricalConfigurationService(authorization,classifications,policies,catalog,
+                (EnergyConversionService)conversionFactory.getProxy(),carbon,projects,summaries);
+        var coverageFactory=new org.springframework.aop.framework.ProxyFactory(target);
+        coverageFactory.setProxyTargetClass(true);
+        coverageFactory.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(transactions,
+                new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+        var proxied=(HistoricalConfigurationService)coverageFactory.getProxy();
+        var result=new org.springframework.transaction.support.TransactionTemplate(transactions).execute(status->{
+            var view=proxied.coverage(1,roles,"BUILDING",request());
+            assertThat(status.isRollbackOnly()).isFalse();
+            return view;
+        });
+        assertThat(result.configurationStatus()).isEqualTo("BLOCKED");
+        assertThat(result.executionStatus()).isEqualTo("NOT_RUN");
+        assertThat(result.checks()).filteredOn(check->"TCE_RULE".equals(check.domain())).singleElement()
+                .satisfies(check->assertThat(check.code()).isEqualTo("ENERGY_CONVERSION_RULE_MISSING"));
+    }
     @Test void formatPreviewCanPassWhileHistoricalConfigurationRemainsBlocked() {
         configured();
         when(policies.policyForPeriod(anyString(), any(), any())).thenThrow(new BusinessException(409, "期间未配置"));

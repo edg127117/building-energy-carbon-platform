@@ -1,0 +1,35 @@
+.intensity-summary { width: 100%; display: grid; flex: 1; min-height: 0; grid-template-rows: repeat(2,minmax(0,1fr)); gap: var(--bec-screen-space-6); }
+.intensity-summary.has-benchmarks { grid-template-rows: auto 1fr; }
+.intensity-row { min-width: 0; display: grid; grid-template-columns: var(--bec-screen-icon-32) minmax(0,1fr); align-items: center; gap: var(--bec-screen-space-8); padding: var(--bec-screen-space-6) var(--bec-screen-space-10); color: var(--bec-screen-ink); background: var(--bec-screen-glass-subcard); border: var(--bec-screen-border-width) solid var(--bec-screen-card-outline); border-radius: var(--bec-ref-radius-8); box-shadow: var(--bec-screen-shadow-subcard); }
+.intensity-row.has-out-of-range-ratio { border-color: var(--bec-screen-intensity-danger); }
+.intensity-icon { width: var(--bec-screen-icon-32); height: var(--bec-screen-icon-32); display: grid; place-items: center; color: var(--bec-ref-white); background: var(--bec-screen-metric-icon-teal); border-radius: var(--bec-ref-radius-8); box-shadow: var(--bec-screen-shadow-subcard); }
+.row-person .intensity-icon { background: var(--bec-screen-metric-icon-bg); }
+.intensity-main { min-width: 0; display: grid; gap: var(--bec-screen-space-5); }
+.intensity-label-line { min-width: 0; flex-wrap: nowrap; display: flex; align-items: baseline; justify-content: space-between; gap: var(--bec-screen-space-6); }
+.intensity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--bec-screen-font-small); font-weight: var(--bec-screen-title-weight); }
+.intensity-track { height: var(--bec-screen-bar-medium); display: flex; align-items: center; overflow: hidden; background: var(--bec-screen-track-bg); border-radius: var(--bec-ref-radius-pill); }
+.intensity-track[data-state=out-of-range] { border: var(--bec-screen-border-width) solid var(--bec-screen-intensity-danger); }
+.intensity-fill { display: block; height: 100%; min-width: 0; border-radius: inherit; background: linear-gradient(90deg,var(--bec-screen-blue),var(--bec-screen-cyan),var(--bec-screen-intensity-green)); }
+.intensity-ratio-missing { padding-inline: var(--bec-screen-space-6); color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); white-space: nowrap; }
+.intensity-value { margin-left: auto; min-width: 0; display: flex; align-items: baseline; justify-content: flex-end; gap: var(--bec-screen-space-4); white-space: nowrap; }
+.intensity-value strong { color: var(--bec-screen-ink); font-family: var(--bec-ref-family-number); font-size: var(--bec-ref-font-20); font-weight: var(--bec-screen-title-weight); line-height: var(--bec-screen-line-tight); font-variant-numeric: tabular-nums; }
+.intensity-value span { color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); }
+.intensity-benchmark-section { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--bec-screen-space-4); }
+.intensity-benchmarks { min-width: 0; min-height: 0; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: var(--bec-screen-space-6); }
+.benchmark-source-note { flex: 1; display: flex; align-items: center; justify-content: center; min-width: 0; }
+.benchmark-source-pill { min-width: 0; max-width: 100%; display: inline-flex; align-items: center; gap: var(--bec-screen-space-6); padding: var(--bec-screen-space-3) var(--bec-screen-space-4) var(--bec-screen-space-3) var(--bec-screen-space-10); color: var(--bec-screen-muted); font-size: var(--bec-ref-font-12); line-height: var(--bec-screen-line-tight); white-space: nowrap; background: var(--bec-screen-glass-pill); border: var(--bec-screen-border-width) solid var(--bec-screen-card-outline); border-radius: var(--bec-ref-radius-pill); box-shadow: var(--bec-screen-shadow-subcard); }
+.benchmark-source-icon { flex-shrink: 0; color: var(--bec-screen-blue); }
+.benchmark-source-label { color: var(--bec-screen-blue); font-weight: var(--bec-screen-title-weight); }
+.benchmark-source-divider { width: var(--bec-screen-border-width); height: var(--bec-screen-space-10); background: var(--bec-screen-card-outline); }
+.benchmark-source-doc { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--bec-screen-ink); }
+.benchmark-source-zone { flex-shrink: 0; padding: var(--bec-screen-space-2) var(--bec-screen-space-8); color: var(--bec-ref-white); font-weight: var(--bec-screen-title-weight); background: var(--bec-screen-metric-icon-teal); border-radius: var(--bec-ref-radius-pill); }
+.benchmark-card { min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: var(--bec-screen-space-4); padding: var(--bec-screen-space-4) var(--bec-screen-space-8); background: var(--bec-screen-glass-subcard); border: var(--bec-screen-border-width) solid var(--bec-screen-card-outline); border-left: var(--bec-screen-space-3) solid var(--bec-benchmark-tone); border-radius: var(--bec-ref-radius-8); box-shadow: var(--bec-screen-shadow-subcard); }
+.benchmark-head { display: flex; align-items: center; gap: var(--bec-screen-space-4); }
+.benchmark-head i { width: var(--bec-screen-space-6); height: var(--bec-screen-space-6); border-radius: var(--bec-ref-radius-pill); background: var(--bec-benchmark-tone); }
+.benchmark-label { color: var(--bec-screen-ink); font-size: var(--bec-screen-font-small); font-weight: var(--bec-screen-title-weight); line-height: var(--bec-screen-heading-line-height); white-space: nowrap; }
+.benchmark-reading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--bec-screen-space-2); white-space: nowrap; }
+.benchmark-reading strong { color: var(--bec-benchmark-tone); font-family: var(--bec-ref-family-number); font-size: var(--bec-ref-font-18); font-weight: var(--bec-screen-title-weight); line-height: var(--bec-screen-line-tight); font-variant-numeric: tabular-nums; }
+.benchmark-reading small { color: var(--bec-screen-muted); font-size: var(--bec-screen-font-small); }
+.tone-constraint { --bec-benchmark-tone: var(--bec-screen-factor-dynamic); }
+.tone-baseline { --bec-benchmark-tone: var(--bec-screen-blue); }
+.tone-guide { --bec-benchmark-tone: var(--bec-screen-device-green); }

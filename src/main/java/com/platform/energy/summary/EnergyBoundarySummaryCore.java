@@ -39,15 +39,28 @@ public class EnergyBoundarySummaryCore {
 
     public List<BoundaryAggregate> summarize(
             List<SnapshotMeasure> measures, List<AssignmentEvidence> assignments,
-            List<BoundaryPolicyVersion> policies) {
+            List<BoundaryPolicyVersion> policies, Map<String,Map<String,Set<String>>> ancestorsByVersion) {
         Map<MeasureKey, List<AssignmentEvidence>> assignmentIndex = assignments.stream()
                 .filter(value -> value.pointId() != null)
                 .collect(Collectors.groupingBy(value -> new MeasureKey(
                         value.relationVersionId(), value.pointId())));
-        List<MeterDatum> data = measures.stream()
+        List<MeterDatum> all = measures.stream()
                 .map(value -> datum(value, assignmentIndex.getOrDefault(
                         new MeasureKey(value.relationVersionId(), value.pointId()), List.of())))
                 .toList();
+        all.stream().collect(Collectors.groupingBy(MeterDatum::boundaryKey)).values().forEach(values -> {
+            if(values.stream().map(v->v.measure().pointId()).distinct().count()!=values.size())
+                relation("同一原生边界存在重复测点期间，不能因折标视角不同重复计入");
+        });
+        // 先校验全部来源，再去除已被同角色父表覆盖的子表；不能通过去重隐藏无效计量分配。
+        List<MeterDatum> data=all.stream().filter(value -> {
+            if(!Set.of("SUB","INDEPENDENT").contains(value.assignment().meterRole()))return true;
+            Set<String> ancestors=ancestorsByVersion.getOrDefault(value.measure().relationVersionId(),Map.of())
+                    .getOrDefault(value.measure().pointId(),Set.of());
+            return all.stream().noneMatch(parent->ancestors.contains(parent.measure().pointId())
+                    && parent.boundaryKey().equals(value.boundaryKey())
+                    && parent.assignment().meterRole().equals(value.assignment().meterRole()));
+        }).toList();
         Map<BoundaryKey, List<MeterDatum>> groups = data.stream()
                 .collect(Collectors.groupingBy(MeterDatum::boundaryKey,
                         LinkedHashMap::new, Collectors.toList()));

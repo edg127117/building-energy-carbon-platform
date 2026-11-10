@@ -292,6 +292,13 @@ public class EnergyAggregationGovernanceService {
                 .map(EnergyAggregationGovernanceService::eventEvidence).toList();
     }
 
+    List<MeterEventEvidence> approvedEventsAt(String building,String point,Instant from,Instant to,Instant asOf,int limit) {
+        // 事件发生时间沿用UTC存储，审核时间沿用服务本地时间；截止需使用各自既有语义。
+        return repository.listApprovedEventsAt(building,point,local(from),local(to),
+                LocalDateTime.ofInstant(asOf,java.time.ZoneId.systemDefault()),limit).stream()
+                .map(EnergyAggregationGovernanceService::eventEvidence).toList();
+    }
+
     private static MeterEventEvidence eventEvidence(EventVersionRow row) {
         return new MeterEventEvidence(row.eventId(), row.eventVersionId(), row.buildingId(),
                         row.meterPointId(), MeterEventType.valueOf(row.eventType()), instant(row.occurredAt()),

@@ -10,6 +10,12 @@ import java.sql.SQLException;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CarbonCalculationDeadlineTest {
+    @Test void recognizesServerSelectBudgetErrorWithoutClaimingClientTimeout() {
+        assertThat(CarbonCalculationDeadline.causedByDatabaseTimeout(new java.sql.SQLException("Query execution was interrupted, maximum statement execution time exceeded", "HY000",3024))).isTrue();
+        assertThat(CarbonCalculationDeadline.causedByDatabaseTimeout(new java.sql.SQLException("Other SQL failure", "HY000",9999))).isFalse();
+    }
+
+
     @Test
     void rollbackFailureDoesNotHideTheOriginalQueryTimeout() {
         var rollback = new TransactionSystemException("rollback failed", new SQLException("closed"));

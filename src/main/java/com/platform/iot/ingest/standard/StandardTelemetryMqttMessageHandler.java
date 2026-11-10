@@ -15,6 +15,7 @@ public class StandardTelemetryMqttMessageHandler {
 
     private final ObjectMapper objectMapper;
     private final StandardTelemetryIngestionService ingestionService;
+    private final StandardDynamicElectricityIngestionService dynamicElectricity;
 
     /** 将云端标准 JSON 交给本地批次接入服务，格式错误按不可修复毒消息拒绝。 */
     public StandardTelemetryResult handle(byte[] payload, long localReceivedTime) {
@@ -24,6 +25,7 @@ public class StandardTelemetryMqttMessageHandler {
         try {
             StandardTelemetryMessage message = objectMapper.readValue(
                     payload, StandardTelemetryMessage.class);
+            if(message.electricityInterval()!=null)return dynamicElectricity.ingest(message,localReceivedTime);
             return ingestionService.ingest(message, localReceivedTime);
         } catch (IOException | IllegalArgumentException exception) {
             log.warn("标准MQTT报文JSON格式错误，已拒绝: reason={}", exception.getMessage());

@@ -10,30 +10,30 @@ const LOGICAL_CANVAS_WIDTH = 1920
 const LOGICAL_CANVAS_HEIGHT = 1080
 
 /**
- * 大屏内容使用固定的设计坐标而非视觉 Token：位置和交互热点必须等比缩放，
- * 颜色、字体等视觉属性仍由页面的 CSS Token 管理。
+ * 以 1920×1080 为设计基准，文字和交互保持统一缩放比例。
+ * 非 16:9 窗口扩展逻辑画布承接额外空间，避免留边、拉伸或裁切整屏。
  */
 export function useLogicalCanvas() {
   const viewportRef = ref<HTMLElement | null>(null)
   const scale = ref(1)
-  const left = ref(0)
-  const top = ref(0)
+  const logicalWidth = ref(LOGICAL_CANVAS_WIDTH)
+  const logicalHeight = ref(LOGICAL_CANVAS_HEIGHT)
   let resizeObserver: ResizeObserver | null = null
 
   const canvasStyle = computed<CSSProperties>(() => ({
     position: 'absolute',
-    width: `${LOGICAL_CANVAS_WIDTH}px`,
-    height: `${LOGICAL_CANVAS_HEIGHT}px`,
+    width: `${logicalWidth.value}px`,
+    height: `${logicalHeight.value}px`,
     transformOrigin: 'top left',
     transform: `scale(${scale.value})`,
-    left: `${left.value}px`,
-    top: `${top.value}px`,
+    left: '0px',
+    top: '0px',
   }))
 
   function resetViewport(): void {
     scale.value = 1
-    left.value = 0
-    top.value = 0
+    logicalWidth.value = LOGICAL_CANVAS_WIDTH
+    logicalHeight.value = LOGICAL_CANVAS_HEIGHT
   }
 
   function updateViewport(width: number, height: number): void {
@@ -52,8 +52,8 @@ export function useLogicalCanvas() {
     }
 
     scale.value = nextScale
-    left.value = (width - LOGICAL_CANVAS_WIDTH * nextScale) / 2
-    top.value = (height - LOGICAL_CANVAS_HEIGHT * nextScale) / 2
+    logicalWidth.value = width / nextScale
+    logicalHeight.value = height / nextScale
   }
 
   function measureViewport(viewport: HTMLElement): void {

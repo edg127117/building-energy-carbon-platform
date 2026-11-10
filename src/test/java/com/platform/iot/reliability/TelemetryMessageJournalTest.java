@@ -23,6 +23,22 @@ class TelemetryMessageJournalTest {
     void complete(String id){journal.locked(id,e->{journal.complete(id,new V2ProcessingResult(id,ReceiptStatus.PLATFORM_PERSISTED,"PLATFORM_PERSISTED",1,false,AckMode.EVIDENCE_ONLY,null,new PlatformApplicationAck("1.0",id,ReceiptStatus.PLATFORM_PERSISTED,"PLATFORM_PERSISTED",1L,2L,AckMode.EVIDENCE_ONLY,"EVIDENCE_ONLY"),null));return null;});}
     TelemetryConflictRecovery recovery(){return new TelemetryConflictRecovery(f.jdbc,f.ledger,mock(TdengineHvacRawEventRepository.class),journal,mock(TelemetryV2IngestionService.class),new StaticListableBeanFactory().getBeanProvider(com.platform.iot.dataquality.LateRealMinuteCorrectionService.class),mock(EnergyPeriodResultRepository.class),new SimpleMeterRegistry(),f.codec,7);}
 
+    @Test void rebuildingPeriodHotSnapshotKeepsOriginalReceiptTime() {
+        long original=System.currentTimeMillis()-Duration.ofDays(6).toMillis();
+        var base=snapshot("period-old");
+        var input=new com.platform.carbon.DynamicElectricityContracts.DeviceIntervalRequest(base.message().deviceIdentity(),"P1","P1",
+                java.time.Instant.ofEpochMilli(original),java.time.Instant.ofEpochMilli(original+900000),0,
+                BigDecimal.ONE,BigDecimal.ONE,"SIMULATED","test");
+        var period=new TelemetryMessageJournal.Snapshot(base.message(),base.binding(),base.mode(),System.currentTimeMillis(),List.of(),input);
+        var proof=new V2ProcessingResult("period-old",ReceiptStatus.DUPLICATE_PERIOD_INPUT,"DUPLICATE_PERIOD_INPUT",0,false,AckMode.EVIDENCE_ONLY,null,
+                new PlatformApplicationAck("1.0","period-old",ReceiptStatus.DUPLICATE_PERIOD_INPUT,"DUPLICATE_PERIOD_INPUT",
+                        System.currentTimeMillis(),original,AckMode.EVIDENCE_ONLY,"EVIDENCE_ONLY"),null);
+        journal.freezeLegacy("hash",period,proof);
+        assertThat(f.jdbc.queryForObject("SELECT created_ms FROM biz_telemetry_message_intent WHERE canonical_message_id='period-old'",Long.class)).isEqualTo(original);
+        recovery().expire(System.currentTimeMillis());
+        assertThat(journal.find("period-old")).isNull();
+    }
+
     @Test void duplicateFreezeKeepsFirstBindingAndTerminalSurvivesReceiptRetention(){
         var original=journal.freeze("first",snapshot("M1"));
         journal.freeze("different",snapshot("M1"));

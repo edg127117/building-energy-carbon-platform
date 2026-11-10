@@ -901,6 +901,20 @@ public class RelationGovernanceRepository {
     }
 
     /**
+     * 元数据按版本统计原始分配行，保留重复、未关联表计及异常归属，不按资产类型过滤。
+     * 二进制比较加字节长度保持 Java String.equals 的大小写和尾空格语义，避免数据库排序规则扩展匹配。
+     */
+    public long countUnassignedMeteringAssignments(String versionId) {
+        Long count = jdbc.queryForObject("""
+                SELECT COUNT(*) FROM biz_metering_assignment_version_item
+                WHERE version_id=? AND allocation_status='UNASSIGNED'
+                  AND OCTET_LENGTH(allocation_status)=10
+                  AND CAST(allocation_status AS BINARY(10))=CAST('UNASSIGNED' AS BINARY(10))
+                """, Long.class, versionId);
+        return count == null ? 0 : count;
+    }
+
+    /**
      * 组合指定版本的分配、边界、表计结构和目标身份，供下游只读消费。
      * 未分配项使用左连接保留，避免查询层把未知关系静默解释为整栋建筑归属。
      */

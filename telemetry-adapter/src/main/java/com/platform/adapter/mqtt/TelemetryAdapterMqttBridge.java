@@ -53,6 +53,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     private static final Logger log = LoggerFactory.getLogger(TelemetryAdapterMqttBridge.class);
 
     private final IMqttClient client;
+    private final IMqttClient ackClient;
     private final TaskScheduler scheduler;
     private final AdapterMqttProperties properties;
     private final ObjectMapper objectMapper;
@@ -66,7 +67,8 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
             new ConcurrentHashMap<>();
 
     public TelemetryAdapterMqttBridge(
-            IMqttClient client,
+            @Qualifier("adapterMqttClient") IMqttClient client,
+            @Qualifier("adapterAckMqttClient") IMqttClient ackClient,
             @Qualifier("adapterMqttTaskScheduler") TaskScheduler scheduler,
             AdapterMqttProperties properties,
             ObjectMapper objectMapper,
@@ -75,6 +77,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
             ProtocolProfileProvider profileProvider,
             AdapterMqttSslContextFactory sslContextFactory) {
         this.client = client;
+        this.ackClient=ackClient;
         this.scheduler = scheduler;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -88,16 +91,27 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     public void start() throws MqttException {
         client.setManualAcks(true);
         client.setCallback(this);
+        ackClient.setManualAcks(true);
+        ackClient.setCallback(new MqttCallbackExtended() {
+            public void connectComplete(boolean reconnect,String uri) {
+                scheduler.schedule(()->{try {subscribeAckTopic();}catch(MqttException ex){log.warn("应用ACK订阅恢复失败");}},Instant.now());
+            }
+            public void connectionLost(Throwable failure){log.warn("应用ACK连接断开，等待独立重连");}
+            public void messageArrived(String topic,MqttMessage message){handleApplicationAck(message,ackClient);}
+            public void deliveryComplete(IMqttDeliveryToken token){ }
+        });
         connectOrScheduleRetry();
     }
 
     private void connectOrScheduleRetry() {
-        if (client.isConnected() || !connecting.compareAndSet(false, true)) {
+        if (client.isConnected()&&ackClient.isConnected() || !connecting.compareAndSet(false, true)) {
             return;
         }
         try {
             MqttConnectOptions options = connectOptions();
-            client.connect(options);
+            if(!ackClient.isConnected())ackClient.connect(options);
+            subscribeAckTopic();
+            if(!client.isConnected())client.connect(connectOptions());
             subscribeRawTopic();
             consecutiveFailures.set(0);
             log.info("云端报文适配器已连接EMQX: rawTopic={}, standardTopic={}",
@@ -162,14 +176,14 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
 
     @Override
     public void connectComplete(boolean reconnect, String serverURI) {
-        try {
+        scheduler.schedule(()->{try {
             subscribeRawTopic();
             if (reconnect) {
                 log.info("云端报文适配器自动重连后已恢复订阅: {}", properties.getRawTopic());
             }
         } catch (MqttException exception) {
             log.error("云端报文适配器恢复订阅失败", exception);
-        }
+        }},Instant.now());
     }
 
     @Override
@@ -181,9 +195,16 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     @Override
     public void messageArrived(String topic, MqttMessage message) {
         if (topic.equals(properties.getApplicationAckTopic())) {
-            handleApplicationAck(message);
+            handleApplicationAck(message,client);
             return;
         }
+        // 同步QoS1发布必须离开Paho回调：接收队列满时，PUBACK也会被堵在同一接收线程后面。
+        long receivedAt=System.currentTimeMillis();
+        try {scheduler.schedule(()->processRaw(topic,message,receivedAt),Instant.now());}
+        catch(RuntimeException failure){log.warn("适配处理未能入队，保留原始消息等待重投: topic={}",topic);}
+    }
+
+    private void processRaw(String topic,MqttMessage message,long receivedAt) {
         boolean acknowledge = true;
         String pendingCanonicalId = null;
         try {
@@ -199,15 +220,18 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
             StandardTelemetryMessage canonical = telemetryAdapter.adapt(
                     topic,
                     rawPayload,
-                    System.currentTimeMillis(),
+                    receivedAt,
                     resolved.profile(),
                     resolved.mappings());
             byte[] canonicalPayload = outputSerializer.serialize(canonical);
             if (outputSerializer.supportsProxyAck()
                     && "ADAPTER_PROXY".equals(canonical.declaredAckMode())) {
                 pendingCanonicalId = canonical.canonicalMessageId();
-                pendingProxyAcks.computeIfAbsent(pendingCanonicalId,
-                        ignored -> new ConcurrentLinkedQueue<>()).add(message);
+                // ACK连接可并发移除同键队列，登记与入队须原子完成，避免重投报文落入已移除的队列。
+                pendingProxyAcks.compute(pendingCanonicalId,(ignored,waiting)->{
+                    var queue=waiting==null?new ConcurrentLinkedQueue<MqttMessage>():waiting;
+                    queue.add(message);return queue;
+                });
                 acknowledge = false;
             }
             client.publish(properties.getStandardTopic(), canonicalPayload, 1, false);
@@ -240,16 +264,17 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
 
     @Override
     public void deliveryComplete(IMqttDeliveryToken token) {
-        // 标准消息的同步 publish 已决定原始消息 ACK，本回调不承载额外状态。
+        // 发布任务与应用ACK处理决定原始消息确认，此回调不重复确认。
     }
 
     private void subscribeRawTopic() throws MqttException {
-        client.subscribe(
-                new String[]{properties.getRawTopic(), properties.getApplicationAckTopic()},
-                new int[]{1, 1});
+        // 清理旧版本稳定会话保留的ACK订阅；ACK仍通过独立连接以QoS1接收。
+        client.unsubscribe(properties.getApplicationAckTopic());
+        client.subscribe(properties.getRawTopic(),1);
     }
+    private void subscribeAckTopic() throws MqttException {ackClient.subscribe(properties.getApplicationAckTopic(),1);}
 
-    private void handleApplicationAck(MqttMessage ackMessage) {
+    private void handleApplicationAck(MqttMessage ackMessage,IMqttClient receiver) {
         try {
             PlatformAck ack = objectMapper.readValue(ackMessage.getPayload(), PlatformAck.class);
             if (ack.canonicalMessageId() == null || ack.canonicalMessageId().isBlank()
@@ -268,7 +293,7 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
         } catch (IOException exception) {
             log.warn("拒绝格式无效的应用ACK: reason={}", exception.getMessage());
         } finally {
-            acknowledge(ackMessage);
+            acknowledge(receiver,ackMessage);
         }
     }
 
@@ -283,8 +308,11 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
     }
 
     private void acknowledge(MqttMessage message) {
+        acknowledge(client,message);
+    }
+    private void acknowledge(IMqttClient receiver,MqttMessage message) {
         try {
-            client.messageArrivedComplete(message.getId(), message.getQos());
+            receiver.messageArrivedComplete(message.getId(), message.getQos());
         } catch (MqttException exception) {
             log.error("原始设备消息手动确认失败: messageId={}", message.getId(), exception);
         }
@@ -297,6 +325,8 @@ public class TelemetryAdapterMqttBridge implements MqttCallbackExtended {
                 client.disconnect();
             }
             client.close();
+            if(ackClient.isConnected())ackClient.disconnect();
+            ackClient.close();
         } catch (MqttException exception) {
             log.warn("关闭云端报文适配器MQTT客户端失败: {}", exception.getMessage());
         }

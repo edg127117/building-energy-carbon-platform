@@ -159,6 +159,7 @@ export interface ManualReading {
   sourceReference: string | null
   timePrecision: ReadingTimePrecision
   supersedesFactId: string | null
+  refinementMode?: 'MONTH_TO_DAY' | null
 }
 
 export interface ReadingImportRequest {

@@ -128,7 +128,7 @@ describe('office and monitor composition', () => {
     expect(router.currentRoute.value.path).toBe('/403')
   })
   it('registers all confirmed pages without granting them by role', () => {
-    expect(pages).toHaveLength(53)
+    expect(pages.filter(page => page.system === 'monitor').map(page => page.path)).toEqual(['/monitor/monitoring'])
     expect(pages.filter(page => page.path.includes('/weather'))).toHaveLength(3)
     expect(pages.some(page => page.path === '/configuration/ingestion/protocols')).toBe(true)
     expect(pages.some(page => page.path === '/configuration/access/changeRequests')).toBe(true)
@@ -189,12 +189,15 @@ describe('office and monitor composition', () => {
   })
   it('resolves all screen addresses to the shared monitor parent and loads pages lazily', () => {
     const router = createPlatformRouter(createMemoryHistory())
-    for (const path of ['monitoring', 'trend', 'situation', 'status', 'analysis']) {
+    for (const path of ['monitoring']) {
       const route = router.resolve('/monitor/' + path)
       expect(route.matched[0].path).toBe('/monitor')
       expect(route.meta.mode).toBe('monitor')
       expect(route.meta.screenLayout).toBe(path === 'monitoring' ? 'scene' : 'grid')
       expect(typeof route.matched.at(-1).components.default).toBe('function')
+    }
+    for (const path of ['trend', 'situation', 'status', 'analysis']) {
+      expect(router.resolve('/monitor/' + path).matched.at(-1).props.default).toEqual({ state: 'not-found' })
     }
     expect(router.resolve('/monitor/unknown').matched.at(-1).props.default).toEqual({ state: 'not-found' })
   })

@@ -15,6 +15,7 @@ import com.platform.framework.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.math.BigDecimal;
 import java.time.*;
@@ -25,7 +26,8 @@ import static com.platform.energy.history.HistoricalConfigurationContracts.*;
 /** 按请求的建筑与整月业务区间检查现有配置，不补读数、不审核、不重算。 */
 @Service
 @RequiredArgsConstructor
-@Transactional(readOnly = true)
+// 预检逐域报告缺口；各域结束自己的只读事务后再收集诊断，避免已捕获异常污染外层事务。
+@Transactional(readOnly = true, propagation = Propagation.NOT_SUPPORTED)
 public class HistoricalConfigurationService {
     private final EnergyPeriodAuthorization authorization;
     private final ClassificationService classifications;

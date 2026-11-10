@@ -68,6 +68,8 @@ describe('建筑编辑表单', () => {
       buildingName: '新建建筑',
       buildingCode: null,
       buildingType: '办公',
+      carbonEvaluationCategory: '',
+      carbonEvaluationSubcategory: '',
       constructionYear: null,
       totalGfa: 0,
       climateZone: '夏热冬冷',

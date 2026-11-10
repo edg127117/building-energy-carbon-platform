@@ -28,6 +28,8 @@ export type AssetBuilding = {
   buildingName: string
   buildingCode: string | null
   buildingType: string | null
+  carbonEvaluationCategory?: string | null
+  carbonEvaluationSubcategory?: string | null
   constructionYear: number | null
   totalGfa: number | null
   climateZone: string | null
@@ -42,6 +44,8 @@ export type AssetBuildingForm = {
   buildingName: string
   buildingCode: string | null
   buildingType: string | null
+  carbonEvaluationCategory?: string | null
+  carbonEvaluationSubcategory?: string | null
   constructionYear: number | null
   totalGfa: number | null
   climateZone: string | null

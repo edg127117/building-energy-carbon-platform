@@ -38,6 +38,10 @@ public class Building implements Serializable {
     /** 办公/商业/教育/医疗/文化体育/综合 */
     private String buildingType;
 
+    /** 综合用途等无法自动归类时一次明确评价类别；为空时沿用建筑用途。 */
+    private String carbonEvaluationCategory;
+    private String carbonEvaluationSubcategory;
+
     /** 竣工年份 */
     private Integer constructionYear;
 

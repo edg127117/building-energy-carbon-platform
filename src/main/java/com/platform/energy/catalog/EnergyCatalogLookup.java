@@ -40,6 +40,11 @@ public class EnergyCatalogLookup {
         if (from.isEmpty() || to.isEmpty()) return Optional.empty();
         ApprovedUnit source = from.get();
         ApprovedUnit target = to.get();
+        return convert(quantity, source, target);
+    }
+
+    /** 已解析的同期间单位供有界批量计算复用，换算算法与单条入口保持一致。 */
+    public Optional<UnitConversion> convert(BigDecimal quantity, ApprovedUnit source, ApprovedUnit target) {
         if (!source.dimensionCode().equals(target.dimensionCode())
                 || !source.canonicalUnitCode().equals(target.canonicalUnitCode())) {
             return Optional.empty();

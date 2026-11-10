@@ -17,6 +17,7 @@ import type {
   AssetSystemGroup,
   AssetSystemGroupForm,
 } from '../models/assets'
+import type { AssetLedgerPage, AssetLedgerQuery } from '../models/ledger'
 
 const basePath = '/v1/assets'
 const encoded = (value: string) => encodeURIComponent(value)
@@ -75,6 +76,11 @@ export function deleteSystemGroup(systemGroupId: string) {
 
 export function listEquipment(params: AssetEquipmentQuery) {
   return requestApi<AssetPage<AssetEquipment>>({ method: 'get', url: `${basePath}/equipment`, params })
+}
+
+/** 聚合台账是列表的唯一数据源，分类、运行、通讯和默认展示测点均由后端按设备范围判定。 */
+export function listAssetLedger(params: AssetLedgerQuery) {
+  return requestApi<AssetLedgerPage>({ method: 'get', url: `${basePath}/ledger`, params })
 }
 
 export function getEquipment(equipmentId: string) {

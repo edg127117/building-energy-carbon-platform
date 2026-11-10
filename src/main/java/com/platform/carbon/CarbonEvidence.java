@@ -36,10 +36,71 @@ public final class CarbonEvidence {
 
     public static String canonical(JsonNode value) {
         try {
-            return JSON.writeValueAsString(ordered(value));
+            // 已冻结的规范JSON保持原顺序直接写出；仍递归核对键顺序和小数语义，不复制整棵证据树。
+            return JSON.writeValueAsString(canonicalOrder(value) ? value : ordered(value));
         } catch (JsonProcessingException exception) {
             throw new IllegalStateException("碳追溯证据无法序列化", exception);
         }
+    }
+
+    /** Hash exactly the canonical UTF-8 text without retaining a second full JSON string and byte array. */
+    public static String canonicalHash(JsonNode value) {
+        try {
+            var digest=java.security.MessageDigest.getInstance("SHA-256");
+            // Writer encoding matches canonical(value).getBytes(UTF_8), including malformed surrogate replacement.
+            try(var output=new java.io.OutputStreamWriter(new java.security.DigestOutputStream(
+                    java.io.OutputStream.nullOutputStream(),digest),java.nio.charset.StandardCharsets.UTF_8)) {
+                JSON.writeValue(output,canonicalOrder(value)?value:ordered(value));
+            }
+            return java.util.HexFormat.of().formatHex(digest.digest());
+        } catch(java.io.IOException | java.security.NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("Canonical evidence digest failed",exception);
+        }
+    }
+
+    /** Compare every canonical character without allocating another complete evidence string. */
+    public static boolean canonicalEquals(JsonNode value,String expected) {
+        if(expected==null)return false;
+        var comparison=new java.io.Writer() {
+            private int position;
+            private boolean matches=true;
+            private void compare(char character) {
+                if(position>=expected.length()||expected.charAt(position)!=character)matches=false;
+                if(position<expected.length())position++;
+            }
+            @Override public void write(char[] chars,int offset,int length) {
+                for(int i=offset;i<offset+length;i++)compare(chars[i]);
+            }
+            @Override public void write(String text,int offset,int length) {
+                for(int i=offset;i<offset+length;i++)compare(text.charAt(i));
+            }
+            @Override public void write(int character) { compare((char)character); }
+            @Override public void flush() { }
+            @Override public void close() { }
+            boolean complete(){return matches&&position==expected.length();}
+        };
+        try {
+            JSON.writeValue(comparison,canonicalOrder(value)?value:ordered(value));
+            return comparison.complete();
+        } catch(java.io.IOException exception) {
+            throw new IllegalStateException("Canonical evidence comparison failed",exception);
+        }
+    }
+
+    private static boolean canonicalOrder(JsonNode value) {
+        if (value.isObject()) {
+            String previous = null;
+            var fields = value.fields();
+            while (fields.hasNext()) {
+                var entry = fields.next();
+                if (previous != null && previous.compareTo(entry.getKey()) >= 0) return false;
+                if (!canonicalOrder(entry.getValue())) return false;
+                previous = entry.getKey();
+            }
+        } else if (value.isArray()) {
+            for (var element : value) if (!canonicalOrder(element)) return false;
+        }
+        return !value.isFloatingPointNumber();
     }
 
     /** 同一计量分解的公共证据只保留一份，访问时返回副本，避免各明细互相修改。 */

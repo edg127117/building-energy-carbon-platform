@@ -1,8 +1,11 @@
 import type { DeviceProductDetail, ProductPointTemplate } from '@/modules/device-onboarding/public'
 
 export type ProtocolFieldType = 'NUMBER' | 'STRING' | 'BOOLEAN' | 'NULL'
+export type ProtocolAckMode = 'DEVICE_DIRECT' | 'ADAPTER_PROXY' | 'EVIDENCE_ONLY'
+export type ProtocolCorrelationPolicy = 'SOURCE_MESSAGE_ID' | 'BOOT_ID_AND_SEQ' | 'SEQ_AND_COLLECTED_AT' | 'UNIQUE_COLLECTED_AT' | 'NONE'
 
 export type ProtocolMapping = {
+  valueType?: 'DECIMAL' | 'ELECTRICITY_KWH' | 'CO2_FACTOR' | 'INTERVAL_START' | 'INTERVAL_END' | 'INTERVAL_REVISION' | null
   sourcePath: string
   metricCode: string
   sourceUnit: string
@@ -24,6 +27,13 @@ export type ProtocolConfiguration = {
   discriminatorPath: string | null
   discriminatorValue: string | null
   timestampPath: string | null
+  seqPath?: string | null
+  messageIdPath?: string | null
+  bootIdPath?: string | null
+  batchIdPath?: string | null
+  retransmittedAtPath?: string | null
+  maxAckMode?: ProtocolAckMode | null
+  correlationPolicy?: ProtocolCorrelationPolicy | null
   mappings: ProtocolMapping[]
 }
 
@@ -152,6 +162,13 @@ export const emptyProtocolConfiguration = (): ProtocolConfiguration => ({
   discriminatorPath: null,
   discriminatorValue: null,
   timestampPath: null,
+  seqPath: null,
+  messageIdPath: null,
+  bootIdPath: null,
+  batchIdPath: null,
+  retransmittedAtPath: null,
+  maxAckMode: null,
+  correlationPolicy: null,
   mappings: [],
 })
 

@@ -1,0 +1,13 @@
+{
+  "source": "User-approved integrated V10.1 offline prototype",
+  "model": "Innovation Harbor authored building and professional-system geometry",
+  "modelSha256": "fe12155579aa009fd726d7fe203a6d500be3fa5ec75eb8a7f3455bf9dd279fa3",
+  "rendererSha256": "5f24b3b9731c24648cc9547de4dbb7f6bac263c90f012f94debe99137d13a6db",
+  "scope": "Scene renderer and geometry only; no authenticated building or device binding",
+  "rendererChanges": [
+    "Extract scene-only dependency closure and initialization",
+    "Move identical compressed geometry to a same-origin lazy-loaded asset",
+    "Accept HTTP-decoded geometry or gzip bytes using the gzip signature"
+  ],
+  "telemetry": false
+}

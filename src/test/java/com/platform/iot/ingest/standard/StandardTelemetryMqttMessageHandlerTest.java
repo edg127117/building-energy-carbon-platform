@@ -20,7 +20,7 @@ class StandardTelemetryMqttMessageHandlerTest {
     @BeforeEach
     void setUp() {
         service = mock(StandardTelemetryIngestionService.class);
-        handler = new StandardTelemetryMqttMessageHandler(new ObjectMapper(), service);
+        handler = new StandardTelemetryMqttMessageHandler(new ObjectMapper().findAndRegisterModules(), service, mock(StandardDynamicElectricityIngestionService.class));
     }
 
     @Test

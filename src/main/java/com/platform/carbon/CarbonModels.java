@@ -12,10 +12,10 @@ public final class CarbonModels {
     private CarbonModels() {
     }
 
-    public enum ResultNature { DEVELOPMENT_SIMULATION, FORMAL }
+    public enum ResultNature { DEVELOPMENT_SIMULATION, FORMAL, MONITORING }
     public enum UsageNature { DEVELOPMENT_REFERENCE, FORMAL }
     public enum LifecycleStatus { PENDING_REVIEW, APPROVED, ACTIVE, DISABLED, REJECTED }
-    public enum PeriodType { MONTH, QUARTER, YEAR }
+    public enum PeriodType { MONTH, QUARTER, YEAR, HOUR, DAY }
     public enum ScopeType { SCOPE_1, SCOPE_2 }
     public enum FactorCategory {
         STATIONARY_COMBUSTION, PURCHASED_ELECTRICITY_LOCATION, PURCHASED_HEAT
