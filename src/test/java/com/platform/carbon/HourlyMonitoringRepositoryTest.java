@@ -71,4 +71,16 @@ class HourlyMonitoringRepositoryTest {
         assertThat(repo.due(now,true)).extracting(HourlyMonitoringRepository.Target::date).containsExactly(LocalDate.of(2026,1,3));
         assertThat(repo.due(now,false)).extracting(HourlyMonitoringRepository.Target::date).containsExactly(day);
     }
+    @Test void stableCursorVisitsLaterBuildingsAndDatesWithoutUpdatingIdleRows() {
+        long now=Instant.parse("2026-01-20T04:00:00Z").toEpochMilli();
+        for(int i=1;i<=10;i++)repo.register("B",day.plusDays(i),7);
+        repo.register("C",day,7);
+        var first=repo.due(now,false,null);
+        assertThat(first).hasSize(8);
+        var second=repo.due(now,false,first.getLast());
+        assertThat(second).hasSize(4).doesNotContainAnyElementsOf(first);
+        assertThat(second.getLast().building()).isEqualTo("C");
+        assertThat(repo.due(now,false,second.getLast())).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_hourly_monitor_target WHERE lease_token IS NOT NULL OR next_check<>0",Integer.class)).isZero();
+    }
 }

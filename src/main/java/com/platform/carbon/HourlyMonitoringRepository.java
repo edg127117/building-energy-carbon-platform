@@ -37,9 +37,19 @@ class HourlyMonitoringRepository {
         jdbc.update("INSERT INTO biz_hourly_monitor_target(building_id,day_date,actor_id) VALUES(?,?,?) ON DUPLICATE KEY UPDATE actor_id=VALUES(actor_id)",building,java.sql.Date.valueOf(date),actor);
     }
     List<Target> due(long now,boolean currentDay) {
+        return due(now,currentDay,null);
+    }
+    List<Target> due(long now,boolean currentDay,Target after) {
         var today=java.sql.Date.valueOf(Instant.ofEpochMilli(now).atZone(ZONE).toLocalDate());
-        return jdbc.query("SELECT building_id,day_date,actor_id FROM biz_hourly_monitor_target WHERE next_check<=? AND lease_until<? AND day_date"+(currentDay?"=":"<")+"? ORDER BY next_check,day_date DESC,building_id LIMIT 8",
-                (r,n)->new Target(r.getString(1),r.getDate(2).toLocalDate(),r.getLong(3)),now,now,today);
+        var args=new ArrayList<Object>(List.of(now,now,today));
+        String seek="";
+        if(after!=null) {
+            seek=" AND (building_id>? OR (building_id=? AND day_date>?))";
+            args.add(after.building());args.add(after.building());args.add(java.sql.Date.valueOf(after.date()));
+        }
+        // 稳定主键游标让空闲目标也能向后扫描，不靠反复写next_check维持公平性。
+        return jdbc.query("SELECT building_id,day_date,actor_id FROM biz_hourly_monitor_target WHERE next_check<=? AND lease_until<? AND day_date"+(currentDay?"=":"<")+"?"+seek+" ORDER BY building_id,day_date LIMIT 8",
+                (r,n)->new Target(r.getString(1),r.getDate(2).toLocalDate(),r.getLong(3)),args.toArray());
     }
     boolean claim(Target target,String token,long now) {
         return jdbc.update("UPDATE biz_hourly_monitor_target SET lease_token=?,lease_until=? WHERE building_id=? AND day_date=? AND lease_until<?",

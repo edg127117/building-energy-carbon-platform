@@ -19,6 +19,8 @@ class HourlyMonitoringWorker implements AutoCloseable {
     private final AtomicBoolean currentActive=new AtomicBoolean(),historyActive=new AtomicBoolean();
     private final ExecutorService executor=Executors.newFixedThreadPool(2,Thread.ofPlatform().daemon().name("hourly-monitoring-",0).factory());
     private long discoverAfter;
+    // 每个通道由对应active保护；游标只决定扫描位置，重启仍由持久租约恢复实际任务。
+    private HourlyMonitoringRepository.Target currentCursor,historyCursor;
     HourlyMonitoringWorker(HourlyMonitoringRepository repository,HourlyMonitoringCalculator calculator,
             CarbonDisplayTaskIdentity identities,CarbonDisplayQueryProperties properties) {
         this.repository=repository;this.calculator=calculator;this.identities=identities;this.properties=properties;
@@ -46,19 +48,35 @@ class HourlyMonitoringWorker implements AutoCloseable {
                 }
             }
             long stop=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
-            for(var target:repository.due(now,currentDay)) {
-                String token=UUID.randomUUID().toString();if(!repository.claim(target,token,now))continue;
+            var page=repository.due(now,currentDay,currentDay?currentCursor:historyCursor);
+            if(page.isEmpty()){cursor(currentDay,null);return;}
+            int visited=0;
+            for(var target:page) {
+                if(visited>0&&System.nanoTime()>=stop)break;
+                cursor(currentDay,target);visited++;
+                var observed=Instant.now();
+                var snapshot=repository.snapshot(target.building(),target.date(),observed,calculator.policy());
+                // 高频检查只读版本；空闲目标不领取/释放租约，避免持续提交挤占原始写入与年日恢复。
+                if(candidates(target,snapshot,observed).isEmpty())continue;
+                String token=UUID.randomUUID().toString();if(!repository.claim(target,token,System.currentTimeMillis()))continue;
                 long delay=1000;
-                try{refresh(target,token);}catch(RuntimeException e){
+                try{refresh(target,token,snapshot,observed);}catch(RuntimeException e){
                     delay=10_000;LoggerFactory.getLogger(getClass()).warn("Hourly monitoring refresh failed building={} date={} type={}",target.building(),target.date(),e.getClass().getSimpleName(),e);
                 }finally{repository.release(target,token,delay);}
                 if(System.nanoTime()>=stop)break;
             }
+            if(visited==page.size()&&page.size()<8)cursor(currentDay,null);
         }catch(RuntimeException e){LoggerFactory.getLogger(getClass()).warn("Hourly monitoring scan failed",e);}
     }
     void refresh(HourlyMonitoringRepository.Target target,String token) {
-        var roles=identities.currentRoles(target.actor());var now=Instant.now();
+        identities.currentRoles(target.actor());var now=Instant.now();
         var snapshot=repository.snapshot(target.building(),target.date(),now,calculator.policy());
+        refresh(target,token,snapshot,now);
+    }
+    private void cursor(boolean currentDay,HourlyMonitoringRepository.Target value) {
+        if(currentDay)currentCursor=value;else historyCursor=value;
+    }
+    private List<Instant> candidates(HourlyMonitoringRepository.Target target,HourlyMonitoringRepository.Snapshot snapshot,Instant now) {
         var start=target.date().atStartOfDay(ZONE).toInstant();
         var candidates=new ArrayList<Instant>();
         for(int hour=0;hour<24;hour++) {
@@ -74,8 +92,12 @@ class HourlyMonitoringWorker implements AutoCloseable {
         }
         // 新小时及当前累计优先；已完成小时不会因另一个小时上报而进入候选。
         candidates.sort(Comparator.reverseOrder());
+        return candidates;
+    }
+    private void refresh(HourlyMonitoringRepository.Target target,String token,HourlyMonitoringRepository.Snapshot snapshot,Instant now) {
+        var roles=identities.currentRoles(target.actor());
         long stop=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);int attempted=0;
-        for(var from:candidates) {
+        for(var from:candidates(target,snapshot,now)) {
             HourlyMonitoringCalculator.Calculated result;
             try {
                 String sourceKind=repository.sourceKind(target.building(),from,from.plusSeconds(3600).isAfter(now)?now:from.plusSeconds(3600));
