@@ -49,4 +49,43 @@ class CarbonDisplayQueryRepositoryTest {
         assertThat(repo.duePeriods(40002)).extracting(CarbonDisplayQueryRepository.Head::kind).doesNotContain("DAILY_TREND_DAY");
         assertThat(repo.duePeriods(200002)).extracting(CarbonDisplayQueryRepository.Head::kind).contains("DAILY_TREND_DAY");
     }
+    @Test void periodCursorVisitsEveryPageThenRescansAfterExhaustionOrRepositoryRestart(){
+        for(int i=0;i<205;i++) {
+            String key=String.format(Locale.ROOT,"%064d",i);
+            repo.request(key,"B","ELECTRICITY_MONTH","{}",1,"v1",1000);
+        }
+
+        var first=repo.duePeriods(1000);assertThat(first).hasSize(100);
+        assertThat(first.getFirst().key()).isEqualTo(String.format(Locale.ROOT,"%064d",0));
+        assertThat(first.getLast().key()).isEqualTo(String.format(Locale.ROOT,"%064d",99));
+        first.forEach(repo::advance);
+
+        var second=repo.duePeriods(1000);assertThat(second).hasSize(100);
+        assertThat(second.getFirst().key()).isEqualTo(String.format(Locale.ROOT,"%064d",100));
+        second.forEach(repo::advance);
+        var last=repo.duePeriods(1000);assertThat(last).hasSize(5);
+        assertThat(last.getFirst().key()).isEqualTo(String.format(Locale.ROOT,"%064d",200));
+        last.forEach(repo::advance);
+        assertThat(repo.duePeriods(1000)).isEmpty();
+
+        var restarted=new CarbonDisplayQueryRepository(jdbc,new CarbonDisplayQueryProperties());
+        assertThat(restarted.duePeriods(1000)).hasSize(100)
+                .first().extracting(CarbonDisplayQueryRepository.Head::key).isEqualTo(String.format(Locale.ROOT,"%064d",0));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_carbon_display_read_model WHERE updated_at<>1000",Integer.class)).isZero();
+    }
+    @Test void changedPublicPeriodReturnsToTheQueueAndCanBePublished(){
+        String key="changed-period";repo.request(key,"B","ELECTRICITY_MONTH","{}",1,"v1",1000);
+        var original=repo.head(key);String first=repo.claim(original,1000);
+        assertThat(repo.publish(original,first,"old","old-hash",1001)).isTrue();
+
+        var observed=repo.head(key);
+        repo.requestPeriod(key,"B","ELECTRICITY_MONTH","{}",1,"v2",40000,observed);
+        assertThat(repo.head(key).state()).isEqualTo("PENDING");
+        var due=repo.duePeriods(40000);
+        assertThat(due).extracting(CarbonDisplayQueryRepository.Head::key).contains(key);
+        var changed=due.stream().filter(h->h.key().equals(key)).findFirst().orElseThrow();
+        String second=repo.claim(changed,40000);assertThat(second).isNotNull();
+        assertThat(repo.publish(changed,second,"new","new-hash",40001)).isTrue();
+        assertThat(repo.head(key).built()).isEqualTo("v2");
+    }
 }

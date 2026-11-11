@@ -12,6 +12,28 @@ class DisplaySourceRevisionRepositoryTest {
     JdbcTemplate jdbc;
     DisplaySourceRevisionRepository revisions;
 
+    @Test void futureCatalogApprovalDoesNotInvalidateOctoberButRelevantChangesRejectOldPublish() {
+        jdbc.execute("CREATE TABLE biz_energy_item(item_id VARCHAR(32),item_code VARCHAR(32))");
+        jdbc.execute("CREATE TABLE biz_energy_item_version(item_id VARCHAR(32),version_id VARCHAR(32),config_revision INT,status VARCHAR(24),effective_from TIMESTAMP,effective_to TIMESTAMP)");
+        jdbc.execute("CREATE TABLE biz_energy_item_version_scope(version_id VARCHAR(32),usage_scope VARCHAR(32))");
+        jdbc.execute("CREATE TABLE biz_measurement_unit(unit_id VARCHAR(32),unit_code VARCHAR(32))");
+        jdbc.execute("CREATE TABLE biz_measurement_unit_version(unit_id VARCHAR(32),version_id VARCHAR(32),config_revision INT,status VARCHAR(24),effective_from TIMESTAMP,effective_to TIMESTAMP,symbol VARCHAR(32),dimension_code VARCHAR(40),canonical_unit_code VARCHAR(64),scale_factor DECIMAL(24,12),conversion_type VARCHAR(32),standard_condition_code VARCHAR(100))");
+        jdbc.update("INSERT INTO biz_carbon_display_source_revision VALUES ('*','CATALOG','*',1)");
+        jdbc.update("INSERT INTO biz_measurement_unit VALUES ('K','KWH')");
+        jdbc.update("INSERT INTO biz_measurement_unit_version(unit_id,version_id,config_revision,status,effective_from,effective_to) VALUES ('K','october',1,'APPROVED','2026-10-01 00:00:00',NULL)");
+        var from=java.time.Instant.parse("2026-09-30T16:00:00Z");var to=java.time.Instant.parse("2026-10-31T16:00:00Z");
+        String october=revisions.version("B","DYNAMIC",from,to);
+        jdbc.update("UPDATE biz_measurement_unit_version SET effective_to='2026-11-01 00:00:00' WHERE version_id='october'");
+        jdbc.update("INSERT INTO biz_measurement_unit_version(unit_id,version_id,config_revision,status,effective_from,effective_to) VALUES ('K','november',1,'APPROVED','2026-11-09 00:00:00',NULL)");
+        jdbc.update("UPDATE biz_carbon_display_source_revision SET revision=revision+1 WHERE domain_key='CATALOG'");
+        assertThat(revisions.version("B","DYNAMIC",from,to)).isEqualTo(october);
+        assertThat(revisions.ifCurrent("B","DYNAMIC",from,to,october,()->{})).isTrue();
+        jdbc.update("UPDATE biz_measurement_unit_version SET config_revision=2 WHERE version_id='october'");
+        jdbc.update("UPDATE biz_carbon_display_source_revision SET revision=revision+1 WHERE domain_key='CATALOG'");
+        assertThat(revisions.version("B","DYNAMIC",from,to)).isNotEqualTo(october);
+        assertThat(revisions.ifCurrent("B","DYNAMIC",from,to,october,()->{throw new AssertionError("stale publish");})).isFalse();
+    }
+
     @BeforeEach
     void setUp() {
         var source = new JdbcDataSource();

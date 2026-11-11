@@ -100,11 +100,19 @@ public class DisplaySourceRevisionRepository {
             while (rs.next()) rows.put(rs.getString(1) + "\u0000" + rs.getString(2) + "\u0000" + rs.getString(3), rs.getLong(4));
             return rows;
         }, parameters(building, domains, scopes));
+        String catalog=null;
+        var months=scopes.stream().filter(s->s.startsWith("M:")).sorted().toList();
+        if(domains.contains("CATALOG")&&!months.isEmpty()&&found.getOrDefault("*\u0000CATALOG\u0000*",0L)>0) {
+            var from=YearMonth.parse(months.getFirst().substring(2)).atDay(1).atStartOfDay(ZONE).toInstant();
+            var to=YearMonth.parse(months.getLast().substring(2)).plusMonths(1).atDay(1).atStartOfDay(ZONE).toInstant();
+            // 通知行仍参与发布锁；指纹只包含查询期间内目录，未来批准不会撤销历史展示。
+            catalog=MetadataSnapshot.catalog(jdbc).version(from,to);
+        }
         var rows = new ArrayList<String>();
         for (String owner : List.of("*", building))
             for (String domain : domains.stream().sorted().toList())
                 for (String scope : scopes.stream().sorted().toList())
-                    rows.add(owner + ":" + domain + ":" + scope + ":" + found.getOrDefault(owner + "\u0000" + domain + "\u0000" + scope, 0L));
+                    rows.add(owner + ":" + domain + ":" + scope + ":" + (catalog!=null&&owner.equals("*")&&domain.equals("CATALOG")&&scope.equals("*")?catalog:found.getOrDefault(owner + "\u0000" + domain + "\u0000" + scope, 0L)));
         return rows;
     }
 
@@ -130,10 +138,11 @@ public class DisplaySourceRevisionRepository {
 
     private static List<String> domains(String domain) {
         return switch (Objects.toString(domain, "")) {
-            case "DYNAMIC_INPUT", "DYNAMIC_RAW", "DYNAMIC_RESULT", "DAILY_INPUT", "DAILY_RESULT" -> List.of(domain);
-            case "DYNAMIC" -> List.of("DYNAMIC_INPUT", "DYNAMIC_RESULT");
-            case "DYNAMIC_WITH_RAW" -> List.of("DYNAMIC_INPUT", "DYNAMIC_RAW", "DYNAMIC_RESULT");
-            case "DYNAMIC_RAW_INPUT" -> List.of("DYNAMIC_INPUT", "DYNAMIC_RAW");
+            case "DYNAMIC_INPUT" -> List.of("DYNAMIC_INPUT","CATALOG");
+            case "DYNAMIC_RAW", "DYNAMIC_RESULT", "DAILY_INPUT", "DAILY_RESULT" -> List.of(domain);
+            case "DYNAMIC" -> List.of("DYNAMIC_INPUT", "CATALOG", "DYNAMIC_RESULT");
+            case "DYNAMIC_WITH_RAW" -> List.of("DYNAMIC_INPUT", "CATALOG", "DYNAMIC_RAW", "DYNAMIC_RESULT");
+            case "DYNAMIC_RAW_INPUT" -> List.of("DYNAMIC_INPUT", "CATALOG", "DYNAMIC_RAW");
             case "DAILY" -> List.of("DAILY_INPUT", "DAILY_RESULT");
             default -> throw new IllegalArgumentException("Unknown display source domain");
         };

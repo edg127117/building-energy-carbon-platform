@@ -19,7 +19,7 @@ class HourlyMonitoringRepository {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final TransactionTemplate reads,writes;
-    private static final List<String> DOMAINS=List.of("DAILY_INPUT","DYNAMIC_INPUT","DYNAMIC_RAW","HOURLY_RULE");
+    private static final List<String> DOMAINS=List.of("DAILY_INPUT","DYNAMIC_INPUT","DYNAMIC_RAW","HOURLY_RULE","CATALOG");
     record Target(String building,LocalDate date,long actor) { }
     record Stored(long hour,String version,String summary,String hash,String evidence,long updatedAt) { }
     record Snapshot(Map<Long,String> versions,Map<Long,Stored> results) { }
@@ -81,7 +81,7 @@ class HourlyMonitoringRepository {
     Snapshot snapshot(String building,LocalDate date,Instant now,String policy) {
         return reads.execute(status->{
             long start=date.atStartOfDay(ZONE).toInstant().toEpochMilli();
-            String global=global(building,false);
+            String global=global(building,date,false);
             Map<Long,Long> revisions=new HashMap<>();
             jdbc.query("SELECT hour_ms,revision FROM biz_hourly_monitor_revision WHERE building_id=? AND hour_ms>=? AND hour_ms<?",r->{revisions.put(r.getLong(1),r.getLong(2));},building,start,start+86_400_000);
             Map<Long,String> versions=new HashMap<>();
@@ -104,7 +104,7 @@ class HourlyMonitoringRepository {
                 p.approximate(),p.staticGasCoverage(),p.sourceNatures(),evidenceId,p.reasonCode());
         String summary=encode(point),summaryHash=hash(evidenceId+":"+summary);
         return Boolean.TRUE.equals(writes.execute(status->{
-            String global=global(target.building(),true);
+            String global=global(target.building(),target.date(),true);
             jdbc.update("INSERT INTO biz_hourly_monitor_revision(building_id,hour_ms,revision) VALUES(?,?,0) ON DUPLICATE KEY UPDATE revision=revision",target.building(),hour);
             Long revision=jdbc.queryForObject("SELECT revision FROM biz_hourly_monitor_revision WHERE building_id=? AND hour_ms=? FOR UPDATE",Long.class,target.building(),hour);
             if(!expected.equals(version(global,Objects.requireNonNull(revision),hour,Instant.now(),policy)))return false;
@@ -134,15 +134,16 @@ class HourlyMonitoringRepository {
         if(!id.equals(hash(building+":"+row.get("hour_ms")+":"+row.get("source_version")+":"+text)))throw integrity();
         return CarbonEvidence.parse(text);
     }
-    private String global(String building,boolean lock) {
+    private String global(String building,LocalDate date,boolean lock) {
         if(lock)for(String owner:List.of("*",building))for(String domain:DOMAINS)
             jdbc.update("INSERT INTO biz_carbon_display_source_revision(building_id,domain_key,scope_key,revision) VALUES(?,?,'*',0) ON DUPLICATE KEY UPDATE revision=revision",owner,domain);
-        var rows=jdbc.query("SELECT building_id,domain_key,revision FROM biz_carbon_display_source_revision WHERE building_id IN ('*',?) AND domain_key IN ('DAILY_INPUT','DYNAMIC_INPUT','DYNAMIC_RAW','HOURLY_RULE') AND scope_key='*' ORDER BY building_id,domain_key"+(lock?" FOR UPDATE":""),
+        var rows=jdbc.query("SELECT building_id,domain_key,revision FROM biz_carbon_display_source_revision WHERE building_id IN ('*',?) AND domain_key IN ('DAILY_INPUT','DYNAMIC_INPUT','DYNAMIC_RAW','HOURLY_RULE','CATALOG') AND scope_key='*' ORDER BY building_id,domain_key"+(lock?" FOR UPDATE":""),
                 (r,n)->r.getString(1)+":"+r.getString(2)+":"+r.getLong(3),building);
         // 缺失零版本行与发布时补建的零版本行必须等价。
         Map<String,String> values=new TreeMap<>();
         for(String owner:List.of("*",building))for(String domain:DOMAINS)values.put(owner+":"+domain,"0");
         for(String row:rows){int index=row.lastIndexOf(':');values.put(row.substring(0,index),row.substring(index+1));}
+        if(!"0".equals(values.get("*:CATALOG")))values.put("*:CATALOG",MetadataSnapshot.catalog(jdbc).version(date.atStartOfDay(ZONE).toInstant(),date.plusDays(1).atStartOfDay(ZONE).toInstant()));
         return hash(encode(values));
     }
     private static String version(String global,long revision,long hour,Instant now,String policy) {

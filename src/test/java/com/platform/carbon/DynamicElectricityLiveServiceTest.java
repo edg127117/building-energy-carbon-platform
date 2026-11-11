@@ -23,6 +23,9 @@ import static com.platform.carbon.DynamicElectricityContracts.*;
 
 /** 隔离H2贯通实际周期求和、计量树、项目排除、动态算法和持久任务，外部身份/目录用测试替身。 */
 class DynamicElectricityLiveServiceTest {
+    private static MetadataSnapshot metadata(String value) {
+        var metadata=mock(MetadataSnapshot.class);when(metadata.version(any(),any())).thenReturn(value);return metadata;
+    }
     private JdbcTemplate jdbc;
     private TransactionTemplate tx;
     private DynamicElectricityLiveService live;
@@ -61,7 +64,7 @@ class DynamicElectricityLiveServiceTest {
         var mapper=new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         tasks=spy(new DynamicElectricityLiveRepository(jdbc,mapper));
         results=new DynamicElectricityRepository(jdbc,mapper);
-        doReturn("metadata-v1").when(tasks).metadataVersion(anyString(),any());
+        doReturn(metadata("metadata-v1")).when(tasks).metadataSnapshot(anyString(),any());
         auth=mock(CarbonAuthorization.class);devices=mock(DeviceIdentityProvider.class);users=mock(SysUserMapper.class);roles=mock(SysRoleMapper.class);
         var user=new SysUser();user.setStatus(1);user.setDelFlag(0);user.setActivationPending(0);
         when(users.selectSecurityState(1L)).thenReturn(user);when(roles.selectRoleKeysByUserId(1L)).thenReturn(role);
@@ -79,6 +82,24 @@ class DynamicElectricityLiveServiceTest {
         meters(2,false);
     }
     private static LocalDateTime local(Instant at){return LocalDateTime.ofInstant(at,ZoneId.of("Asia/Shanghai"));}
+
+    @Test void readyScanVisitsEveryPageAndNeverDelaysNewPendingInput() {
+        for(int i=0;i<205;i++) jdbc.update("INSERT INTO biz_dynamic_electricity_task(building_id,start_ms,end_ms,requested_by,source_kind,input_json,input_hash,state,updated_at) VALUES('B',?,?,1,'REVIEWED_INTERVAL','{}',?,'READY',0)",i,i+1,DynamicElectricityRepository.hash("{}"));
+        var first=tasks.due(1000);
+        assertThat(first).hasSize(100);
+        jdbc.update("INSERT INTO biz_dynamic_electricity_task(building_id,start_ms,end_ms,requested_by,input_json,input_hash,state,updated_at) VALUES('A',0,1,1,'{}',?,'PENDING',0)",DynamicElectricityRepository.hash("{}"));
+        var second=tasks.due(1000);
+        var third=tasks.due(1000);
+        assertThat(second).hasSize(100);
+        assertThat(third).hasSize(7);
+        assertThat(second.getFirst().state()).isEqualTo("PENDING");
+        assertThat(third.getFirst().state()).isEqualTo("PENDING");
+        var visited=new HashSet<Long>();
+        java.util.stream.Stream.of(first,second,third).flatMap(List::stream).filter(t->t.state().equals("READY")).forEach(t->visited.add(t.from()));
+        assertThat(visited).hasSize(205);
+        assertThat(tasks.due(1000).get(1).from()).isZero();
+        assertThat(jdbc.queryForObject("SELECT SUM(next_check)+SUM(updated_at)+SUM(revision) FROM biz_dynamic_electricity_task",Long.class)).isZero();
+    }
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(longs={0,1})
@@ -214,7 +235,7 @@ class DynamicElectricityLiveServiceTest {
         });
         drain();
         String inputHash=jdbc.queryForObject("SELECT input_hash FROM biz_dynamic_electricity_task",String.class);
-        var oldResult=results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
+        var oldResult=results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst();
         String resultHash=jdbc.queryForObject("SELECT payload_hash FROM biz_dynamic_electricity_result WHERE result_id=?",String.class,oldResult.id());
         var retention=new DynamicElectricityEvidenceRetention(jdbc,tasks,results,manager);
         retention.sweepMarkers(System.currentTimeMillis()+Duration.ofDays(6).toMillis());
@@ -244,14 +265,14 @@ class DynamicElectricityLiveServiceTest {
         automatic("P0",from,null,null,null,"10","0.5",null);
         automatic("P1",from,null,null,null,"20","0.8",null);drain();
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_dynamic_interval_evidence",Integer.class)).isZero();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("21");
-        var initialResult=results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id();
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().values().emissionKgCo2()).isEqualByComparingTo("21");
+        var initialResult=results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().id();
         long revision=tasks.locked("B",from,from.plusSeconds(900),0).revision();
         automatic("P0",from,null,null,null,"10.0","0.50",null);
         assertThat(tasks.locked("B",from,from.plusSeconds(900),0).revision()).isEqualTo(revision);
         assertThat(jdbc.queryForList("SELECT snapshot_state FROM biz_dynamic_interval_evidence WHERE outcome='UNCHANGED'",String.class)).containsExactly("LIGHT");
         automatic("P0",from,null,null,null,"12","0.6",null);drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("23.2");
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().values().emissionKgCo2()).isEqualByComparingTo("23.2");
         automatic("P0",from,null,null,null,"10","0.5",null);drain();
         var adopted=tasks.locked("B",from,from.plusSeconds(900),0).readings().get("P0");
         assertThat(adopted.quantityRevision()).isEqualTo(3);assertThat(adopted.quantity()).isEqualByComparingTo("10");
@@ -279,7 +300,7 @@ class DynamicElectricityLiveServiceTest {
         automatic("P0",from,null,null,"first","10","0.5",null);
         automatic("P1",from,null,null,"other","20","0.8",null);
         drain();
-        String oldResult=results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id();
+        String oldResult=results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().id();
         String first=results.byId("B",oldResult).electricityEvidence().path("P0").path("evidenceId").asText();
         automatic("P0",from,null,null,"unpublished","11","0.5",null);
         automatic("P0",from,null,null,"same","11.0","0.50",null);
@@ -348,7 +369,7 @@ class DynamicElectricityLiveServiceTest {
             live.ingestFromMqtt(new DeviceIntervalRequest(new DeviceIdentityKey("SERIAL","P1"),"METER","P1",from,from.plusSeconds(900),1,new BigDecimal("20"),new BigDecimal("0.8"),"SIMULATED","MQTT-test"));
         });
         clearInvocations(auth,users,roles);drain();
-        var result=results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
+        var result=results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst();
         assertThat(result.values().emissionKgCo2()).isEqualByComparingTo("21");
         assertThat(results.byId("B",result.id()).electricityEvidence().path("P0").path("transport").asText()).isEqualTo("MQTT_STANDARD_V1");
         verifyNoInteractions(auth,users,roles);
@@ -358,29 +379,29 @@ class DynamicElectricityLiveServiceTest {
 
     @Test void pairsOutOfOrderAvoidsDuplicatesAndWaitsForBothRevisions() {
         upload("P0",from,1,"10",null);upload("P1",from,1,"20","0.8");drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1")).isEmpty();
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1"))).isEmpty();
         upload("P0",from,1,null,"0.5");drain();
-        var saved=results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst();
+        var saved=results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst();
         assertThat(saved.values().quantity()).isEqualByComparingTo("30");assertThat(saved.values().emissionKgCo2()).isEqualByComparingTo("21");
         upload("P0",from,1,"10","0.5");drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().id()).isEqualTo(saved.id());
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().id()).isEqualTo(saved.id());
         assertThatThrownBy(()->upload("P0",from,1,"11","0.5")).hasMessageContaining("不同值");
         upload("P0",from,2,"12",null);drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1")).isEmpty();
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1"))).isEmpty();
         upload("P0",from,2,null,"0.5");drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("22");
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().values().emissionKgCo2()).isEqualByComparingTo("22");
         assertThat(results.byId("B",saved.id()).electricityEvidence().path("P0").path("quantity").asText()).isEqualTo("10");
     }
     @Test void staleLeaseCannotOverwriteNewInputsAndExpiredLeaseRecovers() {
         upload("P0",from,1,"10","0.5");upload("P1",from,1,"20","0.8");
         var old=tasks.locked("B",from,from.plusSeconds(900),1);String token=tasks.claim(old,System.currentTimeMillis());
         upload("P0",from,2,"12","0.5");live.process(old,token);
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1")).isEmpty();
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1"))).isEmpty();
         jdbc.update("UPDATE biz_dynamic_electricity_task SET state='RUNNING',lease_token='dead',lease_until=0,next_check=0");
         live.refresh();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values().emissionKgCo2()).isEqualByComparingTo("22");
-        doReturn("metadata-v2").when(tasks).metadataVersion(anyString(),any());live.refreshMetadata();drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v2")).hasSize(1);
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().values().emissionKgCo2()).isEqualByComparingTo("22");
+        doReturn(metadata("metadata-v2")).when(tasks).metadataSnapshot(anyString(),any());live.refreshMetadata();drain();
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v2"))).hasSize(1);
     }
     @Test void oneHundredMetersFullDayAggregateAndCorrectionStaysInItsInterval() {
         jdbc.update("DELETE FROM biz_data_point");meters(100,false);
@@ -391,9 +412,9 @@ class DynamicElectricityLiveServiceTest {
         assertThat(day.emissionTco2()).isEqualByComparingTo("4.8");assertThat(day.factorKgCo2PerKwh()).isEqualByComparingTo("0.5");
         verify(catalog,times(100)).effectiveBindingForPeriod(anyLong(),anyCollection(),anyString(),anyString(),any(),any());
         verify(lookup,times(1)).findApprovedItem(eq("ELEC"),any());
-        var unchanged=results.currentDeviceResults("B",from.plusSeconds(900),from.plusSeconds(1800),"metadata-v1").getFirst().id();
+        var unchanged=results.currentDeviceResults("B",from.plusSeconds(900),from.plusSeconds(1800),metadata("metadata-v1")).getFirst().id();
         upload("P0",from,2,"2","0.4");drain();
-        assertThat(results.currentDeviceResults("B",from.plusSeconds(900),from.plusSeconds(1800),"metadata-v1").getFirst().id()).isEqualTo(unchanged);
+        assertThat(results.currentDeviceResults("B",from.plusSeconds(900),from.plusSeconds(1800),metadata("metadata-v1")).getFirst().id()).isEqualTo(unchanged);
         assertThat(queries.query(1,role,"B","MONTH",YearMonth.from(local(from)).toString()).points().get(local(from).getDayOfMonth()-1).emissionTco2()).isEqualByComparingTo("4.8004");
     }
     @Test void openDayAndMonthReturnOnlyTheContinuousComputedPrefix() {
@@ -419,7 +440,7 @@ class DynamicElectricityLiveServiceTest {
         });
         for(int slot=0;slot<2;slot++){upload("P0",from.plusSeconds(slot*900L),1,"10","0.5");upload("P1",from.plusSeconds(slot*900L),1,"20","0.8");}
         drain();
-        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(1800),"metadata-v1")).hasSize(2);
+        assertThat(results.currentDeviceResults("B",from,from.plusSeconds(1800),metadata("metadata-v1"))).hasSize(2);
         verify(catalog,times(8)).effectiveBindingForPeriod(anyLong(),anyCollection(),anyString(),anyString(),any(),any());
     }
 
@@ -435,7 +456,7 @@ class DynamicElectricityLiveServiceTest {
     @Test void totalAndSubmetersUseDisjointContributionsAndBuildingScopeIsEnforced() {
         jdbc.update("DELETE FROM biz_data_point");meters(3,true);
         upload("P0",from,1,"100","0.5");upload("P1",from,1,"30","0.6");upload("P2",from,1,"20","0.7");drain();
-        var value=results.currentDeviceResults("B",from,from.plusSeconds(900),"metadata-v1").getFirst().values();
+        var value=results.currentDeviceResults("B",from,from.plusSeconds(900),metadata("metadata-v1")).getFirst().values();
         assertThat(value.quantity()).isEqualByComparingTo("100");assertThat(value.emissionKgCo2()).isEqualByComparingTo("57");
         doReturn(Optional.of(new DeviceIdentityBinding("I",new DeviceIdentityKey("SERIAL","X"),"P0","P0","OTHER","METER",null,null,null,null))).when(devices).find(any());
         assertThatThrownBy(()->upload("P0",from,2,"100","0.5")).hasMessageContaining("不匹配");

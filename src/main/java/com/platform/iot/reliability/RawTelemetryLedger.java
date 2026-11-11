@@ -73,8 +73,6 @@ public class RawTelemetryLedger {
             }
             Fact fact = locked(key, incoming.eventTime());
             if (inserted) {
-                if(jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='PENDING_RAW' AND used_rows<?",maxPending)!=1)
-                    throw new DataAccessResourceFailureException("Pending raw capacity reached");
                 RawTelemetryEvent existing = historical.get();
                 RawTelemetryEvent frozen = existing == null ? incoming : existing;
                 if (!key.equals(codec.key(frozen.pointId()))) throw new IllegalStateException("Historical raw identity mismatch");
@@ -87,11 +85,19 @@ public class RawTelemetryLedger {
             RawTelemetryEvent original = codec.decode(fact.snapshotJson());
             if (!hash.equals(fact.hash())) {
                 appendConflict(fact, incoming, hash);
+                if(inserted)reservePendingCapacity();
                 return new Reservation(original, true, false);
             }
             if (!codec.hash(original).equals(hash)) throw new IllegalStateException("Raw snapshot digest mismatch");
+            if(inserted)reservePendingCapacity();
             return new Reservation(original, false, false);
         });
+    }
+
+    private void reservePendingCapacity() {
+        // 配额仍与意图原子提交；最后才取得全局行锁，锁内不再访问TDengine或读取冻结正文。
+        if(jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='PENDING_RAW' AND used_rows<?",maxPending)!=1)
+            throw new DataAccessResourceFailureException("Pending raw capacity reached");
     }
 
     public enum RetentionResult { RETAINED, UNKNOWN, RETIRED }
@@ -147,9 +153,9 @@ public class RawTelemetryLedger {
             Fact fact = locked(key, original.eventTime());
             if (!fact.snapshotJson().equals(codec.encode(original))) throw new IllegalStateException("Frozen raw snapshot mismatch");
             T result = write.get();
+            jdbc.update("UPDATE biz_telemetry_raw_intent SET storage_state='PERSISTED',retry_count=0,next_retry_ms=0 WHERE point_key=? AND event_ms=?", key, original.eventTime());
             if(!"PERSISTED".equals(fact.storageState()))
                 jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-1 WHERE budget_key='PENDING_RAW'");
-            jdbc.update("UPDATE biz_telemetry_raw_intent SET storage_state='PERSISTED',retry_count=0,next_retry_ms=0 WHERE point_key=? AND event_ms=?", key, original.eventTime());
             return result;
         });
     }

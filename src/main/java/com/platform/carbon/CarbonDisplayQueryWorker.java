@@ -35,6 +35,7 @@ class CarbonDisplayQueryWorker implements AutoCloseable {
                 try{prewarm.registerDefaults();}catch(RuntimeException e){LoggerFactory.getLogger(getClass()).warn("Carbon display default registration unavailable");}
             }
             for(var h:repository.due(now)) {
+                repository.advance(h);
                 String token=null;
                 try {
                     var q=service.parse(h);String current=versions.version(q);

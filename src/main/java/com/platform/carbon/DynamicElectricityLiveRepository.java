@@ -16,6 +16,7 @@ public class DynamicElectricityLiveRepository {
     private final JdbcTemplate jdbc;
     private final ObjectMapper json;
     private final DynamicElectricityIntervalEvidence evidence;
+    private Task scanCursor;
     public DynamicElectricityLiveRepository(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc,ObjectMapper json) {
         this.jdbc=jdbc; this.json=json;this.evidence=new DynamicElectricityIntervalEvidence(jdbc,json);
     }
@@ -75,8 +76,13 @@ public class DynamicElectricityLiveRepository {
                 Integer.class,building,point,equipment)==1;
     }
     List<Task> due(long now) {
-        return jdbc.query("SELECT * FROM biz_dynamic_electricity_task WHERE (state<>'READY' OR source_kind<>'DEVICE_INTERVAL') AND next_check<=? AND (state<>'RUNNING' OR lease_until<?) ORDER BY CASE WHEN state='READY' THEN 1 ELSE 0 END,next_check,start_ms LIMIT 100",
-                this::row,now,now);
+        // 待算/租约恢复始终优先；空闲已完成任务使用独立游标，既不写调度时间也不挡住新输入。
+        var pending=jdbc.query("SELECT * FROM biz_dynamic_electricity_task WHERE state<>'READY' AND next_check<=? AND (state<>'RUNNING' OR lease_until<?) ORDER BY next_check,building_id,start_ms LIMIT 100",this::row,now,now);
+        int remaining=100-pending.size();if(remaining==0)return pending;
+        var ready=scanCursor==null?jdbc.query("SELECT * FROM biz_dynamic_electricity_task WHERE state='READY' AND source_kind<>'DEVICE_INTERVAL' AND next_check<=? ORDER BY building_id,start_ms,end_ms LIMIT ?",this::row,now,remaining):
+                jdbc.query("SELECT * FROM biz_dynamic_electricity_task WHERE state='READY' AND source_kind<>'DEVICE_INTERVAL' AND next_check<=? AND (building_id>? OR (building_id=? AND (start_ms>? OR (start_ms=? AND end_ms>?)))) ORDER BY building_id,start_ms,end_ms LIMIT ?",this::row,now,scanCursor.building(),scanCursor.building(),scanCursor.from(),scanCursor.from(),scanCursor.to(),remaining);
+        scanCursor=ready.size()<remaining?null:ready.getLast();
+        var rows=new ArrayList<>(pending);rows.addAll(ready);return rows;
     }
     String claim(Task t,long now) {
         String token=UUID.randomUUID().toString().replace("-","");
@@ -101,19 +107,23 @@ public class DynamicElectricityLiveRepository {
                 """,code,System.currentTimeMillis()+5000,t.building(),t.from(),t.to(),t.revision(),token);
     }
     List<String> buildings() {return jdbc.queryForList("SELECT DISTINCT building_id FROM biz_dynamic_electricity_task",String.class);}
-    void metadataChanged(String building,String metadata) {
-        jdbc.update("UPDATE biz_dynamic_electricity_task SET state='PENDING',revision=revision+1,lease_token=NULL,lease_until=0,next_check=? WHERE building_id=? AND source_kind='DEVICE_INTERVAL' AND state='READY' AND metadata_version<>?",
-                System.currentTimeMillis(),building,metadata);
+    private record MetadataHead(long from,long to,long revision,String version) { }
+    void metadataChanged(String building,MetadataSnapshot metadata) {
+        // 仅扫描版本头；复核配置不能再次读取每个设备时段的完整上报正文。
+        var ready=jdbc.query("SELECT start_ms,end_ms,revision,metadata_version FROM biz_dynamic_electricity_task WHERE building_id=? AND source_kind='DEVICE_INTERVAL' AND state='READY' ORDER BY start_ms LIMIT 50001",(r,n)->new MetadataHead(r.getLong(1),r.getLong(2),r.getLong(3),r.getString(4)),building);
+        if(ready.size()>50000)throw new IllegalStateException("Device metadata scan capacity exceeded");
+        for(var task:ready)if(!Objects.equals(task.version(),metadata.version(Instant.ofEpochMilli(task.from()),Instant.ofEpochMilli(task.to()))))
+            jdbc.update("UPDATE biz_dynamic_electricity_task SET state='PENDING',revision=revision+1,lease_token=NULL,lease_until=0,next_check=? WHERE building_id=? AND start_ms=? AND end_ms=? AND source_kind='DEVICE_INTERVAL' AND state='READY' AND revision=? AND metadata_version=?",System.currentTimeMillis(),building,task.from(),task.to(),task.revision(),task.version());
     }
-    public String metadataVersion(String building,DynamicElectricityRepository repository) {
+    MetadataSnapshot metadataSnapshot(String building,DynamicElectricityRepository repository) {
         DynamicElectricityQueryBudget.check();
-        var values=new ArrayList<Object>();
-        values.add(repository.inputMetadataVersion(building,"DEVICE_INTERVAL"));values.add(repository.projectVersion(building));
+        var values=new ArrayList<List<Map<String,Object>>>(repository.inputMetadataHeads(building,"DEVICE_INTERVAL"));
+        values.add(jdbc.queryForList("SELECT version_id,revision,status,effective_from,effective_to FROM biz_carbon_project_version WHERE building_id=? ORDER BY version_id",building));
         values.add(jdbc.queryForList("SELECT version_id,revision,status,effective_from,effective_to FROM biz_energy_classification_version WHERE building_id=? AND status='APPROVED' ORDER BY version_id",building));
         values.add(jdbc.queryForList("SELECT version_id,config_revision,status,snapshot_sha256,effective_at,superseded_at FROM biz_relation_version WHERE building_id=? AND effective_at IS NOT NULL ORDER BY version_id",building));
         values.add(jdbc.queryForList("SELECT model_id,governance_mode,active_version_id FROM biz_relation_model WHERE building_id=? ORDER BY model_id",building));
         values.add(jdbc.queryForList("SELECT scope_id,relation_version_id,start_epoch_ms,end_epoch_ms,status FROM biz_historical_metering_scope WHERE building_id=? AND status='APPROVED' ORDER BY scope_id",building));
-        return hash(encode(values));
+        return new MetadataSnapshot(values);
     }
     void invalidateLegacy(String building,Instant from,Instant to) {
         jdbc.update("UPDATE biz_dynamic_electricity_task SET state='PENDING',revision=revision+1,next_check=0,lease_token=NULL,lease_until=0 WHERE building_id=? AND source_kind<>'DEVICE_INTERVAL' AND start_ms<? AND end_ms>?",building,to.toEpochMilli(),from.toEpochMilli());

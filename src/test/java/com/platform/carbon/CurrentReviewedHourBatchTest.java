@@ -86,7 +86,7 @@ class CurrentReviewedHourBatchTest extends QueryDayCacheFixture {
         verify(repository).currentReviewedDayBodies(eq(BUILDING), eq(FROM), eq(DAY_END), eq(List.of("long")), any());
         verify(repository, never()).electricityVersion(anyString(), any(), any(), anyString());
         verify(repository, times(24)).factors(eq(BUILDING), any(), any());
-        verify(live, times(24)).metadataVersion(BUILDING, repository);
+        verify(live, times(24)).metadataSnapshot(BUILDING, repository);
         assertThat(TransactionSynchronizationManager.hasResource(dataSource)).isFalse();
     }
 

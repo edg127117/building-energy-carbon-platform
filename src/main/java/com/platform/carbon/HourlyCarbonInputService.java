@@ -104,8 +104,7 @@ public class HourlyCarbonInputService {
                     var item=capture.items.get(code);
                     if(item==null||!covers(item.effectiveFrom(),item.effectiveTo(),from,to)) {
                         item=units.findApprovedItem(code,local(from)).orElseThrow(()->error(409,DEPENDENCY_UNAVAILABLE,"外购电力目录尚未审核"));
-                        var lastItem=units.findApprovedItem(code,local(to.minusNanos(1))).orElseThrow(()->error(409,DEPENDENCY_UNAVAILABLE,"外购电力目录有效期不足"));
-                        if(!item.versionId().equals(lastItem.versionId()))throw error(409,DEPENDENCY_UNAVAILABLE,"小时内外购电力目录换版");
+                        if(!covers(item.effectiveFrom(),item.effectiveTo(),from,to))throw error(409,DEPENDENCY_UNAVAILABLE,"外购电力目录有效期不足");
                         capture.items.put(code,item);
                     }
                     if(!"ELECTRICITY".equals(item.compatibleCategory()) || !item.usageScopes().contains("PURCHASED_ELECTRICITY")
@@ -234,8 +233,7 @@ public class HourlyCarbonInputService {
         var value=capture.bindings.get(point);
         if(value==null || value.effectiveFrom().isAfter(local(from)) || value.effectiveTo()!=null && value.effectiveTo().isBefore(local(to))) {
             value=catalog.effectiveBinding(user,roles,building,point,local(from));
-            var last=catalog.effectiveBinding(user,roles,building,point,local(to.minusNanos(1)));
-            if(!value.bindingVersionId().equals(last.bindingVersionId())||!"CONFIRMED".equals(value.confirmationStatus()))
+            if(!covers(value.effectiveFrom(),value.effectiveTo(),from,to)||!"CONFIRMED".equals(value.confirmationStatus()))
                 throw error(409,ACTIVITY_INCOMPLETE,"小时内测点能源绑定换版或尚未确认");
             capture.bindings.put(point,value);
         }
@@ -248,8 +246,8 @@ public class HourlyCarbonInputService {
         if(conversion==null||!covers(conversion.inputUnit().effectiveFrom(),conversion.inputUnit().effectiveTo(),from,to)
                 ||!covers(conversion.targetUnit().effectiveFrom(),conversion.targetUnit().effectiveTo(),from,to)) {
             conversion=units.convert(BigDecimal.ONE,unit,"KWH",local(from)).orElseThrow(()->error(409,UNIT_INCOMPATIBLE,"小时电量只能使用已审核的固定比例电能单位"));
-            var last=units.convert(BigDecimal.ONE,unit,"KWH",local(to.minusNanos(1))).orElseThrow(()->error(409,UNIT_INCOMPATIBLE,"小时末尾电能单位不可用"));
-            if(!conversion.inputUnit().versionId().equals(last.inputUnit().versionId())||!conversion.targetUnit().versionId().equals(last.targetUnit().versionId()))
+            if(!covers(conversion.inputUnit().effectiveFrom(),conversion.inputUnit().effectiveTo(),from,to)
+                    ||!covers(conversion.targetUnit().effectiveFrom(),conversion.targetUnit().effectiveTo(),from,to))
                 throw error(409,UNIT_INCOMPATIBLE,"小时内电能单位版本切换");
             capture.units.put(key,conversion);
         }
@@ -259,6 +257,7 @@ public class HourlyCarbonInputService {
         return new EnergyCatalogLookup.UnitConversion(quantity,conversion.inputUnit(),converted,conversion.targetUnit());
     }
     private static boolean covers(LocalDateTime start,LocalDateTime end,Instant from,Instant to) {
+        // 有效期和核算区间均右开；直接比较终点，避免整点前1纳秒被JDBC舍入成下一个整点。
         return start!=null&&!start.isAfter(local(from))&&(end==null||!end.isBefore(local(to)));
     }
     private static void conversionEvidence(com.fasterxml.jackson.databind.node.ObjectNode point,

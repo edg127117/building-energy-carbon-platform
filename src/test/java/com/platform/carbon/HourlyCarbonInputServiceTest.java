@@ -72,6 +72,68 @@ class HourlyCarbonInputServiceTest {
         return service.read(1,ROLES,request,START.plusSeconds(hour*3600L),START.plusSeconds((hour+1)*3600L),START,END,capture,CarbonCalculationDeadline.start(Duration.ofSeconds(60)));
     }
 
+    private HourlyCarbonInputService.Input readReviewed(Instant from,Instant to) {
+        var hourly=reviewedRequest(ASOF);
+        var reading=new ClassificationContracts.Reading("main",from,to,"ELECTRICITY","KWH","PERIOD_TOTAL",null,null,
+                new BigDecimal("12"),BigDecimal.ONE,true,"CONFIRMED","manifest","EXACT",null);
+        when(classifications.reviewedIntervalReadings(anyLong(),anyCollection(),eq("TEST"),any(),any(),eq(ASOF)))
+                .thenReturn(List.of(new ClassificationContracts.ReadingView("boundary-fact","batch",reading,new BigDecimal("12"),1,"APPROVED",null)));
+        return service.read(1,ROLES,hourly,from,to,from,to,new HourlyCarbonInputService.Capture(),CarbonCalculationDeadline.start(Duration.ofSeconds(20)));
+    }
+
+    private static LocalDateTime local(Instant value) { return LocalDateTime.ofInstant(value,ZoneId.of("Asia/Shanghai")); }
+    private static Instant instant(String value) { return LocalDateTime.parse(value).atZone(ZoneId.of("Asia/Shanghai")).toInstant(); }
+
+    @Test void exactHourlyCoverageAcceptsEveryMonthEndAcrossLeapAndCommonYears() {
+        var monthEnds=new ArrayList<Instant[]>();
+        for(int year=2024;year<=2025;year++)for(int month=1;month<=12;month++) {
+            var lastDay=YearMonth.of(year,month).atEndOfMonth();
+            var from=lastDay.atTime(23,0).atZone(ZoneId.of("Asia/Shanghai")).toInstant();
+            var to=lastDay.plusDays(1).atStartOfDay(ZoneId.of("Asia/Shanghai")).toInstant();
+            monthEnds.add(new Instant[]{from,to});
+        }
+        assertThat(monthEnds).hasSize(24);
+        for(var bounds:monthEnds) {
+            setup();
+            configure(List.of(meter("main",null)));
+            var from=bounds[0];var to=bounds[1];
+            var end=local(to);
+            var binding=new BindingVersionView("binding-main","binding-v1",1,"TEST","main","point","KWH","ELECTRICITY","item-v1",local(from),end,"CONFIRMED","test",0,1L,null,2L,null);
+            when(catalog.effectiveBinding(anyLong(),anyCollection(),eq("TEST"),eq("main"),any())).thenReturn(binding);
+            when(units.findApprovedItem(eq("ELECTRICITY"),any())).thenReturn(Optional.of(
+                    new EnergyCatalogLookup.ApprovedEnergyItem("item","ELECTRICITY","item-v1",1,"ELECTRICITY",List.of("PURCHASED_ELECTRICITY"),"TEST","manifest",local(from),end)));
+            var inputUnit=new EnergyCatalogLookup.ApprovedUnit("input","KWH","input-v1",1,"kWh","ENERGY","KWH",BigDecimal.ONE,"FIXED",null,"TEST","manifest",local(from),end);
+            var targetUnit=new EnergyCatalogLookup.ApprovedUnit("target","KWH","target-v1",1,"kWh","ENERGY","KWH",BigDecimal.ONE,"FIXED",null,"TEST","manifest",local(from),end);
+            when(units.convert(eq(BigDecimal.ONE),eq("KWH"),eq("KWH"),any())).thenReturn(Optional.of(
+                    new EnergyCatalogLookup.UnitConversion(BigDecimal.ONE,inputUnit,BigDecimal.ONE,targetUnit)));
+            var result=readReviewed(from,to);
+            assertThat(result.activities().getFirst().quantityKwh()).isEqualByComparingTo("12");
+            verify(catalog,never()).effectiveBinding(anyLong(),anyCollection(),anyString(),anyString(),eq(end.minusNanos(1)));
+        }
+    }
+
+    @Test void aBindingEndingOneNanosecondBeforeHourEndIsRejected() {
+        setup();configure(List.of(meter("main",null)));
+        var from=instant("2026-01-31T23:00:00");var to=instant("2026-02-01T00:00:00");
+        var earlyEnd=local(to).minusNanos(1);
+        var binding=new BindingVersionView("binding-main","binding-v1",1,"TEST","main","point","KWH","ELECTRICITY","item-v1",local(from),earlyEnd,"CONFIRMED","test",0,1L,null,2L,null);
+        when(catalog.effectiveBinding(anyLong(),anyCollection(),eq("TEST"),eq("main"),any())).thenReturn(binding);
+        assertThatThrownBy(()->readReviewed(from,to)).isInstanceOf(BusinessException.class);
+    }
+
+    @Test void eitherConversionUnitEndingBeforeHourEndIsRejected() {
+        var from=instant("2026-02-28T23:00:00");var to=instant("2026-03-01T00:00:00");
+        for(boolean inputExpires:List.of(true,false)) {
+            setup();configure(List.of(meter("main",null)));
+            var end=local(to);var earlyEnd=end.minusNanos(1);
+            var inputUnit=new EnergyCatalogLookup.ApprovedUnit("input","KWH","input-v1",1,"kWh","ENERGY","KWH",BigDecimal.ONE,"FIXED",null,"TEST","manifest",local(from),inputExpires?earlyEnd:end);
+            var targetUnit=new EnergyCatalogLookup.ApprovedUnit("target","KWH","target-v1",1,"kWh","ENERGY","KWH",BigDecimal.ONE,"FIXED",null,"TEST","manifest",local(from),inputExpires?end:earlyEnd);
+            when(units.convert(eq(BigDecimal.ONE),eq("KWH"),eq("KWH"),any())).thenReturn(Optional.of(
+                    new EnergyCatalogLookup.UnitConversion(BigDecimal.ONE,inputUnit,BigDecimal.ONE,targetUnit)));
+            assertThatThrownBy(()->readReviewed(from,to)).isInstanceOf(BusinessException.class);
+        }
+    }
+
     @Test void nestedSubMetersNeverDoubleCountFloorAndRoomQuantities() {
         configure(List.of(meter("main",null),meter("floor","main"),meter("room1","floor"),meter("room2","floor")));
         raw(Map.of("main",1000,"floor",1000,"room1",600,"room2",400));
