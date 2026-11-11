@@ -111,14 +111,15 @@ public class ClassificationRepository {
     }
     /** 小时计算按实际审批时间冻结来源；迁移前没有审批时刻的旧批次不能冒充水位之前已审核。 */
     public List<StoredReading> approvedReadingsAsOf(String building,Instant from,Instant to,Instant asOf,int limit) {
-        // 先用计量时段索引过滤候选，再从替代事实连接批次；审批水位和替代关系谓词保持不变。
+        // 替代编号大多为 NULL 时，MySQL 可能为每条候选扫描整楼；显式使用既有替代索引做等值查找。
+        // 各分页路径保留同一提示；审批水位和替代关系谓词保持不变。
         return jdbc.query("""
                 SELECT /*+ INDEX(r idx_energy_manual_point_period) NO_SEMIJOIN(@hourly_replacement) */ r.*,b.status AS batch_status FROM biz_energy_manual_reading r
                 JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED' AND b.created_at<=? AND b.reviewed_at<=?
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(hourly_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(hourly_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id
                       AND sb.status='APPROVED' AND sb.created_at<=? AND sb.reviewed_at<=?)
@@ -143,7 +144,7 @@ public class ClassificationRepository {
                 WHERE r.building_id=? AND r.point_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED'
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(current_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(current_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
                 ORDER BY r.start_inclusive,r.fact_id LIMIT ?
@@ -159,7 +160,7 @@ public class ClassificationRepository {
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED'
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(current_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(current_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
                 """;
@@ -195,7 +196,7 @@ public class ClassificationRepository {
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED'
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(window_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(window_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
                 """;
@@ -262,7 +263,7 @@ public class ClassificationRepository {
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED'
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(id_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(id_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
                 """;
@@ -288,7 +289,7 @@ public class ClassificationRepository {
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>?
                   AND b.status='APPROVED' AND b.created_at<=? AND b.reviewed_at<=?
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(day_asof_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(day_asof_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.building_id=r.building_id AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED' AND sb.created_at<=? AND sb.reviewed_at<=?)
                 """;
