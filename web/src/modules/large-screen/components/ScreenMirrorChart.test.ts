@@ -65,8 +65,8 @@ describe('ScreenMirrorChart', () => {
     }
     expect(option.xAxis.axisLabel.interval).toBe(0)
     expect(option.yAxis.map(axis => axis.name)).toEqual(['tCO₂e', 'kgCO₂e/kWh'])
-    expect(option.yAxis[0].axisLabel.formatter(-4)).toBe('4.00')
-    expect(option.yAxis[1].axisLabel.formatter(-0.5)).toBe('0.50')
+    expect(option.yAxis[0].axisLabel.formatter(-4)).toBe('4')
+    expect(option.yAxis[1].axisLabel.formatter(-0.5)).toBe('0.5')
     expect(option.series.map(series => ({
       id: series.id,
       type: series.type,
@@ -148,11 +148,13 @@ describe('ScreenMirrorChart', () => {
         hourDetails: [{ actualStart: '2026-09-22T00:00:00+08:00', actualEnd: '2026-09-22T00:55:00+08:00', status: 'COMPLETE', approximate: true, gasCoverage: 'CO2_ONLY_ELECTRICITY', reasonCode: null }],
       },
     } })
-    const option = wrapper.findComponent(ChartView).props('option') as { yAxis: Array<{ name: string }>; series: Array<{ yAxisIndex: number }>; tooltip: { formatter: (params: unknown) => string } }
-    expect(option.yAxis.map(axis => axis.name)).toEqual(['tCO₂', 'kgCO₂/kWh', 'tCO₂e', 'kgCO₂e/kWh'])
+    const option = wrapper.findComponent(ChartView).props('option') as { yAxis: Array<{ name: string }>; series: Array<{ yAxisIndex: number; data: Array<number | null> }>; tooltip: { formatter: (params: unknown) => string } }
+    expect(option.yAxis.map(axis => axis.name)).toEqual(['kgCO₂', 'kgCO₂/kWh', 'kgCO₂e', 'kgCO₂e/kWh'])
     expect(option.series.map(series => series.yAxisIndex)).toEqual([0, 2, 1, 3])
-    const tooltip = option.tooltip.formatter([{ axisValueLabel: '00:00', dataIndex: 0, seriesId: 'static-emissions', seriesName: '静态碳排放量', value: -0.3 }])
-    expect(tooltip).toContain('tCO₂e')
+    expect(option.series[0].data[0]).toBe(200)
+    expect(option.series[1].data[0]).toBe(-300)
+    const tooltip = option.tooltip.formatter([{ axisValueLabel: '00:00', dataIndex: 0, seriesId: 'static-emissions', seriesName: '静态碳排放量', value: option.series[1].data[0] }])
+    expect(tooltip).toContain('300.00 kgCO₂e')
     expect(tooltip).toContain('2026-09-22T00:55:00+08:00')
     expect(tooltip).toContain('静态口径：CO₂')
     wrapper.unmount()
@@ -165,12 +167,79 @@ describe('ScreenMirrorChart', () => {
     expect(axes()[0]).toMatchObject({ min: -20, max: 20, interval: 5 })
     expect(axes()[1]).toMatchObject({ min: -0.8, max: 0.8, interval: 0.2 })
     await wrapper.setProps({ data: { ...data, dynamicEmissions: [400] } })
-    expect(axes()[0]).toMatchObject({ min: -500, max: 500, interval: 100 })
+    expect(axes()[0]).toMatchObject({ min: -600, max: 600, interval: 200 })
     await wrapper.setProps({ data: { ...data, dynamicEmissions: [0.014] } })
     expect(axes()[0].max).toBeCloseTo(0.02)
     expect(axes()[0].interval).toBeCloseTo(0.005)
     await wrapper.setProps({ data: { ...data, dynamicEmissions: [0] } })
     expect(axes()[0]).toMatchObject({ min: -1, max: 1, interval: 0.25 })
+    wrapper.unmount()
+  })
+
+  it.each(['day', 'month', 'year'] as const)('%s同口径轴覆盖两组峰值，小时转千克，月年保留吨和原始数据', kind => {
+    const data = { dynamicEmissions: [0.008, 0, null], staticEmissions: [0.026, null, 0], dynamicFactors: [0.2], staticFactors: [0.9], emissionUnit: 'tCO₂', factorUnit: 'kgCO₂/kWh' }
+    const original = structuredClone(data)
+    const period = { kind, value: kind === 'day' ? '2026-10-25' : kind === 'month' ? '2026-10' : '2026' }
+    const wrapper = mount(ScreenMirrorChart, { props: { period, data } })
+    const option = wrapper.findComponent(ChartView).props('option') as {
+      yAxis: Array<{ name: string; min: number; max: number; interval: number; axisLabel: { formatter: (value: number) => string } }>
+      series: Array<{ data: Array<number | null>; yAxisIndex: number }>
+      tooltip: { formatter: (params: unknown) => string }
+    }
+    const scale = kind === 'day' ? 1000 : 1
+    expect(option.yAxis[0].name).toBe(kind === 'day' ? 'kgCO₂' : 'tCO₂')
+    expect(option.series[0].data[0]).toBeCloseTo(0.008 * scale)
+    expect(option.series[1].data[0]).toBeCloseTo(-0.026 * scale)
+    expect(option.series[0].data.slice(1, 3)).toEqual([0, null])
+    for (const series of option.series) {
+      const axis = option.yAxis[series.yAxisIndex]
+      for (const value of series.data.filter((value): value is number => value !== null)) {
+        expect(value).toBeGreaterThan(axis.min)
+        expect(value).toBeLessThan(axis.max)
+      }
+    }
+    for (const axis of option.yAxis) {
+      expect(axis.min).toBe(-axis.max)
+      const count = Math.round(axis.max / axis.interval)
+      expect(count).toBeLessThanOrEqual(4)
+      const labels = Array.from({ length: count + 1 }, (_, i) => axis.axisLabel.formatter(i * axis.interval))
+      expect(new Set(labels).size).toBe(labels.length)
+      expect(axis.axisLabel.formatter(0)).toBe('0')
+    }
+    expect(option.tooltip.formatter([{ axisValueLabel: '00:00', seriesId: 'static-emissions', seriesName: '静态碳排放量', value: option.series[1].data[0] }])).toContain(kind === 'day' ? '26.00 kgCO₂' : '0.03 tCO₂')
+    expect(data).toEqual(original)
+    wrapper.unmount()
+  })
+
+  it('极小值刻度、十字量标和悬停保留必要精度，静态单侧有值仍可展示', () => {
+    const wrapper = mount(ScreenMirrorChart, { props: { period: { kind: 'month', value: '2026-10' }, data: {
+      dynamicEmissions: [null], staticEmissions: [0.007], dynamicFactors: [null], staticFactors: [0.6], emissionUnit: 'tCO₂', factorUnit: 'kgCO₂/kWh',
+    } } })
+    const option = wrapper.findComponent(ChartView).props('option') as {
+      yAxis: Array<{ max: number; interval: number; axisLabel: { formatter: (value: number) => string }; axisPointer: { label: { formatter: (params: { value: number }) => string } } }>
+      tooltip: { formatter: (params: unknown) => string }
+    }
+    expect(option.yAxis[0].interval).toBe(0.0025)
+    expect([0, 0.0025, 0.005, 0.0075, 0.01].map(value => option.yAxis[0].axisLabel.formatter(value))).toEqual(['0', '0.0025', '0.005', '0.0075', '0.01'])
+    expect(option.yAxis[0].axisPointer.label.formatter({ value: -0.007 })).toBe('0.007')
+    expect(option.tooltip.formatter([{ seriesId: 'static-emissions', seriesName: '静态碳排放量', value: -0.007 }])).toContain('0.007 tCO₂')
+    expect(option.yAxis[1].max).toBeGreaterThan(0.6)
+    wrapper.unmount()
+  })
+
+  it('切换小时与月年不会重复换算，已经是千克或未知单位不猜测换算', async () => {
+    const data = { dynamicEmissions: [8], staticEmissions: [12], dynamicFactors: [0], staticFactors: [0], emissionUnit: 'kgCO₂', factorUnit: 'kgCO₂/kWh' }
+    const wrapper = mount(ScreenMirrorChart, { props: { period: { kind: 'day', value: '2026-10-25' }, data } })
+    const option = () => wrapper.findComponent(ChartView).props('option') as { yAxis: Array<{ name: string }>; series: Array<{ data: Array<number | null> }> }
+    expect(option().series[0].data[0]).toBe(8)
+    await wrapper.setProps({ data: { ...data, emissionUnit: 'tCO₂' } })
+    expect(option().series[0].data[0]).toBe(8000)
+    await wrapper.setProps({ period: { kind: 'year', value: '2026' } })
+    expect(option().series[0].data[0]).toBe(8)
+    expect(option().yAxis[0].name).toBe('tCO₂')
+    await wrapper.setProps({ period: { kind: 'day', value: '2026-10-25' }, data: { ...data, emissionUnit: 'unknown' } })
+    expect(option().yAxis[0].name).toBe('unknown')
+    expect(option().series[0].data[0]).toBe(8)
     wrapper.unmount()
   })
 })
