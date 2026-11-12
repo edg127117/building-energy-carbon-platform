@@ -7,6 +7,7 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import java.time.Instant;
 import java.util.*;
 import static org.assertj.core.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
 class DynamicElectricitySourceChecksTest {
     JdbcTemplate jdbc;
@@ -31,6 +32,21 @@ class DynamicElectricitySourceChecksTest {
         assertThat(restarted.unchanged(task,restarted.capture(task))).isFalse();
         checks.completed(task,version);
         assertThat(restarted.unchanged(task,restarted.capture(task))).isFalse();
+    }
+    @Test void unchangedCheckIsReadOnlyAndAChangedSourceCanBeCheckedAgain() {
+        var watched=spy(jdbc);var watchedVersions=new DisplaySourceRevisionRepository(watched);
+        var watchedChecks=new DynamicElectricitySourceChecks(watched,watchedVersions);
+        String original=watchedChecks.capture(task);watchedChecks.completed(task,original);
+        clearInvocations(watched);
+        assertThat(watchedChecks.unchanged(task,original)).isTrue();
+        verify(watched,never()).update(anyString(),any(Object[].class));
+
+        watched.update("UPDATE biz_carbon_display_source_revision SET revision=revision+1 WHERE building_id='B' AND domain_key='DYNAMIC_INPUT' AND scope_key='U:2026-09'");
+        String changed=watchedChecks.capture(task);
+        assertThat(changed).isNotEqualTo(original);
+        assertThat(watchedChecks.unchanged(task,changed)).isFalse();
+        watchedChecks.completed(task,changed);
+        assertThat(watchedChecks.unchanged(task,changed)).isTrue();
     }
     @Test void failedOrRevisedTaskCannotBeStampedAsSuccessfullyChecked() {
         String version=checks.capture(task);

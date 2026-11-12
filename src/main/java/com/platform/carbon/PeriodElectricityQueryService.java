@@ -18,11 +18,12 @@ public class PeriodElectricityQueryService {
     private final DynamicElectricityService dynamic;
     private final DailyElectricityCarbonService daily;
     private final ObjectMapper mapper;
+    private final CarbonDisplayQueryCache cache;
 
     public PeriodElectricityQueryService(CarbonAuthorization authorization,CarbonDisplayQueryRepository repository,
-            DisplaySourceRevisionRepository revisions,DynamicElectricityService dynamic,DailyElectricityCarbonService daily,ObjectMapper mapper) {
+            DisplaySourceRevisionRepository revisions,DynamicElectricityService dynamic,DailyElectricityCarbonService daily,ObjectMapper mapper,CarbonDisplayQueryCache cache) {
         this.authorization=authorization;this.repository=repository;this.revisions=revisions;
-        this.dynamic=dynamic;this.daily=daily;this.mapper=mapper;
+        this.dynamic=dynamic;this.daily=daily;this.mapper=mapper;this.cache=cache;
     }
 
     record Query(String building,String kind,String period) {
@@ -58,13 +59,27 @@ public class PeriodElectricityQueryService {
         return read(user,roles,q,false);
     }
     private Read read(long user,Collection<String> roles,Query q,boolean summary) {
+        try {return readCurrent(user,roles,q,summary);}
+        catch(org.springframework.dao.TransientDataAccessException|org.springframework.transaction.TransactionTimedOutException e) {throw unavailable(q,e);}
+        catch(org.springframework.transaction.TransactionSystemException e) {
+            // 驱动取消语句后可能关闭连接，回滚异常不得掩盖原始读取超时。
+            if(e.getOriginalException() instanceof org.springframework.dao.TransientDataAccessException
+                    ||e.getOriginalException() instanceof org.springframework.transaction.TransactionTimedOutException)throw unavailable(q,e);
+            throw e;
+        }
+    }
+    private BusinessException unavailable(Query q,RuntimeException cause) {
+        org.slf4j.LoggerFactory.getLogger(getClass()).warn("Period read temporarily unavailable: key={}",q.key(),cause);
+        return new BusinessException(503,"PERIOD_DISPLAY_READ_BUSY","数据读取暂时繁忙，请稍后重试");
+    }
+    private Read readCurrent(long user,Collection<String> roles,Query q,boolean summary) {
         authorization.requireReader(user,roles,q.building());
-        // 版本、指针和载荷属于同一数据库快照；不能在旧版本检查之后再读到另一代指针。
+        // 小载荷与指针同快照读取；日明细的大正文在短事务外读取，随后复核同一版本与哈希。
         var snapshot=revisions.readSnapshot(q.building(),domain(q),q.from(),q.to(),()-> {
             String version=version(q,base(q));
             var h=repository.head(q.key());
             if(h!=null&&version.equals(h.source())&&version.equals(h.built())&&"READY".equals(h.state()))
-                return new Read(version,summary?decodeSummary(q,h,repository.summary(h,q.period())):decode(q,h,repository.payload(h)),false,h);
+                return new Read(version,summary?decodeSummary(q,h,repository.summary(h,q.period())):q.kind().equals("DAILY_TREND_DETAIL")?h:decode(q,h,repository.payload(h)),false,h);
             if(h!=null&&version.equals(h.source())&&"FAILED".equals(h.state())&&h.errorStatus()!=null&&h.errorStatus()!=403)
                 throw new BusinessException(h.errorStatus(),h.error(),"展示结果准备失败，请检查来源或稍后重试");
             // 已登记的同版本任务由后台恢复；轮询不能反复抢占发布锁或重置在途任务。
@@ -72,6 +87,21 @@ public class PeriodElectricityQueryService {
             return new Read(version,null,request,h);
         });
         Read read=snapshot.value();
+        if(read.value() instanceof CarbonDisplayQueryRepository.Head h) {
+            String payload=cache.get(q.key(),h.hash());
+            boolean loaded=payload==null;
+            if(loaded)payload=repository.onlinePayload(h);
+            if(payload==null)throw preparing();
+            Object value=decode(q,h,payload);
+            boolean current=revisions.readSnapshot(q.building(),domain(q),q.from(),q.to(),()-> {
+                var latest=repository.head(q.key());
+                return latest!=null&&"READY".equals(latest.state())&&read.version().equals(current(q))
+                        &&Objects.equals(h.source(),latest.source())&&Objects.equals(h.built(),latest.built())&&Objects.equals(h.hash(),latest.hash());
+            }).value();
+            if(!current)throw preparing();
+            if(loaded)cache.put(q.key(),h.hash(),payload);
+            return new Read(read.version(),value,false,h);
+        }
         // 任务登记只做单行比较更新，不争用跨期间的来源发布锁；旧任务仍须通过重建和发布两次来源校验。
         if(read.request())repository.requestPeriod(q.key(),q.building(),q.kind(),encode(q),user,read.version(),System.currentTimeMillis(),read.observed());
         return read;

@@ -3,6 +3,8 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import IndexPage from './IndexPage.vue'
+import BuildingScene from '../../components/BuildingScene.vue'
+import ProfessionalScenePanels from '../../components/ProfessionalScenePanels.vue'
 import ScreenPeriodControl from '../../components/ScreenPeriodControl.vue'
 import ScreenUsageChart from '../../components/ScreenUsageChart.vue'
 import ScreenBusinessFlow from '../../components/ScreenBusinessFlow.vue'
@@ -14,12 +16,12 @@ import ScreenSummaryCandidate from '../../components/ScreenSummaryCandidate.vue'
 import { currentScreenPeriod } from '../../models/screen-period'
 import type { ScreenRedesignData } from '../../models/screen-redesign'
 
-const sceneCalls = vi.hoisted(() => ({ enter: vi.fn(), preset: vi.fn(), motion: vi.fn() }))
+const sceneCalls = vi.hoisted(() => ({ enter: vi.fn(), preset: vi.fn(), motion: vi.fn(), floor: vi.fn(), select: vi.fn(), playing: vi.fn() }))
 vi.mock('../../components/BuildingScene.vue', () => ({ default: defineComponent({
   emits: ['ready', 'snapshot', 'hotspots'],
   setup(_, { expose, emit }) {
-    expose({ enterSystem: sceneCalls.enter, preset: sceneCalls.preset, setFree: vi.fn(), setMotion: sceneCalls.motion, setTour: vi.fn(), reload: vi.fn() })
-    nextTick(() => { emit('ready', true); emit('hotspots', [{ id: 'hvac', visible: true, x: 800, y: 350 }]) })
+    expose({ enterSystem: sceneCalls.enter, preset: sceneCalls.preset, setFree: vi.fn(), setMotion: sceneCalls.motion, setTour: vi.fn(), reload: vi.fn(), setFloor: sceneCalls.floor, selectAsset: sceneCalls.select, setPlaying: sceneCalls.playing })
+    nextTick(() => { emit('ready', true); emit('hotspots', ['hvac', 'elevator', 'lighting', 'fire'].map((id, i) => ({ id, visible: true, x: 800 + i * 100, y: 350 }))) })
     return () => h('div', { class: 'scene-test-stage' })
   },
 }) }))
@@ -123,14 +125,70 @@ describe('approved twelve-point prototype', () => {
     expect(wrapper.get('.comparison-values').text()).not.toContain('上年全年')
     wrapper.unmount()
   })
-  it('never restores hot spots or professional drilldown from a cached deep link', async () => {
+  it('starts at overview despite a cached deep link and exposes the restored hotspots', async () => {
     const wrapper = await screen(undefined, '?system=hvac')
-    expect(wrapper.find('.system-hotspot').exists()).toBe(false)
-    expect(wrapper.find('.system-hotspots').exists()).toBe(false)
+    expect(wrapper.findAll('.system-hotspot')).toHaveLength(3)
+    expect(wrapper.find('.system-hotspot[aria-label="进入消防系统"]').exists()).toBe(false)
+    expect(wrapper.findComponent(ProfessionalScenePanels).exists()).toBe(false)
     expect(sceneCalls.enter).toHaveBeenCalledWith(null)
     expect(wrapper.find('.screen-metrics').exists()).toBe(true)
     await wrapper.get('.camera-views button:nth-child(4)').trigger('click')
     expect(sceneCalls.preset).toHaveBeenCalledWith('aerial')
+    wrapper.unmount()
+  })
+  it.each(['hvac', 'elevator', 'lighting'])('从%s热点进入模型，切楼层并返回时保留总览期间与场景实例', async (topic) => {
+    const wrapper = await screen({}, '', 'b')
+    const canvas = wrapper.get('.scene-test-stage').element
+    const periods = wrapper.findAllComponents(ScreenPeriodControl)
+    periods[1].vm.$emit('update:modelValue', { kind: 'day', value: '2026-11-12' })
+    await nextTick()
+    const changes = wrapper.emitted('periodChange')?.length
+    await wrapper.findAll('.system-hotspot')[['hvac', 'elevator', 'lighting'].indexOf(topic)].trigger('click')
+    expect(sceneCalls.enter).toHaveBeenLastCalledWith(topic)
+    expect(wrapper.get('.information-layer').isVisible()).toBe(false)
+    expect(wrapper.find('.screen-clock').exists()).toBe(false)
+    const renderer = wrapper.findComponent(BuildingScene)
+    renderer.vm.$emit('snapshot', { topic, selected: null, floorFilter: '全部', playing: false, selectionRevision: 0, assets: [{ id: 'model-1', name: '楼层模型', system: topic, floor: 'F3' }] })
+    await nextTick()
+    const panel = wrapper.findComponent(ProfessionalScenePanels)
+    expect(panel.props('assets')).toHaveLength(1)
+    expect(panel.get('.energy-total').text()).not.toContain('—')
+    expect(panel.get('.professional-tabs').text()).not.toContain('消防')
+    panel.vm.$emit('system', 'fire')
+    await nextTick()
+    expect(sceneCalls.enter).toHaveBeenLastCalledWith(topic)
+    await panel.get('select').setValue('F3')
+    expect(sceneCalls.floor).toHaveBeenLastCalledWith('F3')
+    await panel.get('.model-list-toggle').trigger('click')
+    await panel.get('.model-list button').trigger('click')
+    expect(sceneCalls.select).toHaveBeenLastCalledWith('model-1')
+    panel.vm.$emit('playing', true)
+    expect(sceneCalls.playing).toHaveBeenLastCalledWith(true)
+    panel.vm.$emit('system', null)
+    await nextTick()
+    expect(sceneCalls.enter).toHaveBeenLastCalledWith(null)
+    expect(wrapper.get('.information-layer').isVisible()).toBe(true)
+    expect(wrapper.findAllComponents(ScreenPeriodControl)[1].props('modelValue')).toEqual({ kind: 'day', value: '2026-11-12' })
+    expect(wrapper.emitted('periodChange')?.length).toBe(changes)
+    expect(wrapper.get('.scene-test-stage').element).toBe(canvas)
+    wrapper.unmount()
+  })
+  it('场景重载时清空旧模型快照，恢复后保持当前系统并过滤不可见热点', async () => {
+    const wrapper = await screen({})
+    const renderer = wrapper.findComponent(BuildingScene)
+    renderer.vm.$emit('hotspots', [{ id: 'hvac', visible: false, x: 0, y: 0 }, { id: 'unknown', visible: true, x: 0, y: 0 }])
+    await nextTick()
+    expect(wrapper.findAll('.system-hotspot')).toHaveLength(0)
+    renderer.vm.$emit('hotspots', [{ id: 'hvac', visible: true, x: 800, y: 350 }])
+    await nextTick()
+    await wrapper.get('.system-hotspot').trigger('click')
+    renderer.vm.$emit('ready', false)
+    renderer.vm.$emit('snapshot', null)
+    await nextTick()
+    expect(wrapper.findComponent(ProfessionalScenePanels).props('assets')).toEqual([])
+    renderer.vm.$emit('ready', true)
+    await nextTick()
+    expect(sceneCalls.enter).toHaveBeenLastCalledWith('hvac')
     wrapper.unmount()
   })
   it('keeps side panels and both bottom summaries independently collapsible without recreating the scene', async () => {

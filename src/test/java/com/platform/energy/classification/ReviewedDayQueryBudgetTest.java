@@ -26,7 +26,7 @@ class ReviewedDayQueryBudgetTest {
         creator.getValue().createPreparedStatement(connection);setter.getValue().setValues(statement);
         var sql=ArgumentCaptor.forClass(String.class);verify(connection).prepareStatement(sql.capture());
         assertThat(sql.getValue()).contains("MAX_EXECUTION_TIME(1750)","INDEX(r PRIMARY)","JOIN_ORDER(r,b)",
-                "NO_SEMIJOIN(@day_asof_replacement)","JOIN_ORDER(s,sb)","r.fact_id IN (?,?)",
+                "NO_SEMIJOIN(@day_asof_replacement)","JOIN_ORDER(s,sb)","INDEX(s idx_energy_manual_supersedes)","r.fact_id IN (?,?)",
                 "r.start_inclusive<? AND r.end_exclusive>?",
                 "b.created_at<=? AND b.reviewed_at<=?","sb.created_at<=? AND sb.reviewed_at<=?",
                 "CASE WHEN OCTET_LENGTH(r.reading_json)<=16384 THEN r.reading_json ELSE NULL END")

@@ -33,7 +33,7 @@ class PeriodElectricityQueryServiceTest {
         jdbc.execute("CREATE TABLE biz_dynamic_electricity_chart_projection(result_id VARCHAR(64),building_id VARCHAR(32),start_ms BIGINT,end_ms BIGINT,source_kind VARCHAR(32))");
         revisions=new DisplaySourceRevisionRepository(jdbc,new DataSourceTransactionManager(ds));
         repo=new CarbonDisplayQueryRepository(jdbc,new CarbonDisplayQueryProperties());
-        service=new PeriodElectricityQueryService(authorization,repo,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        service=new PeriodElectricityQueryService(authorization,repo,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         for(var point:view().points())when(dynamic.queryYearMonth(1L,roles,"B",YearMonth.parse(point.period()))).thenReturn(point);
     }
     DynamicElectricityContracts.View view() {
@@ -60,7 +60,7 @@ class PeriodElectricityQueryServiceTest {
         verifyNoInteractions(dynamic,daily);
         build();clearInvocations(dynamic,daily);
         assertThat(service.dynamic(1,roles,"B","YEAR","2025")).isEqualTo(view());
-        var restarted=new PeriodElectricityQueryService(authorization,repo,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var restarted=new PeriodElectricityQueryService(authorization,repo,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         assertThat(restarted.dynamic(1,roles,"B","YEAR","2025")).isEqualTo(view());
         verifyNoInteractions(dynamic,daily);
     }
@@ -68,7 +68,7 @@ class PeriodElectricityQueryServiceTest {
         service.prepare(year,1);var head=repo.head(year.key());
         String token=repo.claim(head,System.currentTimeMillis());
         var observed=spy(revisions);
-        var polling=new PeriodElectricityQueryService(authorization,repo,observed,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var polling=new PeriodElectricityQueryService(authorization,repo,observed,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         assertThatThrownBy(()->polling.dynamic(1,roles,"B","YEAR","2025"))
                 .isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("PERIOD_DISPLAY_PREPARING"));
         verify(observed,never()).ifCurrent(anyString(),anyString(),any(Instant.class),any(Instant.class),anyString(),any(Runnable.class));
@@ -76,13 +76,13 @@ class PeriodElectricityQueryServiceTest {
     }
     @Test void coldAndChangedRequestsDoNotAcquireSourcePublicationLocks() {
         var observed=spy(revisions);
-        var reader=new PeriodElectricityQueryService(authorization,repo,observed,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var reader=new PeriodElectricityQueryService(authorization,repo,observed,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         assertThatThrownBy(()->reader.dynamic(1,roles,"B","YEAR","2025")).isInstanceOf(BusinessException.class);
         jdbc.update("INSERT INTO biz_carbon_display_source_revision VALUES ('B','DYNAMIC_INPUT','M:2025-01',1)");
         assertThatThrownBy(()->reader.dynamic(1,roles,"B","YEAR","2025")).isInstanceOf(BusinessException.class);
         assertThat(repo.head(year.key()).source()).isEqualTo(reader.current(year));
         verify(observed,never()).ifCurrent(anyString(),anyString(),any(Instant.class),any(Instant.class),anyString(),any(Runnable.class));
-        var tasks=spy(repo);var preparer=new PeriodElectricityQueryService(authorization,tasks,observed,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var tasks=spy(repo);var preparer=new PeriodElectricityQueryService(authorization,tasks,observed,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         preparer.prepare(year,1);
         verify(tasks,never()).requestPeriod(anyString(),anyString(),anyString(),anyString(),anyLong(),anyString(),anyLong(),any());
     }
@@ -170,7 +170,7 @@ class PeriodElectricityQueryServiceTest {
     @Test void summaryIsPublishedWithDetailAndReadsNoLargeDetailPayload()throws Exception {
         var view=prepareDailyLeaves();var h=repo.head(month.key());
         assertThat(service.rebuild(h,repo.claim(h,System.currentTimeMillis()),roles)).isTrue();
-        var observed=spy(repo);var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var observed=spy(repo);var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         assertThat(reader.summary(1,roles,"B","2025-02")).isEqualTo(DailyTrendSummaryContracts.from(view,h.source()));
         verify(observed,never()).payload(any());
         assertThat(reader.detail(1,roles,"B","2025-02")).isEqualTo(view);
@@ -180,7 +180,7 @@ class PeriodElectricityQueryServiceTest {
     @Test void existingDetailBackfillsSummaryOnlyInWorkerAndCorruptSummaryIsRejected()throws Exception {
         prepareDailyLeaves();var h=repo.head(month.key());service.rebuild(h,repo.claim(h,System.currentTimeMillis()),roles);
         jdbc.update("DELETE FROM biz_daily_trend_read_model");
-        var observed=spy(repo);var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var observed=spy(repo);var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         assertThat(reader.summary(1,roles,"B","2025-02").state()).isEqualTo("PREPARING");verify(observed,never()).payload(any());
         reader.prepareSummary(repo.head(month.key()));assertThat(reader.summary(1,roles,"B","2025-02").days()).hasSize(28);
         jdbc.update("UPDATE biz_daily_trend_read_model SET summary_json='{}'");
@@ -189,9 +189,42 @@ class PeriodElectricityQueryServiceTest {
     @Test void summaryPublicationFailureRollsBackDetailPublication()throws Exception {
         prepareDailyLeaves();var h=repo.head(month.key());String token=repo.claim(h,System.currentTimeMillis());var failing=spy(repo);
         doThrow(new org.springframework.dao.DataIntegrityViolationException("summary storage unavailable")).when(failing).publishSummary(any(),anyString(),anyString(),anyString(),anyLong());
-        var publisher=new PeriodElectricityQueryService(authorization,failing,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules());
+        var publisher=new PeriodElectricityQueryService(authorization,failing,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
         assertThatThrownBy(()->publisher.rebuild(h,token,roles)).isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class);
         assertThat(repo.head(month.key()).state()).isEqualTo("RUNNING");assertThat(repo.head(month.key()).built()).isNull();
         assertThat(repo.summary(repo.head(month.key()),month.period())).isNull();
+    }
+
+    @Test void dailyCacheStillChecksCurrentSourceAndDigestWithoutReadingLargeBody()throws Exception {
+        var view=prepareDailyLeaves();var h=repo.head(month.key());service.rebuild(h,repo.claim(h,System.currentTimeMillis()),roles);
+        var ready=repo.head(month.key());var cache=mock(CarbonDisplayQueryCache.class);var observed=spy(repo);
+        when(cache.get(month.key(),ready.hash())).thenReturn(repo.payload(ready));
+        var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),cache);
+        assertThat(reader.detail(1,roles,"B","2025-02")).isEqualTo(view);verify(observed,never()).onlinePayload(any());
+        when(cache.get(month.key(),ready.hash())).thenReturn("{}");
+        assertThatThrownBy(()->reader.detail(1,roles,"B","2025-02")).isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("PERIOD_DISPLAY_INTEGRITY"));
+        jdbc.update("UPDATE biz_carbon_display_source_revision SET revision=revision+1 WHERE domain_key='DAILY_INPUT'");
+        assertThatThrownBy(()->reader.detail(1,roles,"B","2025-02")).isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("PERIOD_DISPLAY_PREPARING"));
+    }
+
+    @Test void sourceChangeDuringBodyReadRejectsMixedGenerationAndDoesNotPopulateCache()throws Exception {
+        prepareDailyLeaves();var h=repo.head(month.key());service.rebuild(h,repo.claim(h,System.currentTimeMillis()),roles);
+        var observed=spy(repo);var cache=mock(CarbonDisplayQueryCache.class);
+        doAnswer(call->{String payload=repo.onlinePayload(call.getArgument(0));jdbc.update("UPDATE biz_carbon_display_source_revision SET revision=revision+1 WHERE domain_key='DAILY_INPUT'");return payload;}).when(observed).onlinePayload(any());
+        var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),cache);
+        assertThatThrownBy(()->reader.detail(1,roles,"B","2025-02")).isInstanceOfSatisfying(BusinessException.class,e->assertThat(e.getErrorCode()).isEqualTo("PERIOD_DISPLAY_PREPARING"));
+        verify(cache,never()).put(anyString(),anyString(),anyString());
+    }
+
+    @Test void timeoutIncludingRollbackFailureReportsReadBusyRatherThanRebuildOrServerError()throws Exception {
+        prepareDailyLeaves();var h=repo.head(month.key());service.rebuild(h,repo.claim(h,System.currentTimeMillis()),roles);
+        var observed=spy(repo);var reader=new PeriodElectricityQueryService(authorization,observed,revisions,dynamic,daily,new ObjectMapper().findAndRegisterModules(),mock(CarbonDisplayQueryCache.class));
+        var timeout=new org.springframework.dao.QueryTimeoutException("bounded body read");
+        var rollback=new org.springframework.transaction.TransactionSystemException("closed during rollback");rollback.initApplicationException(timeout);
+        for(RuntimeException failure:List.of(timeout,rollback)) {
+            doThrow(failure).when(observed).onlinePayload(any());
+            assertThatThrownBy(()->reader.detail(1,roles,"B","2025-02")).isInstanceOfSatisfying(BusinessException.class,e->{assertThat(e.getCode()).isEqualTo(503);assertThat(e.getErrorCode()).isEqualTo("PERIOD_DISPLAY_READ_BUSY");});
+        }
+        assertThat(repo.head(month.key()).state()).isEqualTo("READY");
     }
 }

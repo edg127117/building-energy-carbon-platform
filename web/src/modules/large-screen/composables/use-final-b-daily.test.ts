@@ -20,6 +20,14 @@ it('shares a month across two cards, independently supports different months and
   expect(state.data.value.usage?.period.value).toBe('2024-02')
   scope.stop()
 })
+it('does not issue the monthly trends query for day mode', async () => {
+  const scope = effectScope(), building = ref('B'), day = ref<ScreenPeriod>({ kind: 'day', value: '2026-09-22' })
+  const state = scope.run(() => useFinalBDaily(building, day, day))!
+  await flushPromises()
+  expect(readDailyTrends).not.toHaveBeenCalled()
+  expect(state.data.value).toEqual({})
+  scope.stop()
+})
 it('aborts switched scopes, rejects wrong identities and ignores late responses without demo fallback', async () => {
   const pending: Array<(v: DailyTrends) => void> = []
   vi.mocked(readDailyTrends).mockImplementation(() => new Promise(resolve => pending.push(resolve)))

@@ -4,7 +4,8 @@ import { ElButton, ElDialog, Leaf, Monitor, Zap, Clock, ChevronDown, Maximize, M
 import { t } from '@/locales'
 import { screenShellKey } from '@/shared/models/screen-shell'
 import SceneScreenLayout from '../../components/SceneScreenLayout.vue'
-import BuildingScene from '../../components/BuildingScene.vue'
+import BuildingScene, { type SceneGeometrySnapshot, type SceneHotspot } from '../../components/BuildingScene.vue'
+import ProfessionalScenePanels from '../../components/ProfessionalScenePanels.vue'
 import ScreenPeriodControl from '../../components/ScreenPeriodControl.vue'
 import ScreenBusinessFlow from '../../components/ScreenBusinessFlow.vue'
 import ScreenPlanChart from '../../components/ScreenPlanChart.vue'
@@ -14,11 +15,11 @@ import ScreenIntensitySummary from '../../components/ScreenIntensitySummary.vue'
 import ScreenDeviceSummary from '../../components/ScreenDeviceSummary.vue'
 import ScreenAlarmSummary from '../../components/ScreenAlarmSummary.vue'
 import ScreenSummaryCandidate from '../../components/ScreenSummaryCandidate.vue'
-import { currentScreenPeriod, type ScreenPeriod } from '../../models/screen-period'
+import { currentBeijingDate, currentScreenPeriod, followBeijingDay, type ScreenPeriod } from '../../models/screen-period'
 import { periodEntry, PLAN_PROTOTYPE, type ScreenRedesignData, type ScreenPeriods } from '../../models/screen-redesign'
 import { prototypeMetrics, prototypeDeviceFrames, PROTOTYPE_DEVICE_FRAME_MS, prototypeAlarms, prototypeFlow, prototypeUsage, prototypeMirror, prototypeIntensity, prototypeRuntimeRanking, prototypeIntensityBenchmarks } from '../../models/screen-prototype'
 
-const props = defineProps<{ title?: string; data?: ScreenRedesignData; layoutVariant?: 'a' | 'b' | 'c'; alarmBuildingId?: string }>()
+const props = defineProps<{ title?: string; data?: ScreenRedesignData; layoutVariant?: 'a' | 'b' | 'c'; alarmBuildingId?: string; buildingName?: string }>()
 const emit = defineEmits<{ periodChange: [periods: ScreenPeriods] }>()
 const reviewingLayout = computed(() => props.layoutVariant !== undefined)
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
@@ -48,6 +49,12 @@ onBeforeUnmount(stopDeviceFrames)
 const shell = inject(screenShellKey, null)
 const scene = ref<InstanceType<typeof BuildingScene> | null>(null)
 const ready = ref(false), selectedView = ref('front'), free = ref(false), tour = ref(false)
+const activeSystem = ref<string | null>(null)
+const geometry = ref<SceneGeometrySnapshot | null>(null)
+const hotspots = ref<readonly SceneHotspot[]>([])
+const systems = new Set(['hvac', 'elevator', 'lighting'])
+const visibleHotspots = computed(() => hotspots.value.filter(item => item.visible && systems.has(item.id)))
+const professionalGeometry = computed(() => geometry.value?.topic === activeSystem.value ? geometry.value : null)
 const motion = ref(!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
 const menuOpen = ref(false), infoOpen = ref(false), alarmsOpen = ref(true), devicesOpen = ref(true)
 const compositionPeriod = ref<ScreenPeriod>(currentScreenPeriod()), flowPeriod = ref<ScreenPeriod>(currentScreenPeriod())
@@ -57,6 +64,16 @@ const flowMode = ref<'energy' | 'carbon'>('carbon')
 watch([compositionPeriod, flowPeriod, planPeriod, mirrorPeriod, usagePeriod, intensityPeriod], () => {
   emit('periodChange', { composition: compositionPeriod.value, flow: flowPeriod.value, plan: planPeriod.value, mirror: mirrorPeriod.value, usage: usagePeriod.value, intensity: intensityPeriod.value })
 }, { immediate: true })
+let lastBeijingDate = currentBeijingDate()
+const dayRolloverTimer = setInterval(() => {
+  const today = currentBeijingDate()
+  if (today === lastBeijingDate) return
+  const previous = lastBeijingDate
+  lastBeijingDate = today
+  usagePeriod.value = followBeijingDay(usagePeriod.value, previous, today)
+  mirrorPeriod.value = followBeijingDay(mirrorPeriod.value, previous, today)
+}, 15_000)
+onBeforeUnmount(() => clearInterval(dayRolloverTimer))
 const currentYear = currentScreenPeriod().value
 const beijingDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit' }).format(new Date())
 const [year, month] = beijingDate.split('-').map(Number)
@@ -105,23 +122,38 @@ function number(value: number | null | undefined): string {
 function ratio(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${value > 0 ? '+' : ''}${number(value)}%` : s('missing')
 }
-watch(ready, value => { if (value) { scene.value?.enterSystem(null); scene.value?.setMotion(motion.value) } })
+watch(ready, value => { if (value) { scene.value?.enterSystem(activeSystem.value); scene.value?.setMotion(motion.value) } })
+function enterSystem(topic: string | null) {
+  if (topic !== null && (!ready.value || !systems.has(topic))) return
+  activeSystem.value = topic
+  tour.value = false
+  free.value = false
+  scene.value?.setTour(false)
+  scene.value?.setFree(false)
+  // 下钻只使用场景层过滤后的几何快照，模型动效与对象数量不作为正式设备读数。
+  scene.value?.enterSystem(topic)
+  if (topic === null) scene.value?.preset(selectedView.value)
+}
 function preset(id: string) { selectedView.value = id; free.value = false; tour.value = false; scene.value?.setTour(false); scene.value?.preset(id) }
 function toggleFree() { free.value = !free.value; tour.value = false; scene.value?.setTour(false); scene.value?.setFree(free.value) }
 function toggleTour() { tour.value = !tour.value; free.value = false; scene.value?.setFree(false); scene.value?.setTour(tour.value) }
 function toggleMotion() { motion.value = !motion.value; scene.value?.setMotion(motion.value) }
 </script>
 <template>
-  <SceneScreenLayout class="building-screen redesign-screen" :class="[layoutVariant ? 'layout-review layout-' + layoutVariant : '']">
+  <SceneScreenLayout class="building-screen redesign-screen" :panels-visible="activeSystem === null" :class="[layoutVariant ? 'layout-review layout-' + layoutVariant : '']">
     <template #scene>
-      <BuildingScene ref="scene" @ready="ready = $event" />
-      <div v-if="layoutVariant === 'b'" class="screen-clock"><time class="screen-clock-time">{{ clockTime }}</time><span class="screen-clock-divider" aria-hidden="true" /><div class="screen-clock-meta"><span class="screen-clock-date">{{ clockDate }}</span><span class="screen-clock-weekday">{{ clockWeekday }}</span></div></div>
-      <nav class="scene-controls" :aria-label="s('scene')">
+      <BuildingScene ref="scene" @ready="ready = $event" @snapshot="geometry = $event" @hotspots="hotspots = $event" />
+      <div v-if="ready && activeSystem === null" class="system-hotspots">
+        <button v-for="hotspot in visibleHotspots" :key="hotspot.id" class="system-hotspot" :style="{ left: hotspot.x + 'px', top: hotspot.y + 'px' }" :aria-label="s('enterSystem', { system: s(hotspot.id) })" @click="enterSystem(hotspot.id)">{{ s(hotspot.id) }}<ChevronDown :size="14" /></button>
+      </div>
+      <div v-if="layoutVariant === 'b' && activeSystem === null" class="screen-clock"><time class="screen-clock-time">{{ clockTime }}</time><span class="screen-clock-divider" aria-hidden="true" /><div class="screen-clock-meta"><span class="screen-clock-date">{{ clockDate }}</span><span class="screen-clock-weekday">{{ clockWeekday }}</span></div></div>
+      <nav v-show="activeSystem === null" class="scene-controls" :aria-label="s('scene')">
         <div class="camera-views"><button v-for="view in ['front', 'terrace', 'rear', 'aerial']" :key="view" :aria-pressed="selectedView === view && !free" :disabled="!ready" @click="preset(view)">{{ s(view) }}</button></div>
         <div class="camera-actions"><button :disabled="!ready" @click="preset(selectedView)">{{ s('reset') }}</button><button :disabled="!ready" :aria-pressed="free" @click="toggleFree">{{ s('free') }}</button><button :disabled="!ready" :aria-pressed="tour" @click="toggleTour">{{ s('tour') }}</button><button :disabled="!ready" :aria-pressed="!motion" @click="toggleMotion">{{ s(motion ? 'pause' : 'resume') }}</button><button :disabled="!ready" @click="scene?.reload()">{{ s('reload') }}</button><button @click="infoOpen = true">{{ s('dataInfo') }}</button><button class="scene-switch" @click="menuOpen = true">{{ s('switchPage') }}</button></div>
       </nav>
     </template>
     <template #overlay>
+      <ProfessionalScenePanels v-if="activeSystem !== null" :topic="activeSystem" :assets="professionalGeometry?.assets ?? []" :selected="professionalGeometry?.selected ?? null" :floor="professionalGeometry?.floorFilter ?? s('all')" :playing="professionalGeometry?.playing ?? false" :building-name="props.buildingName ?? ''" @system="enterSystem" @floor="scene?.setFloor($event)" @select="scene?.selectAsset($event)" @playing="scene?.setPlaying($event)" @menu="menuOpen = true" />
       <ElDialog v-model="menuOpen" :title="s('switchPage')" width="var(--bec-screen-dialog-width)" :append-to-body="false" destroy-on-close><div class="screen-menu"><ElButton :icon="shell?.fullscreen.value ? Minimize : Maximize" @click="shell?.toggleFullscreen()">{{ s(shell?.fullscreen.value ? 'exitFullscreen' : 'fullscreen') }}</ElButton><ElButton @click="infoOpen = true; menuOpen = false">{{ s('dataInfo') }}</ElButton><ElButton @click="shell?.openNavigation(); menuOpen = false">{{ t('navigation.switchScreen') }}</ElButton><ElButton @click="shell?.exit()">{{ s('exit') }}</ElButton></div></ElDialog>
       <ElDialog v-model="infoOpen" :title="s('dataInfo')" width="var(--bec-screen-dialog-width)" :append-to-body="false" destroy-on-close><div class="screen-caliber"><slot name="data-context" /><template v-if="prototypeMode"><p>{{ s('redesignPrototypeNotice') }}</p><p>{{ s('redesignPlanNotice') }}</p><p>{{ s('redesignPendingNotice') }}</p><p>{{ s('modelNotice') }}</p><p>{{ s('redesignHotspotNotice') }}</p></template></div></ElDialog>
     </template>
@@ -131,14 +163,14 @@ function toggleMotion() { motion.value = !motion.value; scene.value?.setMotion(m
     </template>
     <template #left>
       <article class="screen-card composition-card"><header><h2>{{ s('composition') }}</h2><ScreenPeriodControl v-model="compositionPeriod" :label="s('composition')" /></header><div class="composition-body"><div class="carbon-ring"><span>{{ s('carbonTotal') }}</span><strong>{{ number(composition?.total) }}</strong><small>{{ composition?.unit ?? s('tco2') }}</small></div><div class="electricity-summary"><span class="scope-caption">{{ s('scopeTwo') }}</span><div class="electricity-source"><strong>{{ s('electricity') }}</strong><b>{{ s('redesignElectricityShare') }}</b></div><div class="comparison-values"><div><span>{{ s(compositionPeriod.kind === 'year' ? (composition?.throughMonth !== undefined && composition.throughMonth < 12 ? 'finalBYearComparison' : 'redesignYearComparison') : 'redesignMonthComparison') }}</span><b>{{ ratio(composition?.yearOverYear) }}</b></div><div v-if="compositionPeriod.kind === 'month'"><span>{{ s('redesignPreviousMonth') }}</span><b>{{ ratio(composition?.monthOverMonth) }}</b></div></div></div></div></article>
-      <article v-if="layoutVariant === 'b'" class="screen-card chart-card usage-card"><header><h2>{{ s('redesignUsage') }}</h2><ScreenPeriodControl v-model="usagePeriod" :label="s('redesignUsage')" /></header><ScreenUsageChart :period="usagePeriod" :data="usage" :loading="props.data?.loading?.usage" :failed="props.data?.failed?.usage" :expanded="reviewingLayout" /></article>
+      <article v-if="layoutVariant === 'b'" class="screen-card chart-card usage-card"><header><h2>{{ s('redesignUsage') }}</h2><ScreenPeriodControl v-model="usagePeriod" :label="s('redesignUsage')" allow-day /></header><ScreenUsageChart :period="usagePeriod" :data="usage" :loading="props.data?.loading?.usage" :failed="props.data?.failed?.usage" :expanded="reviewingLayout" /></article>
       <article class="screen-card flow-card"><header><h2>{{ s('flow') }}</h2><ScreenPeriodControl v-model="flowPeriod" :label="s('flow')" /></header><div class="flow-tools"><span>{{ s(flowMode === 'carbon' ? 'redesignCarbonTotal' : 'standardCoal') }}<small>{{ s(flowMode === 'carbon' ? 'tco2' : 'tce') }}</small></span><div class="segmented"><button v-for="mode in (layoutVariant === 'b' ? ['carbon', 'energy'] as const : ['energy', 'carbon'] as const)" :key="mode" :aria-pressed="flowMode === mode" @click="flowMode = mode">{{ s(mode === 'carbon' ? 'carbonFlow' : 'energyFlow') }}</button></div></div><ScreenBusinessFlow :mode="flowMode" :data="flow" /></article>
       <article v-if="reviewingLayout && layoutVariant !== 'b'" class="screen-card chart-card usage-card"><header><h2>{{ s('redesignUsage') }}</h2><ScreenPeriodControl v-model="usagePeriod" :label="s('redesignUsage')" /></header><ScreenUsageChart :period="usagePeriod" :data="usage" :loading="props.data?.loading?.usage" :failed="props.data?.failed?.usage" :expanded="reviewingLayout" :wide="layoutVariant === 'c'" /></article>
       <article v-else-if="!reviewingLayout" class="screen-card intensity-card"><header><h2>{{ s('scoreSummary') }}</h2><ScreenPeriodControl v-model="intensityPeriod" :label="s('scoreSummary')" /></header><ScreenIntensitySummary :data="intensity" /></article>
     </template>
     <template #right>
       <article class="screen-card chart-card plan-card"><header><h2>{{ s('redesignPlan') }}</h2><ScreenPeriodControl v-model="planPeriod" :label="s('redesignPlan')" /></header><ScreenPlanChart :period="planPeriod" :data="plan" /></article>
-      <article class="screen-card chart-card mirror-card"><header><h2>{{ s('redesignMirror') }}</h2><ScreenPeriodControl v-model="mirrorPeriod" :label="s('redesignMirror')" /></header><ScreenMirrorChart :period="mirrorPeriod" :data="mirror" :loading="props.data?.loading?.mirror" :failed="props.data?.failed?.mirror" :expanded="reviewingLayout" /></article>
+      <article class="screen-card chart-card mirror-card"><header><h2>{{ s('redesignMirror') }}</h2><ScreenPeriodControl v-model="mirrorPeriod" :label="s('redesignMirror')" :allow-day="layoutVariant === 'b'" /></header><ScreenMirrorChart :period="mirrorPeriod" :data="mirror" :loading="props.data?.loading?.mirror" :failed="props.data?.failed?.mirror" :expanded="reviewingLayout" /></article>
       <article v-if="reviewingLayout" class="screen-card intensity-card"><header><h2>{{ s(layoutVariant === 'b' ? 'carbonIntensityTitle' : 'scoreSummary') }}</h2><ScreenPeriodControl v-model="intensityPeriod" :label="s(layoutVariant === 'b' ? 'carbonIntensityTitle' : 'scoreSummary')" /></header><ScreenIntensitySummary :data="intensity" :show-benchmarks="layoutVariant === 'b'" :benchmarks="intensityBenchmarks" :prototype-reference="prototypeMode" /></article>
       <article v-else class="screen-card chart-card usage-card"><header><h2>{{ s('redesignUsage') }}</h2><ScreenPeriodControl v-model="usagePeriod" :label="s('redesignUsage')" /></header><ScreenUsageChart :period="usagePeriod" :data="usage" :loading="props.data?.loading?.usage" :failed="props.data?.failed?.usage" :expanded="reviewingLayout" :wide="layoutVariant === 'c'" /></article>
     </template>

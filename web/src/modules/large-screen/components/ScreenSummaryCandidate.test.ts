@@ -58,6 +58,19 @@ describe('summary card design candidates', () => {
     expect(wrapper.findAll('.status-reading')).toHaveLength(10)
     wrapper.unmount()
   })
+  it('排名时长四舍五入为整数，保留零值和缺失状态，长名称可查看全文', async () => {
+    const runtimeRanking = [115.55, 115.49, 0, null, Number.NaN].map((hours, index) => ({
+      rank: index + 1, room: '1层总用电量 · 长名称设备', floor: '1层总用电量', hours, percentage: 50,
+    }))
+    const wrapper = mount(ScreenSummaryCandidate, { props: { ...base, variant: 'b', runtimeRanking } })
+    await wrapper.get('.group-filter button:last-child').trigger('click')
+    expect(wrapper.findAll('.ranking-hours b').map(node => node.text())).toEqual(['116', '115', '0', '—', '—'])
+    expect(wrapper.get('.ranking-card').attributes('aria-label')).toContain('当月观测开机 116 小时')
+    expect(wrapper.get('.ranking-floor').attributes('title')).toBe(runtimeRanking[0].floor)
+    expect(wrapper.get('.ranking-room').attributes('title')).toBe(runtimeRanking[0].room)
+    expect(runtimeRanking[0].hours).toBe(115.55)
+    wrapper.unmount()
+  })
   it('B排名保留原页签和状态行，展示零时长且不增加覆盖率或规则提示', async () => {
     const runtimeRanking = [{ rank: 1, room: '会议室 · 内机', floor: '三楼', hours: 0, percentage: 0,
       coveredHours: 2, coveragePercentage: 5.71, coverageStatus: 'PARTIAL' as const }]

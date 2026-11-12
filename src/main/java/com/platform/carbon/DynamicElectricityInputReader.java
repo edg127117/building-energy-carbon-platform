@@ -246,7 +246,7 @@ public class DynamicElectricityInputReader {
         return new Input(contributions, hash, evidence.deepCopy());
     }
 
-    private static List<Contribution> hourlyContributions(HourlyCarbonInputService.Input input) {
+    static List<Contribution> hourlyContributions(HourlyCarbonInputService.Input input) {
         JsonNode evidence = requireEvidence(input);
         if (input.activities() == null || !evidence.path("energies").isArray()) {
             throw problem("DYNAMIC_ELECTRICITY_EVIDENCE_MISMATCH", "小时来源缺少活动量或项目组成证据");

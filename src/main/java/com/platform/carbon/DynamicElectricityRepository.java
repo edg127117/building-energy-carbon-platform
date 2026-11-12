@@ -107,7 +107,11 @@ public class DynamicElectricityRepository {
 
     /** 小时输入还依赖目录绑定与单位；保守读取已确认版本头，不能让配置修订后的旧结果继续可用。 */
     public String inputMetadataVersion(String building, String sourceKind) {
-        var heads = new ArrayList<Object>();
+        return hash(encode(inputMetadataHeads(building,sourceKind)));
+    }
+
+    List<List<Map<String,Object>>> inputMetadataHeads(String building,String sourceKind) {
+        var heads = new ArrayList<List<Map<String,Object>>>();
         heads.add(versionHeads("SELECT point_id,unit,equip_id,del_flag,status FROM biz_data_point WHERE building_id=? ORDER BY point_id", building));
         heads.add(versionHeads("""
                 SELECT b.point_id,v.binding_version_id,v.config_revision,v.confirmation_status,v.effective_from,v.effective_to
@@ -120,18 +124,18 @@ public class DynamicElectricityRepository {
                 WHERE v.status='APPROVED' ORDER BY v.version_id
                 """));
         heads.add(versionHeads("""
-                SELECT s.version_id,s.usage_scope FROM biz_energy_item_version_scope s
+                SELECT s.version_id,s.usage_scope,v.effective_from,v.effective_to FROM biz_energy_item_version_scope s
                 JOIN biz_energy_item_version v ON v.version_id=s.version_id
                 WHERE v.status='APPROVED' ORDER BY s.version_id,s.usage_scope
                 """));
         heads.add(versionHeads("""
-                SELECT u.unit_code,v.version_id,v.config_revision,v.status,v.effective_from,v.effective_to
+                SELECT u.unit_code,v.version_id,v.config_revision,v.status,v.effective_from,v.effective_to,v.symbol,v.dimension_code,v.canonical_unit_code,v.scale_factor,v.conversion_type,v.standard_condition_code
                 FROM biz_measurement_unit u JOIN biz_measurement_unit_version v ON v.unit_id=u.unit_id
                 WHERE v.status='APPROVED' ORDER BY v.version_id
                 """));
         if ("RAW_CUMULATIVE".equals(sourceKind))
             heads.add(versionHeads("SELECT point_id,config_revision FROM biz_energy_point_profile WHERE building_id=? ORDER BY point_id", building));
-        return hash(encode(heads));
+        return heads;
     }
 
     private List<Map<String, Object>> versionHeads(String sql, Object... args) {
@@ -167,14 +171,14 @@ public class DynamicElectricityRepository {
             var quality=jdbc.queryForList("SELECT config_revision FROM biz_quality_usage_config_revision ORDER BY singleton_id");
             return hash(encode(List.of(facts,quality,jdbc.queryForList("SELECT point_id,config_revision FROM biz_energy_point_profile WHERE building_id=? ORDER BY point_id",building))));
         }
-        // 先按建筑和区间筛选事实，再用替代关系索引检查修订，避免后台复核反复扫描整楼历史。
+        // 替代编号大量为 NULL 会误导 MySQL 选择范围扫描；两条版本读取路径均显式按替代编号等值查找。
         var facts=jdbc.queryForList("""
                 SELECT /*+ INDEX(r idx_energy_manual_point_period) NO_SEMIJOIN(@dynamic_manual_replacement) */
                        r.fact_id,r.point_id,r.reading_json,r.normalized_quantity,b.revision,b.reviewed_at
                 FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>? AND b.status='APPROVED'
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(dynamic_manual_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(dynamic_manual_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id
                       AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
@@ -236,7 +240,7 @@ public class DynamicElectricityRepository {
                 FROM biz_energy_manual_reading r JOIN biz_energy_manual_batch b ON b.batch_id=r.batch_id AND b.building_id=r.building_id
                 WHERE r.building_id=? AND r.start_inclusive<? AND r.end_exclusive>? AND b.status='APPROVED'
                   AND NOT EXISTS (
-                    SELECT /*+ QB_NAME(dynamic_day_manual_replacement) JOIN_ORDER(s,sb) */ 1 FROM biz_energy_manual_reading s
+                    SELECT /*+ QB_NAME(dynamic_day_manual_replacement) JOIN_ORDER(s,sb) INDEX(s idx_energy_manual_supersedes) */ 1 FROM biz_energy_manual_reading s
                     JOIN biz_energy_manual_batch sb ON sb.batch_id=s.batch_id AND sb.building_id=s.building_id
                     WHERE s.supersedes_fact_id IS NOT NULL AND s.building_id=r.building_id
                       AND s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED')
@@ -339,23 +343,24 @@ public class DynamicElectricityRepository {
     }
 
     /** 设备当前指针也必须引用完整证据验证后的投影，不能单独信任任务中的摘要正文。 */
-    public List<ChartResult> currentDeviceResults(String building,Instant from,Instant to,String metadata) {
+    public List<ChartResult> currentDeviceResults(String building,Instant from,Instant to,MetadataSnapshot metadata) {
         return jdbc.query("""
                 SELECT r.result_id,r.building_id,r.grain,r.start_ms,r.end_ms,r.source_version,
                        r.payload_hash AS evidence_hash,p.source_kind,p.evidence_hash AS projection_evidence_hash,
-                       p.chart_json,p.chart_hash,p.integrity_error
+                       p.chart_json,p.chart_hash,p.integrity_error,t.metadata_version
                 FROM biz_dynamic_electricity_task t
                 LEFT JOIN biz_dynamic_electricity_result r ON r.result_id=t.result_id AND r.building_id=t.building_id AND r.start_ms=t.start_ms AND r.end_ms=t.end_ms
                 LEFT JOIN biz_dynamic_electricity_chart_projection p ON p.result_id=r.result_id
-                WHERE t.building_id=? AND t.start_ms>=? AND t.end_ms<=? AND t.source_kind='DEVICE_INTERVAL' AND t.state='READY' AND t.metadata_version=?
+                WHERE t.building_id=? AND t.start_ms>=? AND t.end_ms<=? AND t.source_kind='DEVICE_INTERVAL' AND t.state='READY'
                 ORDER BY t.start_ms LIMIT 50001
                 """,(r,n)->{
                     DynamicElectricityQueryBudget.check();if(n>=50000)throw DynamicElectricityCore.problem("DYNAMIC_CAPACITY","动态结果超过读取上限");
+                    if(!Objects.equals(r.getString("metadata_version"),metadata.version(Instant.ofEpochMilli(r.getLong("start_ms")),Instant.ofEpochMilli(r.getLong("end_ms")))))return null;
                     var chart=decodeProjectionRow(r,building);
                     if(!"DEVICE_INTERVAL".equals(chart.sourceKind()))throw projectionProblem("DYNAMIC_PROJECTION_INTEGRITY","设备结果来源类型不一致");
                     return chart;
                 },
-                building,from.toEpochMilli(),to.toEpochMilli(),metadata);
+                building,from.toEpochMilli(),to.toEpochMilli()).stream().filter(Objects::nonNull).toList();
     }
 
     private ChartResult decodeProjectionRow(java.sql.ResultSet row,String expectedBuilding) throws java.sql.SQLException {

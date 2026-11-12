@@ -22,8 +22,7 @@ class DynamicElectricitySourceChecks {
         var checks=jdbc.queryForList("SELECT source_version FROM biz_dynamic_input_check WHERE building_id=? AND start_ms=? AND end_ms=? AND task_revision=? AND metadata_version=?",String.class,
                 task.building(),task.from(),task.to(),task.revision(),task.metadata());
         if(checks.size()!=1||!Objects.equals(version,checks.getFirst()))return false;
-        return jdbc.update("UPDATE biz_dynamic_electricity_task SET next_check=? WHERE building_id=? AND start_ms=? AND end_ms=? AND revision=? AND metadata_version=? AND state='READY'",
-                System.currentTimeMillis()+5000,task.building(),task.from(),task.to(),task.revision(),task.metadata())==1;
+        return true;
     }
     void completed(DynamicElectricityLiveRepository.Task task,String version) {
         if(version==null||"DEVICE_INTERVAL".equals(task.sourceKind()))return;

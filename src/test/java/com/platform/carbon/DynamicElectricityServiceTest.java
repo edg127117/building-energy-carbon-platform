@@ -54,7 +54,7 @@ class DynamicElectricityServiceTest {
         jdbc.execute("CREATE TABLE biz_energy_item_version(item_id VARCHAR(32),version_id VARCHAR(32),config_revision INT,status VARCHAR(32),effective_from TIMESTAMP,effective_to TIMESTAMP)");
         jdbc.execute("CREATE TABLE biz_energy_item_version_scope(version_id VARCHAR(32),usage_scope VARCHAR(32))");
         jdbc.execute("CREATE TABLE biz_measurement_unit(unit_id VARCHAR(32),unit_code VARCHAR(32))");
-        jdbc.execute("CREATE TABLE biz_measurement_unit_version(unit_id VARCHAR(32),version_id VARCHAR(32),config_revision INT,status VARCHAR(32),effective_from TIMESTAMP,effective_to TIMESTAMP)");
+        jdbc.execute("CREATE TABLE biz_measurement_unit_version(unit_id VARCHAR(32),version_id VARCHAR(32),config_revision INT,status VARCHAR(32),effective_from TIMESTAMP,effective_to TIMESTAMP,symbol VARCHAR(32),dimension_code VARCHAR(32),canonical_unit_code VARCHAR(32),scale_factor DECIMAL(24,12),conversion_type VARCHAR(32),standard_condition_code VARCHAR(32))");
         jdbc.execute("CREATE TABLE biz_energy_point_profile(building_id VARCHAR(32),point_id VARCHAR(80),config_revision INT)");
         var mapper = new ObjectMapper().findAndRegisterModules().disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
         repository = spy(new DynamicElectricityRepository(jdbc, mapper));
@@ -281,7 +281,7 @@ class DynamicElectricityServiceTest {
         jdbc.update("INSERT INTO biz_energy_item VALUES ('item','ELECTRICITY')");
         jdbc.update("INSERT INTO biz_energy_item_version VALUES ('item','iv',1,'APPROVED',NULL,NULL)");
         jdbc.update("INSERT INTO biz_measurement_unit VALUES ('unit','KWH')");
-        jdbc.update("INSERT INTO biz_measurement_unit_version VALUES ('unit','uv',1,'APPROVED',NULL,NULL)");
+        jdbc.update("INSERT INTO biz_measurement_unit_version(unit_id,version_id,config_revision,status,effective_from,effective_to) VALUES ('unit','uv',1,'APPROVED',NULL,NULL)");
         var command = new CalculationRequest("HOUR", FROM, FROM.plusSeconds(3600));
         for (String change : List.of(
                 "UPDATE biz_energy_point_item_binding_version SET config_revision=2",

@@ -34,7 +34,7 @@ class CurrentReviewedDayVersionBudgetTest {
         var captured=capture(0);
         assertThat(captured.sql()).contains("MAX_EXECUTION_TIME(1750)","INDEX(r PRIMARY)","JOIN_ORDER(r,b)",
                 "NO_SEMIJOIN(@dynamic_day_manual_replacement)","QB_NAME(dynamic_day_manual_replacement)",
-                "JOIN_ORDER(s,sb)","r.fact_id IN (?,?)","ORDER BY r.fact_id",
+                "JOIN_ORDER(s,sb)","INDEX(s idx_energy_manual_supersedes)","r.fact_id IN (?,?)","ORDER BY r.fact_id",
                 "r.start_inclusive<? AND r.end_exclusive>?","s.supersedes_fact_id IS NOT NULL",
                 "s.building_id=r.building_id","s.supersedes_fact_id=r.fact_id AND sb.status='APPROVED'",
                 "b.batch_id=r.batch_id AND b.building_id=r.building_id",

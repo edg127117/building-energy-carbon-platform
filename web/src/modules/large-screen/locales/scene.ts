@@ -26,6 +26,7 @@ export default {
   todayElectricity: '今日用电', currentPower: '当前功率', monthlyElectricity: '本月用电', yesterdayComparison: '昨日同期对比', updatedAt: '数据更新时间', energyTrend: '今日用电趋势', selectedModel: '当前模型对象', modelId: '模型标识', modelScope: '模型范围', modelFloor: '安装楼层', geometryOnly: '仅定位几何对象，不以模型标识自动绑定正式设备。', modelAssets: '查看模型对象', modelEmpty: '当前楼层无模型对象', noEnergy: '尚无该模型范围的正式计量关系', formalState: '正式运行状态', communication: '正式通讯状态', selectedBuilding: '正式数据建筑',
   modelPlaying: '播放模型动效', modelPaused: '暂停模型动效', modelSystem: '专业系统模型', apply: '应用', cancel: '取消', panelRestore: '恢复面板', details: '详细信息', dataBatch: '正式核算批次', noBinding: '尚未建立正式资产映射',
   modelName: '创新港', modelContext: '创新港参考模型 · 尚未建立正式资产映射', typicalOutdoor: '典型空调外机', typicalIndoor: '典型空调内机', combination: '组合视图',
+  sceneOperatingState: '运行状态', sceneOperating: '运行正常', sceneCommunication: '通讯状态', sceneScope: '当前查看范围',
   classificationScheme: '正式分类方案', separator: ' · ',
   conversionView: '折标查看口径', chooseConversion: '请选择已审核参数', flowSourceManual: '已审核来源统计 · 本次查询折标', flowSourceFormal: '正式原生来源 · 本次查询折标',
   energyFlowPending: '能流节点与连线接口待补齐', flowEvidenceMissing: '该批次尚无可用的守恒分类流图', batchListLimited: '最近100个批次中未找到该期间，历史完整性尚不能确认', batchAmbiguous: '该期间存在多个有效候选，需核对当前正式版本',

@@ -25,6 +25,7 @@ public class RawTelemetryLedger {
     private final JdbcTemplate jdbc;
     private final RawTelemetryCodec codec;
     private final TransactionTemplate tx;
+    private final RawTelemetryCommitBatcher commitBatcher;
     private final int maxVariants;
     private final long maxEvidence;
     @Value("${telemetry-conflicts.max-pending-intents:50000}")
@@ -35,7 +36,15 @@ public class RawTelemetryLedger {
     public RawTelemetryLedger(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc, RawTelemetryCodec codec,
             @Value("${telemetry-conflicts.max-variants-per-fact:16}") int maxVariants,
             @Value("${telemetry-conflicts.max-evidence-rows:50000}") long maxEvidence) {
+        this(jdbc,codec,maxVariants,maxEvidence,null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RawTelemetryLedger(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc, RawTelemetryCodec codec,
+            @Value("${telemetry-conflicts.max-variants-per-fact:16}") int maxVariants,
+            @Value("${telemetry-conflicts.max-evidence-rows:50000}") long maxEvidence,RawTelemetryCommitBatcher commitBatcher) {
         if (maxVariants < 1 || maxVariants > 100 || maxEvidence < 1) throw new IllegalArgumentException("Invalid conflict capacity");
+        this.commitBatcher=commitBatcher;
         this.jdbc = jdbc; this.codec = codec; this.maxVariants = maxVariants; this.maxEvidence = maxEvidence;
         tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
         tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -56,7 +65,7 @@ public class RawTelemetryLedger {
     public Reservation reserve(RawTelemetryEvent incoming, Supplier<RawTelemetryEvent> historical) {
         String key = codec.key(incoming.pointId());
         String hash = codec.hash(incoming);
-        return tx.execute(status -> {
+        return commit(RawTelemetryCommitBatcher.Stage.RESERVE,key,() -> {
             boundary(key);
             long floor = jdbc.queryForObject("SELECT before_ms FROM biz_telemetry_retention_boundary WHERE point_key=? FOR UPDATE", Long.class, key);
             if (incoming.eventTime() < floor) return new Reservation(null, false, true);
@@ -73,8 +82,6 @@ public class RawTelemetryLedger {
             }
             Fact fact = locked(key, incoming.eventTime());
             if (inserted) {
-                if(jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='PENDING_RAW' AND used_rows<?",maxPending)!=1)
-                    throw new DataAccessResourceFailureException("Pending raw capacity reached");
                 RawTelemetryEvent existing = historical.get();
                 RawTelemetryEvent frozen = existing == null ? incoming : existing;
                 if (!key.equals(codec.key(frozen.pointId()))) throw new IllegalStateException("Historical raw identity mismatch");
@@ -87,11 +94,24 @@ public class RawTelemetryLedger {
             RawTelemetryEvent original = codec.decode(fact.snapshotJson());
             if (!hash.equals(fact.hash())) {
                 appendConflict(fact, incoming, hash);
+                if(inserted)reservePendingCapacity();
                 return new Reservation(original, true, false);
             }
             if (!codec.hash(original).equals(hash)) throw new IllegalStateException("Raw snapshot digest mismatch");
+            if(inserted)reservePendingCapacity();
             return new Reservation(original, false, false);
         });
+    }
+
+    private void reservePendingCapacity() {
+        // 配额与意图原子提交；并发批次已统一取得配额锁，此处只核对并增加实际占用。
+        if(jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows+1 WHERE budget_key='PENDING_RAW' AND used_rows<?",maxPending)!=1)
+            throw new DataAccessResourceFailureException("Pending raw capacity reached");
+    }
+
+    private <T> T commit(RawTelemetryCommitBatcher.Stage stage,String point,Supplier<T> action) {
+        // 登记与落库仍分别提交；原始意图不能并入调用者的消息回执事务。
+        return commitBatcher==null?tx.execute(status->action.get()):commitBatcher.execute(stage,point,action);
     }
 
     public enum RetentionResult { RETAINED, UNKNOWN, RETIRED }
@@ -139,17 +159,17 @@ public class RawTelemetryLedger {
 
     /** 回放与退役共用水位锁，防止清理后在锁外重新写回过期原始行。 */
     public <T> T storeFrozen(RawTelemetryEvent original, Supplier<T> write) {
-        return tx.execute(status -> {
-            String key = codec.key(original.pointId());
+        String key = codec.key(original.pointId());
+        return commit(RawTelemetryCommitBatcher.Stage.PERSIST,key,() -> {
             boundary(key);
             long floor = jdbc.queryForObject("SELECT before_ms FROM biz_telemetry_retention_boundary WHERE point_key=? FOR UPDATE", Long.class, key);
             if (original.eventTime() < floor) throw new IllegalStateException("Raw intent retired");
             Fact fact = locked(key, original.eventTime());
             if (!fact.snapshotJson().equals(codec.encode(original))) throw new IllegalStateException("Frozen raw snapshot mismatch");
             T result = write.get();
+            jdbc.update("UPDATE biz_telemetry_raw_intent SET storage_state='PERSISTED',retry_count=0,next_retry_ms=0 WHERE point_key=? AND event_ms=?", key, original.eventTime());
             if(!"PERSISTED".equals(fact.storageState()))
                 jdbc.update("UPDATE biz_telemetry_conflict_budget SET used_rows=used_rows-1 WHERE budget_key='PENDING_RAW'");
-            jdbc.update("UPDATE biz_telemetry_raw_intent SET storage_state='PERSISTED',retry_count=0,next_retry_ms=0 WHERE point_key=? AND event_ms=?", key, original.eventTime());
             return result;
         });
     }

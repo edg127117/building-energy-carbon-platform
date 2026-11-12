@@ -51,6 +51,7 @@ class PeriodElectricityQueryWorker implements AutoCloseable {
             int attempted=0;
             long batchDeadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);
             for(var h:repository.duePeriods(now)) {
+                repository.advance(h);
                 String token=null;
                 try {
                     var q=service.parse(h);String current=service.current(q);

@@ -33,6 +33,19 @@ class TelemetryConflictTest {
     TelemetryConflictService conflicts;TransactionTemplate tx;
     BuildingScopeService scope;AuditEvidenceWriter audit;EnergyAggregationGovernanceService energy;
 
+    @Test void historicalReadDoesNotHoldGlobalPendingQuotaAndFailureRollsBackIntent() {
+        ledger.reserve(event(100),()->{
+            assertThat(jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='PENDING_RAW'",Long.class)).isZero();
+            return null;
+        });
+        assertThat(jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='PENDING_RAW'",Long.class)).isEqualTo(1);
+        assertThatThrownBy(()->ledger.storeFrozen(event(100),()->{throw new IllegalStateException("TD verification failed");})).isInstanceOf(IllegalStateException.class);
+        assertThat(ledger.find("P1",event(100).eventTime()).storageState()).isEqualTo("PENDING");
+        assertThat(jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='PENDING_RAW'",Long.class)).isEqualTo(1);
+        ledger.storeFrozen(event(100),()->true);
+        assertThat(jdbc.queryForObject("SELECT used_rows FROM biz_telemetry_conflict_budget WHERE budget_key='PENDING_RAW'",Long.class)).isZero();
+    }
+
     @BeforeEach void setup() {
         var ds=new DriverManagerDataSource("jdbc:h2:mem:d01_"+UUID.randomUUID()+";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false","sa","");
         new ResourceDatabasePopulator(new ClassPathResource("schema-test.sql"),new ClassPathResource("telemetry-conflict-schema-test.sql")).execute(ds);

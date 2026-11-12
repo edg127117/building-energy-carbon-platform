@@ -156,7 +156,7 @@ public class DynamicElectricityLiveService {
             else calculations.calculate(task.user(),roles,task.building(),new CalculationRequest(task.grain(),from,to,task.sourceKind()));
             return;
         }
-        String metadata=tasks.metadataVersion(task.building(),results);
+        String metadata=tasks.metadataSnapshot(task.building(),results).version(Instant.ofEpochMilli(task.from()),Instant.ofEpochMilli(task.to()));
         capture.pin(task.building()+":"+task.user()+":"+new TreeSet<>(roles)+":"+metadata);
         var applied=inputs.calculate(task,roles,capture);
         String version=hash(encode(List.of("DEVICE_INTERVAL_V1",task.inputHash(),metadata)));
@@ -171,7 +171,7 @@ public class DynamicElectricityLiveService {
                 task.inputHash(),CarbonEvidence.tree(Map.of("resultId",id)),result.factorHash(),result.capturedAt());
         new TransactionTemplate(transactionManager).executeWithoutResult(status->{
             if(!systemTask)authorization.requireCalculationRunner(task.user(),roles,task.building());
-            if(!metadata.equals(tasks.metadataVersion(task.building(),results)))throw problem("DYNAMIC_SOURCE_CHANGED","计算期间计量或能源配置变更");
+            if(!metadata.equals(tasks.metadataSnapshot(task.building(),results).version(Instant.ofEpochMilli(task.from()),Instant.ofEpochMilli(task.to()))))throw problem("DYNAMIC_SOURCE_CHANGED","计算期间计量或能源配置变更");
             if(tasks.publish(task,token,metadata,summary))results.save(result);
         });
     }
@@ -298,6 +298,6 @@ public class DynamicElectricityLiveService {
         org.slf4j.LoggerFactory.getLogger(getClass()).warn("Dynamic interval awaiting calculation: building={}, start={}, code={}", task.building(), task.from(), code);
     }
     void refreshMetadata() {
-        for(String building:tasks.buildings())tasks.metadataChanged(building,tasks.metadataVersion(building,results));
+        for(String building:tasks.buildings())tasks.metadataChanged(building,tasks.metadataSnapshot(building,results));
     }
 }

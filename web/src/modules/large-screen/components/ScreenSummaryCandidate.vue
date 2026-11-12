@@ -26,6 +26,9 @@ watch(() => props.variant, variant => {
 const numberFormatter = new Intl.NumberFormat('zh-CN')
 const number = (value: number | null | undefined) => typeof value === 'number' && Number.isFinite(value)
   ? numberFormatter.format(value) : s('missing')
+const hoursFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+const hours = (value: number | null) => typeof value === 'number' && Number.isFinite(value)
+  ? hoursFormatter.format(value) : s('missing')
 const refreshTime = computed(() => typeof props.updatedAt === 'number' && Number.isFinite(props.updatedAt)
   ? new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(props.updatedAt) : null)
 const alarms = computed(() => [
@@ -97,10 +100,10 @@ function readingLabel(entry: Reading) {
           </nav>
         </div>
         <div v-if="variant === 'b' && deviceView === 'ranking'" class="runtime-ranking" data-test="candidate-runtime-ranking">
-          <article v-for="(entry, index) in runtimeRanking ?? []" :key="entry.rank" class="ranking-card" :class="'tone-' + rankingTones[index % rankingTones.length]" :data-test="'candidate-rank-' + entry.rank" tabindex="0" :aria-label="s('summaryRankReading', { rank: entry.rank, room: entry.room, hours: number(entry.hours) })">
-            <div class="ranking-top"><span class="ranking-badge">{{ s('summaryRankBadge', { rank: entry.rank }) }}</span><span class="ranking-floor">{{ entry.floor }}</span></div>
-            <strong class="ranking-room">{{ entry.room }}</strong>
-            <div class="ranking-bottom"><span class="ranking-period"><Clock :size="12" aria-hidden="true" />{{ s('summaryRuntimePeriod') }}</span><span class="ranking-hours"><b>{{ number(entry.hours) }}</b><small>{{ s('summaryRuntimeUnit') }}</small></span></div>
+          <article v-for="(entry, index) in runtimeRanking ?? []" :key="entry.rank" class="ranking-card" :class="'tone-' + rankingTones[index % rankingTones.length]" :data-test="'candidate-rank-' + entry.rank" tabindex="0" :aria-label="s('summaryRankReading', { rank: entry.rank, room: entry.room, hours: hours(entry.hours) })">
+            <div class="ranking-top"><span class="ranking-badge">{{ s('summaryRankBadge', { rank: entry.rank }) }}</span><span class="ranking-floor" :title="entry.floor">{{ entry.floor }}</span></div>
+            <strong class="ranking-room" :title="entry.room">{{ entry.room }}</strong>
+            <div class="ranking-bottom"><span class="ranking-period"><Clock :size="12" aria-hidden="true" />{{ s('summaryRuntimePeriod') }}</span><span class="ranking-hours"><b>{{ hours(entry.hours) }}</b><small>{{ s('summaryRuntimeUnit') }}</small></span></div>
             <span class="reading-bar" aria-hidden="true"><i :style="{ width: visualWidth(entry.percentage) }" /></span>
           </article>
           <p v-if="!runtimeRanking?.length" class="missing-state">{{ s('deviceSummaryMissing') }}</p>

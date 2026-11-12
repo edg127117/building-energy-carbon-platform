@@ -288,7 +288,9 @@ abstract class QueryDayCacheFixture {
         authorization = mock(CarbonAuthorization.class);
         reader = mock(DynamicElectricityInputReader.class);
         live = mock(DynamicElectricityLiveRepository.class);
-        when(live.metadataVersion(BUILDING, repository)).thenReturn(METADATA);
+
+        var metadata=mock(MetadataSnapshot.class);when(metadata.version(any(),any())).thenReturn(METADATA);
+        when(live.metadataSnapshot(BUILDING,repository)).thenReturn(metadata);
         service = new DynamicElectricityService(authorization, repository, reader, transactionManager,
                 evidence -> { }, new AuditGovernanceProperties(), live);
     }

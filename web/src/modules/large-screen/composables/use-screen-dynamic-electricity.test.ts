@@ -138,6 +138,15 @@ describe('useScreenDynamicElectricity', () => {
     expect(validated?.hasSimulatedSource).toBe(true)
   })
 
+  it('日模式不调用旧年/月动态电量查询', async () => {
+    period.value = { kind: 'day', value: '2026-09-22' }
+    const wrapper = mountDynamic()
+    await settle()
+    expect(readDynamicElectricity).not.toHaveBeenCalled()
+    expect(dynamic.status.value).toBe('unavailable')
+    wrapper.unmount()
+  })
+
   it('只显示当前开放自然桶的 ACCUMULATING 完整前缀，并校验 computedThrough 在桶内', () => {
     vi.setSystemTime(new Date('2026-09-15T04:00:00.000Z'))
     const month: ScreenPeriod = { kind: 'month', value: '2026-09' }

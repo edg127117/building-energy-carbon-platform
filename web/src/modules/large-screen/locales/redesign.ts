@@ -4,7 +4,7 @@ export default {
   redesignPlatform: '创新港大楼 · 建筑能碳监测管理平台',
   previousMonthCarbon: '上月累计碳排放', previousMonthIntensity: '上月碳排放强度',
   currentYearCarbon: '当年累计碳排放', currentYearIntensity: '当年碳排放强度',
-  yearShort: '年', periodType: '统计期间', periodMonthTick: '{value}月', periodDayTick: '{value}日',
+  yearShort: '年', dayShort: '日', periodType: '统计期间', periodMonthTick: '{value}月', periodDayTick: '{value}日',
   redesignComposition: '碳排放构成', redesignFlow: '能碳流向', redesignPlan: '碳排放计划与配额',
   redesignMirror: '碳排放趋势', redesignUsage: '用电趋势', redesignDevices: '设备实时状态',
   redesignElectricityShare: '100%',
@@ -22,6 +22,6 @@ export default {
   redesignPrototypeNotice: '当前为原型效果审阅阶段；各项指标、曲线、能碳流向和状态汇总均采用固定展示样例，供确认布局、颜色与交互。正式接口与数据将在后续阶段对齐。',
   redesignPlanNotice: '计划基准仅用于本轮原型；不代表正式核算或已批准的减排目标。',
   redesignPendingNotice: '年视图按全年同比，月视图按去年同月同比、上月环比；年累计数据须与上年相同截止时间比较。正式比较期间、固定年基准、月度强度单位、评分比例、动态因子和状态汇总口径将在原型确认后与后端逐项核对。',
-  redesignHotspotNotice: '专业系统下钻入口暂时隐藏，建筑场景和浏览操作保留。',
+  redesignHotspotNotice: '点击建筑热点可查看专业系统、楼层与模型对象；模型不代表正式设备运行状态。',
   redesignPerPersonUnit: 'tCO₂/人·年', redesignPerAreaUnit: 'kgCO₂/m²·年',
 } as const

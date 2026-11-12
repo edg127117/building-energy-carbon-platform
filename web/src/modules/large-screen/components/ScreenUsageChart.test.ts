@@ -23,6 +23,20 @@ vi.mock('@/locales', () => ({
 }))
 
 describe('ScreenUsageChart', () => {
+  it('富文本提示按实际换行展示电量与温度，不显示HTML标签，含小时证据时保持相同格式', async () => {
+    const data = { electricity: [25.23], temperature: [23], electricityUnit: 'kWh', temperatureUnit: '°C' }
+    const wrapper = mount(ScreenUsageChart, { props: { period: { kind: 'day', value: '2026-10-25' }, data } })
+    const tooltip = () => (wrapper.findComponent(ChartView).props('option') as { tooltip: { formatter: (params: unknown) => string } }).tooltip
+    const params = [
+      { dataIndex: 0, axisValueLabel: '00:00', seriesId: 'electricity', seriesName: '总用电量', value: 25.23 },
+      { dataIndex: 0, seriesId: 'temperature-history', seriesName: '历史气象温度', value: 23 },
+    ]
+    expect(tooltip().formatter(params)).toBe('00:00\n总用电量：25.23 kWh\n历史气象温度：23 °C')
+    await wrapper.setProps({ data: { ...data, hourDetails: [{ actualStart: '2026-10-25T00:00:00+08:00', actualEnd: '2026-10-25T01:00:00+08:00', status: 'COMPLETE', approximate: false, reasonCode: null }] } })
+    expect(tooltip().formatter(params)).not.toContain('<br>')
+    expect(tooltip().formatter(params).split('\n').length).toBeGreaterThan(3)
+    wrapper.unmount()
+  })
   it('区分等待汇总、失败与缺少数据，不把加载中显示成空态', async () => {
     const wrapper = mount(ScreenUsageChart, { props: { period: { kind: 'month', value: '2026-01' }, data: null, loading: true } })
     expect(wrapper.find('[role="status"]').exists()).toBe(true)

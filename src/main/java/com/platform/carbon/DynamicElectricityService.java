@@ -75,7 +75,7 @@ public class DynamicElectricityService {
         window(request.startInclusive(), request.endExclusive());
         var windows = split(request.startInclusive(), request.endExclusive(), request.grain());
         DynamicElectricityInputReader.Session session=null;
-        String metadata=live.metadataVersion(building,repository);
+        var metadata=live.metadataSnapshot(building,repository);
         Map<Instant, String> versions = new HashMap<>();
         var deadline = CarbonCalculationDeadline.start(Duration.ofMinutes(5));
         try (var ignored = deadline.bind();var spool=new DynamicElectricityResultSpool(deadline)) {
@@ -83,7 +83,7 @@ public class DynamicElectricityService {
             // 却被按水位读取的输入排除。这里只保留版本摘要，不把整月事实或因子留在内存。
             for (var interval : windows) {
                 deadline.requireRemaining();
-                versions.put(interval[0],sourceVersion(building,interval[0],interval[1],request.sourceKind(),metadata));
+                versions.put(interval[0],sourceVersion(building,interval[0],interval[1],request.sourceKind(),metadata.version(interval[0],interval[1])));
             }
             session=electricity.session(request.sourceKind());
             if("HOUR".equals(request.grain()) && "REVIEWED_INTERVAL".equals(request.sourceKind()))
@@ -106,10 +106,10 @@ public class DynamicElectricityService {
             new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
                 repository.lock(building);
                 authorization.requireCalculationRunner(user, roles, building);
-                String publishMetadata=live.metadataVersion(building,repository);
+                var publishMetadata=live.metadataSnapshot(building,repository);
                 spool.heads().forEach(head -> {
                     deadline.requireRemaining();
-                    if (!head.sourceVersion().equals(sourceVersion(building, head.start(), head.end(), request.sourceKind(),publishMetadata))) throw problem("DYNAMIC_SOURCE_CHANGED", "来源已修订，请重新计算");
+                    if (!head.sourceVersion().equals(sourceVersion(building, head.start(), head.end(), request.sourceKind(),publishMetadata.version(head.start(),head.end())))) throw problem("DYNAMIC_SOURCE_CHANGED", "来源已修订，请重新计算");
                 });
                 deadline.requireRemaining();
                 spool.visit((payload,expectedHash)->{
@@ -169,13 +169,14 @@ public class DynamicElectricityService {
                 () -> live.deviceCoverage(building,buckets.getFirst()[0],buckets.getLast()[1]));
         stored.removeIf(r->{ DynamicElectricityQueryBudget.check();
             return deviceCoverage.stream().anyMatch(w->r.start().isBefore(w[1])&&r.end().isAfter(w[0])); });
-        String metadata=stored.isEmpty()&&!DynamicElectricityQueryObservation.observe(DynamicElectricityQueryObservation.Phase.DEVICE_READS,
+        MetadataSnapshot metadata=stored.isEmpty()&&!DynamicElectricityQueryObservation.observe(DynamicElectricityQueryObservation.Phase.DEVICE_READS,
                 () -> live.hasData(building,buckets.getFirst()[0],buckets.getLast()[1]))?null:
                 DynamicElectricityQueryObservation.observe(DynamicElectricityQueryObservation.Phase.METADATA,
-                        () -> live.metadataVersion(building,repository));
+                        () -> live.metadataSnapshot(building,repository));
         if(metadata!=null)
             stored.addAll(DynamicElectricityQueryObservation.observe(DynamicElectricityQueryObservation.Phase.DEVICE_READS,
                     () -> repository.currentDeviceResults(building,buckets.getFirst()[0],buckets.getLast()[1],metadata)));
+        var scopedMetadata=metadata;
         View view = DynamicElectricityQueryObservation.observe(DynamicElectricityQueryObservation.Phase.VIEW_ASSEMBLY, () -> {
         try(var queryVersions=new CurrentElectricityQueryVersions(repository,user,roles,building,stored)) {
         Map<String, String> versions = new HashMap<>();
@@ -194,7 +195,7 @@ public class DynamicElectricityService {
             var candidates = stored.stream().filter(r -> { DynamicElectricityQueryBudget.check();
                 return !r.start().isBefore(bucket[0]) && !r.end().isAfter(bucket[1]); }).toList();
             var current = candidates.stream().filter(r -> { DynamicElectricityQueryBudget.check(); return "DEVICE_INTERVAL".equals(r.sourceKind()) || r.sourceVersion().equals(versions.computeIfAbsent(r.start() + ":" + r.end() + ":" + r.sourceKind(),
-                    keyVersion -> querySourceVersion(user,roles,building,r.start(),r.end(),r.sourceKind(),metadata,queryVersions))); }).toList();
+                    keyVersion -> querySourceVersion(user,roles,building,r.start(),r.end(),r.sourceKind(),scopedMetadata.version(r.start(),r.end()),queryVersions))); }).toList();
             // 优先选覆盖当前游标的最粗已存结果；同一电量不能同时累计月、日和小时三个粒度。
             Map<Instant,ChartResult> byStart=new HashMap<>();
             current.forEach(r->{ DynamicElectricityQueryBudget.check();
@@ -240,12 +241,12 @@ public class DynamicElectricityService {
     }
 
     String sourceVersion(String building, Instant from, Instant to, String sourceKind) {
-        return sourceVersion(building,from,to,sourceKind,live.metadataVersion(building,repository));
+        return sourceVersion(building,from,to,sourceKind,live.metadataSnapshot(building,repository).version(from,to));
     }
     String sourceVersionWithReviewedSnapshot(String building, Instant from, Instant to, String electricityVersion) {
         // Only the current manual facts are shared. Metadata and factors retain their full reads
         // and validation, on the background caller's same read-only repeatable-read connection.
-        String metadata = live.metadataVersion(building, repository);
+        String metadata = live.metadataSnapshot(building, repository).version(from,to);
         var factors = repository.factors(building, from, to);
         return hash(encode(List.of("DYNAMIC_ELECTRICITY_V3", "REVIEWED_INTERVAL", metadata,
                 electricityVersion, factors.stream().map(FactorRow::hash).toList())));

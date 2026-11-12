@@ -5,27 +5,34 @@ import type { ChartOption } from '@/shared/charts/echarts'
 import { t } from '@/locales'
 import type { ScreenMirrorData } from '../models/screen-analytical'
 import { periodBuckets, type ScreenPeriod } from '../models/screen-period'
-import { formatScreenReading } from '../models/screen-reading-format'
 
 type TooltipItem = Record<string, unknown>
 
 const props = defineProps<{ data: ScreenMirrorData | null; period: ScreenPeriod; expanded?: boolean; loading?: boolean; failed?: boolean }>()
 
 const buckets = computed(() => periodBuckets(props.period))
-const dynamicEmissions = computed(() => valuesFor(props.data?.dynamicEmissions, buckets.value.length))
-const staticEmissions = computed(() => valuesFor(props.data?.staticEmissions, buckets.value.length))
+const dynamicEmissionDisplay = computed(() => emissionDisplay(props.data?.dynamicEmissionUnit ?? props.data?.emissionUnit ?? 'tCO₂e'))
+const staticEmissionDisplay = computed(() => emissionDisplay(props.data?.staticEmissionUnit ?? props.data?.emissionUnit ?? 'tCO₂e'))
+const dynamicFactorUnit = computed(() => displayUnit(props.data?.dynamicFactorUnit ?? props.data?.factorUnit ?? 'kgCO₂e/kWh'))
+const staticFactorUnit = computed(() => displayUnit(props.data?.staticFactorUnit ?? props.data?.factorUnit ?? 'kgCO₂e/kWh'))
+const dynamicEmissions = computed(() => valuesFor(props.data?.dynamicEmissions, buckets.value.length, dynamicEmissionDisplay.value.multiplier))
+const staticEmissions = computed(() => valuesFor(props.data?.staticEmissions, buckets.value.length, staticEmissionDisplay.value.multiplier))
 const dynamicFactors = computed(() => valuesFor(props.data?.dynamicFactors, buckets.value.length))
 const staticFactors = computed(() => valuesFor(props.data?.staticFactors, buckets.value.length))
 const mirroredStaticEmissions = computed(() => staticEmissions.value.map(mirrorCoordinate))
 const mirroredStaticFactors = computed(() => staticFactors.value.map(mirrorCoordinate))
-const emissionExtent = computed(() => symmetricExtent([...dynamicEmissions.value, ...staticEmissions.value]))
-const factorExtent = computed(() => symmetricExtent([...dynamicFactors.value, ...staticFactors.value]))
+const dynamicEmissionExtent = computed(() => symmetricExtent(separateEmissionUnits.value ? dynamicEmissions.value : [...dynamicEmissions.value, ...staticEmissions.value]))
+const staticEmissionExtent = computed(() => symmetricExtent(staticEmissions.value))
+const dynamicFactorExtent = computed(() => symmetricExtent(separateFactorUnits.value ? dynamicFactors.value : [...dynamicFactors.value, ...staticFactors.value]))
+const staticFactorExtent = computed(() => symmetricExtent(staticFactors.value))
+const separateEmissionUnits = computed(() => dynamicEmissionDisplay.value.unit !== staticEmissionDisplay.value.unit)
+const separateFactorUnits = computed(() => dynamicFactorUnit.value !== staticFactorUnit.value)
 const hasChartData = computed(() => [dynamicEmissions.value, staticEmissions.value, dynamicFactors.value, staticFactors.value]
   .some(values => values.some(isFiniteValue)))
 
 const option = computed<ChartOption>(() => ({
   animation: false,
-  grid: props.expanded ? { top: 54, right: 46, bottom: 34, left: 40 } : { top: '22%', right: '11%', bottom: '12%', left: '11%', containLabel: true },
+  grid: props.expanded ? { top: 54, right: separateEmissionUnits.value || separateFactorUnits.value ? 170 : 46, bottom: 34, left: 40 } : { top: '22%', right: separateEmissionUnits.value || separateFactorUnits.value ? '25%' : '11%', bottom: '12%', left: '11%', containLabel: true },
   legend: { top: 0, left: 'center', itemWidth: 10, itemHeight: 8 },
   tooltip: {
     trigger: 'axis',
@@ -37,21 +44,26 @@ const option = computed<ChartOption>(() => ({
   yAxis: [
     {
       type: 'value',
-      name: displayUnit(props.data?.emissionUnit ?? 'tCO₂e'),
+      name: dynamicEmissionDisplay.value.unit,
       position: 'left',
-      ...extentOptions(emissionExtent.value),
-      axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
-      axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
+      ...axisScale(dynamicEmissionExtent.value),
     },
     {
       type: 'value',
-      name: displayUnit(props.data?.factorUnit ?? 'kgCO₂e/kWh'),
-      position: 'right',
-      ...extentOptions(factorExtent.value),
+      name: dynamicFactorUnit.value,
+      position: 'right', offset: separateEmissionUnits.value ? 42 : 0,
+      ...axisScale(dynamicFactorExtent.value),
       splitLine: { show: false },
-      axisLabel: { formatter: (value: number) => formatNumber(Math.abs(value)) },
-      axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value))) } },
     },
+    ...(separateEmissionUnits.value ? [{
+      type: 'value', name: staticEmissionDisplay.value.unit,
+      position: 'right', ...axisScale(staticEmissionExtent.value),
+    }] : []),
+    ...(separateFactorUnits.value ? [{
+      type: 'value', name: staticFactorUnit.value,
+      position: 'right', offset: separateEmissionUnits.value ? 84 : 42, ...axisScale(staticFactorExtent.value),
+      splitLine: { show: false },
+    }] : []),
   ],
   series: [
     {
@@ -68,7 +80,7 @@ const option = computed<ChartOption>(() => ({
       name: t('largeScreen.mirrorStaticEmissions'),
       type: 'bar',
       data: mirroredStaticEmissions.value,
-      yAxisIndex: 0,
+      yAxisIndex: separateEmissionUnits.value ? 2 : 0,
       barGap: '-100%',
       barMaxWidth: 18,
       itemStyle: { color: 'var(--bec-screen-cyan)' },
@@ -93,7 +105,7 @@ const option = computed<ChartOption>(() => ({
       name: t('largeScreen.mirrorStaticFactors'),
       type: 'line',
       data: mirroredStaticFactors.value,
-      yAxisIndex: 1,
+      yAxisIndex: separateFactorUnits.value ? separateEmissionUnits.value ? 3 : 2 : 1,
       z: 5,
       smooth: false,
       showSymbol: true,
@@ -110,11 +122,18 @@ function isFiniteValue(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-function valuesFor(values: Array<number | null> | undefined, length: number): Array<number | null> {
+function valuesFor(values: Array<number | null> | undefined, length: number, multiplier = 1): Array<number | null> {
   return Array.from({ length }, (_, index) => {
     const value = values?.[index]
-    return isFiniteValue(value) ? value : null
+    return isFiniteValue(value) ? value * multiplier : null
   })
+}
+
+// 小时图只把已知的吨单位换算为千克，保留 CO₂/CO₂e 口径；不修改传入的业务数据。
+function emissionDisplay(rawUnit: string) {
+  const unit = displayUnit(rawUnit)
+  if (props.period.kind === 'day' && /^tCO[₂2]e?$/.test(unit)) return { unit: `kg${unit.slice(1)}`, multiplier: 1000 }
+  return { unit, multiplier: 1 }
 }
 
 // 静态量只映射为下半区坐标；业务展示和悬停读数仍保持实际的正值语义。
@@ -134,13 +153,30 @@ function extentOptions(extent: number | null): { min: number; max: number; inter
   const rawStep = paddedExtent / 4
   const magnitude = 10 ** Math.floor(Math.log10(rawStep))
   const fraction = rawStep / magnitude
-  const interval = (fraction < 1.5 ? 1 : fraction < 3 ? 2 : fraction < 7 ? 5 : 10) * magnitude
+  const interval = (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 2.5 ? 2.5 : fraction <= 5 ? 5 : 10) * magnitude
   const visibleExtent = Number((Math.ceil(paddedExtent / interval) * interval).toPrecision(12))
   return { min: -visibleExtent, max: visibleExtent, interval }
 }
 
-function formatNumber(value: number | null | undefined): string {
-  return isFiniteValue(value) ? formatScreenReading(value) : t('largeScreen.missing')
+function axisScale(extent: number | null) {
+  const range = extentOptions(extent)
+  // 精度依据实际步长，避免小量级刻度舍入后重复；镜像下半区仍显示实际正值。
+  const digits = stepDigits(range.interval)
+  const formatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: digits })
+  return {
+    ...range,
+    axisLabel: { formatter: (value: number) => formatter.format(Math.abs(value)) },
+    axisPointer: { label: { formatter: (params: { value: string | number }) => formatNumber(Math.abs(Number(params.value)), digits) } },
+  }
+}
+
+function stepDigits(interval: number) {
+  const [mantissa, exponent] = Number(interval.toPrecision(12)).toExponential().split('e')
+  return Math.min(20, Math.max(0, (mantissa.split('.')[1]?.length ?? 0) - Number(exponent)))
+}
+
+function formatNumber(value: number | null | undefined, digits = 2): string {
+  return isFiniteValue(value) ? new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: Math.max(2, digits) }).format(value) : t('largeScreen.missing')
 }
 
 function displayUnit(value: string | undefined): string {
@@ -152,6 +188,8 @@ function formatMirrorTooltip(params: unknown): string {
     ? params.filter((item): item is TooltipItem => typeof item === 'object' && item !== null)
     : []
   const axis = items.length ? String(items[0].axisValueLabel ?? items[0].axisValue ?? '') : ''
+  const index = Number(items[0]?.dataIndex)
+  const detail = Number.isInteger(index) ? props.data?.hourDetails?.[index] : undefined
   const rows = items.map((item) => {
     const value = tooltipValue(item)
     if (!isFiniteValue(value)) return ''
@@ -159,11 +197,14 @@ function formatMirrorTooltip(params: unknown): string {
     const actualValue = isStaticSeries(seriesId) ? Math.abs(value) : value
     return t('largeScreen.mirrorTooltipItem', {
       name: String(item.seriesName ?? t('largeScreen.missing')),
-      value: formatNumber(actualValue),
+      value: formatNumber(actualValue, stepDigits(extentOptions(tooltipExtent(seriesId)).interval)),
       unit: tooltipUnit(seriesId),
     })
   }).filter(Boolean)
-  return [axis, ...rows].filter(Boolean).join('\n')
+  const actual = detail?.actualStart && detail.actualEnd ? `${detail.actualStart} — ${detail.actualEnd}` : ''
+  const gas = detail ? t(detail.gasCoverage === 'CO2_ONLY_ELECTRICITY' || detail.gasCoverage === 'CO2_ONLY' ? 'largeScreen.hourGasCo2' : 'largeScreen.hourGasCo2e') : ''
+  const notes = detail ? [actual ? t('largeScreen.hourActualWindow', { value: actual }) : '', detail.actualEnd ? t('largeScreen.hourCutoff', { value: detail.actualEnd }) : '', detail.approximate ? t('largeScreen.hourApproximate') : '', gas, detail.reasonCode ?? ''].filter(Boolean) : []
+  return [axis, ...rows, ...notes].filter(Boolean).join('\n')
 }
 
 function tooltipValue(item: TooltipItem): number | null {
@@ -176,16 +217,24 @@ function isStaticSeries(seriesId: string): boolean {
 }
 
 function tooltipUnit(seriesId: string): string {
-  return seriesId.endsWith('factors')
-    ? displayUnit(props.data?.factorUnit ?? 'kgCO₂e/kWh')
-    : displayUnit(props.data?.emissionUnit ?? 'tCO₂e')
+  if (seriesId === 'dynamic-factors') return dynamicFactorUnit.value
+  if (seriesId === 'static-factors') return staticFactorUnit.value
+  if (seriesId === 'dynamic-emissions') return dynamicEmissionDisplay.value.unit
+  return staticEmissionDisplay.value.unit
+}
+
+function tooltipExtent(seriesId: string) {
+  if (seriesId === 'dynamic-factors') return dynamicFactorExtent.value
+  if (seriesId === 'static-factors') return separateFactorUnits.value ? staticFactorExtent.value : dynamicFactorExtent.value
+  if (seriesId === 'dynamic-emissions') return dynamicEmissionExtent.value
+  return separateEmissionUnits.value ? staticEmissionExtent.value : dynamicEmissionExtent.value
 }
 </script>
 
 <template>
   <section class="mirror-chart" :aria-label="t('largeScreen.mirrorChartLabel')">
     <ChartView :option="option" :accessible-label="t('largeScreen.mirrorChartLabel')" />
-    <p v-if="failed" class="chart-state" role="alert">{{ t('largeScreen.failed') }}</p>
+    <p v-if="failed" class="chart-state" role="alert">{{ t(data?.hourDetails ? 'largeScreen.failedStale' : 'largeScreen.failed') }}</p>
     <p v-else-if="loading" class="chart-state" role="status">{{ t('common.loading') }}</p>
     <p v-else-if="!hasChartData" class="chart-state" data-test="mirror-empty">{{ t('largeScreen.mirrorEmpty') }}</p>
   </section>

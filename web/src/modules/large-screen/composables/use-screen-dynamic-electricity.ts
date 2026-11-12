@@ -67,6 +67,7 @@ function periodType(period: ScreenPeriod): DynamicElectricityPeriodType {
 }
 
 function windowsFor(period: ScreenPeriod): DynamicWindow[] | null {
+  if (period.kind === 'day') return null
   if (!validScreenPeriod(period)) return null
   if (period.kind === 'year') {
     const year = Number(period.value)

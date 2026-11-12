@@ -16,6 +16,11 @@ export interface ScreenMirrorData {
   staticFactors: Array<number | null>
   emissionUnit: string
   factorUnit: string
+  dynamicEmissionUnit?: string
+  staticEmissionUnit?: string
+  dynamicFactorUnit?: string
+  staticFactorUnit?: string
+  hourDetails?: Array<{ actualStart: string | null; actualEnd: string | null; status: string; approximate: boolean; gasCoverage: string | null; reasonCode: string | null }>
 }
 
 export interface ScreenUsageData {
@@ -23,4 +28,7 @@ export interface ScreenUsageData {
   temperature: Array<number | null>
   electricityUnit: string
   temperatureUnit: string
+  temperatureForecast?: Array<number | null>
+  temperatureHistory?: Array<number | null>
+  hourDetails?: Array<{ actualStart: string | null; actualEnd: string | null; status: string; approximate: boolean; reasonCode: string | null }>
 }
