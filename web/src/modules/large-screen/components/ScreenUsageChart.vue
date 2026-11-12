@@ -83,10 +83,10 @@ function formatUsageTooltip(params: unknown): string {
     const temperatureSeries = String(item.seriesId).startsWith('temperature')
     return `${String(item.marker ?? '')}${String(item.seriesName ?? '')}：${formatValue(item.value, temperatureSeries ? 0 : 2)} ${displayUnit(temperatureSeries ? props.data?.temperatureUnit : props.data?.electricityUnit)}`
   })
-  if (!detail) return [String(items[0]?.axisValueLabel ?? ''), ...rows].filter(Boolean).join('<br>')
+  if (!detail) return [String(items[0]?.axisValueLabel ?? ''), ...rows].filter(Boolean).join('\n')
   const actual = detail.actualStart && detail.actualEnd ? `${detail.actualStart} — ${detail.actualEnd}` : t('largeScreen.missing')
   const notes = [t('largeScreen.hourActualWindow', { value: actual }), detail.actualEnd ? t('largeScreen.hourCutoff', { value: detail.actualEnd }) : '', detail.approximate ? t('largeScreen.hourApproximate') : '', detail.reasonCode ?? ''].filter(Boolean)
-  return [String(items[0]?.axisValueLabel ?? ''), ...rows, ...notes].join('<br>')
+  return [String(items[0]?.axisValueLabel ?? ''), ...rows, ...notes].join('\n')
 }
 </script>
 

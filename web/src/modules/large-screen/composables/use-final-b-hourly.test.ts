@@ -28,10 +28,10 @@ function weather(product: string, temperature: number): WeatherSeries[] {
   }]
 }
 
-function view(): HourlyMonitoringView {
-  const date = '2026-09-22', start = Date.parse(`${date}T00:00:00+08:00`)
+function view(buildingId = 'B', date = '2026-09-22'): HourlyMonitoringView {
+  const start = Date.parse(`${date}T00:00:00+08:00`)
   return {
-    buildingId: 'B', date, timezoneId: 'Asia/Shanghai', asOf: new Date(start + 12 * 3_600_000).toISOString(),
+    buildingId, date, timezoneId: 'Asia/Shanghai', asOf: new Date(start + 12 * 3_600_000).toISOString(),
     points: Array.from({ length: 24 }, (_, hour) => ({
       hour, startInclusive: new Date(start + hour * 3_600_000).toISOString(), endExclusive: new Date(start + (hour + 1) * 3_600_000).toISOString(),
       actualStart: null, actualEnd: null, electricityKwh: hour === 0 ? '0' : null, staticEmissionTco2e: null,
@@ -41,6 +41,73 @@ function view(): HourlyMonitoringView {
     })),
   }
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason: Error) => void
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
+  return { promise, resolve, reject }
+}
+
+it('首次读取显示加载，轮询时保留数据且不反复加载，失败仍显示错误并可恢复', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] })
+  const first = deferred<HourlyMonitoringView>(), refresh = deferred<HourlyMonitoringView>()
+  vi.mocked(readHourlyMonitoring).mockReturnValueOnce(first.promise).mockReturnValueOnce(refresh.promise).mockResolvedValue(view())
+  const scope = effectScope(), day: ScreenPeriod = { kind: 'day', value: '2026-09-22' }
+  const state = scope.run(() => useFinalBHourly(ref('B'), ref(day), ref(day)))!
+  expect(state.loading.value).toEqual({ usage: true, mirror: true })
+  first.resolve(view())
+  await flushPromises()
+  expect(state.loading.value).toEqual({ usage: false, mirror: false })
+  await vi.advanceTimersByTimeAsync(2_000)
+  expect(readHourlyMonitoring).toHaveBeenCalledTimes(2)
+  expect(state.loading.value).toEqual({ usage: false, mirror: false })
+  expect(state.data.value.usage?.data.electricity[0]).toBe(0)
+  refresh.reject(new Error('offline'))
+  await flushPromises()
+  expect(state.failed.value).toEqual({ usage: true, mirror: true })
+  expect(state.data.value.usage?.data.electricity[0]).toBe(0)
+  await vi.advanceTimersByTimeAsync(2_000)
+  await flushPromises()
+  expect(state.failed.value).toEqual({ usage: false, mirror: false })
+  scope.stop()
+})
+
+it('切换日期不会用上一个日期的快照隐藏首次加载，空值响应结束加载', async () => {
+  const next = deferred<HourlyMonitoringView>()
+  vi.mocked(readHourlyMonitoring).mockResolvedValueOnce(view()).mockReturnValueOnce(next.promise)
+  const scope = effectScope(), usage = ref<ScreenPeriod>({ kind: 'day', value: '2026-09-22' })
+  const state = scope.run(() => useFinalBHourly(ref('B'), usage, ref({ kind: 'month', value: '2026-09' })))!
+  await flushPromises()
+  usage.value = { kind: 'day', value: '2026-09-23' }
+  expect(state.loading.value.usage).toBe(true)
+  expect(state.data.value.usage).toBeUndefined()
+  const empty = view('B', '2026-09-23')
+  empty.points[0].electricityKwh = null
+  empty.points[0].electricityStatus = 'MISSING'
+  next.resolve(empty)
+  await flushPromises()
+  expect(state.loading.value.usage).toBe(false)
+  expect(state.data.value.usage?.data.electricity.every(value => value === null)).toBe(true)
+  scope.stop()
+})
+
+it('切换建筑后，旧建筑迟到响应不能清除新建筑的加载状态', async () => {
+  const old = deferred<HourlyMonitoringView>(), next = deferred<HourlyMonitoringView>()
+  vi.mocked(readHourlyMonitoring).mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise)
+  const scope = effectScope(), building = ref('B'), day: ScreenPeriod = { kind: 'day', value: '2026-09-22' }
+  const state = scope.run(() => useFinalBHourly(building, ref(day), ref(day)))!
+  building.value = 'C'
+  old.resolve(view())
+  await flushPromises()
+  expect(state.loading.value).toEqual({ usage: true, mirror: true })
+  expect(state.data.value.usage).toBeUndefined()
+  next.resolve(view('C'))
+  await flushPromises()
+  expect(state.loading.value).toEqual({ usage: false, mirror: false })
+  expect(state.data.value.usage?.data.electricity[0]).toBe(0)
+  scope.stop()
+})
 
 it('deduplicates same-building same-day requests and independently reads both weather products', async () => {
   vi.mocked(readHourlyMonitoring).mockResolvedValue(view())

@@ -71,10 +71,12 @@ export function useFinalBHourly(buildingId: Ref<string>, usage: Ref<ScreenPeriod
     } catch {
       if (current()) snapshots.value = new Map(snapshots.value).set(id, { ...snapshots.value.get(id), failed: true, weatherFailed: snapshots.value.get(id)?.weatherFailed ?? false })
     } finally {
-      if (controllers.get(id) === controller) controllers.delete(id)
-      const remaining = new Set(loading.value)
-      remaining.delete(date)
-      loading.value = remaining
+      if (controllers.get(id) === controller) {
+        controllers.delete(id)
+        const remaining = new Set(loading.value)
+        remaining.delete(date)
+        loading.value = remaining
+      }
     }
   }
 
@@ -189,7 +191,12 @@ export function useFinalBHourly(buildingId: Ref<string>, usage: Ref<ScreenPeriod
     usage: usage.value.kind === 'day' && !!(snapshots.value.get(key(buildingId.value, usage.value.value))?.failed || snapshots.value.get(key(buildingId.value, usage.value.value))?.weatherFailed),
     mirror: mirror.value.kind === 'day' && !!snapshots.value.get(key(buildingId.value, mirror.value.value))?.failed,
   }))
-  const isLoading = computed(() => ({ usage: usage.value.kind === 'day' && loading.value.has(usage.value.value), mirror: mirror.value.kind === 'day' && loading.value.has(mirror.value.value) }))
+  // 已成功读取的同建筑、同日期快照在轮询期间继续显示；首次读取才显示加载提示。
+  function needsInitialLoad(period: ScreenPeriod) {
+    return period.kind === 'day' && loading.value.has(period.value)
+      && !snapshots.value.get(key(buildingId.value, period.value))?.view
+  }
+  const isLoading = computed(() => ({ usage: needsInitialLoad(usage.value), mirror: needsInitialLoad(mirror.value) }))
   return { data, failed, loading: isLoading, snapshots, reload }
 }
 
