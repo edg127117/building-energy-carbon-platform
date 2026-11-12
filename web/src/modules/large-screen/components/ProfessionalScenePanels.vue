@@ -1,17 +1,21 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ArrowLeft, Wind, ShieldCheck, Zap, Layers, ChevronDown, Building2 } from '@/shared/ui'
+import { ArrowLeft, Wind, Zap, Layers, ChevronDown, Building2 } from '@/shared/ui'
 import { t } from '@/locales'
 import ScreenPlot from './ScreenPlot.vue'
+import { professionalDemo, professionalDemoPeriods } from '../models/professional-demo'
 export interface SceneObject { id: string; name: string; system: string; floor: string | null; floors?: readonly { name: string }[] | null }
 const props = defineProps<{ topic: string; assets: readonly SceneObject[]; selected: string | null; floor: string; buildingName: string; playing: boolean }>()
 const emit = defineEmits<{ system: [topic: string | null]; floor: [floor: string]; select: [id: string | null]; playing: [playing: boolean]; menu: [] }>()
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
-const systems = [{ id: 'elevator', icon: Layers }, { id: 'hvac', icon: Wind }, { id: 'lighting', icon: Zap }, { id: 'fire', icon: ShieldCheck }]
+const systems = [{ id: 'elevator', icon: Layers }, { id: 'hvac', icon: Wind }, { id: 'lighting', icon: Zap }]
 const floors = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'Roof']
 const kind = ref<'outdoor' | 'indoor'>('outdoor')
 const objectsOpen = ref(false)
 const systemName = computed(() => s(props.topic))
+const demo = computed(() => professionalDemo(props.topic, props.floor))
+const trend = computed(() => [{ name: s('todayElectricity'), values: demo.value?.hours ?? [] }])
+const scopeName = computed(() => props.floor === s('all') ? s('allBuilding') : floorName(props.floor))
 const selectedObject = computed(() => props.assets.find(asset => asset.id === props.selected))
 const onFloor = (asset: SceneObject, floor: string) => asset.floor === floor || asset.floors?.some(item => item.name === floor)
 const visibleObjects = computed(() => props.assets.filter(asset => props.floor === s('all') || onFloor(asset, props.floor)))
@@ -24,7 +28,7 @@ function setKind(value: 'outdoor' | 'indoor') {
 </script>
 <template>
   <section class="professional-ui" :aria-label="s('systemTitle', { system: systemName })">
-    <header class="professional-header"><div><button @click="emit('system', null)"><ArrowLeft :size="16" />{{ s('back') }}</button><span>{{ s('modelName') }}</span><span>{{ '›' }}</span><strong>{{ s('systemTitle', { system: systemName }) }}</strong></div><div><span class="mapping-note">{{ s('noBinding') }}</span><button class="outlined" @click="emit('menu')">{{ s('switchPage') }}</button></div></header>
+    <header class="professional-header"><div><button @click="emit('system', null)"><ArrowLeft :size="16" />{{ s('back') }}</button><span>{{ s('modelName') }}</span><span>{{ '›' }}</span><strong>{{ s('systemTitle', { system: systemName }) }}</strong></div><div><button class="outlined" @click="emit('menu')">{{ s('switchPage') }}</button></div></header>
     <nav class="professional-tabs" :aria-label="s('modelSystem')"><button v-for="system in systems" :key="system.id" :aria-pressed="topic === system.id" @click="emit('system', system.id)"><component :is="system.icon" :size="17" />{{ s(system.id) }}</button></nav>
     <aside class="asset-list">
       <h2>{{ s('floorDistribution', { system: systemName }) }}</h2><p>{{ s('installation') }}</p>
@@ -33,18 +37,22 @@ function setKind(value: 'outdoor' | 'indoor') {
       <button class="all-assets" :aria-pressed="floor === s('all')" @click="emit('floor', s('all'))">{{ s('viewBuilding') }}</button>
       <div class="floor-heading"><span>{{ s('floor') }}</span><span>{{ s('modelObjects') }}</span></div>
       <button v-for="item in floors" :key="item" class="floor-row" :aria-pressed="floor === item" @click="emit('floor', item)"><strong>{{ floorName(item) }}</strong><span>{{ assets.filter(asset => onFloor(asset, item)).length }} {{ s('modelUnit') }}</span></button>
-      <h3>{{ s('selectedModel') }}</h3><p>{{ selectedObject?.name ?? s('allBuilding') }}</p>
-      <dl><div><dt>{{ s('formalState') }}</dt><dd>{{ s('missing') }}</dd></div><div><dt>{{ s('communication') }}</dt><dd>{{ s('missing') }}</dd></div></dl>
-      <p class="footnote">{{ s('geometryOnly') }}</p>
+      <h3>{{ s('selectedModel') }}</h3><p>{{ selectedObject?.name ?? scopeName }}</p>
+      <dl><div><dt>{{ s('sceneOperatingState') }}</dt><dd>{{ demo ? s('sceneOperating') : s('missing') }}</dd></div><div><dt>{{ s('sceneCommunication') }}</dt><dd>{{ demo ? s('backendOnline') : s('missing') }}</dd></div></dl>
       <button class="model-list-toggle" :aria-expanded="objectsOpen" @click="objectsOpen = !objectsOpen">{{ s('modelAssets') }}<ChevronDown :size="14" /></button>
       <div v-if="objectsOpen" class="model-list"><button v-for="asset in visibleObjects" :key="asset.id" :aria-pressed="selected === asset.id" @click="emit('select', asset.id)">{{ asset.name }}</button><p v-if="!visibleObjects.length">{{ s('modelEmpty') }}</p></div>
     </aside>
     <aside class="asset-details">
       <h2>{{ s('energySituation', { system: systemName }) }}</h2><label class="floor-label"><span>{{ s('modelScope') }}</span><select :value="floor" @change="emit('floor', ($event.target as HTMLSelectElement).value)"><option :value="s('all')">{{ s('allBuilding') }}</option><option v-for="item in floors" :key="item" :value="item">{{ floorName(item) }}</option></select></label>
-      <div class="energy-total"><span>{{ s('todayElectricity') }}</span><strong>{{ s('missing') }}<small>{{ s('kwh') }}</small></strong><p>{{ s('noEnergy') }}</p></div>
-      <dl><div v-for="key in ['currentPower', 'monthlyElectricity', 'yesterdayComparison', 'updatedAt']" :key="key"><dt>{{ s(key) }}</dt><dd>{{ s('missing') }}</dd></div></dl>
-      <h3>{{ s('energyTrend') }}</h3><div class="professional-plot"><ScreenPlot kind="trend" :label="s('energyTrend')" /></div>
-      <section class="model-caliber"><h3>{{ s('dataInfo') }}</h3><p>{{ s('mappingPending') }}</p><p>{{ s('selectedBuilding') }}{{ '：' }}{{ buildingName || s('missing') }}</p><p v-if="selectedObject">{{ s('modelId') }}{{ '：' }}{{ selectedObject.id }}</p><p>{{ s('sourceNotice') }}</p></section>
+      <div class="energy-total"><span>{{ s('todayElectricity') }}</span><strong>{{ demo?.today ?? s('missing') }}<small>{{ s('kwh') }}</small></strong><p>{{ systemName }} {{ '·' }} {{ scopeName }}</p></div>
+      <dl>
+        <div><dt>{{ s('currentPower') }}</dt><dd>{{ demo?.power ?? s('missing') }} {{ s('kw') }}</dd></div>
+        <div><dt>{{ s('monthlyElectricity') }}</dt><dd>{{ demo?.month ?? s('missing') }} {{ s('kwh') }}</dd></div>
+        <div><dt>{{ s('yesterdayComparison') }}</dt><dd>{{ demo?.change != null ? `${demo.change}%` : s('missing') }}</dd></div>
+        <div><dt>{{ s('updatedAt') }}</dt><dd>{{ demo?.updatedAt ?? s('missing') }}</dd></div>
+      </dl>
+      <h3>{{ s('energyTrend') }}</h3><div class="professional-plot"><ScreenPlot kind="trend" :label="s('energyTrend')" :periods="professionalDemoPeriods" :series="trend" :value-axis-unit="s('kwh')" /></div>
+      <section class="model-caliber"><h3>{{ s('sceneScope') }}</h3><p>{{ systemName }} {{ '·' }} {{ scopeName }}</p><p v-if="selectedObject">{{ s('selectedModel') }}{{ '：' }}{{ selectedObject.name }}</p></section>
     </aside>
     <nav class="professional-bottom" :aria-label="s('modelSystem')"><span><Building2 :size="16" />{{ s('modelSystem') }}</span><template v-if="topic === 'hvac'"><button :aria-pressed="selected === 'E5_F5_DRAWN_001'" @click="setKind('outdoor')">{{ s('typicalOutdoor') }}</button><button :aria-pressed="selected === 'HVAC-INDOOR-DEMO'" @click="setKind('indoor')">{{ s('typicalIndoor') }}</button></template><button :aria-pressed="!selected" @click="emit('select', null)">{{ s('combination') }}</button><button :aria-pressed="playing" @click="emit('playing', !playing)">{{ s(playing ? 'modelPaused' : 'modelPlaying') }}</button></nav>
   </section>
@@ -58,7 +66,6 @@ button[aria-pressed=true],.all-assets { background: var(--bec-screen-selected); 
 button:focus-visible,select:focus-visible { outline: var(--bec-screen-space-2) solid var(--bec-screen-blue); outline-offset: var(--bec-screen-space-2); }
 .professional-header { position: absolute; inset: 0 0 auto; height: var(--bec-screen-toolbar-height); background: var(--bec-screen-detail-panel); border-bottom: var(--bec-screen-border-width) solid var(--bec-screen-divider); display: flex; align-items: center; justify-content: space-between; padding: 0 var(--bec-screen-space-24); pointer-events: auto; }
 .professional-header>div { display: flex; align-items: center; gap: var(--bec-screen-space-16); }
-.mapping-note { font-size: var(--bec-screen-font-small); color: var(--bec-screen-muted); }
 .outlined { border: var(--bec-screen-border-width) solid var(--bec-screen-divider); background: var(--bec-screen-border); border-radius: var(--bec-screen-radius); }
 .professional-tabs { position: absolute; top: var(--bec-screen-professional-top); left: 50%; transform: translateX(-50%); display: flex; padding: var(--bec-screen-space-4); border: var(--bec-screen-border-width) solid var(--bec-screen-divider); background: var(--bec-screen-detail-panel); border-radius: var(--bec-screen-radius); pointer-events: auto; }
 .asset-list,.asset-details { position: absolute; top: var(--bec-screen-professional-top); bottom: var(--bec-screen-professional-bottom); padding: var(--bec-screen-professional-padding); background: var(--bec-screen-detail-panel); border: var(--bec-screen-border-width) solid var(--bec-screen-divider); pointer-events: auto; overflow: auto; scrollbar-width: thin; }
