@@ -2,29 +2,30 @@
 import { computed, ref } from 'vue'
 import { ArrowLeft, Wind, Zap, Layers, ChevronDown, Building2 } from '@/shared/ui'
 import { t } from '@/locales'
-import ScreenPlot from './ScreenPlot.vue'
-import { professionalDemo, professionalDemoPeriods } from '../models/professional-demo'
-export interface SceneObject { id: string; name: string; system: string; floor: string | null; floors?: readonly { name: string }[] | null }
+import { professionalDemo } from '../models/professional-demo'
+export interface SceneObject { id: string; name: string; system: string; floor: string | null; floors?: readonly { name: string }[] | null; fixtureCount?: number }
 const props = defineProps<{ topic: string; assets: readonly SceneObject[]; selected: string | null; floor: string; buildingName: string; playing: boolean }>()
 const emit = defineEmits<{ system: [topic: string | null]; floor: [floor: string]; select: [id: string | null]; playing: [playing: boolean]; menu: [] }>()
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
 const systems = [{ id: 'elevator', icon: Layers }, { id: 'hvac', icon: Wind }, { id: 'lighting', icon: Zap }]
-const floors = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'Roof']
-const kind = ref<'outdoor' | 'indoor'>('outdoor')
+const floors = computed(() => props.topic === 'hvac' ? ['F3'] : ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'Roof'])
 const objectsOpen = ref(false)
 const systemName = computed(() => s(props.topic))
 const demo = computed(() => professionalDemo(props.topic, props.floor))
-const trend = computed(() => [{ name: s('todayElectricity'), values: demo.value?.hours ?? [] }])
 const scopeName = computed(() => props.floor === s('all') ? s('allBuilding') : floorName(props.floor))
 const selectedObject = computed(() => props.assets.find(asset => asset.id === props.selected))
 const onFloor = (asset: SceneObject, floor: string) => asset.floor === floor || asset.floors?.some(item => item.name === floor)
 const visibleObjects = computed(() => props.assets.filter(asset => props.floor === s('all') || onFloor(asset, props.floor)))
 const floorName = (floor: string) => floor === 'Roof' ? s('roof') : s('floorName', { floor })
-function setKind(value: 'outdoor' | 'indoor') {
-  kind.value = value
-  const candidate = props.assets.find(asset => value === 'indoor' ? asset.id === 'HVAC-INDOOR-DEMO' : asset.id === 'E5_F5_DRAWN_001')
-  if (candidate) emit('select', candidate.id)
+const countLabel = computed(() => s(props.topic === 'lighting' ? 'lightingFixtureCount' : 'modelObjects'))
+const countUnit = computed(() => s(props.topic === 'lighting' ? 'lightingFixtureUnit' : 'modelUnit'))
+function objectCount(assets: readonly SceneObject[]): number | string {
+  if (props.topic !== 'lighting') return assets.length
+  // 照明按模型组内灯具数量统计；缺少数量时不把一个楼层组冒充一盏灯。
+  if (assets.some(asset => !Number.isInteger(asset.fixtureCount) || asset.fixtureCount! < 0)) return s('missing')
+  return assets.reduce((total, asset) => total + asset.fixtureCount!, 0)
 }
+
 </script>
 <template>
   <section class="professional-ui" :aria-label="s('systemTitle', { system: systemName })">
@@ -32,18 +33,17 @@ function setKind(value: 'outdoor' | 'indoor') {
     <nav class="professional-tabs" :aria-label="s('modelSystem')"><button v-for="system in systems" :key="system.id" :aria-pressed="topic === system.id" @click="emit('system', system.id)"><component :is="system.icon" :size="17" />{{ s(system.id) }}</button></nav>
     <aside class="asset-list">
       <h2>{{ s('floorDistribution', { system: systemName }) }}</h2><p>{{ s('installation') }}</p>
-      <div v-if="topic === 'hvac'" class="kind-tabs"><button :aria-pressed="kind === 'outdoor'" @click="setKind('outdoor')">{{ s('outdoor') }}</button><button :aria-pressed="kind === 'indoor'" @click="setKind('indoor')">{{ s('indoor') }}</button></div>
-      <div class="model-total"><span>{{ s('allBuilding') }} {{ '·' }} {{ s('modelObjects') }}</span><strong>{{ assets.length }}<small>{{ s('modelUnit') }}</small></strong></div>
-      <button class="all-assets" :aria-pressed="floor === s('all')" @click="emit('floor', s('all'))">{{ s('viewBuilding') }}</button>
-      <div class="floor-heading"><span>{{ s('floor') }}</span><span>{{ s('modelObjects') }}</span></div>
-      <button v-for="item in floors" :key="item" class="floor-row" :aria-pressed="floor === item" @click="emit('floor', item)"><strong>{{ floorName(item) }}</strong><span>{{ assets.filter(asset => onFloor(asset, item)).length }} {{ s('modelUnit') }}</span></button>
+      <div class="model-total"><span>{{ topic === 'hvac' ? floorName('F3') : s('allBuilding') }} {{ '·' }} {{ countLabel }}</span><strong>{{ objectCount(assets) }}<small>{{ countUnit }}</small></strong></div>
+      <button class="all-assets" :aria-pressed="floor === s('all')" @click="emit('floor', s('all'))">{{ s(topic === 'hvac' ? 'viewHvacFloor' : 'viewBuilding') }}</button>
+      <div class="floor-heading"><span>{{ s('floor') }}</span><span>{{ countLabel }}</span></div>
+      <button v-for="item in floors" :key="item" class="floor-row" :aria-pressed="floor === item" @click="emit('floor', item)"><strong>{{ floorName(item) }}</strong><span>{{ objectCount(assets.filter(asset => onFloor(asset, item))) }} {{ countUnit }}</span></button>
       <h3>{{ s('selectedModel') }}</h3><p>{{ selectedObject?.name ?? scopeName }}</p>
       <dl><div><dt>{{ s('sceneOperatingState') }}</dt><dd>{{ demo ? s('sceneOperating') : s('missing') }}</dd></div><div><dt>{{ s('sceneCommunication') }}</dt><dd>{{ demo ? s('backendOnline') : s('missing') }}</dd></div></dl>
       <button class="model-list-toggle" :aria-expanded="objectsOpen" @click="objectsOpen = !objectsOpen">{{ s('modelAssets') }}<ChevronDown :size="14" /></button>
       <div v-if="objectsOpen" class="model-list"><button v-for="asset in visibleObjects" :key="asset.id" :aria-pressed="selected === asset.id" @click="emit('select', asset.id)">{{ asset.name }}</button><p v-if="!visibleObjects.length">{{ s('modelEmpty') }}</p></div>
     </aside>
     <aside class="asset-details">
-      <h2>{{ s('energySituation', { system: systemName }) }}</h2><label class="floor-label"><span>{{ s('modelScope') }}</span><select :value="floor" @change="emit('floor', ($event.target as HTMLSelectElement).value)"><option :value="s('all')">{{ s('allBuilding') }}</option><option v-for="item in floors" :key="item" :value="item">{{ floorName(item) }}</option></select></label>
+      <h2>{{ s('energySituation', { system: systemName }) }}</h2><label class="floor-label"><span>{{ s('modelScope') }}</span><select :value="floor" @change="emit('floor', ($event.target as HTMLSelectElement).value)"><option v-if="topic !== 'hvac'" :value="s('all')">{{ s('allBuilding') }}</option><option v-for="item in floors" :key="item" :value="item">{{ floorName(item) }}</option></select></label>
       <div class="energy-total"><span>{{ s('todayElectricity') }}</span><strong>{{ demo?.today ?? s('missing') }}<small>{{ s('kwh') }}</small></strong><p>{{ systemName }} {{ '·' }} {{ scopeName }}</p></div>
       <dl>
         <div><dt>{{ s('currentPower') }}</dt><dd>{{ demo?.power ?? s('missing') }} {{ s('kw') }}</dd></div>
@@ -51,10 +51,9 @@ function setKind(value: 'outdoor' | 'indoor') {
         <div><dt>{{ s('yesterdayComparison') }}</dt><dd>{{ demo?.change != null ? `${demo.change}%` : s('missing') }}</dd></div>
         <div><dt>{{ s('updatedAt') }}</dt><dd>{{ demo?.updatedAt ?? s('missing') }}</dd></div>
       </dl>
-      <h3>{{ s('energyTrend') }}</h3><div class="professional-plot"><ScreenPlot kind="trend" :label="s('energyTrend')" :periods="professionalDemoPeriods" :series="trend" :value-axis-unit="s('kwh')" /></div>
       <section class="model-caliber"><h3>{{ s('sceneScope') }}</h3><p>{{ systemName }} {{ '·' }} {{ scopeName }}</p><p v-if="selectedObject">{{ s('selectedModel') }}{{ '：' }}{{ selectedObject.name }}</p></section>
     </aside>
-    <nav class="professional-bottom" :aria-label="s('modelSystem')"><span><Building2 :size="16" />{{ s('modelSystem') }}</span><template v-if="topic === 'hvac'"><button :aria-pressed="selected === 'E5_F5_DRAWN_001'" @click="setKind('outdoor')">{{ s('typicalOutdoor') }}</button><button :aria-pressed="selected === 'HVAC-INDOOR-DEMO'" @click="setKind('indoor')">{{ s('typicalIndoor') }}</button></template><button :aria-pressed="!selected" @click="emit('select', null)">{{ s('combination') }}</button><button :aria-pressed="playing" @click="emit('playing', !playing)">{{ s(playing ? 'modelPaused' : 'modelPlaying') }}</button></nav>
+    <nav class="professional-bottom" :aria-label="s('modelSystem')"><span><Building2 :size="16" />{{ s('modelSystem') }}</span><button :aria-pressed="!selected" @click="emit('select', null)">{{ s('combination') }}</button><button :aria-pressed="playing" @click="emit('playing', !playing)">{{ s(playing ? 'modelPaused' : 'modelPlaying') }}</button></nav>
   </section>
 </template>
 <style scoped>
@@ -91,7 +90,6 @@ select { flex: 1; min-width: 0; padding: var(--bec-screen-space-12); border: var
 .energy-total { border-top: 0; margin-top: var(--bec-screen-space-16); }
 .energy-total strong { font-size: var(--bec-screen-font-large); font-weight: var(--bec-screen-weight); }
 .energy-total p { margin: 0; }
-.professional-plot { height: var(--bec-screen-plot-height); }
 .model-caliber { border-top: var(--bec-screen-border-width) solid var(--bec-screen-divider); margin-top: var(--bec-screen-space-24); }
 .professional-bottom { pointer-events: auto; position: absolute; bottom: var(--bec-screen-space-20); left: 50%; transform: translateX(-50%); background: var(--bec-screen-detail-panel); padding: var(--bec-screen-space-8); display: flex; align-items: center; }
 .professional-bottom>span { display: flex; align-items: center; gap: var(--bec-screen-space-8); padding: var(--bec-screen-space-8); white-space: nowrap; }

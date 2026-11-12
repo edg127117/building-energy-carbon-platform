@@ -122,7 +122,12 @@ function number(value: number | null | undefined): string {
 function ratio(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${value > 0 ? '+' : ''}${number(value)}%` : s('missing')
 }
-watch(ready, value => { if (value) { scene.value?.enterSystem(activeSystem.value); scene.value?.setMotion(motion.value) } })
+// 专业场景在 ready 前已恢复系统与选择，重复进入会清空楼层；总览仍显式初始化。
+watch(ready, value => {
+  if (!value) return
+  if (activeSystem.value === null) scene.value?.enterSystem(null)
+  scene.value?.setMotion(motion.value)
+})
 function enterSystem(topic: string | null) {
   if (topic !== null && (!ready.value || !systems.has(topic))) return
   activeSystem.value = topic

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
+    "build:demo": "node ../scripts/build-cxg-demo-frontend.mjs",
     "preview": "vite preview",
     "check": "vue-tsc -b",
     "test": "vitest",

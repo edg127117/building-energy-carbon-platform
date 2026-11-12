@@ -205,6 +205,18 @@ describe('reference building scene wrapper', () => {
     wrapper.unmount()
   })
 
+  it('publishes lighting geometry fixture counts without publishing authored operating states', async () => {
+    const snapshot = { ...sceneSnapshot(), topic: 'lighting', assets: [{ id: 'LIGHT-DEMO-F3', label: 'F3 照明灯具（演示）', system: 'lighting', floor: 'F3', center: [0, 11, 0] as const, fixtureCount: 251 }] }
+    const scene = sceneDouble(snapshot)
+    renderer.createReferenceScene.mockResolvedValue(scene.instance)
+    const wrapper = mount(BuildingScene)
+    await flushPromises()
+    const published = wrapper.emitted('snapshot')?.at(-1)?.[0]
+    expect(published).toMatchObject({ assets: [{ id: 'LIGHT-DEMO-F3', fixtureCount: 251 }] })
+    expect(published).not.toHaveProperty('assetStates')
+    wrapper.unmount()
+  })
+
   it('shows retry state when construction fails and retries from a new generation', async () => {
     const retried = sceneDouble()
     renderer.createReferenceScene.mockRejectedValueOnce(new Error('WebGL unavailable')).mockResolvedValueOnce(retried.instance)
@@ -219,6 +231,25 @@ describe('reference building scene wrapper', () => {
 
     expect(renderer.createReferenceScene).toHaveBeenCalledTimes(2)
     expect(wrapper.emitted('ready')?.at(-1)).toEqual([true])
+    wrapper.unmount()
+  })
+
+  it('reloads the current system without restoring an old object or overview camera after a floor reset', async () => {
+    const first = sceneDouble(), reloaded = sceneDouble()
+    renderer.createReferenceScene.mockResolvedValueOnce(first.instance).mockResolvedValueOnce(reloaded.instance)
+    const wrapper = mount(BuildingScene)
+    await flushPromises()
+    const exposed = wrapper.vm as unknown as { preset(id: string): void; enterSystem(topic: string): void; selectAsset(id: string): void; setFloor(floor: string): void; reload(): void }
+    exposed.preset('rear')
+    exposed.enterSystem('lighting')
+    exposed.selectAsset('LIGHT-DEMO-F1')
+    exposed.setFloor('F3')
+    exposed.reload()
+    await flushPromises()
+    expect(reloaded.instance.enterSystem).toHaveBeenCalledWith('lighting')
+    expect(reloaded.setSystemFloor).toHaveBeenCalledWith('F3')
+    expect(reloaded.selectAsset).toHaveBeenLastCalledWith(null)
+    expect(reloaded.preset).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

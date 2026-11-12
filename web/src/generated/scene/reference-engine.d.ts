@@ -17,6 +17,8 @@ export interface ReferenceSceneAsset {
   readonly center: ReferenceSceneVector
   readonly bounds?: readonly [ReferenceSceneVector, ReferenceSceneVector]
   readonly kind?: string | null
+  /** Number of authored demonstration luminaires in this geometry group, not registered devices. */
+  readonly fixtureCount?: number
   readonly floors?: readonly ReferenceSceneFloor[]
   readonly sources?: readonly string[]
   readonly maxPlanDeviationM?: number

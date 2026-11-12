@@ -2,12 +2,22 @@
   "source": "User-approved integrated V10.1 offline prototype",
   "model": "Innovation Harbor authored building and professional-system geometry",
   "modelSha256": "fe12155579aa009fd726d7fe203a6d500be3fa5ec75eb8a7f3455bf9dd279fa3",
-  "rendererSha256": "5f24b3b9731c24648cc9547de4dbb7f6bac263c90f012f94debe99137d13a6db",
+  "rendererSha256": "4c1bf2729afa9c6fa93b5bc6a4b904a7620e2b7ceb0ac25ca1e2a160ce96328b",
   "scope": "Scene renderer and geometry only; no authenticated building or device binding",
   "rendererChanges": [
     "Extract scene-only dependency closure and initialization",
     "Move identical compressed geometry to a same-origin lazy-loaded asset",
-    "Accept HTTP-decoded geometry or gzip bytes using the gzip signature"
+    "Accept HTTP-decoded geometry or gzip bytes using the gzip signature",
+    "Constrain DPR canvas display size; reduce slab clutter and keep elevator labels readable in whole-building view",
+    "Elevator-led target shift and moderate dolly-in bounded by actual facade vertices; readable floor labels and moderately translucent building context",
+    "Replace HVAC prototype boxes with the repaired F3 floor and existing system geometry; enlarge floor framing and label four registered indoor units",
+    "Display six-floor lighting with detailed instanced fixtures and schematic branches; place lighting callouts outside the model and compact elevator floor callouts beside its shaft with projected leaders; display the elevator name instead of its identifier"
   ],
-  "telemetry": false
+  "telemetry": false,
+  "hvacFloor": {
+    "asset": "f3-hvac.bin.gz",
+    "assetSha256": "61b07490368b9fde35c2a5f8c07663afd522b566ac6d80ebbf4e25deb786a493",
+    "sourceModelSha256": "884c897be6d36607eaee52b062962d1bca8e1afc15bb10f8101337248fb944de",
+    "units": 100
+  }
 }
