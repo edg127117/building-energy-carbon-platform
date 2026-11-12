@@ -4,7 +4,8 @@ import { ElButton, ElDialog, Leaf, Monitor, Zap, Clock, ChevronDown, Maximize, M
 import { t } from '@/locales'
 import { screenShellKey } from '@/shared/models/screen-shell'
 import SceneScreenLayout from '../../components/SceneScreenLayout.vue'
-import BuildingScene from '../../components/BuildingScene.vue'
+import BuildingScene, { type SceneGeometrySnapshot, type SceneHotspot } from '../../components/BuildingScene.vue'
+import ProfessionalScenePanels from '../../components/ProfessionalScenePanels.vue'
 import ScreenPeriodControl from '../../components/ScreenPeriodControl.vue'
 import ScreenBusinessFlow from '../../components/ScreenBusinessFlow.vue'
 import ScreenPlanChart from '../../components/ScreenPlanChart.vue'
@@ -18,7 +19,7 @@ import { currentBeijingDate, currentScreenPeriod, followBeijingDay, type ScreenP
 import { periodEntry, PLAN_PROTOTYPE, type ScreenRedesignData, type ScreenPeriods } from '../../models/screen-redesign'
 import { prototypeMetrics, prototypeDeviceFrames, PROTOTYPE_DEVICE_FRAME_MS, prototypeAlarms, prototypeFlow, prototypeUsage, prototypeMirror, prototypeIntensity, prototypeRuntimeRanking, prototypeIntensityBenchmarks } from '../../models/screen-prototype'
 
-const props = defineProps<{ title?: string; data?: ScreenRedesignData; layoutVariant?: 'a' | 'b' | 'c'; alarmBuildingId?: string }>()
+const props = defineProps<{ title?: string; data?: ScreenRedesignData; layoutVariant?: 'a' | 'b' | 'c'; alarmBuildingId?: string; buildingName?: string }>()
 const emit = defineEmits<{ periodChange: [periods: ScreenPeriods] }>()
 const reviewingLayout = computed(() => props.layoutVariant !== undefined)
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
@@ -48,6 +49,12 @@ onBeforeUnmount(stopDeviceFrames)
 const shell = inject(screenShellKey, null)
 const scene = ref<InstanceType<typeof BuildingScene> | null>(null)
 const ready = ref(false), selectedView = ref('front'), free = ref(false), tour = ref(false)
+const activeSystem = ref<string | null>(null)
+const geometry = ref<SceneGeometrySnapshot | null>(null)
+const hotspots = ref<readonly SceneHotspot[]>([])
+const systems = new Set(['hvac', 'elevator', 'lighting', 'fire'])
+const visibleHotspots = computed(() => hotspots.value.filter(item => item.visible && systems.has(item.id) && item.id !== 'fire'))
+const professionalGeometry = computed(() => geometry.value?.topic === activeSystem.value ? geometry.value : null)
 const motion = ref(!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
 const menuOpen = ref(false), infoOpen = ref(false), alarmsOpen = ref(true), devicesOpen = ref(true)
 const compositionPeriod = ref<ScreenPeriod>(currentScreenPeriod()), flowPeriod = ref<ScreenPeriod>(currentScreenPeriod())
@@ -115,23 +122,38 @@ function number(value: number | null | undefined): string {
 function ratio(value: number | null | undefined): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${value > 0 ? '+' : ''}${number(value)}%` : s('missing')
 }
-watch(ready, value => { if (value) { scene.value?.enterSystem(null); scene.value?.setMotion(motion.value) } })
+watch(ready, value => { if (value) { scene.value?.enterSystem(activeSystem.value); scene.value?.setMotion(motion.value) } })
+function enterSystem(topic: string | null) {
+  if (topic !== null && (!ready.value || !systems.has(topic))) return
+  activeSystem.value = topic
+  tour.value = false
+  free.value = false
+  scene.value?.setTour(false)
+  scene.value?.setFree(false)
+  // 下钻只使用场景层过滤后的几何快照，模型动效与对象数量不作为正式设备读数。
+  scene.value?.enterSystem(topic)
+  if (topic === null) scene.value?.preset(selectedView.value)
+}
 function preset(id: string) { selectedView.value = id; free.value = false; tour.value = false; scene.value?.setTour(false); scene.value?.preset(id) }
 function toggleFree() { free.value = !free.value; tour.value = false; scene.value?.setTour(false); scene.value?.setFree(free.value) }
 function toggleTour() { tour.value = !tour.value; free.value = false; scene.value?.setFree(false); scene.value?.setTour(tour.value) }
 function toggleMotion() { motion.value = !motion.value; scene.value?.setMotion(motion.value) }
 </script>
 <template>
-  <SceneScreenLayout class="building-screen redesign-screen" :class="[layoutVariant ? 'layout-review layout-' + layoutVariant : '']">
+  <SceneScreenLayout class="building-screen redesign-screen" :panels-visible="activeSystem === null" :class="[layoutVariant ? 'layout-review layout-' + layoutVariant : '']">
     <template #scene>
-      <BuildingScene ref="scene" @ready="ready = $event" />
-      <div v-if="layoutVariant === 'b'" class="screen-clock"><time class="screen-clock-time">{{ clockTime }}</time><span class="screen-clock-divider" aria-hidden="true" /><div class="screen-clock-meta"><span class="screen-clock-date">{{ clockDate }}</span><span class="screen-clock-weekday">{{ clockWeekday }}</span></div></div>
-      <nav class="scene-controls" :aria-label="s('scene')">
+      <BuildingScene ref="scene" @ready="ready = $event" @snapshot="geometry = $event" @hotspots="hotspots = $event" />
+      <div v-if="ready && activeSystem === null" class="system-hotspots">
+        <button v-for="hotspot in visibleHotspots" :key="hotspot.id" class="system-hotspot" :style="{ left: hotspot.x + 'px', top: hotspot.y + 'px' }" :aria-label="s('enterSystem', { system: s(hotspot.id) })" @click="enterSystem(hotspot.id)">{{ s(hotspot.id) }}<ChevronDown :size="14" /></button>
+      </div>
+      <div v-if="layoutVariant === 'b' && activeSystem === null" class="screen-clock"><time class="screen-clock-time">{{ clockTime }}</time><span class="screen-clock-divider" aria-hidden="true" /><div class="screen-clock-meta"><span class="screen-clock-date">{{ clockDate }}</span><span class="screen-clock-weekday">{{ clockWeekday }}</span></div></div>
+      <nav v-show="activeSystem === null" class="scene-controls" :aria-label="s('scene')">
         <div class="camera-views"><button v-for="view in ['front', 'terrace', 'rear', 'aerial']" :key="view" :aria-pressed="selectedView === view && !free" :disabled="!ready" @click="preset(view)">{{ s(view) }}</button></div>
         <div class="camera-actions"><button :disabled="!ready" @click="preset(selectedView)">{{ s('reset') }}</button><button :disabled="!ready" :aria-pressed="free" @click="toggleFree">{{ s('free') }}</button><button :disabled="!ready" :aria-pressed="tour" @click="toggleTour">{{ s('tour') }}</button><button :disabled="!ready" :aria-pressed="!motion" @click="toggleMotion">{{ s(motion ? 'pause' : 'resume') }}</button><button :disabled="!ready" @click="scene?.reload()">{{ s('reload') }}</button><button @click="infoOpen = true">{{ s('dataInfo') }}</button><button class="scene-switch" @click="menuOpen = true">{{ s('switchPage') }}</button></div>
       </nav>
     </template>
     <template #overlay>
+      <ProfessionalScenePanels v-if="activeSystem !== null" :topic="activeSystem" :assets="professionalGeometry?.assets ?? []" :selected="professionalGeometry?.selected ?? null" :floor="professionalGeometry?.floorFilter ?? s('all')" :playing="professionalGeometry?.playing ?? false" :building-name="props.buildingName ?? ''" @system="enterSystem" @floor="scene?.setFloor($event)" @select="scene?.selectAsset($event)" @playing="scene?.setPlaying($event)" @menu="menuOpen = true" />
       <ElDialog v-model="menuOpen" :title="s('switchPage')" width="var(--bec-screen-dialog-width)" :append-to-body="false" destroy-on-close><div class="screen-menu"><ElButton :icon="shell?.fullscreen.value ? Minimize : Maximize" @click="shell?.toggleFullscreen()">{{ s(shell?.fullscreen.value ? 'exitFullscreen' : 'fullscreen') }}</ElButton><ElButton @click="infoOpen = true; menuOpen = false">{{ s('dataInfo') }}</ElButton><ElButton @click="shell?.openNavigation(); menuOpen = false">{{ t('navigation.switchScreen') }}</ElButton><ElButton @click="shell?.exit()">{{ s('exit') }}</ElButton></div></ElDialog>
       <ElDialog v-model="infoOpen" :title="s('dataInfo')" width="var(--bec-screen-dialog-width)" :append-to-body="false" destroy-on-close><div class="screen-caliber"><slot name="data-context" /><template v-if="prototypeMode"><p>{{ s('redesignPrototypeNotice') }}</p><p>{{ s('redesignPlanNotice') }}</p><p>{{ s('redesignPendingNotice') }}</p><p>{{ s('modelNotice') }}</p><p>{{ s('redesignHotspotNotice') }}</p></template></div></ElDialog>
     </template>

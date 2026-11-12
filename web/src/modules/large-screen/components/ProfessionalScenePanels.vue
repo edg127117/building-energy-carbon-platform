@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { ArrowLeft, Wind, ShieldCheck, Zap, Layers, ChevronDown, Building2 } from '@/shared/ui'
 import { t } from '@/locales'
 import ScreenPlot from './ScreenPlot.vue'
-export interface SceneObject { id: string; name: string; system: string; floor: string | null }
+export interface SceneObject { id: string; name: string; system: string; floor: string | null; floors?: readonly { name: string }[] | null }
 const props = defineProps<{ topic: string; assets: readonly SceneObject[]; selected: string | null; floor: string; buildingName: string; playing: boolean }>()
 const emit = defineEmits<{ system: [topic: string | null]; floor: [floor: string]; select: [id: string | null]; playing: [playing: boolean]; menu: [] }>()
 const s = (key: string, params?: Record<string, string | number>) => t('largeScreen.' + key, params)
@@ -13,7 +13,8 @@ const kind = ref<'outdoor' | 'indoor'>('outdoor')
 const objectsOpen = ref(false)
 const systemName = computed(() => s(props.topic))
 const selectedObject = computed(() => props.assets.find(asset => asset.id === props.selected))
-const visibleObjects = computed(() => props.assets.filter(asset => props.floor === s('all') || asset.floor === props.floor))
+const onFloor = (asset: SceneObject, floor: string) => asset.floor === floor || asset.floors?.some(item => item.name === floor)
+const visibleObjects = computed(() => props.assets.filter(asset => props.floor === s('all') || onFloor(asset, props.floor)))
 const floorName = (floor: string) => floor === 'Roof' ? s('roof') : s('floorName', { floor })
 function setKind(value: 'outdoor' | 'indoor') {
   kind.value = value
@@ -31,7 +32,7 @@ function setKind(value: 'outdoor' | 'indoor') {
       <div class="model-total"><span>{{ s('allBuilding') }} {{ '·' }} {{ s('modelObjects') }}</span><strong>{{ assets.length }}<small>{{ s('modelUnit') }}</small></strong></div>
       <button class="all-assets" :aria-pressed="floor === s('all')" @click="emit('floor', s('all'))">{{ s('viewBuilding') }}</button>
       <div class="floor-heading"><span>{{ s('floor') }}</span><span>{{ s('modelObjects') }}</span></div>
-      <button v-for="item in floors" :key="item" class="floor-row" :aria-pressed="floor === item" @click="emit('floor', item)"><strong>{{ floorName(item) }}</strong><span>{{ assets.filter(asset => asset.floor === item).length }} {{ s('modelUnit') }}</span></button>
+      <button v-for="item in floors" :key="item" class="floor-row" :aria-pressed="floor === item" @click="emit('floor', item)"><strong>{{ floorName(item) }}</strong><span>{{ assets.filter(asset => onFloor(asset, item)).length }} {{ s('modelUnit') }}</span></button>
       <h3>{{ s('selectedModel') }}</h3><p>{{ selectedObject?.name ?? s('allBuilding') }}</p>
       <dl><div><dt>{{ s('formalState') }}</dt><dd>{{ s('missing') }}</dd></div><div><dt>{{ s('communication') }}</dt><dd>{{ s('missing') }}</dd></div></dl>
       <p class="footnote">{{ s('geometryOnly') }}</p>

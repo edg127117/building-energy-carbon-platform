@@ -59,6 +59,10 @@
 .scene-controls button[aria-pressed=true], .scene-controls button:hover:not(:disabled) { background: var(--bec-screen-control-active); border-color: var(--bec-screen-blue-soft); }
 .scene-controls button:disabled { cursor: default; opacity: .5; }
 .scene-controls .scene-switch { border-color: var(--bec-screen-divider); }
+.system-hotspots { position: absolute; inset: 0; pointer-events: none; }
+.system-hotspot { position: absolute; transform: translate(-50%, -50%); display: inline-flex; align-items: center; gap: var(--bec-screen-space-6); min-height: var(--bec-screen-control-height); padding: var(--bec-screen-space-6) var(--bec-screen-space-12); border: var(--bec-screen-border-width) solid var(--bec-screen-blue); border-radius: var(--bec-screen-radius-6); background: var(--bec-screen-panel); color: var(--bec-screen-ink); font: inherit; cursor: pointer; pointer-events: auto; box-shadow: var(--bec-ref-shadow-raised); }
+.system-hotspot:hover { background: var(--bec-screen-selected); }
+.system-hotspot:focus-visible { outline: var(--bec-screen-space-2) solid var(--bec-screen-blue); outline-offset: var(--bec-screen-space-2); }
 .screen-menu { display: flex; flex-wrap: wrap; gap: var(--bec-screen-space-12); }
 .screen-caliber { color: var(--bec-screen-ink); font-size: var(--bec-screen-font-body); line-height: var(--bec-screen-line-height); }
 .layout-review { --bec-scene-panel-width: 24.5%; --bec-review-footer-height: var(--bec-screen-dock-a-height); --bec-screen-control-bottom: calc(var(--bec-review-footer-height) + var(--bec-screen-space-20)); background: var(--bec-screen-neutral); }

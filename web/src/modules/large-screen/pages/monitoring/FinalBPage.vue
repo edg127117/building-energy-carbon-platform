@@ -94,7 +94,7 @@ const s = (key: string, params?: Record<string, string | number>) => t('largeScr
 </script>
 
 <template>
-  <IndexPage layout-variant="b" :data="renderData" :alarm-building-id="state.buildingId.value ?? ''" @period-change="state.periods.value = $event">
+  <IndexPage layout-variant="b" :data="renderData" :alarm-building-id="state.buildingId.value ?? ''" :building-name="building?.buildingName" @period-change="state.periods.value = $event">
     <template #data-context>
       <p>{{ s('finalBInterfaceNotice') }}</p>
       <p>{{ s('finalBBuildingContext', { value: building?.buildingName ?? s(code ? 'noBuildings' : 'finalBBuildingNotConfigured') }) }}</p>

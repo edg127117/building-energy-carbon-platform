@@ -22,7 +22,7 @@ interface SceneAssetGeometry {
   readonly floors: readonly ReferenceSceneFloor[] | null
 }
 
-interface SceneGeometrySnapshot {
+export interface SceneGeometrySnapshot {
   readonly topic: string | null
   readonly selected: string | null
   readonly selectionRevision: number
@@ -31,7 +31,7 @@ interface SceneGeometrySnapshot {
   readonly assets: readonly SceneAssetGeometry[]
 }
 
-interface SceneHotspot {
+export interface SceneHotspot {
   readonly id: string
   readonly name: string
   readonly description: string
