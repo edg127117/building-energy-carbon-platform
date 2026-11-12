@@ -1,9 +1,7 @@
 import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import ProfessionalScenePanels from './ProfessionalScenePanels.vue'
-import ScreenPlot from './ScreenPlot.vue'
 import { professionalDemo } from '../models/professional-demo'
-vi.mock('./ScreenPlot.vue', () => ({ default: { props: ['periods', 'series', 'valueAxisUnit'], template: '<div />' } }))
 describe('professional model panels', () => {
   it('跨楼层电梯模型在经过的楼层中可计数、选择，其他楼层保持空列表', async () => {
     const wrapper = mount(ProfessionalScenePanels, { props: { topic: 'elevator', assets: [{ id: 'EL-01', name: '电梯模型', system: 'elevator', floor: '多层', floors: [{ name: 'F1' }, { name: 'F3' }] }], selected: null, floor: 'F3', buildingName: 'A', playing: false } })
@@ -17,7 +15,7 @@ describe('professional model panels', () => {
     wrapper.unmount()
   })
   it('展示左右面板数据，保留真实模型计数，并同步范围选择事件', async () => {
-    const wrapper = mount(ProfessionalScenePanels, { props: { topic: 'hvac', assets: [{ id: 'E5_F5_DRAWN_001', name: '外机模型', system: 'hvac', floor: 'F5' }, { id: 'HVAC-INDOOR-DEMO', name: '内机模型', system: 'hvac', floor: 'F3' }], selected: null, floor: '全部', buildingName: 'A', playing: false } })
+    const wrapper = mount(ProfessionalScenePanels, { props: { topic: 'hvac', assets: [{ id: 'F3-IDU-001', name: '内机001', system: 'hvac', floor: 'F3' }, { id: 'F3-IDU-002', name: '内机002', system: 'hvac', floor: 'F3' }], selected: null, floor: '全部', buildingName: 'A', playing: false } })
     expect(wrapper.get('.model-total').text()).toContain('2')
     expect(wrapper.text()).not.toContain('模拟数据')
     expect(wrapper.text()).not.toContain('正式运行状态')
@@ -27,26 +25,50 @@ describe('professional model panels', () => {
     expect(wrapper.findAll('.professional-tabs button').map(button => button.text())).toEqual(['电梯', '空调', '照明'])
     await wrapper.get('select').setValue('F3')
     expect(wrapper.emitted('floor')?.at(-1)).toEqual(['F3'])
-    await wrapper.findAll('.kind-tabs button')[1].trigger('click')
-    expect(wrapper.emitted('select')?.at(-1)).toEqual(['HVAC-INDOOR-DEMO'])
+    expect(wrapper.find('.kind-tabs').exists()).toBe(false)
+    expect(wrapper.findAll('.floor-row')).toHaveLength(1)
+    expect(wrapper.get('.all-assets').text()).toBe('查看三层空调系统')
+    expect(wrapper.text()).not.toContain('典型空调外机')
     await wrapper.findAll('.professional-tabs button')[0].trigger('click')
     expect(wrapper.emitted('system')?.at(-1)).toEqual(['elevator'])
     wrapper.unmount()
   })
-  it('系统与楼层切换同时更新指标和小时曲线，不受模型播放影响', async () => {
+  it('系统与楼层切换更新指标，三个系统均隐藏用电趋势，不受模型播放影响', async () => {
     const wrapper = mount(ProfessionalScenePanels, { props: { topic: 'hvac', assets: [], selected: null, floor: '全部', buildingName: 'A', playing: false } })
     const total = wrapper.get('.energy-total').text()
     await wrapper.setProps({ floor: 'F3' })
     expect(wrapper.get('.energy-total').text()).not.toBe(total)
     expect(wrapper.get('.energy-total').text()).toContain('F3 层')
+    expect(wrapper.find('.professional-plot').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('今日用电趋势')
     await wrapper.setProps({ topic: 'lighting' })
     const lighting = professionalDemo('lighting', 'F3')!
     expect(wrapper.get('.energy-total').text()).toContain(lighting.today)
-    expect(wrapper.findComponent(ScreenPlot).props('series')[0].values).toEqual(lighting.hours)
-    expect(wrapper.findComponent(ScreenPlot).props('periods')).toHaveLength(24)
-    expect(wrapper.findComponent(ScreenPlot).props('valueAxisUnit')).toBe('kWh')
+    expect(wrapper.find('.professional-plot').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('今日用电趋势')
     await wrapper.setProps({ playing: true })
     expect(wrapper.get('.energy-total').text()).toContain(lighting.today)
+    await wrapper.setProps({ topic: 'elevator' })
+    expect(wrapper.find('.professional-plot').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('今日用电趋势')
+    expect(wrapper.get('.energy-total').text()).toContain(professionalDemo('elevator', 'F3')!.today)
+    wrapper.unmount()
+  })
+  it('照明统计组内灯具总数和分层数量，保留楼层及模型选择', async () => {
+    const counts = [251, 291, 251, 303, 137, 144]
+    const assets = counts.map((fixtureCount, index) => ({ id: 'LIGHT-DEMO-F' + (index + 1), name: '照明模型', system: 'lighting', floor: 'F' + (index + 1), fixtureCount }))
+    const wrapper = mount(ProfessionalScenePanels, { props: { topic: 'lighting', assets, selected: null, floor: '全部', buildingName: 'A', playing: false } })
+    expect(wrapper.get('.model-total').text()).toContain('1377盏')
+    expect(wrapper.get('.model-total').text()).toContain('灯具（演示）')
+    expect(wrapper.findAll('.floor-row').map(row => row.text())).toEqual(['F1 层251 盏', 'F2 层291 盏', 'F3 层251 盏', 'F4 层303 盏', 'F5 层137 盏', 'F6 层144 盏', '屋顶0 盏'])
+    await wrapper.findAll('.floor-row')[2].trigger('click')
+    expect(wrapper.emitted('floor')?.at(-1)).toEqual(['F3'])
+    await wrapper.setProps({ floor: 'F3' })
+    await wrapper.get('.model-list-toggle').trigger('click')
+    await wrapper.get('.model-list button').trigger('click')
+    expect(wrapper.emitted('select')?.at(-1)).toEqual(['LIGHT-DEMO-F3'])
+    await wrapper.setProps({ assets: [{ ...assets[0], fixtureCount: undefined }] })
+    expect(wrapper.get('.model-total strong').text()).toContain('—')
     wrapper.unmount()
   })
   it.each(['hvac', 'elevator', 'lighting'])('%s固定样例的楼层合计、小时合计与总览一致，未来小时留空', topic => {

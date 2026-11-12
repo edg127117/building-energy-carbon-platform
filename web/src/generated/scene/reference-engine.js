@@ -14037,13 +14037,45 @@ function VSt(t) {
 }
 const FE = [{ id: "E5_F5_DRAWN_001", label: "\u5178\u578B\u7A7A\u8C03\u5916\u673A", system: "hvac", floor: "F5", center: [-31.54887104034424, 16.586525440216064, -17.414795875549316], bounds: [[-32.18381881713867, 15.813525199890137, -18.1306095123291], [-30.913923263549805, 17.359525680541992, -16.69898223876953]], sources: ["E5_F5_DRAWN_001", "E5_F5_DRAWN_001_Fan_-1", "E5_F5_DRAWN_001_Fan_1", "E5_F5_DRAWN_001_Feed", "E5_F5_DRAWN_001_Foot_-1", "E5_F5_DRAWN_001_Foot_1"], parts: [{ material: "E5_Body", start: 0, count: 36 }, { material: "E5_Fan", start: 0, count: 72 }, { material: "E5_Fan", start: 72, count: 72 }, { material: "E6_Organized_Cable_Conduit", start: 0, count: 36 }, { material: "E5_Foot", start: 0, count: 36 }, { material: "E5_Foot", start: 36, count: 36 }] }, { id: "HVAC-INDOOR-DEMO", label: "\u5178\u578B\u7A7A\u8C03\u5185\u673A\uFF08\u793A\u610F\uFF09", system: "hvac", floor: "F3", center: [-29.10259437561035, 11.024999618530273, -17.06861686706543], bounds: [[-29.702594375610353, 10.824999618530274, -17.66861686706543], [-28.50259437561035, 11.224999618530273, -16.46861686706543]], sources: ["F3-RF-Port-039"], parts: [] }, { id: "LIGHT-TYPICAL", label: "\u5178\u578B\u7167\u660E\u706F\u5177", system: "lighting", floor: "F1", center: [-74.65775, 3.455, -4.2976], bounds: [[-74.7091, 3.446, -4.8005], [-74.6064, 3.464, -3.7947]], sources: ["F1_Facade_Interior_Luminaires"], parts: [{ material: "R_Interior_linear_light_0", start: 0, count: 3 }, { material: "R_Interior_linear_light_0", start: 3, count: 3 }, { material: "R_Interior_linear_light_0", start: 12, count: 3 }, { material: "R_Interior_linear_light_0", start: 15, count: 3 }, { material: "R_Interior_linear_light_0", start: 18, count: 3 }, { material: "R_Interior_linear_light_0", start: 24, count: 3 }, { material: "R_Interior_linear_light_0", start: 27, count: 3 }, { material: "R_Interior_linear_light_0", start: 30, count: 3 }, { material: "R_Interior_linear_light_0", start: 33, count: 3 }, { material: "R_Interior_linear_light_0", start: 6, count: 3 }, { material: "R_Interior_linear_light_0", start: 9, count: 3 }, { material: "R_Interior_linear_light_0", start: 21, count: 3 }] }, { id: "FIRE-TYPICAL", label: "\u5178\u578B\u6D88\u9632\u914D\u7535\u6865\u67B6", system: "fire", floor: "F5", center: [-48.136695861816406, 16.65999984741211, -6.375421047210693], bounds: [[-48.32339096069336, 16.610000610351562, -8.06184196472168], [-47.95000076293945, 16.709999084472656, -4.689000129699707]], sources: ["E3_Tray_F5_CABLETRAY_FIRE_026"], parts: [{ material: "E2_Tray_Fire", start: 5124, count: 216 }] }];
 const Z1 = wI.slice(0, 1);
-function YSt(t, e, f, n, v, r, z) {
+// Recover disconnected authored light bodies, welding face vertices before grouping.
+// Their positions are model evidence; replacement fixture details and branches are visual demonstration only.
+function lightingFixtures(geometries) {
+  const floors = Array.from({ length: 6 }, () => []);
+  const heights = [3.455, 7.255, 11.055, 14.855, 18.655, 22.655];
+  for (const [name, geometry] of geometries) {
+    if (!/^R_Interior_linear_light_/.test(name) || !geometry.index) continue;
+    const positions = geometry.getAttribute('position'), indices = geometry.index.array;
+    const parent = Array.from({ length: positions.count }, (_, index) => index), welded = new Map();
+    const root = index => { while (parent[index] !== index) { parent[index] = parent[parent[index]]; index = parent[index]; } return index; };
+    const join = (left, right) => { parent[root(left)] = root(right); };
+    for (let index = 0; index < positions.count; index++) {
+      const key = [positions.getX(index), positions.getY(index), positions.getZ(index)].map(value => Math.round(value * 10000)).join(':');
+      if (welded.has(key)) join(index, welded.get(key)); else welded.set(key, index);
+    }
+    for (let index = 0; index < indices.length; index += 3) { join(indices[index], indices[index + 1]); join(indices[index], indices[index + 2]); }
+    const components = new Map();
+    for (const index of welded.values()) {
+      const key = root(index), points = components.get(key) || [];
+      points.push(new ht().fromBufferAttribute(positions, index)); components.set(key, points);
+    }
+    for (const points of components.values()) {
+      const box = new c9().setFromPoints(points), center = box.getCenter(new ht()), size = box.getSize(new ht());
+      if (points.length < 4 || size.length() > 4 || size.length() < .15) continue;
+      const floor = heights.reduce((best, height, index) => Math.abs(height - center.y) < Math.abs(heights[best] - center.y) ? index : best, 0);
+      let xx = 0, zz = 0, xz = 0;
+      for (const point of points) { const dx = point.x - center.x, dz = point.z - center.z; xx += dx * dx; zz += dz * dz; xz += dx * dz; }
+      floors[floor].push({ center, angle: -.5 * Math.atan2(2 * xz, xx - zz) });
+    }
+  }
+  return floors;
+}
+function YSt(t, e, f, n, v, r, z, hvac = null) {
   const u = t.background, b = new D3(), a = new D3();
   t.add(b), t.add(a), b.visible = false, a.visible = false;
   const P = t.children.filter((B) => B !== b && B !== a && !f.includes(B) && !B.isLight), s = f.map((B) => {
     const et = B.material;
     return { mesh: B, m: et, opacity: et.opacity, transparent: et.transparent, depthWrite: et.depthWrite };
-  }), d = /* @__PURE__ */ new Map(), c = [], l = [], W = [...Z1, ...FE];
+  }), d = /* @__PURE__ */ new Map(), c = [], l = [], W = [...Z1, ...FE.filter(asset => asset.system !== "hvac" && asset.system !== "lighting"), ...(hvac?.units || []).map(unit => ({ id: unit.id, label: unit.id + " · " + unit.name, system: "hvac", floor: "F3", center: [unit.xyz[0], unit.xyz[2], -unit.xyz[1]], bounds: null, kind: unit.type }))];
   let X = 0, y = null, m = null, j = 0, x = !matchMedia("(prefers-reduced-motion: reduce)").matches, L = 0, O = "normal", N = "\u5168\u90E8";
   const i = /* @__PURE__ */ new Map();
   let H = () => {
@@ -14086,15 +14118,64 @@ function YSt(t, e, f, n, v, r, z) {
       }
     }
   }
+  // Reuse the authored facade/roof geometry: the elevator context must still look like this building.
+  const slabContextMaterials = new Set(T.map(entry => entry.material));
+  const buildingShell = new D3(), buildingSurfaces = [];
+  for (const [name, geometry] of n) {
+    if (!/^(M_White_aluminium|M_Roof_membrane|Photo_Charcoal_Aluminium|Photo_Clear_Entrance_Glass|Front_Photo|Rear_Photo|R_Window_room|M_Charcoal_plinth|Platform_Continuous_Limestone)/.test(name)) continue;
+    const material = w(/roof/i.test(name) ? 0.32 : /window|glass|charcoal/i.test(name) ? 0.12 : 0.28);
+    const mesh = new Zn(geometry, material);
+    buildingShell.add(mesh);
+    buildingSurfaces.push(geometry.getAttribute("position").array);
+  }
+  a.add(buildingShell);
+  let elevatorViewport = '';
+  function buildingContext() {
+    const overview = z(), originalTarget = new ht(...overview.target);
+    const back = new ht(...overview.position).sub(originalTarget), originalDistance = back.length();
+    back.normalize();
+    const right = new ht().crossVectors(new ht(0, 1, 0), back).normalize();
+    if (right.lengthSq() < 0.5) right.set(1, 0, 0);
+    const up = new ht().crossVectors(back, right).normalize();
+    const lift = Z1[0], liftCenter = new ht(lift.center[0], (lift.floors.at(-1).y + 3.1) / 2, lift.center[2]);
+    const rect = v.getBoundingClientRect(), host = v.closest('.building-screen');
+    const fraction = (selector, axis) => {
+      const box = host?.querySelector(selector)?.getBoundingClientRect();
+      return box?.[axis] ? box[axis] / Math.max(1, rect[axis]) : 0;
+    };
+    const safeX = Math.max(.2, 1 - 2 * Math.max(.15, fraction('.asset-list', 'width') + .015, fraction('.asset-details', 'width') + .015));
+    const safeY = Math.max(.2, 1 - 2 * Math.max(.12, fraction('.professional-header', 'height') + fraction('.professional-tabs', 'height') + .025, fraction('.professional-bottom', 'height') + .025));
+    const tanY = Math.tan(overview.span * Math.PI / 360), tanX = tanY * Math.max(.1, v.clientWidth / Math.max(1, v.clientHeight));
+    let target, distance;
+    // Start with an elevator-led composition and a modest dolly-in. Reduce the lateral shift
+    // if an actual facade vertex would be clipped; empty bounding-box corners do not limit the view.
+    for (const weight of [.55, .4, .25, 0]) {
+      target = originalTarget.clone().lerp(liftCenter, weight);
+      let required = 1;
+      for (const points of buildingSurfaces) for (let index = 0; index < points.length; index += 3) {
+        const px = points[index] - target.x, py = points[index + 1] - target.y, pz = points[index + 2] - target.z;
+        const depth = px * back.x + py * back.y + pz * back.z;
+        required = Math.max(required,
+          depth + Math.abs(px * right.x + py * right.y + pz * right.z) / (tanX * safeX * .97),
+          depth + Math.abs(px * up.x + py * up.y + pz * up.z) / (tanY * safeY * .97));
+      }
+      distance = Math.max(originalDistance * .84, required);
+      if (distance <= originalDistance * .98) break;
+    }
+    const position = target.clone().addScaledVector(back, distance);
+    r(position.toArray(), target.toArray(), overview.span);
+    elevatorViewport = v.clientWidth + ':' + v.clientHeight;
+  }
   function Y(B, et, nt, I, U) {
     const J = new Zn(new Lz(...et), new x7({ color: I, metalness: 0.4, roughness: 0.38 }));
     return J.position.fromArray(nt), B.add(J), U && (J.userData.assetId = U, c.push(J)), J;
   }
   function q(B, et, nt) {
     const I = document.createElement("canvas");
-    I.width = 256, I.height = 64;
+    const floorLabel = /^F\d+$/.test(B);
+    I.width = floorLabel ? 128 : 256, I.height = 64;
     const U = I.getContext("2d");
-    U.fillStyle = "rgba(244,249,252,.96)", U.fillRect(0, 0, 256, 64), U.fillStyle = "#143f64", U.font = "bold 27px sans-serif", U.textAlign = "center", U.fillText(B, 128, 43);
+    U.fillStyle = "rgba(244,249,252,.96)", U.fillRect(0, 0, I.width, 64), U.fillStyle = "#143f64", U.font = floorLabel ? "bold 40px sans-serif" : "bold 36px sans-serif", U.textAlign = "center", U.fillText(B, I.width / 2, 46);
     const J = new TM(I);
     J.colorSpace = Qv;
     const g = new mFt(new MK({ map: J, depthTest: false }));
@@ -14104,23 +14185,29 @@ function YSt(t, e, f, n, v, r, z) {
   b.add(D), d.set("elevator", D), Z1.forEach((B, et) => {
     const nt = new D3();
     nt.position.fromArray(B.center), D.add(nt), nt.userData.assetId = B.id;
-    const I = B.floors.at(-1).y + 3.1, U = new Zn(new Lz(2.2, I, 2.2), new j6({ color: "#4c91bd", transparent: true, opacity: 0.045, depthWrite: false }));
+    const I = B.floors.at(-1).y + 3.1, U = new Zn(new Lz(2.2, I, 2.2), new j6({ color: "#4c91bd", transparent: true, opacity: 0.16, depthWrite: false }));
     U.position.y = I / 2, nt.add(U);
-    for (const zt of [-1, 1]) for (const ut of [-1, 1]) Y(nt, [0.06, I, 0.06], [zt, I / 2, ut], "#749aaa", B.id);
+    for (const zt of [-1, 1]) for (const ut of [-1, 1]) Y(nt, [0.14, I, 0.14], [zt, I / 2, ut], "#186db3", B.id);
     B.floors.forEach((zt) => {
       for (const Pt of [-1.05, 1.05]) Y(nt, [2.2, 0.045, 0.045], [0, zt.y, Pt], "#86a6b7");
-      const ut = q(zt.name, [-2, zt.y + 0.3, 0], nt);
-      ut.userData.floorLabel = true;
-    }), q(B.id, [0, I + 1.3 + et % 2 * 1.4, 0], nt);
+    }), q("电梯", [0, I + 1.3 + et % 2 * 1.4, 0], nt);
     const J = new D3();
     nt.add(J), Y(J, [1.9, 0.13, 1.9], [0, 0.065, 0], "#647e8c", B.id), Y(J, [1.9, 0.1, 1.9], [0, 2.3, 0], "#7e9ca9", B.id), Y(J, [1.9, 2.3, 0.08], [0, 1.15, -0.92], "#d1dbe0", B.id);
     for (const zt of [-0.93, 0.93]) Y(J, [0.07, 2.3, 1.85], [zt, 1.15, 0], "#91aebc", B.id);
     const g = [Y(J, [0.88, 2.18, 0.06], [-0.45, 1.17, 0.94], "#328bb8", B.id), Y(J, [0.88, 2.18, 0.06], [0.45, 1.17, 0.94], "#328bb8", B.id)], tt = Y(J, [1.65, 0.08, 0.08], [0, 2.18, 0.99], "#32c0bb", B.id);
     l.push({ car: J, doors: g, marker: tt });
   });
+  D.traverse(node => {
+    if (!node.isMesh) return;
+    node.renderOrder = 20;
+    node.material.transparent = true;
+    node.material.depthTest = false;
+    node.material.depthWrite = false;
+    if (node.material.emissive) { node.material.emissive.copy(node.material.color); node.material.emissiveIntensity = 0.45; }
+  });
   const V = new XRt(new c9(new ht(), new ht(1, 1, 1)), new Nf("#2079be"));
   V.visible = false, b.add(V);
-  for (const B of ["hvac", "lighting", "fire"]) {
+  for (const B of ["fire"]) {
     const et = new D3();
     b.add(et), d.set(B, et);
     for (const nt of FE.filter((I) => I.system === B)) {
@@ -14144,9 +14231,179 @@ function YSt(t, e, f, n, v, r, z) {
       }
     }
   }
+  const lighting = new D3(), lightingFloors = [], floorLabels = [];
+  b.add(lighting); d.set('lighting', lighting);
+  const floorCallouts = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  floorCallouts.setAttribute('aria-label', '照明楼层标识');
+  floorCallouts.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;display:none;overflow:hidden';
+  v.appendChild(floorCallouts);
+  const calloutNode = (tag, attributes, parent) => {
+    const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [key, value] of Object.entries(attributes)) node.setAttribute(key, value);
+    parent.appendChild(node); return node;
+  };
+  const addFloorCallout = (topic, floor, floorIndex, group, anchors) => {
+    const row = calloutNode('g', {}, floorCallouts);
+    const line = calloutNode('polyline', { fill: 'none', stroke: '#718da6', 'stroke-width': '1.2' }, row);
+    const dot = calloutNode('circle', { r: '2.5', fill: '#3c709b' }, row);
+    const box = calloutNode('rect', { width: topic === 'elevator' ? '52' : '82', height: '30', rx: '5', fill: '#f4f8fc', 'fill-opacity': '.95', stroke: '#bccddd' }, row);
+    const label = calloutNode('text', { fill: '#234e75', 'font-size': '13', 'font-family': 'system-ui,sans-serif', 'font-weight': '600', 'text-anchor': 'middle', 'dominant-baseline': 'central' }, row);
+    label.textContent = topic === 'elevator' ? floor : floor + ' · 照明';
+    floorLabels.push({ row, line, dot, box, label, group, floorIndex, anchors, topic });
+  };
+  Z1.forEach((lift, index) => lift.floors.forEach((floor, floorIndex) => {
+    addFloorCallout('elevator', floor.name, floorIndex, D.children[index], [new ht(lift.center[0] - 1.05, lift.center[1] + floor.y, lift.center[2])]);
+  }));
+  const lightBodyGeometry = new Lz(1, 1, 1);
+  const lightBodyMaterial = new x7({ color: '#4f6675', metalness: .55, roughness: .32 });
+  const lightRimMaterial = new j6({ color: '#dce5e9' });
+  const lightFaceMaterial = new j6({ color: '#fff0b9', toneMapped: false });
+  const lightGlowMaterial = new j6({ color: '#ffd77a', transparent: true, opacity: .075, depthWrite: false });
+  for (const [floorIndex, fixtures] of lightingFixtures(n).entries()) {
+    if (!fixtures.length) continue;
+    const floor = 'F' + (floorIndex + 1), id = 'LIGHT-DEMO-' + floor, group = new D3();
+    const bounds = new c9().setFromPoints(fixtures.map(fixture => fixture.center));
+    const asset = { id, label: floor + ' 照明灯具（演示）', floor, system: 'lighting', center: bounds.getCenter(new ht()).toArray(), bounds: [bounds.min.toArray(), bounds.max.toArray()], fixtureCount: fixtures.length };
+    W.push(asset); lighting.add(group); lightingFloors.push({ group, asset });
+    // Instancing keeps six floors inexpensive. Layered housing, rim and diffuser are visible up close;
+    // a restrained translucent halo keeps the same fixtures legible in the whole-building view.
+    const batches = [lightBodyMaterial, lightRimMaterial, lightFaceMaterial, lightGlowMaterial].map((material, layer) => {
+      const mesh = new ks(lightBodyGeometry, material, fixtures.length);
+      mesh.userData.assetId = id; mesh.renderOrder = layer === 3 ? 5 : 10 + layer;
+      group.add(mesh); if (layer === 0) c.push(mesh); return mesh;
+    });
+    const transform = new D3();
+    fixtures.forEach((fixture, index) => {
+      const panel = index % 3 === 0, length = panel ? 1.15 : 1.9, width = panel ? .85 : .24;
+      const sizes = [[length, .18, width], [length - .06, .025, width - .04], [length - .14, .035, width - .1], [length + .65, .012, width + .55]];
+      sizes.forEach((size, layer) => {
+        transform.position.copy(fixture.center); transform.position.y += [0, .105, .125, -.13][layer];
+        transform.rotation.set(0, fixture.angle, 0); transform.scale.fromArray(size); transform.updateMatrix();
+        batches[layer].setMatrixAt(index, transform.matrix);
+      });
+    });
+    for (const mesh of batches) { mesh.instanceMatrix.needsUpdate = true; mesh.computeBoundingSphere(); }
+    // Short nearest-neighbour branches convey a system without drawing long wires across courtyards.
+    // They are schematic display connections, not electrical circuit records.
+    const connections = [], edges = new Set();
+    for (let index = 0; index < fixtures.length; index++) {
+      const from = fixtures[index].center; let nearest = -1, distance = 7;
+      for (let other = 0; other < fixtures.length; other++) {
+        if (index === other) continue;
+        const candidate = from.distanceTo(fixtures[other].center);
+        if (candidate < distance && candidate > .4) { distance = candidate; nearest = other; }
+      }
+      if (nearest < 0) continue;
+      const key = [Math.min(index, nearest), Math.max(index, nearest)].join(':');
+      if (edges.has(key)) continue; edges.add(key);
+      const to = fixtures[nearest].center;
+      connections.push(from.x, from.y - .16, from.z, to.x, to.y - .16, to.z);
+    }
+    const lineGeometry = new bv(); lineGeometry.setAttribute('position', new ln(connections, 3));
+    group.add(new qK(lineGeometry, new iM({ color: '#b99b55', transparent: true, opacity: .32, depthWrite: false })));
+    addFloorCallout('lighting', floor, floorIndex, group, fixtures.map(fixture => fixture.center));
+  }
+  function updateFloorCallouts() {
+    floorCallouts.style.display = y === 'lighting' || y === 'elevator' ? 'block' : 'none';
+    if (y !== 'lighting' && y !== 'elevator') return;
+    floorCallouts.setAttribute('aria-label', y === 'elevator' ? '电梯楼层标识' : '照明楼层标识');
+    const width = v.clientWidth, height = v.clientHeight, rect = v.getBoundingClientRect();
+    const panel = v.closest('.building-screen')?.querySelector('.asset-list')?.getBoundingClientRect();
+    const displayScale = rect.width > 0 ? rect.width / Math.max(1, width) : 1;
+    const leftLimit = Math.max(12, panel ? (panel.right - rect.left) / displayScale + 12 : 12);
+    const rows = [];
+    for (const item of floorLabels) {
+      if (item.topic !== y) { item.row.style.display = 'none'; continue; }
+      const projected = item.anchors.map(point => point.clone().project(e)).filter(point => point.z > -1 && point.z < 1 && Math.abs(point.x) < 1 && Math.abs(point.y) < 1);
+      item.row.style.display = item.group.visible && projected.length ? '' : 'none';
+      if (!item.group.visible || !projected.length) continue;
+      const anchor = projected.reduce((left, point) => point.x < left.x ? point : left);
+      rows.push({ item, x: (anchor.x + 1) * width / 2, y: (1 - anchor.y) * height / 2 });
+    }
+    rows.sort((left, right) => right.item.floorIndex - left.item.floorIndex);
+    if (!rows.length) return;
+    const column = Math.max(leftLimit, Math.min(...rows.map(row => row.x)) - (y === 'elevator' ? 150 : 116));
+    const labelWidth = y === 'elevator' ? 52 : 82;
+    const gap = Math.min(44, Math.max(32, (height - 170) / 6));
+    const middle = rows.reduce((sum, row) => sum + row.y, 0) / rows.length;
+    const top = Math.max(95, Math.min(height - 65 - (rows.length - 1) * gap, middle - (rows.length - 1) * gap / 2));
+    // Labels stay in screen space; only the leaders follow the projected floor positions.
+    rows.forEach(({ item, x, y }, index) => {
+      const cy = top + index * gap;
+      item.box.setAttribute('x', column); item.box.setAttribute('y', cy - 15);
+      item.label.setAttribute('x', column + labelWidth / 2); item.label.setAttribute('y', cy);
+      item.line.setAttribute('points', `${column + labelWidth},${cy} ${column + labelWidth + 12},${cy} ${x},${y}`);
+      item.dot.setAttribute('cx', x); item.dot.setAttribute('cy', y);
+    });
+  }
+  let lightingViewport = '';
+  function lightingContext() {
+    const overview = z(), center = new ht(...overview.target), back = new ht(...overview.position).sub(center);
+    back.y = Math.hypot(back.x, back.z) * .38; back.normalize();
+    const right = new ht().crossVectors(new ht(0, 1, 0), back).normalize(), up = new ht().crossVectors(back, right).normalize();
+    const host = v.closest('.building-screen'), width = Math.max(1, v.clientWidth), height = Math.max(1, v.clientHeight);
+    const displayWidth = v.getBoundingClientRect().width || width;
+    const panel = selector => (host?.querySelector(selector)?.getBoundingClientRect().width || 0) / displayWidth;
+    const safeX = Math.max(.2, 1 - 2 * Math.max(.15, panel('.asset-list') + .01, panel('.asset-details') + .01));
+    const tanY = Math.tan(40 * Math.PI / 360), tanX = tanY * width / height;
+    let distance = 1;
+    for (const points of buildingSurfaces) for (let index = 0; index < points.length; index += 3) {
+      const delta = new ht(points[index], points[index + 1], points[index + 2]).sub(center), depth = delta.dot(back);
+      distance = Math.max(distance, depth + Math.abs(delta.dot(right)) / (tanX * safeX * .98), depth + Math.abs(delta.dot(up)) / (tanY * .78));
+    }
+    r(center.clone().addScaledVector(back, distance).toArray(), center.toArray(), 40);
+    lightingViewport = width + ':' + height;
+  }
+  const hvacFloor = new D3(), hvacBounds = new c9();
+  b.add(hvacFloor); d.set("hvac", hvacFloor);
+  if (hvac) for (const entry of hvac.meshes) {
+    const name = entry.material, equipment = entry.group === "units", services = entry.group === "services";
+    const color = equipment ? (/Grille/.test(name) ? "#174774" : "#247cb4") : services ? (/RF_/.test(name) ? "#0879ad" : /Drain/.test(name) ? "#269b91" : /Duct/.test(name) ? "#4c87b0" : "#899eaf") : /glass/i.test(name) ? "#aac5d7" : /Stone|floor/.test(name) ? "#dae4e9" : "#bdcdd8";
+    const opacity = equipment || services ? 1 : /glass/i.test(name) ? .18 : /Stone|floor/.test(name) ? .96 : .62;
+    const material = new j6({ color, transparent: true, opacity, depthWrite: !equipment && !services, depthTest: !equipment && !services, side: $3 });
+    const mesh = new Zn(entry.geometry, material); mesh.renderOrder = equipment ? 12 : services ? 10 : 2;
+    hvacFloor.add(mesh);
+    hvacBounds.expandByPoint(new ht(...entry.bounds[0])); hvacBounds.expandByPoint(new ht(...entry.bounds[1]));
+  }
+  const hvacLabels = [];
+  for (const id of ["F3-IDU-001", "F3-IDU-038", "F3-IDU-051", "F3-IDU-100"]) {
+    const unit = hvac?.units.find(unit => unit.id === id);
+    if (!unit) continue;
+    const anchor = new ht(unit.xyz[0], unit.xyz[2], -unit.xyz[1]);
+    const label = q("空调内机", anchor.toArray(), hvacFloor);
+    label.renderOrder = 32; label.material.fog = false; label.userData.hvacUnit = id;
+    const geometry = new bv().setFromPoints([anchor, anchor]);
+    const leader = new qK(geometry, new iM({ color: "#246998", transparent: true, opacity: .85, depthTest: false, depthWrite: false }));
+    leader.renderOrder = 31; hvacFloor.add(leader);
+    hvacLabels.push({ id, anchor, label, leader });
+  }
+  function hvacContext() {
+    if (hvacBounds.isEmpty()) return;
+    const center = hvacBounds.getCenter(new ht());
+    const overview = z(), back = new ht(...overview.position).sub(new ht(...overview.target));
+    back.y = Math.hypot(back.x, back.z) * .95; back.normalize();
+    const right = new ht().crossVectors(new ht(0, 1, 0), back).normalize(), up = new ht().crossVectors(back, right).normalize();
+    const tanY = Math.tan(40 * Math.PI / 360), tanX = tanY * Math.max(.1, v.clientWidth / Math.max(1, v.clientHeight));
+    const rect = v.getBoundingClientRect(), host = v.closest('.building-screen');
+    const panelWidth = selector => (host?.querySelector(selector)?.getBoundingClientRect().width || 0) / Math.max(1, rect.width);
+    const horizontal = Math.max(.2, 1 - 2 * Math.max(.08, panelWidth('.asset-list') + .01, panelWidth('.asset-details') + .01));
+    let distance = 1;
+    // Frame the repaired floor's actual surfaces, with a tilted 2.5D view; never focus a prototype box.
+    for (const entry of hvac.meshes) {
+      const points = entry.geometry.getAttribute("position").array;
+      for (let index = 0; index < points.length; index += 3) {
+        const px = points[index] - center.x, py = points[index + 1] - center.y, pz = points[index + 2] - center.z;
+        const depth = px * back.x + py * back.y + pz * back.z;
+        distance = Math.max(distance, depth + Math.abs(px * right.x + py * right.y + pz * right.z) / (tanX * horizontal * .985), depth + Math.abs(px * up.x + py * up.y + pz * up.z) / (tanY * .84));
+      }
+    }
+    r(center.clone().addScaledVector(back, distance).toArray(), center.toArray(), 40);
+  }
   function G() {
+    if (y === "lighting") { lightingContext(); return; }
+    if (y === "hvac") { hvacContext(); return; }
     if (y === "elevator") {
-      R(Z1[0].id);
+      buildingContext();
       return;
     }
     const B = new c9();
@@ -14169,19 +14426,54 @@ function YSt(t, e, f, n, v, r, z) {
       return;
     }
     y = B, t.background = new Nf("#e9f1f6"), N = "\u5168\u90E8", O = "normal", i.forEach((et) => et.visible = true), b.visible = true, P.forEach((et) => et.visible = false), d.forEach((et, nt) => et.visible = nt === B), m = null, R(null);
+    if (B === "hvac") N = "F3";
+    elevatorViewport = ""; lightingViewport = "";
   }
   function K(B) {
     y && x && (j += B);
+    buildingShell.visible = y === "elevator" || y === "hvac" || y === "lighting";
+    if (y === 'lighting') {
+      if (!m && lightingViewport !== v.clientWidth + ':' + v.clientHeight) lightingContext();
+      for (const { group, asset } of lightingFloors) group.visible = (N === '\u5168\u90E8' || N === asset.floor) && (!m || m === asset.id);
+    }
+    updateFloorCallouts();
+    if (y === "hvac") for (const item of hvacLabels) {
+      const projected = item.anchor.clone().project(e);
+      const visible = (!m || m === item.id) && Math.abs(projected.x) < .94 && Math.abs(projected.y) < .88 && projected.z > -1 && projected.z < 1;
+      item.label.visible = visible; item.leader.visible = visible;
+      if (!visible) continue;
+      // Display-sized labels identify registered units; leader endpoints stay on their source coordinates.
+      const unitPerPixel = 2 * item.anchor.distanceTo(e.position) * Math.tan(e.fov * Math.PI / 360) / Math.max(1, v.clientHeight);
+      item.label.position.copy(item.anchor).add(new ht(0, unitPerPixel * 34, 0).applyQuaternion(e.quaternion));
+      item.label.scale.set(unitPerPixel * 128, unitPerPixel * 32, 1);
+      const line = item.leader.geometry.getAttribute("position");
+      line.setXYZ(0, item.anchor.x, item.anchor.y, item.anchor.z);
+      line.setXYZ(1, item.label.position.x, item.label.position.y, item.label.position.z);
+      line.needsUpdate = true; item.leader.geometry.computeBoundingSphere();
+    }
+    if (y === "elevator" && !m && elevatorViewport !== v.clientWidth + ':' + v.clientHeight) buildingContext();
     const et = y ? 1 : 0;
     M && (L = et), L = et > L ? Math.min(et, L + B / 0.8) : Math.max(et, L - B / 0.8), s.forEach(({ mesh: nt, m: I, opacity: U, transparent: J, depthWrite: g }) => {
       nt.visible = L < 0.999, I.opacity = U * (1 - L);
       const tt = L > 1e-3 || J;
       I.transparent !== tt && (I.transparent = tt, I.needsUpdate = true), I.depthWrite = L > 1e-3 ? false : g;
     }), a.visible = L > 1e-3, b.visible = L > 1e-3, T.forEach(({ material: nt, opacity: I }) => {
-      nt.opacity = I * L * (m != null && m.startsWith("EL-") ? 0.65 : 1);
+      nt.opacity = I * L * (y === "hvac" ? .22 : y === "lighting" ? .55 : 1) * (y === "elevator" && slabContextMaterials.has(nt) ? 0.22 : 1) * (m != null && m.startsWith("EL-") ? 0.65 : 1);
     }), !y && L === 0 && (P.forEach((nt) => nt.visible = true), t.background = u), D.children.forEach((nt) => {
       nt.visible = !m || nt.userData.assetId === m, nt.children.forEach((I) => {
-        I.userData.floorLabel && (I.visible = !!m);
+        I.userData.floorLabel && (I.visible = y === "elevator");
+        if (I.isSprite && y === "elevator") {
+          I.renderOrder = 30;
+          I.material.fog = false;
+          const point = I.getWorldPosition(new ht());
+          const pixelWorld = 2 * point.distanceTo(e.position) * Math.tan(e.fov * Math.PI / 360) / Math.max(1, v.clientHeight);
+          const labelWidth = pixelWorld * (I.userData.floorLabel ? 48 : 100);
+          I.scale.set(labelWidth, labelWidth / (I.userData.floorLabel ? 2 : 4), 1);
+          if (I.userData.floorLabel) {
+            I.position.copy(new ht(-pixelWorld * 38, 0, 0).applyQuaternion(e.quaternion));
+            I.position.y += I.userData.floorY + .3;
+          }
+        }
       });
     }), i.forEach((nt, I) => {
       const U = W.find((g) => g.id === I);
@@ -14224,7 +14516,7 @@ function YSt(t, e, f, n, v, r, z) {
   return v.addEventListener("pointerdown", A), v.addEventListener("pointerup", Q), { enter: k, focus: R, update: K, assets: W, setScenario(B) {
     O = B;
   }, setFloor(B) {
-    N = B, m = null, V.visible = false, G();
+    N = y === "hvac" ? "F3" : B, m = null, V.visible = false, G();
   }, setReturn(B) {
     H = B;
   }, setPlaying(B) {
@@ -14240,6 +14532,7 @@ function YSt(t, e, f, n, v, r, z) {
       return { ...B, x: (I.x + 1) / 2 * v.clientWidth, y: (1 - I.y) / 2 * v.clientHeight, visible: I.z >= -1 && I.z <= 1 };
     });
   }, dispose() {
+    floorCallouts.remove();
     v.removeEventListener("pointerdown", A), v.removeEventListener("pointerup", Q);
   } };
 }
@@ -14269,6 +14562,8 @@ vSurfacePosition=position;`), z.fragmentShader = qSt + z.fragmentShader;
 }
 async function RSt(t, e) {
   const f = new mSt({ antialias: true, alpha: false, powerPreference: "high-performance" });
+  // Physical render pixels follow DPR; display pixels must remain tied to the viewport.
+  Object.assign(f.domElement.style, { display: "block", width: "100%", height: "100%" });
   f.setPixelRatio(Math.min(devicePixelRatio, 1.35)), f.outputColorSpace = Qv, f.toneMapping = RI, f.toneMappingExposure = 1, f.shadowMap.enabled = true, f.shadowMap.autoUpdate = false, f.shadowMap.needsUpdate = true, f.shadowMap.type = VI, t.append(f.domElement), f.domElement.setAttribute("aria-label", "\u521B\u65B0\u6E2F\u6574\u680B\u4E09\u7EF4\u573A\u666F"), f.domElement.tabIndex = 0;
   const n = new yFt();
   n.fog = new OM("#c5d2d8", 260, 1050);
@@ -14327,13 +14622,27 @@ async function RSt(t, e) {
       const Pt = new Zn(ut, FSt(U.material));
       Pt.name = U.material, Pt.castShadow = !/glass/.test(U.material.toLowerCase()), Pt.receiveShadow = true, n.add(Pt), rt.push(Pt), M.set(U.material, ut);
     }
+    const hvacResponse = await fetch(new URL("./f3-hvac.bin.gz", import.meta.url));
+    if (!hvacResponse.ok) throw Error("F3 model resource unavailable");
+    const hvacBytes = new Uint8Array(await hvacResponse.arrayBuffer());
+    const hvacBuffer = hvacBytes[0] === 31 && hvacBytes[1] === 139 ? await new Response(new Blob([hvacBytes]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer() : hvacBytes.buffer;
+    const hvacHeaderSize = new DataView(hvacBuffer).getUint32(0, true), hvacArray = new Uint8Array(hvacBuffer);
+    const hvacData = JSON.parse(new TextDecoder().decode(hvacArray.subarray(4, 4 + hvacHeaderSize))), hvacBody = hvacArray.subarray(4 + hvacHeaderSize);
+    for (const mesh of hvacData.meshes) {
+      const start = mesh.offset, positionsEnd = start + mesh.vertices * 12;
+      const geometry = new bv();
+      geometry.setAttribute("position", new ov(new Float32Array(hvacBody.slice(start, positionsEnd).buffer), 3));
+      geometry.setAttribute("normal", new ov(new Int16Array(hvacBody.slice(positionsEnd, positionsEnd + mesh.vertices * 6).buffer), 3, true));
+      geometry.computeBoundingSphere(); mesh.geometry = geometry;
+    }
     const A = jSt(n);
     A(0), f.shadowMap.needsUpdate = true;
     const Q = new NK(256, { type: Ba }), B = new OK(0.5, 1800, Q);
     B.position.set(0, 18, 0), rt.forEach((U) => U.visible = false), B.update(f, n);
     const et = a.fromCubemap(Q.texture);
     rt.forEach((U) => U.visible = true), P.dispose(), P = et, n.environment = P.texture, Q.dispose(), f.shadowMap.needsUpdate = true, H = YSt(n, d, rt, M, t, w, () => {
-    }), H.setReturn(() => {
+      return p || { position: d.position.toArray(), target: c.target.toArray(), span: N };
+    }, hvacData), H.setReturn(() => {
       p && w(p.position, p.target, p.span);
     });
     const nt = (U, J = false) => {

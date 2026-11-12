@@ -19,6 +19,7 @@ interface SceneAssetGeometry {
   readonly center: ReferenceSceneVector
   readonly bounds: readonly [ReferenceSceneVector, ReferenceSceneVector] | null
   readonly kind: string | null
+  readonly fixtureCount?: number
   readonly floors: readonly ReferenceSceneFloor[] | null
 }
 
@@ -97,6 +98,7 @@ function toGeometryAsset(asset: ReferenceSceneAsset): SceneAssetGeometry {
     center: copyVector(asset.center),
     bounds: asset.bounds ? [copyVector(asset.bounds[0]), copyVector(asset.bounds[1])] : null,
     kind: asset.kind ?? null,
+    ...(asset.fixtureCount !== undefined ? { fixtureCount: asset.fixtureCount } : {}),
     floors: asset.floors ? asset.floors.map(copyFloor) : null,
   }
 }
@@ -207,7 +209,7 @@ function applyRequestedState(current: ReferenceScene): void {
     if (requestedFloor !== null) current.setSystemFloor(requestedFloor)
     current.selectAsset(requestedAsset)
   }
-  if (requestedPreset !== null) current.preset(requestedPreset)
+  if (requestedSystem === null && requestedPreset !== null) current.preset(requestedPreset)
 }
 
 async function loadScene(): Promise<void> {
@@ -300,6 +302,8 @@ function enterSystem(topic: string | null): void {
 function setFloor(floor: string): void {
   if (requestedSystem === null) return
   requestedFloor = floor
+  // 楼层切换会清除渲染器中的对象选择，重载时也不能恢复上个楼层的对象。
+  requestedAsset = null
   scene?.setSystemFloor(floor)
   publishScene()
 }

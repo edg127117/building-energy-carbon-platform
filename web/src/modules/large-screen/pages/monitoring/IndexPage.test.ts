@@ -186,9 +186,11 @@ describe('approved twelve-point prototype', () => {
     renderer.vm.$emit('snapshot', null)
     await nextTick()
     expect(wrapper.findComponent(ProfessionalScenePanels).props('assets')).toEqual([])
+    const transitions = sceneCalls.enter.mock.calls.length
     renderer.vm.$emit('ready', true)
     await nextTick()
     expect(sceneCalls.enter).toHaveBeenLastCalledWith('hvac')
+    expect(sceneCalls.enter).toHaveBeenCalledTimes(transitions)
     wrapper.unmount()
   })
   it('keeps side panels and both bottom summaries independently collapsible without recreating the scene', async () => {
