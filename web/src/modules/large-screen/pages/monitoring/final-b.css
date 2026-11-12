@@ -84,7 +84,7 @@
 .layout-review .screen-metrics { grid-template-columns: repeat(4,minmax(0,1fr)); gap: var(--bec-screen-space-8); }
 .layout-review .screen-metrics article { height: var(--bec-screen-metric-height); padding: var(--bec-screen-space-8) var(--bec-screen-space-10); gap: var(--bec-screen-space-8); }
 .layout-review .screen-summary-dock { position: absolute; left: 50%; bottom: var(--bec-screen-space-8); transform: translate(-50%); width: min(calc(51% - var(--bec-screen-space-12)),var(--bec-screen-summary-dock-width)); height: var(--bec-review-footer-height); max-width: none; pointer-events: auto; }
-.layout-b { --bec-review-footer-height: var(--bec-screen-dock-b-height); --bec-screen-summary-dock-width: var(--bec-screen-summary-matrix-width); }
+.layout-b { --bec-review-footer-height: var(--bec-screen-dock-b-height); --bec-screen-summary-dock-width: calc(var(--bec-screen-summary-matrix-width) + var(--bec-screen-space-32)); }
 .layout-b :deep(.left-anchor .side-panel) { grid-template-rows: var(--bec-screen-dock-composition-height) minmax(0,.78fr) minmax(0,1.08fr); }
 .layout-b :deep(.left-anchor), .layout-b :deep(.right-anchor) { padding-top: calc(var(--bec-screen-space-8) + var(--bec-screen-dock-b-clock-height) + var(--bec-screen-space-10)); }
 .layout-b :deep(.right-anchor .side-panel) { grid-template-rows: var(--bec-screen-dock-b-plan-height) minmax(0,1fr) var(--bec-screen-dock-b-score-height); }
