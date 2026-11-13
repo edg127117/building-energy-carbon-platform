@@ -64,7 +64,7 @@ class ReviewedDayReadingsTest {
         jdbc.batchUpdate("INSERT INTO biz_energy_manual_reading VALUES (?,?,?,?,?,?,?,?,?)",rows);
         var day=read();assertThat(day).hasSize(5256);
         var metadataLimits=org.mockito.ArgumentCaptor.forClass(Integer.class);
-        verify(repository,times(6)).windowCandidatesPage(eq("B"),eq(TO),any(),any(),metadataLimits.capture(),same(BUDGET));
+        verify(repository,times(6)).overlappingWindowCandidatesPage(eq("B"),eq(FROM),eq(TO),any(),any(),metadataLimits.capture(),same(BUDGET));
         assertThat(metadataLimits.getAllValues()).containsOnly(1000);
         @SuppressWarnings("unchecked") var bodyIds=(org.mockito.ArgumentCaptor<List<String>>)(Object)org.mockito.ArgumentCaptor.forClass(List.class);
         verify(repository,times(21)).approvedWindowByIdsAsOf(eq("B"),eq(FROM),eq(TO),eq(AS_OF),bodyIds.capture(),same(BUDGET));
@@ -116,7 +116,7 @@ class ReviewedDayReadingsTest {
             assertThat(TransactionSynchronizationManager.getCurrentTransactionIsolationLevel()).isEqualTo(java.sql.Connection.TRANSACTION_REPEATABLE_READ);
             transactionNames.add(TransactionSynchronizationManager.getCurrentTransactionName());calls.incrementAndGet();
             return call.callRealMethod();
-        }).when(repository).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+        }).when(repository).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
         doAnswer(call->{
             assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
             assertThat(TransactionSynchronizationManager.isCurrentTransactionReadOnly()).isTrue();
@@ -144,7 +144,7 @@ class ReviewedDayReadingsTest {
                 }
             }
             return page;
-        }).when(repository).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+        }).when(repository).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
         assertThat(read()).singleElement().extracting(ReadingView::normalizedQuantity).isEqualTo(new BigDecimal("1.000000000000"));
         assertThatThrownBy(this::read).isInstanceOf(BusinessException.class).hasMessageContaining("固定用量");
     }
@@ -167,20 +167,22 @@ class ReviewedDayReadingsTest {
     @Test void rejectsNonNaturalDayAndInvalidCutoff() {
         assertThatThrownBy(()->service.reviewedDayIntervalReadings(1,ROLES,"B",FROM.plusSeconds(1),TO.plusSeconds(1),AS_OF,BUDGET)).isInstanceOf(BusinessException.class);
         assertThatThrownBy(()->service.reviewedDayIntervalReadings(1,ROLES,"B",FROM,TO,TO.minusMillis(1),BUDGET)).isInstanceOf(BusinessException.class);
-        verify(repository,never()).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+        verify(repository,never()).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
     }
 
     @Test void expiredBudgetAndDeniedIdentityNeverReadBodies() {
         assertThatThrownBy(()->service.reviewedDayIntervalReadings(1,ROLES,"B",FROM,TO,AS_OF,()->Duration.ZERO)).isInstanceOf(org.springframework.dao.QueryTimeoutException.class);
         doThrow(new BusinessException(403,"denied")).when(authorization).checkBuilding(2,ROLES,"B");
         assertThatThrownBy(()->service.reviewedDayIntervalReadings(2,ROLES,"B",FROM,TO,AS_OF,BUDGET)).isInstanceOf(BusinessException.class);
-        verify(repository,never()).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+        verify(repository,never()).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
     }
 
-    @Test void historicalMetadataRowsAreCountedAndFailAtHardBound() throws Exception {
+    @Test void unrelatedHistoryIsFilteredAndOverlappingCandidatesStillFailAtHardBound() throws Exception {
         for(int i=0;i<4;i++)insert("old"+i,"old","B",FROM.minusSeconds(7200),FROM.minusSeconds(3600),null);
-        assertThatThrownBy(()->bounded(new ReviewedDayReadings.Limits(2,3,5,4096,16384))).isInstanceOf(BusinessException.class).hasMessageContaining("limit");
+        assertThat(bounded(new ReviewedDayReadings.Limits(2,3,5,4096,16384))).isEmpty();
         verify(repository,never()).approvedWindowByIdsAsOf(any(),any(),any(),any(),any(),any());
+        for(int i=0;i<4;i++)insert("relevant"+i,"old","B",FROM.minusSeconds(3600),FROM.plusSeconds(3600),null);
+        assertThatThrownBy(()->bounded(new ReviewedDayReadings.Limits(2,3,5,4096,16384))).isInstanceOf(BusinessException.class).hasMessageContaining("limit");
         assertThat(ReviewedDayReadings.DEFAULT_LIMITS.maximumCandidates()).isEqualTo(1_000_000);
     }
 
@@ -189,11 +191,11 @@ class ReviewedDayReadingsTest {
         doReturn(List.of(new ClassificationRepository.WindowCandidate("a",old,end),
                 new ClassificationRepository.WindowCandidate("b",old,end),
                 new ClassificationRepository.WindowCandidate("a",old,end)))
-                .when(repository).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+                .when(repository).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
         assertThatThrownBy(this::read).isInstanceOf(BusinessException.class).hasMessageContaining("inconsistent");
         doReturn(List.of(new ClassificationRepository.WindowCandidate("a",old,end),
                 new ClassificationRepository.WindowCandidate("b",old.minusSeconds(1),end)))
-                .when(repository).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+                .when(repository).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
         assertThatThrownBy(this::read).isInstanceOf(BusinessException.class).hasMessageContaining("inconsistent");
         verify(repository,never()).approvedWindowByIdsAsOf(any(),any(),any(),any(),any(),any());
     }
@@ -203,7 +205,7 @@ class ReviewedDayReadingsTest {
         // Valid case-insensitive database order differs from Java's uppercase-before-lowercase ordering.
         doReturn(List.of(new ClassificationRepository.WindowCandidate("a",old,end),
                 new ClassificationRepository.WindowCandidate("B",old,end)))
-                .when(repository).windowCandidatesPage(any(),any(),any(),any(),anyInt(),any());
+                .when(repository).overlappingWindowCandidatesPage(any(),any(),any(),any(),any(),anyInt(),any());
         assertThat(read()).isEmpty();
     }
 

@@ -5,7 +5,7 @@ import type { ScreenRedesignData } from '../models/screen-redesign'
 import { hourlyScreenData, validateHourlyMonitoring, weatherTemperatures } from '../models/final-b-hourly'
 import { readHourlyMonitoring, type HourlyMonitoringView } from '../api/hourly-monitoring'
 
-const REFRESH_MS = 2_000
+const REFRESH_MS = 500
 const WEATHER_REFRESH_MS = 60_000
 const WEATHER_TIMEOUT_MS = 5_000
 type DaySnapshot = { view?: HourlyMonitoringView; weather?: { history: Array<number | null>; forecast: Array<number | null> }; failed: boolean; weatherFailed: boolean }

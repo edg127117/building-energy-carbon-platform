@@ -59,7 +59,7 @@ it('首次读取显示加载，轮询时保留数据且不反复加载，失败�
   first.resolve(view())
   await flushPromises()
   expect(state.loading.value).toEqual({ usage: false, mirror: false })
-  await vi.advanceTimersByTimeAsync(2_000)
+  await vi.advanceTimersByTimeAsync(500)
   expect(readHourlyMonitoring).toHaveBeenCalledTimes(2)
   expect(state.loading.value).toEqual({ usage: false, mirror: false })
   expect(state.data.value.usage?.data.electricity[0]).toBe(0)
@@ -67,7 +67,7 @@ it('首次读取显示加载，轮询时保留数据且不反复加载，失败�
   await flushPromises()
   expect(state.failed.value).toEqual({ usage: true, mirror: true })
   expect(state.data.value.usage?.data.electricity[0]).toBe(0)
-  await vi.advanceTimersByTimeAsync(2_000)
+  await vi.advanceTimersByTimeAsync(500)
   await flushPromises()
   expect(state.failed.value).toEqual({ usage: false, mirror: false })
   scope.stop()
@@ -135,7 +135,7 @@ it('keeps a successful same-day snapshot after a refresh failure', async () => {
   scope.stop()
 })
 
-it('does not let slow weather requests delay the two-second carbon refresh', async () => {
+it('does not let slow weather requests delay the half-second carbon refresh', async () => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] })
   vi.mocked(readHourlyMonitoring).mockResolvedValue(view())
   vi.mocked(screenWeatherQueries.hourly).mockImplementation(() => new Promise<WeatherSeries[]>(() => {}))
@@ -144,7 +144,7 @@ it('does not let slow weather requests delay the two-second carbon refresh', asy
   await settleMicrotasks()
   const firstCount = vi.mocked(readHourlyMonitoring).mock.calls.length
   expect(firstCount).toBeGreaterThan(0)
-  await vi.advanceTimersByTimeAsync(2_000)
+  await vi.advanceTimersByTimeAsync(500)
   await settleMicrotasks()
   expect(vi.mocked(readHourlyMonitoring).mock.calls.length).toBeGreaterThan(firstCount)
   expect(screenWeatherQueries.hourly).toHaveBeenCalledTimes(2)

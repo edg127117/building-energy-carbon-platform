@@ -398,6 +398,14 @@ public class ClassificationService {
                                   Configuration configuration,List<Meter> meters,Map<String,Set<String>> resolvedBindings,
                                   String historicalMeteringScopeId) { }
 
+    /** 仅活在一次监测计算中的版本结构；调用方仍须按来源版本守卫发布，不能作为跨请求缓存。 */
+    public static final class MonitoringCapture {
+        private record Scope(long user,Set<String> roles,String building) { }
+        private Scope scope;
+        private final Map<String,RelationData> relations=new HashMap<>();
+        private final Map<String,Map<String,Set<String>>> spaces=new HashMap<>();
+    }
+
     /** 小时计算复用同一历史计量结构与归属解析；这里只提供上下文，不伪造正式封账快照。 */
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public IntervalContext intervalContext(long user,Collection<String> roles,String building,String versionId,
@@ -410,7 +418,16 @@ public class ClassificationService {
     @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
     public IntervalContext monitoringIntervalContext(long user,Collection<String> roles,String building,String versionId,
             Instant from,Instant to,String energy) {
+        return monitoringIntervalContext(user,roles,building,versionId,from,to,energy,new MonitoringCapture());
+    }
+
+    @Transactional(readOnly=true,isolation=Isolation.REPEATABLE_READ)
+    public IntervalContext monitoringIntervalContext(long user,Collection<String> roles,String building,String versionId,
+            Instant from,Instant to,String energy,MonitoringCapture capture) {
         read(user,roles,building);window(from,to);
+        var scope=new MonitoringCapture.Scope(user,Set.copyOf(roles),building);
+        if(capture.scope!=null&&!capture.scope.equals(scope))throw error(409,"监测结构捕获不能跨用户、角色或建筑复用");
+        capture.scope=scope;
         if(Duration.between(from,to).compareTo(Duration.ofHours(1))>0)throw error(400,"设备监测时段超过一小时");
         var version=resolveEffectiveVersion(building,from,to,versionId);
         Configuration original=decode(version.json(),Configuration.class);
@@ -419,7 +436,7 @@ public class ClassificationService {
                 || rules.stream().anyMatch(r->!"CONFIRMED".equals(r.status())||"SUBMETER_SUM".equals(r.mode())))
             throw error(409,"小时建筑核算需要已确认的完整边界计量口径，不能把分表小计当全楼量");
         var config=new Configuration(original.relationVersionId(),original.schemes(),original.nodes(),original.bindings(),rules);
-        var relation=loadRelations(user,roles,building,config.relationVersionId());
+        var relation=capture.relations.computeIfAbsent(config.relationVersionId(),id->loadRelations(user,roles,building,id));
         String historicalScopeId=historicalScope(user,roles,building,config.relationVersionId(),relation,from,to);
         // 历史小时复用已经审核的计量适用期；保留引用，不把版本实际激活时间回填到过去。
         if(relation.metadata().effectiveAt()==null || relation.metadata().effectiveAt().toInstant(ZoneOffset.ofHours(8)).isAfter(from)&&historicalScopeId==null
@@ -430,15 +447,22 @@ public class ClassificationService {
         if(meters.isEmpty() || meters.size()>500)throw error(409,"小时计量来源缺失或超过500个测点");
         Map<String,Meter> index=new HashMap<>();meters.forEach(m->index.put(m.pointId(),m));
         var equipment=repository.pointEquipment(building,index.keySet());
-        for(Meter a:meters)for(Meter b:meters)if(!a.pointId().equals(b.pointId())&&equipment.containsKey(a.pointId())
-                &&equipment.get(a.pointId()).equals(equipment.get(b.pointId()))&&!meterAncestor(a.pointId(),b.pointId(),index)
-                &&!meterAncestor(b.pointId(),a.pointId(),index)&&rules.stream()
+        var channels=new HashMap<String,List<Meter>>();
+        for(var meter:meters)if(equipment.containsKey(meter.pointId()))channels.computeIfAbsent(equipment.get(meter.pointId()),id->new ArrayList<>()).add(meter);
+        // 只在同一设备内比较通道；设备归属仍逐小时重读，独立性与祖先规则保持不变。
+        for(var group:channels.values())for(Meter a:group)for(Meter b:group)if(!a.pointId().equals(b.pointId())
+                &&!meterAncestor(a.pointId(),b.pointId(),index)&&!meterAncestor(b.pointId(),a.pointId(),index)&&rules.stream()
                 .filter(r->r.boundaryId().equals(a.boundaryId())||r.boundaryId().equals(b.boundaryId())).anyMatch(r->!r.independentChannelsConfirmed()))
             throw error(409,"同设备独立计量通道尚未确认，不能相加");
         Map<String,Set<String>> ancestors=new HashMap<>();
         if(config.bindings().stream().anyMatch(b->"SPACE".equals(b.objectType()))) {
-            var tree=relations.historicalSpaceTree(user,roles,building,config.relationVersionId());
-            for(var root:tree.roots())collectSpaces(root,Set.of(),ancestors);
+            var saved=capture.spaces.get(config.relationVersionId());
+            if(saved!=null)ancestors.putAll(saved);
+            else {
+                var tree=relations.historicalSpaceTree(user,roles,building,config.relationVersionId());
+                for(var root:tree.roots())collectSpaces(root,Set.of(),ancestors);
+                capture.spaces.put(config.relationVersionId(),Map.copyOf(ancestors));
+            }
         }
         return new IntervalContext(version.id(),config.relationVersionId(),relation.metadata().modelRevision(),config,meters,
                 resolve(config,relation.assignments(),ancestors),historicalScopeId);

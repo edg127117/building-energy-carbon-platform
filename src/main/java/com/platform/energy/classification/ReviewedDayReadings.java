@@ -41,7 +41,7 @@ final class ReviewedDayReadings {
         Instant cursor=null;String cursorId=null;int scanned=0;long retainedBytes=0;
         while(true) {
             checkRemaining(remaining);
-            var page=repository.windowCandidatesPage(building,to,cursor,cursorId,limits.metadataPageSize(),remaining);
+            var page=repository.overlappingWindowCandidatesPage(building,from,to,cursor,cursorId,limits.metadataPageSize(),remaining);
             if(page.size()>limits.metadataPageSize())throw integrity();
             scanned=Math.addExact(scanned,page.size());
             if(scanned>limits.maximumCandidates())throw capacity();
@@ -56,7 +56,7 @@ final class ReviewedDayReadings {
                         ||(cursor!=null&&(candidate.startInclusive().isBefore(cursor)
                         ||(candidate.startInclusive().equals(cursor)&&candidate.id().equals(cursorId)))))throw integrity();
                 cursor=candidate.startInclusive();cursorId=candidate.id();
-                // 覆盖索引扫描保留历史前缀，但只为真实相交候选取正文，不能加日初下界丢失跨日事实。
+                // 在覆盖索引中过滤无关历史；不加开始时间下界，跨日事实与异常空结束时间仍进入核验。
                 if(candidate.endExclusive().isAfter(from)&&candidates.put(candidate.id(),candidate)!=null)throw integrity();
             }
             var ids=List.copyOf(candidates.keySet());

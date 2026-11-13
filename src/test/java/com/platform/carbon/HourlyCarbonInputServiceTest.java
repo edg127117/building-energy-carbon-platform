@@ -40,11 +40,17 @@ class HourlyCarbonInputServiceTest {
         var unit=new EnergyCatalogLookup.ApprovedUnit("kwh","KWH","unit-v1",1,"kWh","ENERGY","KWH",BigDecimal.ONE,"FIXED",null,"TEST","manifest",effective,null);
         when(units.convert(eq(BigDecimal.ONE),anyString(),eq("KWH"),any())).thenReturn(Optional.of(new EnergyCatalogLookup.UnitConversion(BigDecimal.ONE,unit,BigDecimal.ONE,unit)));
         doReturn(new GovernedEvidence(List.of(),List.of())).when(nativeQuantities).governedEvidence(anyLong(),anyCollection(),anyString(),anyString(),any(),any(),any());
+        // Existing boundary tests retain the single-point path when a group lacks profile metadata.
+        doThrow(new BusinessException(409,"ENERGY_ACTIVITY_POINT_PROFILE_REQUIRED","test profile unavailable"))
+                .when(activities).monitoringSnapshots(anyLong(),anyCollection(),anyString(),anyList(),anyLong(),anyLong(),anyLong());
+        doAnswer(call->classifications.monitoringIntervalContext(call.getArgument(0),call.getArgument(1),call.getArgument(2),call.getArgument(3),call.getArgument(4),call.getArgument(5),call.getArgument(6)))
+                .when(classifications).monitoringIntervalContext(anyLong(),anyCollection(),anyString(),anyString(),any(),any(),anyString(),any());
     }
-    private void configure(List<ClassificationCore.Meter> meters) {
+    private void configure(List<ClassificationCore.Meter> meters) {configure(meters,"MAIN_WITH_SUBMETER_BREAKDOWN");}
+    private void configure(List<ClassificationCore.Meter> meters,String mode) {
         var config=new ClassificationContracts.Configuration("relation-v1",List.of(new ClassificationContracts.Scheme("use","用途","USAGE","ADDITIVE")),
                 List.of(new ClassificationContracts.Node("use","all","全部",null)),List.of(),
-                List.of(new ClassificationContracts.BoundaryRule("boundary","MAIN_WITH_SUBMETER_BREAKDOWN","CONFIRMED","test","ELECTRICITY","KWH")));
+                List.of(new ClassificationContracts.BoundaryRule("boundary",mode,"CONFIRMED","test","ELECTRICITY","KWH")));
         when(classifications.intervalContext(anyLong(),anyCollection(),eq("TEST"),eq("class-v1"),any(),any(),eq("ELECTRICITY")))
                 .thenAnswer(call->{
                     assertThat(Duration.between(call.getArgument(4),call.getArgument(5))).isEqualTo(Duration.ofHours(1));
@@ -55,6 +61,39 @@ class HourlyCarbonInputServiceTest {
                     assertThat(Duration.between(call.getArgument(4),call.getArgument(5))).isPositive().isLessThanOrEqualTo(Duration.ofHours(1));
                     return new ClassificationService.IntervalContext("class-v1","relation-v1",1,config,meters,Map.of(),null);
                 });
+    }
+    private AggregationActivitySnapshot monitoringSnapshot(String point,long from,long to) {
+        return new AggregationActivitySnapshot("TEST",point,"KWH","CUMULATIVE","CONFIRMED",1,from,to,ASOF.toEpochMilli(),ASOF.toEpochMilli(),"POINT_ID_EVENT_TIME","EXTERNAL_APPEND_ONLY",List.of(fact(point,0,0),fact(point,1,point.equals("A")?100:40)));
+    }
+    private HourlyCarbonInputService.Input monitoringRead(HourlyCarbonInputService.Capture capture) {
+        return service.read(1,ROLES,request,START,START.plusSeconds(3600),START.minusSeconds(360),START.plusSeconds(3600),capture,CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+    }
+    @Test void bulkMonitoringFactsMatchTheSinglePointGovernedResultExactly() {
+        configure(List.of(meter("A",null),meter("B","A")));
+        when(activities.aggregationSnapshot(anyLong(),anyCollection(),eq("TEST"),anyString(),anyLong(),anyLong(),anyLong()))
+                .thenAnswer(call->monitoringSnapshot(call.getArgument(3),call.getArgument(4),call.getArgument(5)));
+        var single=monitoringRead(new HourlyCarbonInputService.Capture(false,true));clearInvocations(activities);
+        doAnswer(call->{var result=new HashMap<String,AggregationActivitySnapshot>();
+            for(String point:(List<String>)call.getArgument(3))result.put(point,monitoringSnapshot(point,call.getArgument(4),call.getArgument(5)));return result;
+        }).when(activities).monitoringSnapshots(anyLong(),anyCollection(),eq("TEST"),anyList(),anyLong(),anyLong(),anyLong());
+        var capture=new HourlyCarbonInputService.Capture(false,true);var bulk=monitoringRead(capture);
+        assertThat(bulk.activities()).isEqualTo(single.activities());assertThat(bulk.sourceSnapshotIds()).isEqualTo(single.sourceSnapshotIds());
+        assertThat(bulk.activities().getFirst().quantityKwh()).isEqualByComparingTo("100");
+        verify(activities,never()).aggregationSnapshot(anyLong(),anyCollection(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
+        assertThatThrownBy(()->service.read(2,ROLES,request,START,START.plusSeconds(3600),START.minusSeconds(360),START.plusSeconds(3600),capture,CarbonCalculationDeadline.start(Duration.ofSeconds(30)))).isInstanceOf(BusinessException.class);
+    }
+    @Test void aMissingChildProfileKeepsTheAvailableMainTotalButBulkDependencyFailureDoesNotFallBack() {
+        configure(List.of(meter("A",null),meter("B","A")),"MAIN_METER_TOTAL");
+        when(activities.aggregationSnapshot(anyLong(),anyCollection(),eq("TEST"),anyString(),anyLong(),anyLong(),anyLong())).thenAnswer(call->{
+            if(call.getArgument(3).equals("B"))throw new BusinessException(409,"ENERGY_ACTIVITY_POINT_PROFILE_REQUIRED","child unavailable");
+            return monitoringSnapshot(call.getArgument(3),call.getArgument(4),call.getArgument(5));
+        });
+        assertThat(monitoringRead(new HourlyCarbonInputService.Capture(false,true)).activities().getFirst().quantityKwh()).isEqualByComparingTo("100");
+        clearInvocations(activities);
+        doThrow(new BusinessException(503,"ENERGY_ACTIVITY_DEPENDENCY_UNAVAILABLE","down"))
+                .when(activities).monitoringSnapshots(anyLong(),anyCollection(),anyString(),anyList(),anyLong(),anyLong(),anyLong());
+        assertThatThrownBy(()->monitoringRead(new HourlyCarbonInputService.Capture(false,true))).isInstanceOf(BusinessException.class).extracting(e->((BusinessException)e).getCode()).isEqualTo(503);
+        verify(activities,never()).aggregationSnapshot(anyLong(),anyCollection(),anyString(),anyString(),anyLong(),anyLong(),anyLong());
     }
     private static ClassificationCore.Meter meter(String id,String parent) {return new ClassificationCore.Meter(id,parent,"boundary",parent==null?"MAIN":"SUB","INBOUND","CONFIRMED");}
     private void raw(Map<String,Integer> increments) {

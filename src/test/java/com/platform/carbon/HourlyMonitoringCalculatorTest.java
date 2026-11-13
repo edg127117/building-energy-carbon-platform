@@ -17,6 +17,23 @@ class HourlyMonitoringCalculatorTest {
     final HourlyMonitoringCalculator calculator=new HourlyMonitoringCalculator(input,rules,dynamic,auth,"FORMAL");
     final Instant start=Instant.parse("2026-11-10T01:00:00Z");
 
+    @Test void reviewedBatchSharesOnlyOneClosedDayCaptureAndRejectsAnotherDay() {
+        var day=start.atZone(HourlyMonitoringCalculator.ZONE).toLocalDate();
+        var from=day.atStartOfDay(HourlyMonitoringCalculator.ZONE).toInstant();
+        var asOf=from.plusSeconds(90000);
+        var batch=calculator.reviewedBatch(day,asOf);
+        when(input.read(anyLong(),anyCollection(),any(),any(),any(),any(),any(),any(),any()))
+                .thenThrow(new BusinessException(409,"MISSING","no source"));
+        calculator.calculateReviewed(7,Set.of("ENERGY_MANAGER"),"B",from,batch);
+        calculator.calculateReviewed(7,Set.of("ENERGY_MANAGER"),"B",from.plusSeconds(3600),batch);
+        verify(input,times(2)).read(eq(7L),anyCollection(),argThat(r->r.calculationAsOf().equals(asOf)),any(),any(),
+                eq(from),eq(from.plusSeconds(86400)),same(batch.capture()),same(batch.deadline()));
+        assertThatThrownBy(()->calculator.calculateReviewed(7,Set.of("ENERGY_MANAGER"),"B",from.plusSeconds(86400),batch))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->calculator.reviewedBatch(day,from.plusSeconds(3600)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     void source(String quantity,Instant end) {
         var evidence=CarbonEvidence.object();var energy=evidence.putArray("energies").addObject();energy.put("energyItemCode","ELECTRICITY");
         var point=energy.putObject("pointInputs").putObject("P");point.put("actualStart",start.minusSeconds(120).toString());point.put("actualEnd",end.toString());
@@ -38,6 +55,17 @@ class HourlyMonitoringCalculatorTest {
         assertThat(point.actualStart()).isEqualTo(start.minusSeconds(120));assertThat(point.actualEnd()).isEqualTo(start.plusSeconds(3480));
         assertThat(point.approximate()).isTrue();assertThat(point.staticGasCoverage()).isEqualTo("CO2_ONLY");
         verify(dynamic).factors("B",start.minusSeconds(120),start.plusSeconds(3480));
+    }
+    @Test void reviewedBatchKeepsExactlyTheSameElectricityAndCarbonPointAsSingleHourReading() {
+        source("10",start.plusSeconds(3600));
+        var day=start.atZone(HourlyMonitoringCalculator.ZONE).toLocalDate();
+        var asOf=day.plusDays(1).atStartOfDay(HourlyMonitoringCalculator.ZONE).toInstant().plusSeconds(1);
+        var single=calculator.calculate(7,Set.of("ENERGY_MANAGER"),"B",start,"REVIEWED_INTERVAL",asOf);
+        var batch=calculator.calculateReviewed(7,Set.of("ENERGY_MANAGER"),"B",start,calculator.reviewedBatch(day,asOf));
+        assertThat(batch.point()).isEqualTo(single.point());
+        assertThat(batch.point().electricityKwh()).isEqualByComparingTo("10");
+        assertThat(batch.point().staticEmissionTco2e()).isEqualByComparingTo("0.006");
+        assertThat(batch.point().dynamicEmissionTco2()).isEqualByComparingTo("0.005");
     }
     @Test void currentHourAccumulatesAndDoesNotPretendStaticHourIsFinal() {
         source("3",start.plusSeconds(900));
