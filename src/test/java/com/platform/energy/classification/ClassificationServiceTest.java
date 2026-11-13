@@ -193,6 +193,30 @@ class ClassificationServiceTest {
         assertThat(sources.electricityVersion(BUILDING,FROM,TO,"REVIEWED_INTERVAL")).isEqualTo(revised);
     }
 
+    @Test void monitoringCaptureReusesVersionStructureButRechecksMutableEquipmentAndIdentity() {
+        var v=approved("R1");clearInvocations(relations);
+        var capture=new ClassificationService.MonitoringCapture();
+        var first=service.monitoringIntervalContext(1,ROLES,BUILDING,v.versionId(),FROM,FROM.plusSeconds(3600),"ELECTRICITY",capture);
+        var second=service.monitoringIntervalContext(1,ROLES,BUILDING,v.versionId(),FROM.plusSeconds(3600),FROM.plusSeconds(7200),"ELECTRICITY",capture);
+        assertThat(second.meters()).isEqualTo(first.meters());
+        verify(relations,times(1)).effectiveMeterStructures(1L,ROLES,BUILDING,1,100);
+        verify(relations,times(1)).historicalMeteringAssignments(1L,ROLES,BUILDING,"R1",1,100);
+        jdbc.update("UPDATE biz_data_point SET equip_id='MULTI_CHANNEL_METER' WHERE point_id IN ('C','D')");
+        assertThatThrownBy(()->service.monitoringIntervalContext(1,ROLES,BUILDING,v.versionId(),FROM.plusSeconds(7200),FROM.plusSeconds(10800),"ELECTRICITY",capture))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("独立计量通道");
+        assertThatThrownBy(()->service.monitoringIntervalContext(2,ROLES,BUILDING,v.versionId(),FROM,FROM.plusSeconds(3600),"ELECTRICITY",capture))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("捕获不能跨");
+    }
+    @Test void monitoringCaptureStillRejectsAnInHourClassificationVersionSwitch() {
+        var v=approved("R1");var capture=new ClassificationService.MonitoringCapture();
+        service.monitoringIntervalContext(1,ROLES,BUILDING,v.versionId(),FROM,FROM.plusSeconds(3600),"ELECTRICITY",capture);
+        var next=service.create(1,ROLES,BUILDING,new CreateRequest("next",v.versionId()));
+        next=service.submit(1,ROLES,BUILDING,next.versionId(),new TransitionRequest(next.revision(),"submit",null));
+        service.approve(2,ROLES,BUILDING,next.versionId(),new TransitionRequest(next.revision(),"review",FROM.plusSeconds(5400)));
+        assertThatThrownBy(()->service.monitoringIntervalContext(1,ROLES,BUILDING,v.versionId(),FROM.plusSeconds(3600),FROM.plusSeconds(7200),"ELECTRICITY",capture))
+                .isInstanceOf(BusinessException.class);
+    }
+
     @Test void hourlyContextKeepsTheActualMeterTreeAndRejectsPartialHourOrClassificationSwitch() {
         var v=approved("R1");
         var context=service.intervalContext(1,ROLES,BUILDING,v.versionId(),FROM,FROM.plusSeconds(3600),"ELECTRICITY");

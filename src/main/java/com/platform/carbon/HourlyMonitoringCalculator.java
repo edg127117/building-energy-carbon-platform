@@ -31,21 +31,35 @@ class HourlyMonitoringCalculator {
     String policy(){return "HOURLY_MONITOR_PRECEDING_SIX_MINUTES_V2:"+factorUsage.name();}
     void authorize(long actor,Collection<String> roles,String building){authorization.requireCalculationRunner(actor,roles,building);}
 
+    record ReviewedBatch(Instant from,Instant to,Instant asOf,HourlyCarbonInputService.Capture capture,CarbonCalculationDeadline deadline) { }
+    ReviewedBatch reviewedBatch(LocalDate day,Instant asOf) {
+        var from=day.atStartOfDay(ZONE).toInstant();var to=from.plusSeconds(86400);
+        if(asOf.isBefore(to))throw new IllegalArgumentException("Reviewed batch requires a closed Beijing day");
+        return new ReviewedBatch(from,to,asOf,new HourlyCarbonInputService.Capture(true,true),CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+    }
+    // 只复用本次已结束自然日的审核来源；每小时配置、精确边界、授权及发布版本仍独立校验。
+    Calculated calculateReviewed(long actor,Collection<String> roles,String building,Instant from,ReviewedBatch batch) {
+        if(from.isBefore(batch.from())||from.plusSeconds(3600).isAfter(batch.to()))
+            throw new IllegalArgumentException("Hour outside reviewed batch");
+        return calculate(actor,roles,building,from,"REVIEWED_INTERVAL",batch.asOf(),batch.capture(),batch.from(),batch.to(),batch.deadline());
+    }
     Calculated calculate(long actor,Collection<String> roles,String building,Instant from,String sourceKind,Instant asOf) {
+        return calculate(actor,roles,building,from,sourceKind,asOf,new HourlyCarbonInputService.Capture(false,true),from.minusSeconds(360),from.plusSeconds(3600).isBefore(asOf)?from.plusSeconds(3600):asOf,CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+    }
+    private Calculated calculate(long actor,Collection<String> roles,String building,Instant from,String sourceKind,Instant asOf,
+            HourlyCarbonInputService.Capture capture,Instant readFrom,Instant readTo,CarbonCalculationDeadline deadline) {
         authorization.requireCalculationRunner(actor,roles,building);
         var to=from.plusSeconds(3600);var cutoff=to.isBefore(asOf)?to:asOf;
         int hour=from.atZone(ZONE).getHour();boolean closed=!to.isAfter(asOf);
         var trace=CarbonEvidence.object();trace.put("algorithm","HOURLY_MONITOR_PRECEDING_SIX_MINUTES_V2");
         trace.put("buildingId",building);trace.put("hourStart",from.toString());trace.put("capturedAt",asOf.toString());
         trace.put("sourceKind",sourceKind);trace.put("factorUsageNature",factorUsage.name());
-        var deadline=CarbonCalculationDeadline.start(Duration.ofSeconds(30));
         try(var ignored=deadline.bind()) {
             var request=new HourlyCarbonContracts.Request(building,from.atZone(ZONE).toLocalDate(),asOf,
                     "hourly-monitor",sourceKind,"SOURCE_LABELLED","HOURLY_MONITOR",factorUsage.name());
-            var capture=new HourlyCarbonInputService.Capture(false,true);
             HourlyCarbonInputService.Input input;
             try {
-                input=inputs.read(actor,roles,request,from,cutoff,from.minusSeconds(360),cutoff,capture,deadline);
+                input=inputs.read(actor,roles,request,from,cutoff,readFrom,readTo,capture,deadline);
             } catch(BusinessException e) {
                 if(e.getCode()==401||e.getCode()==403||e.getCode()>=500)throw e;
                 trace.put("reasonCode",Objects.toString(e.getErrorCode(),"SOURCE_MISSING"));

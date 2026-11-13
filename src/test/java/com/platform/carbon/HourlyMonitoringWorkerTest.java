@@ -13,6 +13,105 @@ class HourlyMonitoringWorkerTest {
     final LocalDate day=LocalDate.of(2026,1,2);
     final HourlyMonitoringRepository.Target target=new HourlyMonitoringRepository.Target("B",day,7);
     final Instant start=day.atStartOfDay(HourlyMonitoringCalculator.ZONE).toInstant();
+
+    @Test void closedReviewedDayReusesOneCaptureAndCanPublishTwentyFourHoursWithinOneBoundedTurn() {
+        when(repo.snapshot(any(),any(),any(),any())).thenReturn(new HourlyMonitoringRepository.Snapshot(versions(),Map.of()));
+        when(identity.currentRoles(7)).thenReturn(List.of("ENERGY_MANAGER"));
+        when(repo.sourceKind(any(),any(),any())).thenReturn("REVIEWED_INTERVAL");
+        var batch=new HourlyMonitoringCalculator.ReviewedBatch(start,start.plusSeconds(86400),Instant.now(),new HourlyCarbonInputService.Capture(true,true),CarbonCalculationDeadline.start(Duration.ofSeconds(30)));
+        when(calculator.reviewedBatch(eq(day),any())).thenReturn(batch);
+        when(calculator.calculateReviewed(eq(7L),anyCollection(),eq("B"),any(),same(batch))).thenAnswer(call->{
+            // Reproduce the measured tail split: only the last three hours remain when the soft turn budget expires.
+            if(start.plusSeconds(3*3600).equals(call.getArgument(3)))Thread.sleep(4100);
+            return new HourlyMonitoringCalculator.Calculated(HourlyMonitoringContracts.empty(0,call.getArgument(3),"MISSING","NO_SOURCE"),CarbonEvidence.object());
+        });
+        try(var worker=new HourlyMonitoringWorker(repo,calculator,identity,new CarbonDisplayQueryProperties())) {
+            worker.refresh(target,"token");
+        }
+        verify(calculator,times(1)).reviewedBatch(eq(day),any());
+        verify(calculator,times(24)).calculateReviewed(eq(7L),anyCollection(),eq("B"),any(),same(batch));
+        @SuppressWarnings("unchecked") var groups=(org.mockito.ArgumentCaptor<List<HourlyMonitoringRepository.Publication>>)(Object)org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(repo,times(6)).publishBatch(eq(target),eq("token"),groups.capture(),any());
+        assertThat(groups.getAllValues()).allSatisfy(group->assertThat(group).hasSize(4));
+        assertThat(groups.getAllValues().stream().flatMap(List::stream).map(HourlyMonitoringRepository.Publication::hour).distinct().count()).isEqualTo(24);
+        verify(repo,never()).publish(any(),any(),anyLong(),any(),any(),any());
+        verify(calculator,never()).calculate(anyLong(),anyCollection(),any(),any(),any(),any());
+    }
+    @Test void revokedAuthorizationBeforeGroupFlushCannotPublishEarlierCalculatedHours() {
+        when(repo.snapshot(any(),any(),any(),any())).thenReturn(new HourlyMonitoringRepository.Snapshot(versions(),Map.of()));
+        when(identity.currentRoles(7)).thenReturn(List.of("ENERGY_MANAGER"));
+        when(repo.sourceKind(any(),any(),any())).thenReturn("REVIEWED_INTERVAL");
+        when(calculator.calculateReviewed(eq(7L),anyCollection(),eq("B"),any(),any())).thenAnswer(call->
+                new HourlyMonitoringCalculator.Calculated(HourlyMonitoringContracts.empty(0,call.getArgument(3),"MISSING","NO_SOURCE"),CarbonEvidence.object()));
+        doNothing().doThrow(new com.platform.framework.exception.BusinessException(403,"DENIED","revoked"))
+                .when(calculator).authorize(eq(7L),anyCollection(),eq("B"));
+        try(var worker=new HourlyMonitoringWorker(repo,calculator,identity,new CarbonDisplayQueryProperties())) {
+            assertThatThrownBy(()->worker.refresh(target,"token")).isInstanceOf(com.platform.framework.exception.BusinessException.class);
+        }
+        verify(repo,never()).publishBatch(any(),any(),any(),any());
+        verify(repo,never()).publish(any(),any(),anyLong(),any(),any(),any());
+    }
+    @Test void firstRequestIsClaimedBeforeScanningIdleHistoryPages() {
+        when(repo.unpreparedHistory(anyLong())).thenReturn(target);
+        when(repo.snapshot(any(),any(),any(),any())).thenReturn(new HourlyMonitoringRepository.Snapshot(versions(),Map.of()));
+        when(repo.claim(eq(target),any(),anyLong())).thenReturn(true);
+        when(identity.currentRoles(7)).thenReturn(List.of("ENERGY_MANAGER"));
+        when(repo.sourceKind(any(),any(),any())).thenReturn("RAW_CUMULATIVE");
+        when(calculator.calculate(anyLong(),anyCollection(),any(),any(),any(),any())).thenThrow(new IllegalStateException("source down"));
+        try(var worker=new HourlyMonitoringWorker(repo,calculator,identity,new CarbonDisplayQueryProperties())){worker.refresh(false);}
+        verify(repo,never()).due(anyLong(),anyBoolean(),any());
+        verify(repo).claim(eq(target),any(),anyLong());
+        verify(repo).release(eq(target),any(),eq(1000L));
+    }
+    @Test void currentDayDoesNotAddCooldownToTheExistingScanInterval() {
+        var today=LocalDate.now(HourlyMonitoringCalculator.ZONE);var current=new HourlyMonitoringRepository.Target("B",today,7);
+        var first=today.atStartOfDay(HourlyMonitoringCalculator.ZONE).toInstant();var versions=new HashMap<Long,String>();
+        for(int h=0;h<24;h++)versions.put(first.plusSeconds(h*3600).toEpochMilli(),"v");
+        when(repo.due(anyLong(),eq(true),isNull())).thenReturn(List.of(current));
+        when(repo.snapshot(eq("B"),eq(today),any(),any())).thenReturn(new HourlyMonitoringRepository.Snapshot(versions,Map.of()));
+        when(repo.claim(eq(current),any(),anyLong())).thenReturn(true);
+        when(identity.currentRoles(7)).thenReturn(List.of("ENERGY_MANAGER"));
+        when(repo.sourceKind(any(),any(),any())).thenReturn("RAW_CUMULATIVE");
+        when(calculator.calculate(anyLong(),anyCollection(),any(),any(),any(),any())).thenThrow(new IllegalStateException("source down"));
+        try(var worker=new HourlyMonitoringWorker(repo,calculator,identity,new CarbonDisplayQueryProperties())){worker.refresh(true);}
+        verify(repo).release(eq(current),any(),eq(0L));
+        verify(repo,never()).unpreparedHistory(anyLong());
+    }
+    @Test void inFlightCurrentInputWaitsWithoutClaimAndIsPickedUpAfterPersistence() {
+        var today=LocalDate.now(HourlyMonitoringCalculator.ZONE);var current=new HourlyMonitoringRepository.Target("B",today,7);
+        var first=today.atStartOfDay(HourlyMonitoringCalculator.ZONE).toInstant();var versions=new HashMap<Long,String>();
+        for(int h=0;h<24;h++)versions.put(first.plusSeconds(h*3600).toEpochMilli(),"v");
+        when(repo.due(anyLong(),eq(true),isNull())).thenReturn(List.of(current));
+        when(repo.snapshot(eq("B"),eq(today),any(),any())).thenReturn(new HourlyMonitoringRepository.Snapshot(versions,Map.of()));
+        when(repo.pendingRawInput(eq("B"),any(),any())).thenReturn(true,false);
+        when(repo.claim(eq(current),any(),anyLong())).thenReturn(true);
+        when(identity.currentRoles(7)).thenReturn(List.of("ENERGY_MANAGER"));
+        when(repo.sourceKind(any(),any(),any())).thenReturn("RAW_CUMULATIVE");
+        when(calculator.calculate(anyLong(),anyCollection(),any(),any(),any(),any())).thenThrow(new IllegalStateException("source down"));
+        try(var worker=new HourlyMonitoringWorker(repo,calculator,identity,new CarbonDisplayQueryProperties())) {
+            worker.refresh(true);verify(repo,never()).claim(any(),any(),anyLong());verifyNoInteractions(identity);
+            verify(calculator,never()).calculate(anyLong(),anyCollection(),any(),any(),any(),any());
+            verify(calculator,never()).calculateReviewed(anyLong(),anyCollection(),any(),any(),any());
+            worker.refresh(true);
+        }
+        verify(repo).claim(eq(current),any(),anyLong());verify(repo).release(eq(current),any(),eq(0L));
+    }
+    @Test void aVersionChangeDuringTheQuietCheckWaitsAndIsNotLostOnTheNextScan() {
+        var today=LocalDate.now(HourlyMonitoringCalculator.ZONE);var current=new HourlyMonitoringRepository.Target("B",today,7);
+        var first=today.atStartOfDay(HourlyMonitoringCalculator.ZONE).toInstant();var before=new HashMap<Long,String>();var after=new HashMap<Long,String>();
+        for(int h=0;h<24;h++){before.put(first.plusSeconds(h*3600).toEpochMilli(),"v1");after.put(first.plusSeconds(h*3600).toEpochMilli(),"v2");}
+        var initial=new HourlyMonitoringRepository.Snapshot(before,Map.of());var updated=new HourlyMonitoringRepository.Snapshot(after,Map.of());
+        when(repo.due(anyLong(),eq(true),isNull())).thenReturn(List.of(current));
+        when(repo.snapshot(eq("B"),eq(today),any(),any())).thenReturn(initial,updated,updated,updated);
+        when(repo.claim(eq(current),any(),anyLong())).thenReturn(true);when(identity.currentRoles(7)).thenReturn(List.of("ENERGY_MANAGER"));
+        when(repo.sourceKind(any(),any(),any())).thenReturn("RAW_CUMULATIVE");
+        when(calculator.calculate(anyLong(),anyCollection(),any(),any(),any(),any())).thenThrow(new IllegalStateException("source down"));
+        try(var worker=new HourlyMonitoringWorker(repo,calculator,identity,new CarbonDisplayQueryProperties())){
+            worker.refresh(true);verify(repo,never()).claim(any(),any(),anyLong());verifyNoInteractions(identity);
+            worker.refresh(true);
+        }
+        verify(repo).claim(eq(current),any(),anyLong());verify(repo).release(eq(current),any(),eq(0L));
+    }
     Map<Long,String> versions(){var map=new HashMap<Long,String>();for(int h=0;h<24;h++)map.put(start.plusSeconds(h*3600).toEpochMilli(),"v");return map;}
     HourlyMonitoringRepository.Snapshot unchanged() {
         var rows=new HashMap<Long,HourlyMonitoringRepository.Stored>();

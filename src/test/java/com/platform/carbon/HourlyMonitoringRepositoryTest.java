@@ -59,6 +59,46 @@ class HourlyMonitoringRepositoryTest {
         jdbc.update("UPDATE biz_hourly_monitor_evidence SET evidence_json='{}'");
         assertThatThrownBy(()->repo.evidence("B",row.evidence())).isInstanceOf(BusinessException.class).extracting(e->((BusinessException)e).getErrorCode()).isEqualTo("HOURLY_MONITOR_INTEGRITY");
     }
+    List<HourlyMonitoringRepository.Publication> batch(int count) {
+        var snapshot=repo.snapshot("B",day,Instant.now(),"policy");
+        var values=new ArrayList<HourlyMonitoringRepository.Publication>();
+        for(int h=0;h<count;h++) {
+            long at=hour+h*3_600_000L;
+            var calculated=new HourlyMonitoringCalculator.Calculated(HourlyMonitoringContracts.empty(h,Instant.ofEpochMilli(at),"MISSING","TEST"),CarbonEvidence.object().put("source","SIMULATED"));
+            values.add(new HourlyMonitoringRepository.Publication(at,snapshot.versions().get(at),calculated));
+        }
+        return values;
+    }
+    @Test void groupedPublicationKeepsEveryHourEvidenceAndRejectsAnyChangedMember() {
+        var values=batch(4);repo.claim(target,"lease",System.currentTimeMillis());
+        jdbc.update("INSERT INTO biz_hourly_monitor_revision VALUES('B',?,1)",hour+3_600_000);
+        assertThat(repo.publishBatch(target,"lease",values,"policy")).isFalse();
+        assertThat(repo.snapshot("B",day,Instant.now(),"policy").results()).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_hourly_monitor_evidence",Integer.class)).isZero();
+        assertThat(repo.publishBatch(target,"lease",batch(4),"policy")).isTrue();
+        var rows=repo.snapshot("B",day,Instant.now(),"policy").results();assertThat(rows).hasSize(4);
+        rows.values().forEach(row->{
+            assertThat(repo.decode(row).evidenceId()).isEqualTo(row.evidence());
+            assertThat(repo.evidence("B",row.evidence()).path("source").asText()).isEqualTo("SIMULATED");
+        });
+    }
+    @Test void groupedPublicationRollsBackAllEvidenceAndSummariesOnLaterWriteFailure() {
+        var values=batch(2);repo.claim(target,"lease",System.currentTimeMillis());
+        jdbc.execute("ALTER TABLE biz_hourly_monitor_result ADD CONSTRAINT reject_second CHECK (hour_ms<>"+(hour+3_600_000)+")");
+        assertThatThrownBy(()->repo.publishBatch(target,"lease",values,"policy")).isInstanceOf(RuntimeException.class);
+        assertThat(repo.snapshot("B",day,Instant.now(),"policy").results()).isEmpty();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_hourly_monitor_evidence",Integer.class)).isZero();
+    }
+    @Test void groupedPublicationPreservesLeaseOwnershipAndRejectsInvalidBatchBounds() {
+        var values=batch(2);repo.claim(target,"lease",System.currentTimeMillis());
+        jdbc.update("UPDATE biz_hourly_monitor_target SET actor_id=8");
+        assertThat(repo.publishBatch(target,"lease",values,"policy")).isFalse();
+        assertThatThrownBy(()->repo.publishBatch(target,"lease",List.of(),"policy")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->repo.publishBatch(target,"lease",batch(5),"policy")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->repo.publishBatch(target,"lease",List.of(values.getFirst(),values.getFirst()),"policy")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(()->repo.publishBatch(target,"lease",List.of(new HourlyMonitoringRepository.Publication(hour+86_400_000,"v",result())),"policy")).isInstanceOf(IllegalArgumentException.class);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_hourly_monitor_evidence",Integer.class)).isZero();
+    }
     @Test void hourClosureChangesVersionWithoutAnyIncomingEvent() {
         var before=repo.snapshot("B",day,Instant.ofEpochMilli(hour+3599999),"policy");
         var after=repo.snapshot("B",day,Instant.ofEpochMilli(hour+3600000),"policy");
@@ -70,6 +110,19 @@ class HourlyMonitoringRepositoryTest {
         repo.register("B",LocalDate.of(2026,1,3),7);repo.register("B",LocalDate.of(2026,1,4),7);
         assertThat(repo.due(now,true)).extracting(HourlyMonitoringRepository.Target::date).containsExactly(LocalDate.of(2026,1,3));
         assertThat(repo.due(now,false)).extracting(HourlyMonitoringRepository.Target::date).containsExactly(day);
+    }
+    @Test void firstHistoricalQueryBypassesIdlePagesButHonorsDateResultsAndLease() {
+        long now=Instant.parse("2026-01-03T04:00:00Z").toEpochMilli();
+        repo.register("B",LocalDate.of(2026,1,3),7);repo.register("B",LocalDate.of(2026,1,4),7);
+        assertThat(repo.unpreparedHistory(now)).isEqualTo(target);
+        assertThat(repo.claim(target,"lease",now)).isTrue();
+        assertThat(repo.unpreparedHistory(now)).isNull();
+        repo.release(target,"lease",0);
+        jdbc.update("UPDATE biz_hourly_monitor_target SET next_check=0");
+        // Any stored hour makes this an existing target; it continues through the ordinary fair cursor.
+        jdbc.update("INSERT INTO biz_hourly_monitor_result(building_id,hour_ms,source_version,evidence_id,summary_json,summary_hash,updated_at) VALUES('B',?,'v','e','{}','h',0)",hour+23*3_600_000);
+        assertThat(repo.unpreparedHistory(now)).isNull();
+        assertThat(repo.due(now,false,null)).containsExactly(target);
     }
     @Test void stableCursorVisitsLaterBuildingsAndDatesWithoutUpdatingIdleRows() {
         long now=Instant.parse("2026-01-20T04:00:00Z").toEpochMilli();

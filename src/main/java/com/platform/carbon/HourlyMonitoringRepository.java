@@ -51,6 +51,20 @@ class HourlyMonitoringRepository {
         return jdbc.query("SELECT building_id,day_date,actor_id FROM biz_hourly_monitor_target WHERE next_check<=? AND lease_until<? AND day_date"+(currentDay?"=":"<")+"?"+seek+" ORDER BY building_id,day_date LIMIT 8",
                 (r,n)->new Target(r.getString(1),r.getDate(2).toLocalDate(),r.getLong(3)),args.toArray());
     }
+    Target unpreparedHistory(long now) {
+        var today=java.sql.Date.valueOf(Instant.ofEpochMilli(now).atZone(ZONE).toLocalDate());
+        // 北京自然日的结果键按UTC毫秒保存；固定+08日期换算不依赖MySQL会话时区，不读取业务正文。
+        // 首次请求不必等待空闲历史页游标绕回；仍须在实际计算前核对版本并取得同一持久租约。
+        var values=jdbc.query("""
+                SELECT t.building_id,t.day_date,t.actor_id FROM biz_hourly_monitor_target t
+                WHERE t.next_check<=? AND t.lease_until<? AND t.day_date<?
+                  AND NOT EXISTS (SELECT 1 FROM biz_hourly_monitor_result r WHERE r.building_id=t.building_id
+                    AND r.hour_ms>=TIMESTAMPDIFF(DAY,'1970-01-01',t.day_date)*86400000-28800000
+                    AND r.hour_ms<(TIMESTAMPDIFF(DAY,'1970-01-01',t.day_date)+1)*86400000-28800000)
+                ORDER BY t.building_id,t.day_date LIMIT 1
+                """,(r,n)->new Target(r.getString(1),r.getDate(2).toLocalDate(),r.getLong(3)),now,now,today);
+        return values.isEmpty()?null:values.getFirst();
+    }
     boolean claim(Target target,String token,long now) {
         return jdbc.update("UPDATE biz_hourly_monitor_target SET lease_token=?,lease_until=? WHERE building_id=? AND day_date=? AND lease_until<?",
                 token,now+120_000,target.building(),java.sql.Date.valueOf(target.date()),now)==1;
@@ -78,6 +92,14 @@ class HourlyMonitoringRepository {
                 """,String.class,building,from.minusSeconds(360).toEpochMilli(),to.toEpochMilli());
         return raw.isEmpty()?"REVIEWED_INTERVAL":"RAW_CUMULATIVE";
     }
+    boolean pendingRawInput(String building,Instant from,Instant to) {
+        // 只合并本小时相关、已确认电量点的未完成落库；温度、其他建筑和无关历史不能延迟小时更新。
+        return !jdbc.queryForList("""
+                SELECT 1 FROM biz_dynamic_raw_electricity_point p
+                JOIN biz_telemetry_raw_intent r ON r.point_key=CONVERT(LOWER(p.point_id) USING ascii) COLLATE ascii_bin
+                WHERE p.building_id=? AND r.storage_state='PENDING' AND r.event_ms>=? AND r.event_ms<=? LIMIT 1
+                """,Integer.class,building,from.toEpochMilli(),to.toEpochMilli()).isEmpty();
+    }
     Snapshot snapshot(String building,LocalDate date,Instant now,String policy) {
         return reads.execute(status->{
             long start=date.atStartOfDay(ZONE).toInstant().toEpochMilli();
@@ -93,30 +115,52 @@ class HourlyMonitoringRepository {
             return new Snapshot(Map.copyOf(versions),Map.copyOf(values));
         });
     }
+    record Publication(long hour,String expected,HourlyMonitoringCalculator.Calculated result) { }
+    private record Prepared(long hour,String expected,String evidenceId,String evidence,String summary,String summaryHash) { }
     boolean publish(Target target,String token,long hour,String expected,String policy,HourlyMonitoringCalculator.Calculated result) {
-        String evidenceText=encode(result.evidence());
-        if(evidenceText.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>16_000_000)
-            throw new BusinessException(409,"HOURLY_MONITOR_CAPACITY","小时证据超出容量，不截断保存");
-        String evidenceId=hash(target.building()+":"+hour+":"+expected+":"+evidenceText);
-        var p=result.point();
-        var point=new HourlyMonitoringContracts.Point(p.hour(),p.startInclusive(),p.endExclusive(),p.actualStart(),p.actualEnd(),p.electricityKwh(),
-                p.staticEmissionTco2e(),p.staticFactorKgCo2ePerKwh(),p.dynamicEmissionTco2(),p.dynamicFactorKgCo2PerKwh(),p.electricityStatus(),p.staticStatus(),p.dynamicStatus(),
-                p.approximate(),p.staticGasCoverage(),p.sourceNatures(),evidenceId,p.reasonCode());
-        String summary=encode(point),summaryHash=hash(evidenceId+":"+summary);
+        return publishBatch(target,token,List.of(new Publication(hour,expected,result)),policy);
+    }
+    boolean publishBatch(Target target,String token,List<Publication> publications,String policy) {
+        if(publications.isEmpty()||publications.size()>4)throw new IllegalArgumentException("Hourly publication batch requires 1..4 hours");
+        long start=target.date().atStartOfDay(ZONE).toInstant().toEpochMilli();var hours=new HashSet<Long>();
+        for(var publication:publications)if(publication.hour()<start||publication.hour()>=start+86_400_000
+                ||(publication.hour()-start)%3_600_000!=0||!hours.add(publication.hour()))
+            throw new IllegalArgumentException("Hourly publication batch must contain distinct hours of its target day");
+        var prepared=publications.stream().map(publication->prepare(target,publication)).toList();
         return Boolean.TRUE.equals(writes.execute(status->{
+            // 最多四小时共用一次短事务；全部来源版本和租约通过后才写证据与摘要，变化时整组拒绝。
             String global=global(target.building(),target.date(),true);
-            jdbc.update("INSERT INTO biz_hourly_monitor_revision(building_id,hour_ms,revision) VALUES(?,?,0) ON DUPLICATE KEY UPDATE revision=revision",target.building(),hour);
-            Long revision=jdbc.queryForObject("SELECT revision FROM biz_hourly_monitor_revision WHERE building_id=? AND hour_ms=? FOR UPDATE",Long.class,target.building(),hour);
-            if(!expected.equals(version(global,Objects.requireNonNull(revision),hour,Instant.now(),policy)))return false;
+            jdbc.batchUpdate("INSERT INTO biz_hourly_monitor_revision(building_id,hour_ms,revision) VALUES(?,?,0) ON DUPLICATE KEY UPDATE revision=revision",
+                    prepared.stream().map(p->new Object[]{target.building(),p.hour()}).toList());
+            var args=new ArrayList<Object>();args.add(target.building());prepared.forEach(p->args.add(p.hour()));
+            var revisions=new HashMap<Long,Long>();
+            jdbc.query("SELECT hour_ms,revision FROM biz_hourly_monitor_revision WHERE building_id=? AND hour_ms IN ("+
+                    String.join(",",Collections.nCopies(prepared.size(),"?"))+") ORDER BY hour_ms FOR UPDATE",
+                    r->{revisions.put(r.getLong(1),r.getLong(2));},args.toArray());
+            var observed=Instant.now();
+            for(var p:prepared)if(!p.expected().equals(version(global,Objects.requireNonNull(revisions.get(p.hour())),p.hour(),observed,policy)))return false;
             var owners=jdbc.queryForList("SELECT actor_id FROM biz_hourly_monitor_target WHERE building_id=? AND day_date=? AND lease_token=? AND lease_until>? FOR UPDATE",Long.class,
                     target.building(),java.sql.Date.valueOf(target.date()),token,System.currentTimeMillis());
             if(owners.size()!=1||owners.getFirst()!=target.actor())return false;
             long now=System.currentTimeMillis();
-            jdbc.update("INSERT INTO biz_hourly_monitor_evidence(evidence_id,building_id,hour_ms,source_version,evidence_json,created_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE evidence_id=evidence_id",evidenceId,target.building(),hour,expected,evidenceText,now);
-            jdbc.update("INSERT INTO biz_hourly_monitor_result(building_id,hour_ms,source_version,evidence_id,summary_json,summary_hash,updated_at) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE source_version=VALUES(source_version),evidence_id=VALUES(evidence_id),summary_json=VALUES(summary_json),summary_hash=VALUES(summary_hash),updated_at=VALUES(updated_at)",
-                    target.building(),hour,expected,evidenceId,summary,summaryHash,now);
+            jdbc.batchUpdate("INSERT INTO biz_hourly_monitor_evidence(evidence_id,building_id,hour_ms,source_version,evidence_json,created_at) VALUES(?,?,?,?,?,?) ON DUPLICATE KEY UPDATE evidence_id=evidence_id",
+                    prepared.stream().map(p->new Object[]{p.evidenceId(),target.building(),p.hour(),p.expected(),p.evidence(),now}).toList());
+            jdbc.batchUpdate("INSERT INTO biz_hourly_monitor_result(building_id,hour_ms,source_version,evidence_id,summary_json,summary_hash,updated_at) VALUES(?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE source_version=VALUES(source_version),evidence_id=VALUES(evidence_id),summary_json=VALUES(summary_json),summary_hash=VALUES(summary_hash),updated_at=VALUES(updated_at)",
+                    prepared.stream().map(p->new Object[]{target.building(),p.hour(),p.expected(),p.evidenceId(),p.summary(),p.summaryHash(),now}).toList());
             return true;
         }));
+    }
+    private Prepared prepare(Target target,Publication publication) {
+        String evidenceText=encode(publication.result().evidence());
+        if(evidenceText.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>16_000_000)
+            throw new BusinessException(409,"HOURLY_MONITOR_CAPACITY","小时证据超出容量，不截断保存");
+        String evidenceId=hash(target.building()+":"+publication.hour()+":"+publication.expected()+":"+evidenceText);
+        var p=publication.result().point();
+        var point=new HourlyMonitoringContracts.Point(p.hour(),p.startInclusive(),p.endExclusive(),p.actualStart(),p.actualEnd(),p.electricityKwh(),
+                p.staticEmissionTco2e(),p.staticFactorKgCo2ePerKwh(),p.dynamicEmissionTco2(),p.dynamicFactorKgCo2PerKwh(),p.electricityStatus(),p.staticStatus(),p.dynamicStatus(),
+                p.approximate(),p.staticGasCoverage(),p.sourceNatures(),evidenceId,p.reasonCode());
+        String summary=encode(point),summaryHash=hash(evidenceId+":"+summary);
+        return new Prepared(publication.hour(),publication.expected(),evidenceId,evidenceText,summary,summaryHash);
     }
     HourlyMonitoringContracts.Point decode(Stored row) {
         if(!row.hash().equals(hash(row.evidence()+":"+row.summary())))throw integrity();
