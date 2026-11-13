@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
+import { clearScenePreparationCache, preparedLandscape, preparedModel, roadDistance } from '@/generated/scene/scene-preparation'
 
 type Pose = { position: number[]; target: number[]; span: number }
 interface Controller {
@@ -19,21 +21,30 @@ interface TestCamera {
   updateMatrixWorld(force: boolean): void
 }
 interface Internals {
+  jSt(scene: unknown): (time: number) => void
+  buildLandscapeTemplate(scene: unknown): unknown
   YSt(scene: unknown, camera: unknown, meshes: unknown[], geometry: Map<string, unknown>, stage: HTMLElement, move: (position: number[], target: number[], span: number) => void, overview: () => Pose): Controller
-  yFt: new () => unknown
+  yFt: new () => { traverse(visitor: (object: GeometryObject) => void): void }
   qr: new (...args: number[]) => TestCamera
   ht: new (...args: number[]) => { project(camera: TestCamera): { x: number; y: number; z: number } }
   Lz: new (...args: number[]) => { translate(x: number, y: number, z: number): unknown }
 }
+interface GeometryObject {
+  geometry?: { attributes: Record<string, { array: ArrayBufferView }>; index: { array: ArrayBufferView } | null; dispose(): void }
+  instanceMatrix?: { array: ArrayBufferView }
+  material?: { dispose(): void }
+}
 // Exercise the actual bundled controller without creating a WebGL context or fetching assets.
 const source = readFileSync('src/generated/scene/reference-engine.js', 'utf8')
-const engine = new Function(source.replace(/import\.meta\.url/g, '"file:///unused-renderer.js"').replace(/export\s*\{[^}]+\};?\s*$/, '') + ';return {YSt,yFt,qr,Lz,ht};')() as Internals
+const engine = new Function('preparedModel', 'preparedLandscape', 'roadDistance',
+  source.replace(/^import .*from "\.\/scene-preparation";\s*$/m, '').replace(/import\.meta\.url/g, '"file:///unused-renderer.js"')
+    .replace(/export\s*\{[^}]+\};?\s*$/, '') + ';return {YSt,yFt,qr,Lz,ht,jSt,buildLandscapeTemplate};')(preparedModel, preparedLandscape, roadDistance) as Internals
 let controller: Controller
 beforeEach(() => {
   vi.stubGlobal('matchMedia', () => ({ matches: false }))
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ fillRect() {}, fillText() {} } as unknown as CanvasRenderingContext2D)
 })
-afterEach(() => { controller?.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren() })
+afterEach(() => { controller?.dispose(); clearScenePreparationCache(); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren() })
 function setup(overview: Pose) {
   const stage = document.createElement('div'); document.body.append(stage)
   Object.defineProperties(stage, { clientWidth: { value: 1920, configurable: true }, clientHeight: { value: 1080 } })
@@ -42,6 +53,37 @@ function setup(overview: Pose) {
   return { stage, moves }
 }
 describe('elevator-led whole-building composition', () => {
+  it('preserves the landscape geometry and instances while giving each renderer disposable resources', () => {
+    const gradient = { addColorStop() {} }
+    vi.mocked(HTMLCanvasElement.prototype.getContext).mockReturnValue(new Proxy({ createLinearGradient: () => gradient, createRadialGradient: () => gradient },
+      { get: (target, key) => target[key] ?? (() => {}) }) as unknown as CanvasRenderingContext2D)
+    const original = new engine.yFt(), first = new engine.yFt(), second = new engine.yFt()
+    engine.buildLandscapeTemplate(original)
+    engine.jSt(first)(0); engine.jSt(second)(0)
+    const meshes = (scene: typeof first) => {
+      const result: GeometryObject[] = []
+      scene.traverse(object => { if (object.geometry) result.push(object) })
+      return result
+    }
+    const before = meshes(original), a = meshes(first), b = meshes(second)
+    expect(a.length).toBeGreaterThan(100)
+    expect(a).toHaveLength(before.length); expect(b).toHaveLength(before.length)
+    const hash = (array: ArrayBufferView) => createHash('sha256').update(new Uint8Array(array.buffer, array.byteOffset, array.byteLength)).digest('hex')
+    before.forEach((object, i) => {
+      for (const [name, attribute] of Object.entries(object.geometry.attributes)) {
+        expect(hash(a[i].geometry.attributes[name].array)).toBe(hash(attribute.array))
+        expect(a[i].geometry.attributes[name].array).toBe(b[i].geometry.attributes[name].array)
+      }
+      if (object.instanceMatrix) {
+        expect(hash(a[i].instanceMatrix.array)).toBe(hash(object.instanceMatrix.array))
+        expect(a[i].instanceMatrix.array).not.toBe(b[i].instanceMatrix.array)
+      }
+      expect(a[i].geometry).not.toBe(b[i].geometry)
+      expect(a[i].material).not.toBe(b[i].material)
+      a[i].geometry.dispose(); a[i].material.dispose()
+      for (const [name, attribute] of Object.entries(object.geometry.attributes)) expect(hash(b[i].geometry.attributes[name].array)).toBe(hash(attribute.array))
+    })
+  })
   it.each([1920, 900])('keeps actual facade corners clear of side panels at viewport width %s', width => {
     const { stage, moves } = setup({ position: [126, 53, 157], target: [0, 10, 0], span: 40 })
     Object.defineProperty(stage, 'clientWidth', { value: width })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { t } from '@/locales'
+import { preparedBuildingModel } from '@/generated/scene/scene-preparation'
 import type {
   ReferenceScene,
   ReferenceSceneAsset,
@@ -59,6 +60,7 @@ const TOUR_INTERVAL_MILLIS = 14_000
 
 const stage = ref<HTMLElement | null>(null)
 const phase = ref<'loading' | 'ready' | 'unavailable'>('loading')
+const systemLoading = ref(false)
 
 let disposed = false
 let scene: ReferenceScene | null = null
@@ -67,8 +69,10 @@ let pollTimer: ReturnType<typeof setInterval> | undefined
 let tourTimer: ReturnType<typeof setInterval> | undefined
 let generation = 0
 let loadingGeneration: number | undefined
+let loadController: AbortController | undefined
 let intersecting = true
 let ready = false
+let systemGeneration = 0
 let views: readonly ReferenceView[] = []
 let activeViewIndex = 0
 
@@ -161,6 +165,7 @@ function stopTour(): void {
 function markUnavailable(value: number): void {
   if (!isCurrentGeneration(value)) return
   generation += 1
+  loadController?.abort()
   loadingGeneration = undefined
   stopPolling()
   stopTour()
@@ -169,6 +174,7 @@ function markUnavailable(value: number): void {
   current?.setActive(false)
   current?.dispose()
   phase.value = 'unavailable'
+  systemLoading.value = false
   publishReady(false, true)
   clearPublishedScene()
 }
@@ -200,7 +206,9 @@ function startTour(): void {
   tourTimer = setInterval(advanceTour, TOUR_INTERVAL_MILLIS)
 }
 
-function applyRequestedState(current: ReferenceScene): void {
+async function applyRequestedState(current: ReferenceScene): Promise<void> {
+  if (requestedSystem === 'hvac') await current.prepareSystem('hvac')
+  if (scene !== current || disposed) return
   current.setDemoPlaying(requestedPlaying)
   current.setMotion(requestedMotion)
   current.setFree(requestedFree)
@@ -216,12 +224,16 @@ async function loadScene(): Promise<void> {
   const currentStage = stage.value
   if (!currentStage || !canRunScene() || loadingGeneration !== undefined || phase.value === 'unavailable') return
   const loadGeneration = ++generation
+  const controller = new AbortController()
+  loadController = controller
   loadingGeneration = loadGeneration
   phase.value = 'loading'
   try {
+    // 模型请求与渲染脚本并行；共用有界准备缓存，失败仍由渲染器等待并走原有重试入口。
+    void preparedBuildingModel().catch(() => {})
     const renderer = await import('@/generated/scene/reference-engine')
     if (!isCurrentGeneration(loadGeneration)) return
-    const candidate = await renderer.createReferenceScene(currentStage, () => markUnavailable(loadGeneration))
+    const candidate = await renderer.createReferenceScene(currentStage, () => markUnavailable(loadGeneration), controller.signal)
     if (!isCurrentGeneration(loadGeneration)) {
       candidate.dispose()
       return
@@ -230,7 +242,8 @@ async function loadScene(): Promise<void> {
     views = renderer.referenceViews
     const presetIndex = requestedPreset === null ? 0 : views.findIndex(view => view.id === requestedPreset)
     activeViewIndex = presetIndex < 0 ? 0 : presetIndex
-    applyRequestedState(candidate)
+    await applyRequestedState(candidate)
+    if (!isCurrentGeneration(loadGeneration)) return
     candidate.setActive(canRunScene())
     phase.value = 'ready'
     publishReady(true)
@@ -241,6 +254,7 @@ async function loadScene(): Promise<void> {
     markUnavailable(loadGeneration)
   } finally {
     if (loadingGeneration === loadGeneration) loadingGeneration = undefined
+    if (loadController === controller) loadController = undefined
   }
 }
 
@@ -252,6 +266,7 @@ function reconcileScene(): void {
     scene?.setActive(false)
     if (!scene && loadingGeneration !== undefined) {
       generation += 1
+      loadController?.abort()
       loadingGeneration = undefined
     }
     return
@@ -295,8 +310,27 @@ function enterSystem(topic: string | null): void {
     requestedAsset = null
   }
   requestedSystem = topic
-  scene?.enterSystem(topic)
-  publishScene()
+  const current = scene, selection = ++systemGeneration
+  systemLoading.value = false
+  if (!current) return
+  if (topic !== 'hvac') {
+    current.enterSystem(topic)
+    publishScene()
+    return
+  }
+  systemLoading.value = true
+  // 提前点击可以等专业资源，但返回或切换后的旧完成/失败不能重新进入先前系统。
+  void current.prepareSystem(topic).then(() => {
+    if (selection !== systemGeneration || scene !== current || disposed) return
+    current.enterSystem(topic)
+    if (requestedFloor !== null) current.setSystemFloor(requestedFloor)
+    current.selectAsset(requestedAsset)
+    publishScene()
+  }).catch(() => {
+    if (selection === systemGeneration && scene === current && !disposed) markUnavailable(generation)
+  }).finally(() => {
+    if (selection === systemGeneration) systemLoading.value = false
+  })
 }
 
 function setFloor(floor: string): void {
@@ -304,14 +338,14 @@ function setFloor(floor: string): void {
   requestedFloor = floor
   // 楼层切换会清除渲染器中的对象选择，重载时也不能恢复上个楼层的对象。
   requestedAsset = null
-  scene?.setSystemFloor(floor)
+  if (!systemLoading.value) scene?.setSystemFloor(floor)
   publishScene()
 }
 
 function selectAsset(id: string | null): void {
   if (requestedSystem === null) return
   requestedAsset = id
-  scene?.selectAsset(id)
+  if (!systemLoading.value) scene?.selectAsset(id)
   publishScene()
 }
 
@@ -324,6 +358,9 @@ function setPlaying(value: boolean): void {
 function reload(): void {
   if (disposed) return
   generation += 1
+  loadController?.abort()
+  systemGeneration += 1
+  systemLoading.value = false
   loadingGeneration = undefined
   stopPolling()
   stopTour()
@@ -365,6 +402,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposed = true
+  loadController?.abort()
+  systemGeneration += 1
   generation += 1
   loadingGeneration = undefined
   stopPolling()
@@ -392,9 +431,9 @@ defineExpose({
 </script>
 
 <template>
-  <section class="building-scene" :aria-busy="phase === 'loading'" :aria-label="t('largeScreen.scene')">
+  <section class="building-scene" :aria-busy="phase === 'loading' || systemLoading" :aria-label="t('largeScreen.scene')">
     <div ref="stage" class="scene-stage" />
-    <div v-if="phase === 'loading'" class="scene-state" role="status" aria-live="polite">
+    <div v-if="phase === 'loading' || systemLoading" class="scene-state" role="status" aria-live="polite">
       <span>{{ t('largeScreen.sceneLoading') }}</span>
     </div>
     <div v-else-if="phase === 'unavailable'" class="scene-state" role="alert">
