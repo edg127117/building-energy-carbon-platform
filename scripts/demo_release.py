@@ -148,6 +148,25 @@ def unchanged(state, *, current=True):
     require(sha(Path(state["release"]) / JAR) == state["jarSha256"], "DEMO_CANDIDATE_JAR_CHANGED")
 
 
+def preserve_resource(source, target):
+    import shutil
+    if target.exists() and sha(target) != sha(source):
+        require(source.suffix == target.suffix == ".map", "DEMO_EXISTING_RESOURCE_HASH_COLLISION")
+        old, new = json.loads(source.read_text()), json.loads(target.read_text())
+        old_paths, new_paths = old.pop("sources", None), new.pop("sources", None)
+
+        def paths(values):
+            require(isinstance(values, list) and all(isinstance(x, str) for x in values),
+                    "DEMO_SOURCE_MAP_PATHS_INVALID")
+            return [re.sub(r"^(?:\.\./)+", "", x).removeprefix("web/") for x in values]
+
+        # 输出目录深度会改变 sources 相对路径；只有映射、内嵌源码及其余字段完全一致才保留旧文件。
+        require(old == new and paths(old_paths) == paths(new_paths), "DEMO_EXISTING_RESOURCE_HASH_COLLISION")
+    if not target.exists() or sha(target) != sha(source):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
 def prepare(archive, expected_sha):
     contained(archive, BASE / "incoming")
     require(archive.is_file() and not archive.is_symlink() and archive.stat().st_size <= 512 * 1024**2
@@ -181,12 +200,7 @@ def prepare(archive, expected_sha):
                 continue
             relative = path.relative_to(oldroot)
             target = release / "web" / relative
-            if target.exists():
-                require(sha(target) == sha(path), "DEMO_EXISTING_RESOURCE_HASH_COLLISION")
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                import shutil
-                shutil.copy2(path, target)
+            preserve_resource(path, target)
             preserved_web[str(relative)] = sha(path)
     import shutil
     shutil.copyfile(baseline["oldNginx"], release / "nginx.conf")

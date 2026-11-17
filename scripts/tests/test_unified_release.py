@@ -86,6 +86,24 @@ class ArtifactTest(unittest.TestCase):
 
 
 class DemoBoundaryTest(unittest.TestCase):
+    def test_old_resource_preservation_allows_only_identical_source_map_with_different_build_depth(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, target = root / 'old.js.map', root / 'new.js.map'
+            value = {'version': 3, 'sources': ['../../src/page.ts'], 'mappings': 'AAAA', 'sourcesContent': ['const a=1']}
+            source.write_text(json.dumps(value))
+            target.write_text(json.dumps({**value, 'sources': ['../../../../../web/src/page.ts']}))
+            demo.preserve_resource(source, target)
+            self.assertEqual(source.read_bytes(), target.read_bytes())
+            target.write_text(json.dumps({**value, 'mappings': 'BBBB'}))
+            with self.assertRaisesRegex(RuntimeError, 'RESOURCE_HASH_COLLISION'):
+                demo.preserve_resource(source, target)
+            source, target = root / 'old.js', root / 'new.js'
+            source.write_text('different executable code')
+            target.write_text('candidate code')
+            with self.assertRaisesRegex(RuntimeError, 'RESOURCE_HASH_COLLISION'):
+                demo.preserve_resource(source, target)
+
     def test_schema_password_only_crosses_stdin_and_source_validation_is_read_only(self):
         state = {'phase': 'PREPARED', 'mysqlId': '1' * 64, 'appId': '2' * 64,
                  'database': 'independent_fixture', 'release': '/fixture/candidate'}
