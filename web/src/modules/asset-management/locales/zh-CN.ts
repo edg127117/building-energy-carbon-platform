@@ -1,4 +1,35 @@
+import ledgerRuntime from './ledger-runtime'
+
 export default {
+
+  ledgerRuntime,
+  ledger: {
+    groups: { ALL: '全部设备', POWER: '电力与计量', HVAC: '暖通空调', RENEWABLE: '可再生能源', WATER: '给排水', ENVIRONMENT: '环境感知', UNCLASSIFIED: '未分类' },
+    assets: '范围资产', points: '配置测点', online: '设备在线', offline: '设备离线', communicationUnknown: '通讯未知', notMonitored: '未监测', onlineDelayed: '含上报延迟 {total} 台', generatedAt: '聚合时间', unitAssets: '台', unitPoints: '项',
+    unknown: '未知', qualityUnknown: '质量未知', buildingSpaces: '建筑与空间', spaceSearch: '查找楼层或房间', spaceSearchPlaceholder: '如 冷机房、301',
+    noSpaceMatch: '没有匹配的楼层或房间', systemFilter: '系统分组', advancedFilters: '更多筛选',
+    devicesTitle: '全部系统设备', resetFilters: '重置筛选', searchName: '设备名称或编码', searchPlaceholder: '如 PM-301',
+    tableHint: '按设备类型展示默认读数，选中设备可查看其他测点与趋势。', viewReadings: '查看右侧读数', equipmentColumn: '设备 / 编码', spaceColumn: '空间 / 类别', runtimeColumn: '运行 / 通讯', mainPointColumn: '默认展示测点',
+    running: '运行', communication: '通讯',
+    operation: {
+      DEVICE: { RUNNING: '设备运行', STOPPED: '设备停止', UNKNOWN: '设备运行未知', NOT_APPLICABLE: '不适用' },
+      COMPRESSOR: { RUNNING: '压缩机开启', STOPPED: '压缩机停止', UNKNOWN: '压缩机状态未知', NOT_APPLICABLE: '不适用' },
+    },
+    communicationState: { ONLINE: '在线', ONLINE_DELAYED: '在线·上报延迟', OFFLINE: '离线', UNKNOWN: '未知', NOT_MONITORED: '未监测' },
+    displayPoint: {
+      UNCONFIGURED: '未配置展示测点', UNMATCHED: '未匹配展示测点', AMBIGUOUS: '展示测点存在歧义', DISABLED: '展示测点已停用',
+      AVAILABLE: '可展示', NO_DATA: '展示测点暂无数据', QUALITY_BLOCKED: '展示测点受质量策略阻断', UNAVAILABLE: '展示测点不可用',
+    },
+    selectionFooter: '同类型设备使用统一展示项；右侧临时切换测点不会改变列表读数。',
+    inventoryEmpty: '当前筛选范围没有设备', pageMismatch: '台账分页响应与请求不一致，请刷新重试。', scopeMismatch: '台账响应包含不属于当前查询范围或重复的设备，已拒绝展示。',
+    dataCaliber: '数据口径', dataCaliberHint: '统计覆盖当前筛选范围。专业分类与默认读数使用已确认的展示规则；运行和通讯状态及观测时间均由后端判定，未纳入监测时显示未监测，浏览器不按读数或本地时间推断。',
+    pointSelectionHint: '列表按设备类型展示默认读数；右侧可切换其他测点查看历史，不会改变列表展示项。',
+    mappingHint: '专业分类按已确认规则展示，尚未确认的设备保留在未分类中。',
+    refresh: '刷新读数与档案', retry: '重试', count: '{total} 项', currentSelection: '本次查看', loadingReadings: '读取中',
+    description: '按空间与系统查找设备，查看档案、测点与接入信息。',
+    passport: '设备护照', readOnly: '档案速览', noSpaces: '当前建筑暂无空间档案', selectDevice: '选择设备，查看档案与测点信息',
+    fullArchive: '打开完整档案', monitorHint: '实时状态和读数以专业监控页面为准。',
+  },
   associations: {
     title: '设备与空间关联', description: '维护设备所在空间和所属系统；设备台账在智慧运维平台查看。',
     chooseBuilding: '请选择建筑，可输入名称搜索', view: '查看范围', effective: '当前生效归属', version: '版本',
@@ -28,6 +59,7 @@ export default {
     systemGroups: '系统分组',
   },
   equipment: {
+    ledgerTitle: '设备综合台账', currentPageAssets: '当前页设备', archiveSource: '来源：正式设备档案',
     title: '用能设备台账',
     description: '集中管理暖通空调内机、外机、冷热源等用能业务设备的静态档案、测点配置、连接身份与技术参数；实时运行与温度曲线在暖通空调监控查看。',
     businessTitle: '用能设备台账',

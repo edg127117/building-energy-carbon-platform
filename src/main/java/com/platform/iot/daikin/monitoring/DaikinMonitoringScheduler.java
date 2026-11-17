@@ -26,6 +26,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Service
 public class DaikinMonitoringScheduler {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DaikinMonitoringScheduler.class);
+    @Autowired
+    private com.platform.iot.communication.CommunicationEvidenceRecorder communication;
+    @Autowired
+    private com.platform.iot.communication.DeviceCommunicationService communicationState;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final DaikinMonitoringProperties properties;
@@ -115,6 +120,8 @@ public class DaikinMonitoringScheduler {
                             return inbox.stage(target, lease.round(), observation);
                         });
                         if (id != null) {
+                            // 通讯证据独立于原轮询事务，证据故障不能回滚已接收的设备状态。
+                            if (communication != null) communication.daikin(target, lease.round(), observation);
                             inbox.process(id);
                             if (DaikinMonitoringStateService.hasValidRuntimeFields(observation)) covered.add(observation.key());
                         }
@@ -124,7 +131,8 @@ public class DaikinMonitoringScheduler {
             if (covered.size() != byKey.size() || byKey.isEmpty()) throw new IllegalStateException("DAIKIN_INCOMPLETE_OBSERVATION");
             complete(lease, true, covered.size());
         } catch (RuntimeException failure) {
-            complete(lease, false, 0);
+            // 完整 HTTP 轮询中个别设备缺报不等同厂家接口失效，设备由自己的周期超时判定。
+            complete(lease, false, 0,"DAIKIN_INCOMPLETE_OBSERVATION".equals(failure.getMessage()));
         }
     }
 
@@ -177,6 +185,9 @@ public class DaikinMonitoringScheduler {
     }
 
     private void complete(Lease lease, boolean success, int covered) {
+        complete(lease,success,covered,success);
+    }
+    private void complete(Lease lease, boolean success, int covered,boolean observable) {
         try {
             transaction.executeWithoutResult(status -> {
                 requireLease(lease);
@@ -190,6 +201,13 @@ public class DaikinMonitoringScheduler {
                         clock.millis() + properties.getRetrySeconds() * 1000L, terminal ? clock.millis() : null,
                         success ? null : "DAIKIN_MONITORING_FETCH_FAILED", covered, lease.source());
             });
+            if (communicationState != null) {
+                try {
+                    communicationState.sourceHealth("DAIKIN:" + lease.source(), observable && (communication == null || communication.evidenceHealthy("DAIKIN:" + lease.source())) ? "HEALTHY" : "FAILED", clock.millis());
+                } catch (RuntimeException evidenceUnavailable) {
+                    log.warn("厂家通讯健康证据暂不可写 source={} cause={}", lease.source(), evidenceUnavailable.getClass().getSimpleName());
+                }
+            }
         } catch (LostLease ignored) { /* 过期worker无权结束已被其他实例领取的轮次。 */ }
     }
 

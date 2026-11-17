@@ -32,6 +32,8 @@ import java.util.Map;
 @Slf4j
 @Service
 public class HvacIngestionService {
+    @Autowired
+    private com.platform.iot.communication.CommunicationEvidenceRecorder communication;
 
     private final TelemetryQualityValidator validator;
     private final HvacRawEventRepository repository;
@@ -100,6 +102,7 @@ public class HvacIngestionService {
             String trustedSourceSystem,
             boolean immutable) {
         // 来源系统由服务端配置，不允许设备载荷伪造命名空间。
+        if(communication!=null)communication.legacyEnvelope(payload,receivedTime,trustedSourceSystem);
         TelemetryValidationResult validation = validator.validate(
                 payload, receivedTime, trustedSourceSystem);
         if (!validation.accepted()) {

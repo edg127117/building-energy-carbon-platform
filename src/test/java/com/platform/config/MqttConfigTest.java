@@ -360,6 +360,30 @@ class MqttConfigTest {
         verify(f.v2Handler()).handle(any(byte[].class),anyLong());
     }
 
+    @Test
+    void communicationObserverRetainsFreshnessAndDoesNotChangeAcknowledgement() throws Exception {
+        var client = mock(IMqttClient.class);
+        var handler = mock(HvacMqttMessageHandler.class);
+        var fixture = configuredConfig(handler, mock(StandardTelemetryMqttMessageHandler.class));
+        var recorder = mock(com.platform.iot.communication.CommunicationEvidenceRecorder.class);
+        ReflectionTestUtils.setField(fixture.config(), "communication", recorder);
+        when(handler.handle(anyMap(), anyLong())).thenReturn(
+                HvacIngestionResult.of(IngestionOutcome.ACCEPTED));
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        var callback = capturedCallback(client);
+        var message = mqttMessage(70, "{\"pointCode\":\"IT\"}");
+        message.setRetained(true);
+
+        callback.messageArrived("device/data/up", message);
+
+        verify(recorder).beginMqtt(org.mockito.ArgumentMatchers.eq(false), anyLong());
+        verify(recorder).endMqtt();
+        verify(handler).handle(anyMap(), anyLong());
+        verify(client).messageArrivedComplete(70, 1);
+        callback.connectionLost(new MqttException(32109));
+        verify(recorder).mqttReady(false);
+    }
+
     private MqttMessage mqttMessage(int id, String payload) {
         MqttMessage message =
                 new MqttMessage(payload.getBytes(StandardCharsets.UTF_8));
