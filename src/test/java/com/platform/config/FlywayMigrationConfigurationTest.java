@@ -53,6 +53,8 @@ class FlywayMigrationConfigurationTest {
                 "V119__mysql_hourly_monitoring.sql",
                 "V11__mysql_admin_menu_runtime.sql",
                 "V120__mysql_catalog_period_invalidation.sql",
+                "V121__mysql_ledger_display_rules.sql",
+                "V122__mysql_device_communication.sql",
                 "V12__device_identity.sql",
                 "V13__device_onboarding_discovery.sql",
                 "V14__device_onboarding_binding.sql",

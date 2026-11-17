@@ -207,6 +207,36 @@ class DaikinMonitoringSchedulerTest {
         verify(state).scanStale(org.mockito.ArgumentMatchers.eq(NOW.toEpochMilli()), org.mockito.ArgumentMatchers.eq(500), any());
     }
 
+    @Test
+    void communicationEvidenceRunsAfterCommitAndItsFailureDoesNotRollbackMonitoring() {
+        var recorder = mock(com.platform.iot.communication.CommunicationEvidenceRecorder.class);
+        var communication = mock(com.platform.iot.communication.DeviceCommunicationService.class);
+        var observation = observation();
+        when(inbox.stage(target, NOW.toEpochMilli(), observation)).thenReturn("communication-observation");
+        when(recorder.evidenceHealthy("DAIKIN:" + SOURCE)).thenReturn(true);
+        doAnswer(call -> {
+            assertThat(org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()).isFalse();
+            return null;
+        }).when(recorder).daikin(target, NOW.toEpochMilli(), observation);
+        doThrow(new IllegalStateException("isolated communication store unavailable"))
+                .when(communication).sourceHealth(anyString(), anyString(), anyLong());
+        doAnswer(call -> {
+            Consumer<DaikinDevicePageDecoder.Page> accepted = call.getArgument(3);
+            accepted.accept(new DaikinDevicePageDecoder.Page(1, 1, 1, List.of(observation)));
+            return null;
+        }).when(client).visitPages(anyString(), any(), any(), any());
+        scheduler = scheduler(provider());
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "communication", recorder);
+        org.springframework.test.util.ReflectionTestUtils.setField(scheduler, "communicationState", communication);
+
+        scheduler.runSource(SOURCE);
+
+        assertThat(roundStatus()).containsExactly("SUCCEEDED", "1");
+        verify(recorder).daikin(target, NOW.toEpochMilli(), observation);
+        verify(inbox).process("communication-observation");
+        verify(state).recordSuccess(SOURCE, NOW.toEpochMilli());
+    }
+
     private DaikinMonitoringScheduler scheduler(Optional<DaikinCatalogClientProvider> provider) {
         return new DaikinMonitoringScheduler(
                 jdbc, transaction, properties, provider, targets, inbox, state, clock);
