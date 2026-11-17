@@ -25,6 +25,14 @@ public final class D01SchemaMigration {
     }
 
     static void run(String action, Map<String, String> environment) {
+        runForDatabase(action, environment, "iot_platform");
+    }
+
+    /** 共享入口固定库名；独立入口先绑定自身运行库，再复用同一逐步迁移与结构校验。 */
+    static void runForDatabase(String action, Map<String, String> environment, String expectedDatabase) {
+        if (expectedDatabase == null || !expectedDatabase.matches("[A-Za-z0-9_]{1,64}")) {
+            throw new IllegalArgumentException("D01_EXPECTED_DATABASE_REQUIRED");
+        }
         String target = target(action);
         boolean upgrade = action.startsWith("upgrade");
         int targetVersion = Integer.parseInt(target);
@@ -37,7 +45,7 @@ public final class D01SchemaMigration {
         String password = required(environment, "D01_JDBC_PASSWORD");
         var source = new DriverManagerDataSource(url, user, password);
         var jdbc = new JdbcTemplate(source);
-        if (!"iot_platform".equals(jdbc.queryForObject("SELECT DATABASE()", String.class))) {
+        if (!expectedDatabase.equals(jdbc.queryForObject("SELECT DATABASE()", String.class))) {
             throw new IllegalStateException("D01_BUSINESS_DATABASE_REQUIRED");
         }
         // 不提供 baseline/repair/clean：部分 DDL 失败必须保留现场，不能把失败历史伪装为成功。

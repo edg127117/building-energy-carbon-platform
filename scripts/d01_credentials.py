@@ -137,8 +137,8 @@ def check_containers():
 
 
 def mysql_rights(output, role, target_schema="84", release_mode="SCHEMA_UPGRADE"):
-    require(target_schema in ("84", "85", "86", "87", "88", "93", "121"), "D01_SCHEMA_TARGET_REQUIRED")
-    require(release_mode == "SCHEMA_UPGRADE" or (release_mode == "APPLICATION_ONLY" and target_schema in ("88", "93")),
+    require(target_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_SCHEMA_TARGET_REQUIRED")
+    require(release_mode == "SCHEMA_UPGRADE" or (release_mode == "APPLICATION_ONLY" and target_schema in ("88", "93", "121")),
             "D01_CREDENTIAL_RELEASE_MODE_REQUIRED")
     lines = output.splitlines()
     require(lines and re.fullmatch(r"META\t[a-f0-9-]{36}\t[A-Z_]+\t[01]\t[01]\t[A-Za-z0-9+/=]+", lines[0]),
@@ -182,7 +182,7 @@ def mysql_rights(output, role, target_schema="84", release_mode="SCHEMA_UPGRADE"
                 "D01_MYSQL_V85_REFERENCES_PRIVILEGE_MISSING")
         require(release_mode == "APPLICATION_ONLY" or target_schema != "88" or allows("iot_platform", {"ALTER"}),
                 "D01_MYSQL_V88_ALTER_PRIVILEGE_MISSING")
-        require(target_schema != "121" or allows("iot_platform", {
+        require(release_mode == "APPLICATION_ONLY" or target_schema != "121" or allows("iot_platform", {
             "ALTER", "DROP", "INDEX", "REFERENCES", "CREATE VIEW", "SHOW VIEW", "TRIGGER",
             "CREATE ROUTINE", "ALTER ROUTINE", "EXECUTE"}), "D01_MYSQL_V121_DDL_PRIVILEGES_MISSING")
         if binlog == ("1", "0"):

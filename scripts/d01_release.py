@@ -102,6 +102,26 @@ def alignment_plan(jar):
     return plan
 
 
+def unified_shared_package(jar, manifest):
+    """新授权只覆盖已运行 V121 到 V123；保留原房间接入边界，不重复初始化绑定。"""
+    require(manifest.get("artifactMode") == "UNIFIED_SHARED_121_123"
+            and manifest.get("sourceMigration") == "121" and manifest.get("expectedMigration") == "123"
+            and manifest.get("expectedDatabase") == "iot_platform"
+            and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1",
+            "D01_UNIFIED_PACKAGE_PLAN_REQUIRED")
+    require(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.get("screenBuildingCode", "")),
+            "D01_UNIFIED_BUILDING_REQUIRED")
+    require(jar.read("BOOT-INF/classes/application.properties").decode("utf-8")
+            == "".join(k + "=" + v + "\n" for k, v in ALIGNMENT_DEFAULTS.items()),
+            "D01_ALIGNMENT_RUNTIME_BOUNDARY_MISMATCH")
+    for version, name in ((121, "room_sensor_ingestion"), (122, "ledger_display_rules"), (123, "device_communication")):
+        content = jar.read("BOOT-INF/classes/db/migration/mysql/V" + str(version) + "__mysql_" + name + ".sql")
+        require(version == 121 or not re.search(rb"(?i)\bUSE\s+", content),
+                "D01_UNIFIED_CROSS_DATABASE_SQL_FORBIDDEN")
+    jar.read("BOOT-INF/classes/com/platform/iot/roomsensor/RoomSensorIngestor.class")
+    jar.read("BOOT-INF/classes/com/platform/hvac/asset/ledger/LedgerController.class")
+
+
 def frontend_fingerprint(directory):
     require(directory.is_dir() and not directory.is_symlink(), "D01_FRONTEND_DIRECTORY_REQUIRED")
     files = list(directory.rglob("*"))
@@ -249,7 +269,7 @@ def prepare(name, archive, expected_sha, credentials):
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
-        require(target_schema in ("84", "85", "86", "87", "88", "93", "121"), "D01_SUPPORTED_PACKAGE_REQUIRED")
+        require(target_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_SUPPORTED_PACKAGE_REQUIRED")
         # 同版本换包必须显式声明并核验原结构，不能借空迁移区间跳过数据库校验。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
@@ -290,6 +310,10 @@ def prepare(name, archive, expected_sha, credentials):
                 jar.read("BOOT-INF/classes/com/platform/tools/SharedAlignmentSchemaContract.class")
                 state["alignment"] = {key: manifest[key] for key in
                                       ("roomSensorBuildingId", "roomSensorSpaceId", "roomSensorMysqlSha256", "roomSensorTdSha256")}
+            if target_schema == "123":
+                unified_shared_package(jar, manifest)
+                require(all(key not in current_runtime or current_runtime[key] == value
+                            for key, value in ALIGNMENT_ENV.items()), "D01_ALIGNMENT_EXTERNAL_OVERRIDE_CONFLICT")
             for version, migration in ((85, V85), (86, V86), (87, V87), (88, V88), (93, V93)):
                 if int(target_schema) >= version:
                     jar.read(migration)
@@ -419,7 +443,7 @@ def validate_schema_plan(state):
     mode = state.get("release_mode", "SCHEMA_UPGRADE")
     require((mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93")))
             or (mode == "SCHEMA_UPGRADE" and (source, target) in
-                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"))),
+                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"), ("121", "123"))),
             "D01_STATE_SCHEMA_MISMATCH")
     return target
 

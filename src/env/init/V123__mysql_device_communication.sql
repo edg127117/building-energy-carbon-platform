@@ -1,6 +1,6 @@
 -- 统一通讯可用性：不修改采集周期、不发送设备指令，也不以业务补值刷新在线。
 SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE `iot_platform`;
+-- 目标库由已核验的数据源选择，不跨库切换。
 CREATE TABLE biz_device_comm_policy (
  scope_key VARCHAR(150) PRIMARY KEY, period_seconds INT NOT NULL, monitored TINYINT NOT NULL,
  evidence VARCHAR(500) NOT NULL, revision BIGINT NOT NULL, updated_by BIGINT,

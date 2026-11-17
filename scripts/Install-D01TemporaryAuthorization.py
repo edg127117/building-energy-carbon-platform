@@ -85,6 +85,9 @@ def rehearsal_alignment_valid(state):
 
 
 def rehearsal_prepared_fields_valid(state, expected_keys):
+    if isinstance(state, dict) and (state.get("source_schema"), state.get("target_schema")) == ("121", "123"):
+        return (set(state) == expected_keys | {"source_schema", "target_schema", "release_mode"}
+                and state.get("release_mode") == "SCHEMA_UPGRADE")
     return (isinstance(state, dict)
             and set(state) == expected_keys | {"source_schema", "target_schema", "release_mode", "alignment"}
             and state.get("source_schema") == "93" and state.get("target_schema") == "121"
@@ -170,7 +173,7 @@ def retry_baseline(state, prepared, *, allow_other_restart=False):
     allowed_runtime_keys = RUNTIME_REQUIRED | set(TDENGINE_TARGET) | set(ALIGNMENT_ENV)
     legacy_runtime = runtime_keys == RUNTIME_REQUIRED
     extended_runtime = (RUNTIME_REQUIRED | set(TDENGINE_TARGET)) <= runtime_keys <= allowed_runtime_keys
-    schema121 = state.get("target_schema") == "121"
+    schema121 = state.get("target_schema") in ("121", "123")
     require(isinstance(runtime, dict) and (legacy_runtime or extended_runtime)
             and (not schema121 or extended_runtime)
             and (not schema121 or all(runtime.get(key) == value for key, value in TDENGINE_TARGET.items()))
@@ -203,7 +206,7 @@ def valid_schema_plan(source, target, mode="SCHEMA_UPGRADE"):
     # 与发布状态机一致；未显式授权的同版本包不能被默认为“不需要迁移”。
     return (mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93"))) or (
         mode == "SCHEMA_UPGRADE" and (source, target) in
-        (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121")))
+        (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"), ("121", "123")))
 
 
 def failed_online_state_path(private, config, operation):
@@ -243,7 +246,7 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
             "D01_RETRY_SCHEMA_PLAN_MISMATCH")
     rehearsal = config.get("rehearsal_only") is True
     if rehearsal:
-        require((source_schema, target_schema, release_mode) == ("93", "121", "SCHEMA_UPGRADE"),
+        require((source_schema, target_schema, release_mode) in (("93", "121", "SCHEMA_UPGRADE"), ("121", "123", "SCHEMA_UPGRADE")),
                 "D01_REHEARSAL_SCHEMA_PLAN_REQUIRED")
     expected_events = ["PREPARED", "FAILED"] if online_backup else ["FAILED"]
     require(operation.get("phase") == "FAILED"
@@ -275,7 +278,7 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
             require(rehearsal_prepared_fields_valid(state, expected_keys), "D01_OLD_REHEARSAL_ALIGNMENT_INVALID")
         else:
             require(set(state) in legacy_state_keys, "D01_OLD_PREPARED_FIELDS_INVALID")
-        require(state.get("target_schema", "84") in ("84", "85", "86", "87", "88", "93", "121")
+        require(state.get("target_schema", "84") in ("84", "85", "86", "87", "88", "93", "121", "123")
                 and valid_schema_plan(state.get("source_schema", "83"), state.get("target_schema", "84"),
                                       state.get("release_mode", "SCHEMA_UPGRADE"))
                 and state.get("release_mode", "SCHEMA_UPGRADE") == release_mode,
@@ -362,7 +365,7 @@ def authorization_release_id(commit, rehearsal_only=False):
 
 def retire_completed(next_release, source_schema="84"):
     """只归档与新源版本一致、已撤销且仍在运行的完成记录；不重置失败现场或删除备份。"""
-    require(source_schema in ("84", "85", "86", "87", "88", "93", "121"), "D01_COMPLETED_SOURCE_REQUIRED")
+    require(source_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_COMPLETED_SOURCE_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
     paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
@@ -428,7 +431,8 @@ def retire_completed(next_release, source_schema="84"):
 
 def retire_revoked_rehearsal(next_release, source_schema="93"):
     """Archive a revoked, verified online-only rehearsal while preserving published release files."""
-    require(source_schema == "93", "D01_REHEARSAL_SOURCE_SCHEMA_REQUIRED")
+    require(source_schema in ("93", "121"), "D01_REHEARSAL_SOURCE_SCHEMA_REQUIRED")
+    target_schema = "121" if source_schema == "93" else "123"
     require(re.fullmatch(r"d01-[a-f0-9]{12}(?:-rehearsal)?", next_release), "D01_REHEARSAL_RELEASE_ID_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
@@ -440,8 +444,8 @@ def retire_revoked_rehearsal(next_release, source_schema="93"):
     release = config.get("release", "")
     commit = config.get("commit", "")
     require(config.get("format") == "D01_TEMP_AUTH_V1" and config.get("user") == "user1"
-            and config.get("rehearsal_only") is True and config.get("source_schema") == "93"
-            and config.get("target_schema") == "121" and config.get("release_mode") == "SCHEMA_UPGRADE"
+            and config.get("rehearsal_only") is True and config.get("source_schema") == source_schema
+            and config.get("target_schema") == target_schema and config.get("release_mode") == "SCHEMA_UPGRADE"
             and re.fullmatch(r"[a-f0-9]{40}", commit)
             and release == "d01-" + commit[:12] + "-rehearsal"
             and release != next_release and config.get("archive_name") == release + "-authorized.tar.gz",
@@ -473,7 +477,7 @@ def retire_revoked_rehearsal(next_release, source_schema="93"):
     current = (BASE / "current").resolve()
     require(state.get("phase") == "PREPARED" and state.get("candidate_started") is False
             and state.get("release") == str(candidate) and state.get("previous_release") == previous
-            and state.get("source_schema") == "93" and state.get("target_schema") == "121"
+            and state.get("source_schema") == source_schema and state.get("target_schema") == target_schema
             and state.get("release_mode") == "SCHEMA_UPGRADE"
             and current == Path(previous).resolve() and current.is_relative_to(BASE / "releases"),
             "D01_OLD_REHEARSAL_BASELINE_CHANGED")
@@ -522,7 +526,7 @@ def retire_revoked_rehearsal(next_release, source_schema="93"):
         HISTORY.chmod(0o700)
     trusted_parent(HISTORY)
     require(HISTORY.is_dir() and HISTORY.stat().st_mode & 0o077 == 0, "D01_HISTORY_NOT_PRIVATE")
-    archive = HISTORY / ("rehearsal-v93-" + uuid.uuid4().hex)
+    archive = HISTORY / ("rehearsal-v" + source_schema + "-" + uuid.uuid4().hex)
     archive.mkdir(mode=0o700)
     try:
         for source, name in zip(paths, ("tools", "data", "launcher", "authorization.service", "authorization.timer")):
@@ -551,11 +555,14 @@ def package_manifest(raw):
         manifest = dict(line.split("=", 1) for line in archive.extractfile("MANIFEST.txt").read().decode().splitlines() if "=" in line)
         jar = archive.extractfile("building-energy-carbon-platform.jar").read()
         index = archive.extractfile("web/index.html").read()
-        require(manifest.get("expectedMigration") in ("84", "85", "86", "87", "88", "93", "121")
+        require(manifest.get("expectedMigration") in ("84", "85", "86", "87", "88", "93", "121", "123")
                 and re.fullmatch("[a-f0-9]{40}", manifest.get("commit", ""))
                 and hashlib.sha256(jar).hexdigest() == manifest.get("backendJarSha256")
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
         target = manifest["expectedMigration"]
+        require("backupPolicy" not in manifest or
+                (target == "123" and manifest["backupPolicy"] == "FROZEN_SINGLE_RESTORE_V1"),
+                "D01_BACKUP_POLICY_INVALID")
         source = manifest.get("sourceMigration", str(int(target) - 1) if int(target) <= 85 else None)
         require(valid_schema_plan(source, target, manifest.get("releaseMode", "SCHEMA_UPGRADE")),
                 "D01_PACKAGE_SCHEMA_PLAN_REQUIRED")
@@ -603,6 +610,21 @@ def package_manifest(raw):
                             "D01_ROOM_RESOURCE_HASH_MISMATCH")
                 packaged.read("BOOT-INF/classes/com/platform/tools/D01RoomSensorBootstrap.class")
                 packaged.read("BOOT-INF/classes/com/platform/tools/SharedAlignmentSchemaContract.class")
+            if target == "123":
+                require(manifest.get("artifactMode") == "UNIFIED_SHARED_121_123"
+                        and manifest.get("expectedDatabase") == "iot_platform"
+                        and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1"
+                        and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.get("screenBuildingCode", "")),
+                        "D01_UNIFIED_PACKAGE_PLAN_REQUIRED")
+                require(packaged.read("BOOT-INF/classes/application.properties").decode("utf-8")
+                        == "".join(k + "=" + v + "\n" for k, v in ALIGNMENT_DEFAULTS.items()),
+                        "D01_ALIGNMENT_RUNTIME_BOUNDARY_MISMATCH")
+                for version, suffix in ((121, "room_sensor_ingestion"), (122, "ledger_display_rules"), (123, "device_communication")):
+                    content = packaged.read("BOOT-INF/classes/db/migration/mysql/V" + str(version) + "__mysql_" + suffix + ".sql")
+                    require(version == 121 or not re.search(rb"(?i)\bUSE\s+", content),
+                            "D01_UNIFIED_CROSS_DATABASE_SQL_FORBIDDEN")
+                packaged.read("BOOT-INF/classes/com/platform/iot/roomsensor/RoomSensorIngestor.class")
+                packaged.read("BOOT-INF/classes/com/platform/hvac/asset/ledger/LedgerController.class")
             packaged.read("BOOT-INF/classes/db/migration/mysql/V84__mysql_telemetry_immutable_conflicts.sql")
             for version, filename in ((85, "V85__mysql_d01_test_building_retirement.sql"),
                                       (86, "V86__mysql_energy_reporting.sql"),
@@ -643,12 +665,12 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     target_schema = manifest.get("expectedMigration", "84")
     source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1))
     release_mode = manifest.get("releaseMode", "SCHEMA_UPGRADE")
-    require(not rehearsal_only or (source_schema, target_schema) == ("93", "121"),
+    require(not rehearsal_only or (source_schema, target_schema) in (("93", "121"), ("121", "123")),
             "D01_REHEARSAL_SCHEMA_PLAN_REQUIRED")
     require(sum((replace_revoked_prepare, replace_revoked_online_backup, replace_revoked_completed,
                  replace_revoked_rehearsal)) <= 1,
             "D01_ONE_REPLACEMENT_MODE_REQUIRED")
-    require(not replace_revoked_rehearsal or (source_schema, target_schema) == ("93", "121"),
+    require(not replace_revoked_rehearsal or (source_schema, target_schema) in (("93", "121"), ("121", "123")),
             "D01_REHEARSAL_REPLACEMENT_PLAN_REQUIRED")
     require(target_schema == "84" or (isinstance(authorization_reference, str)
             and 0 < len(authorization_reference.strip()) <= 512
@@ -658,7 +680,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
         require(INSTALL.exists() or INSTALL.is_symlink(), "D01_REHEARSAL_AUTH_NOT_FOUND")
         retire_revoked_rehearsal(release, source_schema)
     if replace_revoked_completed:
-        require(target_schema in ("85", "86", "87", "88", "93", "121"), "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
+        require(target_schema in ("85", "86", "87", "88", "93", "121", "123"), "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
         if INSTALL.exists() or INSTALL.is_symlink():
             retire_completed(release, source_schema)
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
@@ -673,7 +695,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
             "D01_EXPECTED_SERVICE_USER_REQUIRED")
     previous = str((BASE / "current").resolve())
     require(Path(previous).is_relative_to(BASE / "releases"), "D01_CURRENT_OUTSIDE_TEST_RELEASES")
-    # 本轮只授权在线备份/恢复核验；源结构校验只需双库SELECT，不提前要求或授予升级DDL权限。
+    # 演练只校验源结构；正式维护仍提前核验目标迁移权限，不在发布过程中临时授予DDL权限。
     schema, backup, credential_report = credentials(jar, files["d01_credentials.py"],
                                                    source_schema if rehearsal_only else target_schema,
                                                    "APPLICATION_ONLY" if rehearsal_only else release_mode)
@@ -681,6 +703,9 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     sudoers = "# One installed D01 operation; no wildcard arguments or SETENV.\n"
     sudoers += "Defaults!" + str(LAUNCHER) + " env_reset, !setenv, secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n"
     allowed_actions = REHEARSAL_ACTIONS if rehearsal_only else ACTIONS
+    if not rehearsal_only and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1":
+        allowed_actions = tuple(action for action in allowed_actions if action not in
+                                ("online-backup", "export-online", "record-online-restore"))
     sudoers += "user1 ALL=(root) NOPASSWD: " + ", ".join(str(LAUNCHER) + " " + action for action in allowed_actions) + "\n"
     launcher = "#!/bin/sh\nexec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 /usr/bin/python3 -I " + str(INSTALL / "d01_maintenance.py") + ' "$@"\n'
     config = {"format": "D01_TEMP_AUTH_V1", "user": "user1", "expires_at": expires,
@@ -692,8 +717,10 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
               "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
               "authorization_reference": authorization_reference or "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
+    if "backupPolicy" in manifest:
+        config["backup_policy"] = manifest["backupPolicy"]
     if rehearsal_only:
-        require((source_schema, target_schema) == ("93", "121"), "D01_REHEARSAL_SCHEMA_PLAN_REQUIRED")
+        require((source_schema, target_schema) in (("93", "121"), ("121", "123")), "D01_REHEARSAL_SCHEMA_PLAN_REQUIRED")
         config["rehearsal_only"] = True
     mkdir(INSTALL, 0o755)
     mkdir(DATA, 0o755)
@@ -737,6 +764,8 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     print("Existing credentials and direct privileges verified. Application services have not been stopped or restarted.")
     if rehearsal_only:
         print("Rehearsal-only: online backup and isolated restore verification only; shared freeze, migration and cutover are prohibited.")
+    elif config.get("backup_policy") == "FROZEN_SINGLE_RESTORE_V1":
+        print("Single final backup: prepare, readiness checks, freeze, backup, isolated restore, migrate, cutover. No duplicate online backup/restore.")
     else:
         print("Actual backup and isolated restore verification are still required before freeze.")
 
