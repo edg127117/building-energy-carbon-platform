@@ -26,7 +26,7 @@ spring:
   sql:
     init:
       mode: always
-      schema-locations: classpath:schema-test.sql,classpath:device-parameter-schema-test.sql,classpath:audit-governance-schema-test.sql,classpath:eerp-schema-test.sql,classpath:protocol-schema-test.sql,classpath:daikin-schema-test.sql,classpath:daikin-sync-schema-test.sql,classpath:daikin-monitoring-state-test.sql,classpath:daikin-monitoring-checkpoint-test.sql,classpath:daikin-runtime-test.sql,classpath:daikin-retention-test.sql,classpath:temperature-binding-test.sql,classpath:meter-coverage-test.sql,classpath:daikin-control-test.sql,classpath:project-energy-test.sql,classpath:relation-staging-test.sql,classpath:carbon-work-order-test.sql,classpath:carbon-rule-options-test.sql,classpath:telemetry-conflict-schema-test.sql,classpath:energy-reporting-schema-test.sql
+      schema-locations: classpath:schema-test.sql,classpath:device-parameter-schema-test.sql,classpath:audit-governance-schema-test.sql,classpath:eerp-schema-test.sql,classpath:protocol-schema-test.sql,classpath:daikin-schema-test.sql,classpath:daikin-sync-schema-test.sql,classpath:daikin-monitoring-state-test.sql,classpath:daikin-monitoring-checkpoint-test.sql,classpath:daikin-runtime-test.sql,classpath:daikin-retention-test.sql,classpath:temperature-binding-test.sql,classpath:meter-coverage-test.sql,classpath:daikin-control-test.sql,classpath:project-energy-test.sql,classpath:relation-staging-test.sql,classpath:carbon-work-order-test.sql,classpath:carbon-rule-options-test.sql,classpath:telemetry-conflict-schema-test.sql,classpath:energy-reporting-schema-test.sql,classpath:ledger-display-test.sql,classpath:device-communication-test.sql
 
       data-locations: classpath:data-test.sql
 
@@ -116,3 +116,7 @@ weather:
 
 telemetry-conflicts:
   recovery-enabled: false
+
+# 通讯专项显式驱动扫描，普通测试继续隔离后台任务。
+device-communication:
+  scan-enabled: false

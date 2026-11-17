@@ -33,6 +33,8 @@ import java.util.Set;
  * 不确认，重投时已成功的点依靠现有幂等键成为重复数据。</p>
  */
 public class StandardTelemetryIngestionService {
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.platform.iot.communication.CommunicationEvidenceRecorder communication;
 
     static final long MIN_MILLISECOND_TIMESTAMP = 1_000_000_000_000L;
     static final long MAX_MILLISECOND_TIMESTAMP_EXCLUSIVE = 10_000_000_000_000L;
@@ -84,6 +86,17 @@ public class StandardTelemetryIngestionService {
         String malformed = validateEnvelope(message, localReceivedTime);
         if (malformed != null) {
             return StandardTelemetryResult.rejected(malformed);
+        }
+
+        // 通讯证据在数值质量/量程检查前记录，但仍必须匹配启用的正式身份和协议。
+        // 补值和 journal 重放不经过此入口；拒绝旧消息的时间水位由通讯状态机维护。
+        if (communication != null) {
+            try {
+                identityProvider.find(message.deviceIdentity()).filter(binding -> binding.expectedProfileCode().equals(message.profileCode()))
+                        .ifPresent(binding -> communication.standard(binding,message,localReceivedTime));
+            } catch(RuntimeException unavailable) {
+                log.warn("标准报文通讯身份暂不可用 cause={}",unavailable.getClass().getSimpleName());
+            }
         }
 
         Set<String> metricCodes = new HashSet<>();

@@ -71,6 +71,8 @@ public class MqttConfig {
 
     private static final Logger log = LoggerFactory.getLogger(MqttConfig.class);
     private static final int MAX_PAYLOAD_BYTES = 64 * 1024;
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.platform.iot.communication.CommunicationEvidenceRecorder communication;
 
     private final ObjectMapper objectMapper;
     private final HvacMqttMessageHandler hvacMqttMessageHandler;
@@ -255,6 +257,7 @@ public class MqttConfig {
 
             @Override
             public void connectionLost(Throwable cause) {
+                if (communication != null) communication.mqttReady(false);
                 connectionEpoch.incrementAndGet();
                 log.warn("MQTT连接断开，等待自动重连: {}",
                         cause == null ? "unknown" : cause.getMessage());
@@ -262,6 +265,7 @@ public class MqttConfig {
 
             @Override
             public void messageArrived(String topic, MqttMessage message) {
+                if (communication != null) communication.beginMqtt(!message.isRetained() && !message.isDuplicate(), System.currentTimeMillis());
                 boolean acknowledge = true;
                 boolean deferredAck=false;
                 V2ProcessingResult v2Result = null;
@@ -337,6 +341,7 @@ public class MqttConfig {
                     log.error("MQTT业务处理异常，保留重投: topic={}, reason={}",
                             topic, exception.getMessage());
                 } finally {
+                    if (communication != null) communication.endMqtt();
                     if (acknowledge) {
                         boolean inboundAckObserved = acknowledge(client, topic, message);
                         if (v2Result != null) {
@@ -367,12 +372,14 @@ public class MqttConfig {
             if (connectionEpoch.get() != epoch) {
                 return;
             }
+            if (communication != null) communication.mqttReady(true);
             consecutiveFailures.set(0);
             log.info("MQTT上行订阅已确认: topics={}", configuredTopics());
         } catch (MqttException exception) {
             if (connectionEpoch.get() != epoch) {
                 return;
             }
+            if (communication != null) communication.mqttReady(false);
             MqttFailureCategory category = exception.getReasonCode() == 128
                     ? MqttFailureCategory.SUBSCRIBE_DENIED : failureClassifier.classify(exception);
             long retryMillis = retryDelay(category);

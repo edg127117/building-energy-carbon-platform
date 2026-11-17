@@ -16,8 +16,8 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/operations/devices/businessDevices',
     name: 'equipment-points',
-    component: () => import('./pages/EquipmentPointPage.vue'),
-    meta: { titleKey: 'assetManagement.equipment.businessTitle', mode: 'office', requiresPlatformAdmin: true },
+    component: () => import('./pages/EquipmentLedgerPage.vue'),
+    meta: { titleKey: 'assetManagement.equipment.ledgerTitle', mode: 'office', requiresPlatformAdmin: true },
   },
   {
     path: '/operations/devices/meters',
