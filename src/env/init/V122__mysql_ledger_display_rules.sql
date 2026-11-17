@@ -1,6 +1,6 @@
 -- 台账展示元数据独立于能源分类、公式参数及采集身份；不向真实设备发送命令。
 SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci;
-USE `iot_platform`;
+-- 目标库由已核验的数据源选择，不跨库切换；共享端与独立大屏使用不同业务库名。
 
 CREATE TABLE biz_ledger_type_rule (
   type_code VARCHAR(50) NOT NULL PRIMARY KEY,
