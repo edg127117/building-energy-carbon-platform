@@ -57,6 +57,8 @@ def contained(path, parent):
 def signature(container):
     # Stop/start changes State, but must not change image, commands, credentials, limits or mounts.
     value = {key: container[key] for key in ("Id", "Image", "Config", "HostConfig", "Mounts")}
+    # Docker从内部映射生成挂载列表，顺序不稳定；按目标路径比较内容，避免把只读查询误判为变更。
+    value["Mounts"] = sorted(value["Mounts"], key=lambda item: item["Destination"])
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 

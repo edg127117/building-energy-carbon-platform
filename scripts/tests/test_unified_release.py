@@ -86,6 +86,20 @@ class ArtifactTest(unittest.TestCase):
 
 
 class DemoBoundaryTest(unittest.TestCase):
+    def test_mount_order_is_ignored_but_actual_mount_or_limit_changes_are_rejected(self):
+        original = {'Id': 'fixture', 'Image': 'sha256:pinned', 'Config': {'Env': ['KEPT=value']},
+                    'HostConfig': {'Memory': 1024}, 'Mounts': [
+                        {'Destination': '/app', 'Source': '/old.jar'}, {'Destination': '/config', 'Source': '/private'}]}
+        reordered = copy.deepcopy(original)
+        reordered['Mounts'].reverse()
+        self.assertEqual(demo.signature(original), demo.signature(reordered))
+        changed = copy.deepcopy(original)
+        changed['Mounts'][0]['Source'] = '/different.jar'
+        self.assertNotEqual(demo.signature(original), demo.signature(changed))
+        changed = copy.deepcopy(original)
+        changed['HostConfig']['Memory'] = 2048
+        self.assertNotEqual(demo.signature(original), demo.signature(changed))
+
     def test_old_resource_preservation_allows_only_identical_source_map_with_different_build_depth(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
