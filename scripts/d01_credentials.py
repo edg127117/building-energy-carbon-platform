@@ -43,6 +43,10 @@ class D01CredentialProbe {
         System.out.println("META\t"+r.getString(1)+"\t"+r.getString(2)+"\t"+r.getString(3)+"\t"+r.getString(4)
             +"\t"+Base64.getEncoder().encodeToString(r.getString(5).getBytes(StandardCharsets.UTF_8)));
       }
+      try (ResultSet r = s.executeQuery("SELECT @@log_bin,@@log_bin_trust_function_creators")) {
+        if (!r.next()) throw new SQLException();
+        System.out.println("BINLOG\t"+r.getString(1)+"\t"+r.getString(2));
+      }
       try (ResultSet r = s.executeQuery("SHOW GRANTS FOR CURRENT_USER")) {
         while (r.next()) System.out.println("GRANT64\t"+Base64.getEncoder().encodeToString(r.getString(1).getBytes(StandardCharsets.UTF_8)));
       }
@@ -133,7 +137,7 @@ def check_containers():
 
 
 def mysql_rights(output, role, target_schema="84", release_mode="SCHEMA_UPGRADE"):
-    require(target_schema in ("84", "85", "86", "87", "88", "93"), "D01_SCHEMA_TARGET_REQUIRED")
+    require(target_schema in ("84", "85", "86", "87", "88", "93", "121"), "D01_SCHEMA_TARGET_REQUIRED")
     require(release_mode == "SCHEMA_UPGRADE" or (release_mode == "APPLICATION_ONLY" and target_schema in ("88", "93")),
             "D01_CREDENTIAL_RELEASE_MODE_REQUIRED")
     lines = output.splitlines()
@@ -143,6 +147,13 @@ def mysql_rights(output, role, target_schema="84", release_mode="SCHEMA_UPGRADE"
     authenticated = base64.b64decode(principal, validate=True).decode().partition("@")
     require(authenticated[0] == ("platform_migrator" if role == "migration" else "root") and authenticated[2],
             "D01_MYSQL_AUTHENTICATED_ACCOUNT_MISMATCH")
+    binlog = None
+    if role == "migration" and target_schema == "121" and release_mode == "SCHEMA_UPGRADE":
+        binlog_lines = [line for line in lines[1:] if line.startswith("BINLOG")]
+        require(len(binlog_lines) == 1, "D01_MYSQL_BINLOG_METADATA_REQUIRED")
+        match = re.fullmatch(r"BINLOG\t([01])\t([01])", binlog_lines[0])
+        require(match is not None, "D01_MYSQL_BINLOG_METADATA_INVALID")
+        binlog = (match[1], match[2])
     grants = [base64.b64decode(line[8:], validate=True).decode() if line.startswith("GRANT64\t") else line
               for line in lines[1:]]
     rights = {"*": set(), "iot_platform": set(), "iot_platform_archive": set()}
@@ -171,6 +182,12 @@ def mysql_rights(output, role, target_schema="84", release_mode="SCHEMA_UPGRADE"
                 "D01_MYSQL_V85_REFERENCES_PRIVILEGE_MISSING")
         require(release_mode == "APPLICATION_ONLY" or target_schema != "88" or allows("iot_platform", {"ALTER"}),
                 "D01_MYSQL_V88_ALTER_PRIVILEGE_MISSING")
+        require(target_schema != "121" or allows("iot_platform", {
+            "ALTER", "DROP", "INDEX", "REFERENCES", "CREATE VIEW", "SHOW VIEW", "TRIGGER",
+            "CREATE ROUTINE", "ALTER ROUTINE", "EXECUTE"}), "D01_MYSQL_V121_DDL_PRIVILEGES_MISSING")
+        if binlog == ("1", "0"):
+            # 该组合创建触发器还需全局SUPER；停写前拒绝，避免迁移中途才收到MySQL 1419。
+            require(allows("*", {"SUPER"}), "D01_MYSQL_V121_BINLOG_SUPER_PRIVILEGE_MISSING")
     else:
         require(all(allows(db, {"SELECT", "SHOW VIEW", "TRIGGER", "EVENT"})
                     for db in ("iot_platform", "iot_platform_archive"))

@@ -43,9 +43,30 @@ class LedgerMysqlIntegrationTest {
         var menus = jdbc.queryForList("SELECT id,parent_id,path FROM sys_menu ORDER BY id");
         var grants = jdbc.queryForList("SELECT role_id,menu_id FROM sys_role_menu ORDER BY role_id,menu_id");
 
+        // 按已部署的共享端历史先停在 V121，再升级；不修改历史脚本、校验和或传感器积压。
+        assertThat(Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init")
+                .target("121").load().migrate().migrationsExecuted).isEqualTo(1);
+        jdbc.update("INSERT INTO building(building_id,building_name,building_code,building_type,total_gfa,climate_zone,region_code) VALUES('ROOM_KEEP','传感器保留楼','ROOM_KEEP','办公',1000,'夏热冬冷','320113')");
+        jdbc.update("INSERT INTO biz_space(space_id,building_id,space_name,space_code,space_type) VALUES('ROOM_KEEP_SPACE','ROOM_KEEP','保留设备间','ROOM_KEEP_SPACE','ROOM')");
+        jdbc.update("INSERT INTO biz_system_group(system_group_id,system_group_code,building_id,system_type,system_group_name) VALUES('ROOM_KEEP_GROUP','ROOM_KEEP_GROUP','ROOM_KEEP','HVAC','保留系统')");
+        jdbc.update("INSERT INTO biz_equipment(equip_id,equip_code,equip_name,type_code,equip_category,building_id,space_id,system_group_id) VALUES('ROOM_KEEP_EQ','ROOM_KEEP_EQ','保留传感器','IDU','INDOOR_UNIT','ROOM_KEEP','ROOM_KEEP_SPACE','ROOM_KEEP_GROUP')");
+        jdbc.update("INSERT INTO biz_device_identity(identity_id,identity_type,identity_value,equip_id,building_id,expected_profile_code) VALUES('ROOM_KEEP_ID','MAC','001122334455','ROOM_KEEP_EQ','ROOM_KEEP','MSR01_RADAR')");
+        jdbc.update("INSERT INTO biz_room_sensor_source(source_id,identity_id,gateway_mac,topic,protocol,enabled,last_storage_ts) VALUES('ROOM_KEEP_SRC','ROOM_KEEP_ID','001122334455','/integration/room/radar','MSR01_RADAR',1,123456)");
+        jdbc.update("INSERT INTO biz_room_sensor_ingest_pending(event_id,source_id,storage_ts,received_at,observation_json,attempts,next_attempt_at) VALUES('ROOM_KEEP_PENDING','ROOM_KEEP_SRC',123456,123456,'{}',2,123999)");
+        var history = jdbc.queryForList("SELECT installed_rank,version,description,script,checksum,success FROM flyway_schema_history ORDER BY installed_rank");
+        var sources = jdbc.queryForList("SELECT * FROM biz_room_sensor_source");
+        var pending = jdbc.queryForList("SELECT * FROM biz_room_sensor_ingest_pending");
+        var roomDefinition = jdbc.queryForMap("SHOW CREATE TABLE biz_room_sensor_source");
+        buildings++;
         var flyway = Flyway.configure().dataSource(dataSource).locations("filesystem:src/env/init").load();
         assertThat(flyway.migrate().migrationsExecuted).isEqualTo(2);
         assertThat(flyway.migrate().migrationsExecuted).isZero();
+        assertThat(jdbc.queryForList("SELECT installed_rank,version,description,script,checksum,success FROM flyway_schema_history WHERE CAST(version AS UNSIGNED)<=121 OR version IS NULL ORDER BY installed_rank")).isEqualTo(history);
+        assertThat(jdbc.queryForList("SELECT * FROM biz_room_sensor_source")).isEqualTo(sources);
+        assertThat(jdbc.queryForList("SELECT * FROM biz_room_sensor_ingest_pending")).isEqualTo(pending);
+        assertThat(jdbc.queryForMap("SHOW CREATE TABLE biz_room_sensor_source")).isEqualTo(roomDefinition);
+        assertThat(jdbc.queryForObject("SELECT version FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 1", String.class)).isEqualTo("123");
+
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM building", Integer.class)).isEqualTo(buildings);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class)).isEqualTo(points);
         assertThat(jdbc.queryForList("SELECT id,parent_id,path FROM sys_menu ORDER BY id")).isEqualTo(menus);

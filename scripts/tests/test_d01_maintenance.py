@@ -281,6 +281,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
             operation = object.__new__(bridge.Maintenance)
             operation.release = Mock(JAR=jar.name)
             operation.release.target_schema.side_effect = lambda state: state.get("target_schema", "84")
+            operation.release.migration_versions.side_effect = lambda source, target: (93,) if (source, target) == ("88", "93") else tuple(range(int(source) + 1, int(target) + 1))
             operation.schema_credentials = root / "private/schema.json"
             operation.config = {"jar_sha256": bridge.digest(jar), "web_sha256": "b" * 64}
             operation.original_schema = Mock()
@@ -330,6 +331,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
             operation = object.__new__(bridge.Maintenance)
             operation.release = Mock(JAR=jar.name)
             operation.release.target_schema.return_value = "88"
+            operation.release.migration_versions.return_value = ()
             operation.schema_credentials = root / "schema.json"
             operation.config = {"jar_sha256": bridge.digest(jar), "web_sha256": "b" * 64,
                                 "source_schema": "88", "target_schema": "88", "release_mode": "APPLICATION_ONLY"}

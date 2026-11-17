@@ -1,0 +1,119 @@
+{
+  "format": "SHARED_ALIGNMENT_93_121_V1",
+  "source": 93,
+  "target": 121,
+  "migrations": [
+    {
+      "version": 94,
+      "script": "V94__mysql_carbon_intensity_catalog.sql"
+    },
+    {
+      "version": 95,
+      "script": "V95__mysql_area_applicability.sql"
+    },
+    {
+      "version": 96,
+      "script": "V96__mysql_carbon_annual_plan.sql"
+    },
+    {
+      "version": 97,
+      "script": "V97__mysql_hourly_carbon.sql"
+    },
+    {
+      "version": 98,
+      "script": "V98__mysql_joint_flow_configuration.sql"
+    },
+    {
+      "version": 99,
+      "script": "V99__mysql_monthly_reading_query_indexes.sql"
+    },
+    {
+      "version": 100,
+      "script": "V100__mysql_period_hourly_evidence_capacity.sql"
+    },
+    {
+      "version": 101,
+      "script": "V101__mysql_manual_interval_covering_indexes.sql"
+    },
+    {
+      "version": 102,
+      "script": "V102__mysql_daily_trend_read_model.sql"
+    },
+    {
+      "version": 103,
+      "script": "V103__mysql_carbon_display_read_model.sql"
+    },
+    {
+      "version": 104,
+      "script": "V104__mysql_dynamic_electricity_carbon.sql"
+    },
+    {
+      "version": 105,
+      "script": "V105__mysql_dynamic_electricity_tasks.sql"
+    },
+    {
+      "version": 106,
+      "script": "V106__mysql_dynamic_interval_evidence.sql"
+    },
+    {
+      "version": 107,
+      "script": "V107__mysql_dynamic_interval_evidence_retention.sql"
+    },
+    {
+      "version": 110,
+      "script": "V110__mysql_alarm_information.sql"
+    },
+    {
+      "version": 111,
+      "script": "V111__mysql_manual_batch_lookup_index.sql"
+    },
+    {
+      "version": 112,
+      "script": "V112__mysql_manual_window_covering_index.sql"
+    },
+    {
+      "version": 113,
+      "script": "V113__mysql_daily_static_carbon.sql"
+    },
+    {
+      "version": 114,
+      "script": "V114__mysql_carbon_display_source_revision.sql"
+    },
+    {
+      "version": 115,
+      "script": "V115__mysql_dynamic_chart_projection.sql"
+    },
+    {
+      "version": 116,
+      "script": "V116__mysql_electricity_display_verification.sql"
+    },
+    {
+      "version": 117,
+      "script": "V117__mysql_dynamic_raw_source_revision.sql"
+    },
+    {
+      "version": 118,
+      "script": "V118__mysql_raw_electricity_invalidation_scope.sql"
+    },
+    {
+      "version": 119,
+      "script": "V119__mysql_hourly_monitoring.sql"
+    },
+    {
+      "version": 120,
+      "script": "V120__mysql_catalog_period_invalidation.sql"
+    },
+    {
+      "version": 121,
+      "script": "V121__mysql_room_sensor_ingestion.sql"
+    }
+  ],
+  "runtimeDefaults": {
+    "room-sensor.enabled": "true",
+    "mqtt.topics.room-sensor-upstream": "/MSR01/ac233fc2b716/radar,/MSR01/ac233fc2b716/status",
+    "dynamic-electricity.live-enabled": "false",
+    "dynamic-electricity.evidence-retention-enabled": "false",
+    "carbon-display-query.enabled": "false",
+    "alarm.enabled": "false"
+  }
+}

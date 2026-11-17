@@ -26,6 +26,7 @@ TIMER = "building-energy-d01-authorization"
 SAFE_ENV = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": "/root"}
 ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore",
            "freeze", "backup", "export-backup", "record-restore", "migrate", "cutover", "revoke")
+REHEARSAL_ACTIONS = ("status", "prepare", "online-backup", "export-online", "record-online-restore", "revoke")
 CODE_FILES = ("d01_maintenance.py", "d01_release.py", "d01_backup.py", "daikin_test_deployment_config.py", "d01_credentials.py", "taosdump-d01")
 
 
@@ -191,14 +192,18 @@ class Maintenance:
                 and state["web_sha256"] == self.config["web_sha256"], "D01_TRUSTED_JAR_REQUIRED")
         target = self.config.get("target_schema", "84")
         source = self.config.get("source_schema", str(int(target) - 1))
-        versions = [93] if (source, target) == ("88", "93") else range(int(source) + 1, int(target) + 1)
+        versions = self.release.migration_versions(source, target)
         actions = ("validate" + source, "validate" + target,
                    *("upgrade" + str(v) for v in versions))
+        if target == "121":
+            actions += ("bootstrap121",)
         require(self.release.target_schema(state) == target
                 and state.get("source_schema", "83") == source
                 and state.get("release_mode", "SCHEMA_UPGRADE") == self.config.get("release_mode", "SCHEMA_UPGRADE")
                 and action in actions,
                 "D01_AUTH_SCHEMA_MISMATCH")
+        if self.config.get("rehearsal_only", False):
+            require(action == "validate" + source, "D01_REHEARSAL_ONLY_ACTION_REQUIRED")
         # Never run Java as root using the mutable application release directory.
         self.original_schema(action, {**state, "release": str(INSTALL)}, credentials)
 
@@ -291,15 +296,17 @@ class Maintenance:
     def migrate(self):
         self.phase(("RESTORE_VERIFIED",))
         self.record("MIGRATING")
+        extra = {"td_credentials": self.backup_credentials} if self.config.get("target_schema") == "121" else {}
         self.release.migrate(self.state, self.backup_directory(False), self.schema_credentials,
-                             self.private / "final-restore/report.json")
+                             self.private / "final-restore/report.json", **extra)
         self.record("MIGRATED")
 
     def cutover(self):
         self.phase(("MIGRATED",))
         self.record("STARTING")
+        extra = {"td_credentials": self.backup_credentials} if self.config.get("target_schema") == "121" else {}
         self.release.cutover(self.state, self.backup_directory(False), self.schema_credentials,
-                             self.private / "final-restore/report.json")
+                             self.private / "final-restore/report.json", **extra)
         self.record("AWAITING_BUSINESS_ACCEPTANCE", services_restored_at=int(time.time()))
 
     def status(self):
@@ -333,6 +340,8 @@ def main():
     # Cleanup must still work if an unused backup/migration module is damaged;
     # revoke imports none of them and checks its own fixed grant before removal.
     config = load_config(verify_code=action != "revoke")
+    require(action == "revoke" or not config.get("rehearsal_only", False) or action in REHEARSAL_ACTIONS,
+            "D01_REHEARSAL_ONLY_ACTION_REQUIRED")
     require(os.geteuid() == 0, "D01_ROOT_REQUIRED")
     os.environ.clear()
     os.environ.update(SAFE_ENV)

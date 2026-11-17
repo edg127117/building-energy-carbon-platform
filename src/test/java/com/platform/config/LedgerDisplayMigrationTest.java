@@ -27,7 +27,7 @@ class LedgerDisplayMigrationTest {
 
             jdbc.execute("CREATE TABLE sys_menu(id BIGINT PRIMARY KEY,menu_name VARCHAR(100),path VARCHAR(200))");
             jdbc.update("INSERT INTO sys_menu VALUES(1,'用能设备台账','/operations/devices/businessDevices'),(2,'监测采集设备','/operations/devices/meters')");
-            String script = Files.readString(Path.of("src/env/init/V121__mysql_ledger_display_rules.sql"));
+            String script = Files.readString(Path.of("src/env/init/V122__mysql_ledger_display_rules.sql"));
             String h2Compatible = script.replaceAll("(?m)^SET NAMES [^;]+;\\R", "")
                     .replaceAll("(?m)^USE `[^`]+`;\\R", "");
             ScriptUtils.executeSqlScript(connection,

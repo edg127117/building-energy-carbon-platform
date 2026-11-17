@@ -21,7 +21,7 @@ class DeviceCommunicationMigrationTest {
     void createsConstrainedCommunicationTablesAndOnlySeedsTheEngineeringDefault() throws Exception {
         try (var connection = DriverManager.getConnection(
                 "jdbc:h2:mem:device-communication-migration;MODE=MySQL;DATABASE_TO_UPPER=false")) {
-            String script = Files.readString(Path.of("src/env/init/V122__mysql_device_communication.sql"));
+            String script = Files.readString(Path.of("src/env/init/V123__mysql_device_communication.sql"));
             String h2Compatible = script.replaceAll("(?m)^SET NAMES [^;]+;\\R", "")
                     .replaceAll("(?m)^USE `[^`]+`;\\R", "");
             ScriptUtils.executeSqlScript(connection,

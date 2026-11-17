@@ -46,6 +46,127 @@ import static org.mockito.Mockito.inOrder;
 class MqttConfigTest {
 
     @Test
+    void roomSensorRouteCommitsProjectionWithoutInvokingEnergyHandlers() throws Exception {
+        var client = mock(IMqttClient.class);
+        var legacy = mock(HvacMqttMessageHandler.class);
+        var standard = mock(StandardTelemetryMqttMessageHandler.class);
+        var fixture = configuredConfig(legacy, standard);
+        var receiver = mock(com.platform.iot.roomsensor.RoomSensorIngestor.class);
+        String topic = "/MSR01/test/radar";
+        ReflectionTestUtils.setField(fixture.config(), "roomSensorUpstreamTopics", new String[]{topic});
+        ReflectionTestUtils.setField(fixture.config(), "roomSensorIngestor", receiver);
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        capturedCallback(client).messageArrived(topic, mqttMessage(90, "{}"));
+        verify(receiver).accept(org.mockito.ArgumentMatchers.eq(topic), any(byte[].class), anyLong(),
+                org.mockito.ArgumentMatchers.eq(false));
+        verifyNoInteractions(legacy, standard, fixture.v2Handler());
+        verify(client).messageArrivedComplete(90, 1);
+    }
+
+    @Test
+    void roomSensorMysqlFailureDoesNotAcknowledgeIncomingMessage() throws Exception {
+        var client = mock(IMqttClient.class);
+        var fixture = configuredConfig(mock(HvacMqttMessageHandler.class), mock(StandardTelemetryMqttMessageHandler.class));
+        var receiver = mock(com.platform.iot.roomsensor.RoomSensorIngestor.class);
+        ReflectionTestUtils.setField(fixture.config(), "roomSensorUpstreamTopics", new String[]{"room/radar"});
+        ReflectionTestUtils.setField(fixture.config(), "roomSensorIngestor", receiver);
+        doThrow(new org.springframework.dao.DataAccessResourceFailureException("unavailable"))
+                .when(receiver).accept(any(String.class), any(byte[].class), anyLong(), any(Boolean.class));
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        capturedCallback(client).messageArrived("room/radar", mqttMessage(91, "{}"));
+        verify(client, never()).messageArrivedComplete(91, 1);
+    }
+
+    @Test
+    void roomSensorTopicsRequireEnabledHandlerExactTopicsAndDisjointRoutes() throws Exception {
+        var receiver = mock(com.platform.iot.roomsensor.RoomSensorIngestor.class);
+        for (String topic : new String[]{"room/radar", "room/+", "device/telemetry/up"}) {
+            var client = mock(IMqttClient.class);
+            var fixture = configuredConfig(mock(HvacMqttMessageHandler.class), mock(StandardTelemetryMqttMessageHandler.class));
+            ReflectionTestUtils.setField(fixture.config(), "roomSensorUpstreamTopics", new String[]{topic});
+            if (!topic.equals("room/radar")) ReflectionTestUtils.setField(fixture.config(), "roomSensorIngestor", receiver);
+            fixture.config().initMqttClient(client, fixture.scheduler()).run();
+            verifyNoInteractions(client);
+        }
+    }
+
+    @Test
+    void roomSensorExactTopicsJoinExistingSubscriptions() throws Exception {
+        var client = mock(IMqttClient.class);
+        when(client.isConnected()).thenReturn(false, true);
+        var fixture = configuredConfig(mock(HvacMqttMessageHandler.class), mock(StandardTelemetryMqttMessageHandler.class));
+        ReflectionTestUtils.setField(fixture.config(), "roomSensorUpstreamTopics", new String[]{"room/radar", "room/status"});
+        ReflectionTestUtils.setField(fixture.config(), "roomSensorIngestor", mock(com.platform.iot.roomsensor.RoomSensorIngestor.class));
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+        var topics = ArgumentCaptor.forClass(String[].class);
+        verify(client).subscribe(topics.capture(), any(int[].class));
+        assertThat(topics.getValue()).contains("room/radar", "room/status", "device/data/up", "platform/telemetry/v2/up");
+    }
+
+    @Test
+    void receiveOnlyRouteCountsEveryOpaquePayloadWithoutInvokingBusinessHandlers() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        var legacy = mock(HvacMqttMessageHandler.class);
+        var standard = mock(StandardTelemetryMqttMessageHandler.class);
+        var fixture = configuredConfig(legacy, standard);
+        String topic = "/MSR01/test-device/radar";
+        ReflectionTestUtils.setField(fixture.config(), "receiveOnlyUpstreamTopics", new String[]{topic});
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+
+        capturedCallback(client).messageArrived(topic, mqttMessage(81, "opaque non-JSON bytes"));
+        capturedCallback(client).messageArrived(topic, mqttMessage(82, "opaque non-JSON bytes"));
+
+        assertThat(fixture.meterRegistry().counter("iot.mqtt.receive_only.messages", "topic", topic).count())
+                .isEqualTo(2);
+        verifyNoInteractions(legacy, standard, fixture.v2Handler());
+        verify(client).messageArrivedComplete(81, 1);
+        verify(client).messageArrivedComplete(82, 1);
+    }
+
+    @Test
+    void receiveOnlyRouteIsAddedToConfirmedSubscription() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        when(client.isConnected()).thenReturn(false, true);
+        var fixture = configuredConfig(mock(HvacMqttMessageHandler.class),
+                mock(StandardTelemetryMqttMessageHandler.class));
+        ReflectionTestUtils.setField(fixture.config(), "receiveOnlyUpstreamTopics",
+                new String[]{"/MSR01/test-a/radar", "/MSR01/test-b/radar"});
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+
+        ArgumentCaptor<String[]> topics = ArgumentCaptor.forClass(String[].class);
+        verify(client).subscribe(topics.capture(), any(int[].class));
+        assertThat(topics.getValue()).containsExactly("device/data/up", "device/telemetry/up",
+                "platform/telemetry/v2/up", "/MSR01/test-a/radar", "/MSR01/test-b/radar");
+    }
+
+    @Test
+    void refusesReceiveOnlyTopicOverlappingBusinessRoute() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        var fixture = configuredConfig(mock(HvacMqttMessageHandler.class),
+                mock(StandardTelemetryMqttMessageHandler.class));
+        ReflectionTestUtils.setField(fixture.config(), "receiveOnlyUpstreamTopics",
+                new String[]{"device/telemetry/up"});
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void refusesReceiveOnlyWildcardSubscription() throws Exception {
+        IMqttClient client = mock(IMqttClient.class);
+        var fixture = configuredConfig(mock(HvacMqttMessageHandler.class),
+                mock(StandardTelemetryMqttMessageHandler.class));
+        ReflectionTestUtils.setField(fixture.config(), "receiveOnlyUpstreamTopics",
+                new String[]{"/MSR01/+/radar"});
+
+        fixture.config().initMqttClient(client, fixture.scheduler()).run();
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
     void acknowledgesAcceptedHvacMessage() throws Exception {
         IMqttClient client = mock(IMqttClient.class);
         HvacMqttMessageHandler handler = mock(HvacMqttMessageHandler.class);

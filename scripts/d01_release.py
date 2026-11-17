@@ -1,6 +1,7 @@
 """D01 分阶段维护入口。prepare 只准备文件；其余动作仅供已批准的维护窗口。"""
 
 import argparse
+import base64
 import contextlib
 import hashlib
 import json
@@ -32,10 +33,29 @@ V86 = "BOOT-INF/classes/db/migration/mysql/V86__mysql_energy_reporting.sql"
 V87 = "BOOT-INF/classes/db/migration/mysql/V87__mysql_heat_co2_factor_formula.sql"
 V88 = "BOOT-INF/classes/db/migration/mysql/V88__mysql_default_electricity_factor_year.sql"
 V93 = "BOOT-INF/classes/db/migration/mysql/V93__mysql_historical_metering_scope.sql"
+ALIGNMENT_PLAN = "BOOT-INF/classes/db/shared-test-alignment.json"
+ALIGNMENT_VERSIONS = tuple(range(94, 108)) + tuple(range(110, 122))
+ALIGNMENT_DEFAULTS = {
+    "room-sensor.enabled": "true",
+    "mqtt.topics.room-sensor-upstream": "/MSR01/ac233fc2b716/radar,/MSR01/ac233fc2b716/status",
+    "dynamic-electricity.live-enabled": "false",
+    "dynamic-electricity.evidence-retention-enabled": "false",
+    "carbon-display-query.enabled": "false",
+    "alarm.enabled": "false",
+}
 CONTROL = Path("/etc/building-energy-carbon-test/daikin-control-disabled.env")
 RUNTIME_KEYS = ("MYSQL_HOST", "MYSQL_PORT", "MYSQL_USER", "MYSQL_FLYWAY_ENABLED", "TDENGINE_INITIALIZATION_ENABLED",
                 "MQTT_ENABLED", "MQTT_CLIENT_ID", "MYSQL_CONTAINER_NAME", "MYSQL_VOLUME_NAME",
-                "TDENGINE_CONTAINER_NAME", "TDENGINE_VOLUME_NAME", "TDENGINE_DATABASE", "SERVER_PORT")
+                "TDENGINE_CONTAINER_NAME", "TDENGINE_VOLUME_NAME", "TDENGINE_DATABASE", "TDENGINE_HOST", "TDENGINE_PORT", "SERVER_PORT")
+ALIGNMENT_ENV = {
+    "ROOM_SENSOR_ENABLED": "true",
+    "MQTT_ROOM_SENSOR_UPSTREAM_TOPICS": ALIGNMENT_DEFAULTS["mqtt.topics.room-sensor-upstream"],
+    "DYNAMIC_ELECTRICITY_LIVE_ENABLED": "false",
+    "DYNAMIC_ELECTRICITY_EVIDENCE_RETENTION_ENABLED": "false",
+    "CARBON_DISPLAY_QUERY_ENABLED": "false",
+    "ALARM_ENABLED": "false",
+}
+RUNTIME_KEYS += tuple(ALIGNMENT_ENV)
 
 
 def runtime():
@@ -45,6 +65,48 @@ def runtime():
 def require(condition, code):
     if not condition:
         raise RuntimeError(code)
+
+
+def migration_versions(source, target):
+    """只展开已批准路径；版本跳号不是待补迁移，也不接受调用者任意指定 SQL。"""
+    if (source, target) == ("93", "121"):
+        return ALIGNMENT_VERSIONS
+    if (source, target) == ("88", "93"):
+        return (93,)
+    return tuple(range(int(source) + 1, int(target) + 1))
+
+
+def alignment_plan(jar):
+    """核验包内唯一的固定迁移清单，供迁移、授权和候选构建共同使用。"""
+    plan = json.loads(jar.read(ALIGNMENT_PLAN))
+    require(plan.get("format") == "SHARED_ALIGNMENT_93_121_V1"
+            and plan.get("source") == 93 and plan.get("target") == 121,
+            "D01_ALIGNMENT_PLAN_REQUIRED")
+    require(plan.get("runtimeDefaults") == ALIGNMENT_DEFAULTS, "D01_ALIGNMENT_RUNTIME_BOUNDARY_MISMATCH")
+    items = plan.get("migrations", [])
+    require(isinstance(items, list) and tuple(i.get("version") for i in items) == ALIGNMENT_VERSIONS,
+            "D01_ALIGNMENT_MIGRATION_SEQUENCE_REQUIRED")
+    expected = []
+    for item in items:
+        name = item.get("script", "")
+        require(re.fullmatch("V" + str(item["version"]) + r"__[A-Za-z0-9_]+\.sql", name),
+                "D01_ALIGNMENT_SCRIPT_REQUIRED")
+        path = "BOOT-INF/classes/db/migration/mysql/" + name
+        jar.read(path)
+        expected.append(path)
+    actual = [name for name in jar.namelist()
+              if (m := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))
+              and int(m[1]) > 93]
+    require(len(actual) == len(set(actual)) == len(expected) and set(actual) == set(expected),
+            "D01_ALIGNMENT_PACKAGE_SEQUENCE_MISMATCH")
+    return plan
+
+
+def frontend_fingerprint(directory):
+    require(directory.is_dir() and not directory.is_symlink(), "D01_FRONTEND_DIRECTORY_REQUIRED")
+    files = list(directory.rglob("*"))
+    require(not any(p.is_symlink() for p in files), "D01_FRONTEND_SYMLINK_FORBIDDEN")
+    return {p.relative_to(directory).as_posix(): sha(p) for p in files if p.is_file()}
 
 
 def sha(path):
@@ -187,7 +249,7 @@ def prepare(name, archive, expected_sha, credentials):
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
-        require(target_schema in ("84", "85", "86", "87", "88", "93"), "D01_SUPPORTED_PACKAGE_REQUIRED")
+        require(target_schema in ("84", "85", "86", "87", "88", "93", "121"), "D01_SUPPORTED_PACKAGE_REQUIRED")
         # 同版本换包必须显式声明并核验原结构，不能借空迁移区间跳过数据库校验。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
@@ -204,6 +266,30 @@ def prepare(name, archive, expected_sha, credentials):
             require(max(versions) == int(target_schema), "D01_PACKAGE_SCHEMA_MISMATCH")
             if target_schema == "93":
                 require({v for v in versions if 88 < v <= 93} == {93}, "D01_V93_SINGLE_MIGRATION_REQUIRED")
+            if target_schema == "121":
+                plan = alignment_plan(jar)
+                require(hashlib.sha256(jar.read(ALIGNMENT_PLAN)).hexdigest() == manifest.get("alignmentPlanSha256"),
+                        "D01_ALIGNMENT_PLAN_HASH_MISMATCH")
+                # 旧配置文件字节不改；新增业务边界由候选内标准 Properties 资源声明。
+                defaults = jar.read("BOOT-INF/classes/application.properties").decode("utf-8")
+                require(defaults == "".join(k + "=" + v + "\n" for k, v in ALIGNMENT_DEFAULTS.items()),
+                        "D01_ALIGNMENT_RUNTIME_BOUNDARY_MISMATCH")
+                require(all(key not in current_runtime or current_runtime[key] == value
+                            for key, value in ALIGNMENT_ENV.items()), "D01_ALIGNMENT_EXTERNAL_OVERRIDE_CONFLICT")
+                require(sha(current / "web/index.html") == manifest.get("preserveFrontendSha256"),
+                        "D01_ALIGNMENT_FRONTEND_MUST_BE_PRESERVED")
+                require(frontend_fingerprint(target / "web") == frontend_fingerprint(current / "web"),
+                        "D01_ALIGNMENT_FRONTEND_MUST_BE_PRESERVED")
+                for id_kind in ("Building", "Space"):
+                    require(re.fullmatch(r"[A-Za-z0-9_-]{1,32}", manifest.get("roomSensor" + id_kind + "Id", "")),
+                            "D01_ROOM_BINDING_REQUIRED")
+                for resource_kind, resource_name in (("Mysql", "configure-b314.sql"), ("Td", "tdengine.sql")):
+                    require(hashlib.sha256(jar.read("BOOT-INF/classes/db/room-sensor/" + resource_name)).hexdigest()
+                            == manifest.get("roomSensor" + resource_kind + "Sha256"), "D01_ROOM_RESOURCE_HASH_MISMATCH")
+                jar.read("BOOT-INF/classes/com/platform/tools/D01RoomSensorBootstrap.class")
+                jar.read("BOOT-INF/classes/com/platform/tools/SharedAlignmentSchemaContract.class")
+                state["alignment"] = {key: manifest[key] for key in
+                                      ("roomSensorBuildingId", "roomSensorSpaceId", "roomSensorMysqlSha256", "roomSensorTdSha256")}
             for version, migration in ((85, V85), (86, V86), (87, V87), (88, V88), (93, V93)):
                 if int(target_schema) >= version:
                     jar.read(migration)
@@ -276,7 +362,9 @@ def schema(action, state, credentials):
     target = target_schema(state)
     source = state.get("source_schema", "83")
     allowed = ("validate" + source, "validate" + target,
-               *("upgrade" + str(v) for v in range(int(source) + 1, int(target) + 1)))
+               *("upgrade" + str(v) for v in migration_versions(source, target)))
+    if target == "121":
+        allowed += ("bootstrap121",)
     require(action in allowed, "D01_SCHEMA_ACTION_NOT_AUTHORIZED")
     values = protected_json(credentials)
     endpoint = urllib.parse.urlparse(values["url"].removeprefix("jdbc:"))
@@ -285,16 +373,22 @@ def schema(action, state, credentials):
             (endpoint.port or 3306) == int(actual_runtime.get("MYSQL_PORT", "3306")) and
             endpoint.path == "/iot_platform", "D01_SCHEMA_TARGET_MISMATCH")
     require(endpoint.username is None and endpoint.password is None, "D01_CREDENTIALS_MUST_NOT_BE_IN_URL")
-    if action.startswith("upgrade"):
+    if action.startswith("upgrade") or action == "bootstrap121":
         require(values["user"] != actual_runtime.get("MYSQL_USER", "platform_app"), "D01_SEPARATE_MIGRATION_ACCOUNT_REQUIRED")
     env = {**os.environ, "D01_JDBC_URL": values["url"], "D01_JDBC_USER": values["user"],
            "D01_JDBC_PASSWORD": values["password"], "D01_WRITERS_FROZEN": "true"}
-    result = subprocess.run(["java", "-Dloader.main=com.platform.tools.D01SchemaMigration", "-cp",
+    bootstrap = action == "bootstrap121"
+    if bootstrap:
+        env.update(D01_ROOM_BUILDING_ID=state["alignment"]["roomSensorBuildingId"],
+                   D01_ROOM_SPACE_ID=state["alignment"]["roomSensorSpaceId"])
+    loader = "D01RoomSensorBootstrap" if bootstrap else "D01SchemaMigration"
+    result = subprocess.run(["java", "-Dloader.main=com.platform.tools." + loader, "-cp",
                              str(Path(state["release"]) / JAR),
-                             "org.springframework.boot.loader.launch.PropertiesLauncher", action],
+                             "org.springframework.boot.loader.launch.PropertiesLauncher", *([] if bootstrap else [action])],
                             env=env, capture_output=True, text=True, timeout=300)
     # 不回显 JDBC 错误或凭据。数据库失败现场由有权限的维护者另行读取。
-    require(result.returncode == 0 and ("D01_SCHEMA_VALIDATED=" + action[-2:]) in result.stdout.splitlines(),
+    version = re.search(r"[0-9]+$", action)[0]
+    require(result.returncode == 0 and ("D01_SCHEMA_VALIDATED=" + version) in result.stdout.splitlines(),
             "D01_SCHEMA_CHECK_FAILED")
 
 
@@ -325,7 +419,7 @@ def validate_schema_plan(state):
     mode = state.get("release_mode", "SCHEMA_UPGRADE")
     require((mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93")))
             or (mode == "SCHEMA_UPGRADE" and (source, target) in
-                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"))),
+                (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"))),
             "D01_STATE_SCHEMA_MISMATCH")
     return target
 
@@ -334,31 +428,123 @@ def target_schema(state):
     return validate_schema_plan(state)
 
 
-def migrate(state_path, backup_dir, credentials, restore_report=None):
+def alignment_ready_path(state_path):
+    return Path(state_path).with_name(Path(state_path).stem + "-alignment-ready.json")
+
+
+def minimum_td_keep_minutes(value):
+    """统一旧版天数与实测元数据的分钟单位；未知格式交由调用方拒绝。"""
+    text = str(value)
+    if not re.fullmatch(r"[0-9]{1,10}m?(?:,[0-9]{1,10}m?)*", text):
+        return None
+    periods = []
+    for segment in text.split(","):
+        if segment.endswith("m"):
+            periods.append(int(segment[:-1]))
+        else:
+            periods.append(int(segment) * 1440)
+    return min(periods)
+
+
+class NoTdRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def bootstrap_room_tdengine(state, credentials, *, verify_only=False, preflight_only=False):
+    """仅初始化/核验两张房间历史表；不创建数据库，不修改KEEP或既有超级表。"""
+    require(credentials is not None, "D01_TD_BOOTSTRAP_CREDENTIALS_REQUIRED")
+    runtime = state["runtime_controls"]
+    require(runtime.get("TDENGINE_HOST") == "127.0.0.1" and runtime.get("TDENGINE_PORT") == "16041"
+            and runtime.get("TDENGINE_DATABASE") == "iot_telemetry", "D01_TD_BOOTSTRAP_TARGET_MISMATCH")
+    auth = protected_json(credentials)["tdengine"]
+    token = base64.b64encode((auth["user"] + ":" + auth["password"]).encode()).decode()
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoTdRedirect())
+
+    def execute(sql):
+        request = urllib.request.Request("http://127.0.0.1:16041/rest/sql", data=sql.encode(),
+                                         headers={"Authorization": "Basic " + token})
+        with opener.open(request, timeout=30) as response:
+            result = json.load(response)
+        require(result.get("code") == 0, "D01_TD_BOOTSTRAP_SQL_FAILED")
+        return result
+
+    meta = execute("SELECT * FROM information_schema.ins_databases WHERE name='iot_telemetry'")
+    require(len(meta.get("data", [])) == 1, "D01_TD_BOOTSTRAP_DATABASE_REQUIRED")
+    values = dict(zip([c[0].strip('`').lower() for c in meta["column_meta"]], meta["data"][0]))
+    require(values.get("precision") == "ms", "D01_TD_BOOTSTRAP_MILLISECOND_PRECISION_REQUIRED")
+    keep = values.get("keep")
+    if keep is None:
+        ddl = execute("SHOW CREATE DATABASE iot_telemetry")
+        match = re.search(r"\bKEEP\s+([0-9,]+)(?=\s|;|$)", " ".join(str(v) for row in ddl.get("data", []) for v in row), re.I)
+        keep = match[1] if match else ""
+    minimum_keep_minutes = minimum_td_keep_minutes(keep)
+    require(minimum_keep_minutes is not None and minimum_keep_minutes >= 10080,
+            "D01_TD_BOOTSTRAP_KEEP_AT_LEAST_SEVEN_REQUIRED")
+    # 在任何MySQL升级前检查凭据、目标、精度和保留期，避免前置条件失败时留下半升级现场。
+    if preflight_only:
+        return
+    common = [("ts", "TIMESTAMP", 8), ("received_at", "BIGINT", 8), ("device_time", "VARCHAR", 64),
+              ("event_id", "VARCHAR", 36), ("data_hash", "VARCHAR", 64), ("identity_id", "VARCHAR", 32),
+              ("equip_id", "VARCHAR", 32), ("building_id", "VARCHAR", 32), ("space_id", "VARCHAR", 32),
+              ("gateway_mac", "VARCHAR", 12), ("device_mac", "VARCHAR", 12)]
+    expected = {"st_radar_observation": common + [("target_count", "INT", 4), ("device_seq", "INT", 4), ("source_id", "VARCHAR", 32)],
+                "st_door_observation": common + [("door_open", "BOOL", 1), ("source_id", "VARCHAR", 32)]}
+    if not verify_only:
+        with zipfile.ZipFile(Path(state["release"]) / JAR) as jar:
+            content = jar.read("BOOT-INF/classes/db/room-sensor/tdengine.sql")
+        require(hashlib.sha256(content).hexdigest() == state["alignment"]["roomSensorTdSha256"],
+                "D01_ROOM_RESOURCE_HASH_MISMATCH")
+        statements = [s.strip() for s in re.sub(r"(?m)^\s*--.*$", "", content.decode()).split(";") if s.strip()]
+        names = [re.match(r"CREATE STABLE IF NOT EXISTS (st_[a-z_]+)\s*\(", sql) for sql in statements]
+        require(len(names) == 2 and all(names) and {m[1] for m in names} == set(expected),
+                "D01_TD_BOOTSTRAP_FIXED_SCHEMA_REQUIRED")
+        for sql, match in zip(statements, names):
+            execute(sql[:match.start(1)] + "iot_telemetry." + sql[match.start(1):])
+    for table, fields in expected.items():
+        result = execute("DESCRIBE iot_telemetry." + table)
+        rows = result.get("data", [])
+        actual = [(r[0].lower(), "VARCHAR" if r[1].upper() == "BINARY" else r[1].upper(), int(r[2])) for r in rows]
+        require(actual == fields and str(rows[-1][3]).upper() == "TAG", "D01_TD_BOOTSTRAP_SCHEMA_MISMATCH")
+
+
+def migrate(state_path, backup_dir, credentials, restore_report=None, td_credentials=None):
     state = frozen_state(state_path)
     require(state["phase"] == "FROZEN", "D01_UPGRADE_NOT_REENTRANT")
     backup = checked_backup(state_path, state, backup_dir)
     checked_restore(backup_dir, restore_report)
     target = target_schema(state)
+    if target == "121":
+        bootstrap_room_tdengine(state, td_credentials, preflight_only=True)
     if state.get("release_mode") == "APPLICATION_ONLY":
         # 仍经过停写、完整备份和恢复证据门禁；仅换包不运行任何 upgrade/repair，也不改冻结文件。
         schema("validate" + target, state, credentials)
         return
     # 每个独立进程只执行一条迁移；任一步失败保留冻结现场，不自动重试、repair 或启动旧应用。
-    versions = [93] if target == "93" else range(int(state.get("source_schema", "83")) + 1, int(target) + 1)
+    versions = migration_versions(state.get("source_schema", "83"), target)
     for index, version in enumerate(versions):
         if index:
             inactive()
             check_unchanged(state)
             check_backup_sources(backup)
         schema("upgrade" + str(version), state, credentials)
+    if target == "121":
+        schema("bootstrap121", state, credentials)
+        bootstrap_room_tdengine(state, td_credentials)
+        write_state(alignment_ready_path(state_path), {"format": "D01_ALIGNMENT_READY_V1",
+                    "freeze_sha256": sha(state_path), "jar_sha256": state["jar_sha256"]}, new=True)
     # 不改冻结文件：备份哈希和冻结身份贯穿迁移、切换；迁移结果由 cutover 再次验证。
 
 
-def cutover(state_path, backup_dir, credentials, restore_report=None):
+def cutover(state_path, backup_dir, credentials, restore_report=None, td_credentials=None):
     state = frozen_state(state_path)
     checked_backup(state_path, state, backup_dir)
     checked_restore(backup_dir, restore_report)
+    if target_schema(state) == "121":
+        ready = protected_json(alignment_ready_path(state_path))
+        require(ready == {"format": "D01_ALIGNMENT_READY_V1", "freeze_sha256": sha(state_path),
+                          "jar_sha256": state["jar_sha256"]}, "D01_ALIGNMENT_NOT_READY")
+        bootstrap_room_tdengine(state, td_credentials, verify_only=True)
     schema("validate" + target_schema(state), state, credentials)
     require(sha(Path(state["release"]) / "web/index.html") == state["web_sha256"], "D01_WEB_CHANGED")
     # 在首次启动前落盘不可自动回退标记。即使健康检查失败，也不能假定尚无后台写入。
@@ -418,6 +604,7 @@ def main():
     parser.add_argument("--state", type=Path)
     parser.add_argument("--backup-dir", type=Path)
     parser.add_argument("--schema-credentials", type=Path)
+    parser.add_argument("--td-credentials", type=Path)
     parser.add_argument("--restore-report", type=Path)
     parser.add_argument("--writers-fenced", action="store_true")
     ingress = parser.add_mutually_exclusive_group()
@@ -434,9 +621,9 @@ def main():
             freeze(args.state, args.writers_fenced, args.ingress_retained,
                    args.accept_ingress_loss, args.loss_acceptance_reference)
         elif args.action == "migrate":
-            migrate(args.state, args.backup_dir, args.schema_credentials, args.restore_report)
+            migrate(args.state, args.backup_dir, args.schema_credentials, args.restore_report, args.td_credentials)
         else:
-            cutover(args.state, args.backup_dir, args.schema_credentials, args.restore_report)
+            cutover(args.state, args.backup_dir, args.schema_credentials, args.restore_report, args.td_credentials)
             print("D01_INFRASTRUCTURE_READY_BUSINESS_ACCEPTANCE_REQUIRED")
 
 
