@@ -12,6 +12,7 @@ const renderer = vi.hoisted(() => ({
 }))
 
 vi.mock('@/generated/scene/reference-engine', () => renderer)
+vi.mock('@/generated/scene/scene-preparation', () => ({ preparedBuildingModel: vi.fn(async () => undefined) }))
 vi.mock('@/locales', () => ({
   t: (key: string) => ({
     'largeScreen.scene': '试点建筑场景',
@@ -90,6 +91,7 @@ function sceneDouble(snapshot = sceneSnapshot()): SceneDouble {
     stats: { ready: true, active: false, frames: 0, triangles: 0, drawCalls: 0, view: 'front', geometryCount: 0, textureCount: 0, gpu: '', contextLosses: 0, renderMs: [] },
     preset,
     dispose,
+    prepareSystem: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     viewState: () => ({ position: [1, 2, 3], target: [0, 0, 0], transition: false, opaque: true }),
     enterSystem: vi.fn<(topic: string | null) => void>(),
     setSystemFloor,
@@ -130,6 +132,63 @@ afterEach(() => {
 })
 
 describe('reference building scene wrapper', () => {
+  it('makes the exterior ready before HVAC preparation and ignores completion after returning', async () => {
+    const scene = sceneDouble()
+    let finish: () => void
+    vi.mocked(scene.instance.prepareSystem).mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    renderer.createReferenceScene.mockResolvedValue(scene.instance)
+    const wrapper = mount(BuildingScene)
+    await flushPromises()
+    expect(wrapper.emitted('ready')?.at(-1)).toEqual([true])
+    expect(scene.instance.prepareSystem).not.toHaveBeenCalled()
+    const exposed = wrapper.vm as unknown as { enterSystem(topic: string | null): void }
+    exposed.enterSystem('hvac')
+    await flushPromises()
+    expect(wrapper.attributes('aria-busy')).toBe('true')
+    expect(scene.instance.enterSystem).not.toHaveBeenCalledWith('hvac')
+    exposed.enterSystem(null)
+    finish()
+    await flushPromises()
+    expect(wrapper.attributes('aria-busy')).toBe('false')
+    expect(scene.instance.enterSystem).not.toHaveBeenCalledWith('hvac')
+    wrapper.unmount()
+  })
+
+  it('disposes failed professional preparation and retries with the requested system', async () => {
+    const failed = sceneDouble(), retried = sceneDouble()
+    vi.mocked(failed.instance.prepareSystem).mockRejectedValue(new Error('model offline'))
+    renderer.createReferenceScene.mockResolvedValueOnce(failed.instance).mockResolvedValueOnce(retried.instance)
+    const wrapper = mount(BuildingScene)
+    await flushPromises()
+    const exposed = wrapper.vm as unknown as { enterSystem(topic: string): void }
+    exposed.enterSystem('hvac')
+    await flushPromises()
+    expect(wrapper.text()).toContain('场景暂不可用')
+    expect(failed.dispose).toHaveBeenCalledTimes(1)
+    await wrapper.get('button').trigger('click')
+    await flushPromises()
+    expect(retried.instance.prepareSystem).toHaveBeenCalledWith('hvac')
+    expect(retried.instance.enterSystem).toHaveBeenCalledWith('hvac')
+    expect(wrapper.emitted('ready')?.at(-1)).toEqual([true])
+    wrapper.unmount()
+  })
+
+  it('cancels construction when leaving before the static model finishes', async () => {
+    const scene = sceneDouble()
+    let finish: (value: ReferenceScene) => void
+    renderer.createReferenceScene.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+    const wrapper = mount(BuildingScene)
+    await flushPromises()
+    const signal = renderer.createReferenceScene.mock.calls[0][2] as AbortSignal
+    expect(signal.aborted).toBe(false)
+    wrapper.unmount()
+    expect(signal.aborted).toBe(true)
+    finish(scene.instance)
+    await flushPromises()
+    expect(scene.dispose).toHaveBeenCalledTimes(1)
+    expect(scene.setActive).not.toHaveBeenCalledWith(true)
+  })
+
   it('keeps the authored camera framing for initial load and preset changes', async () => {
     const scene = sceneDouble()
     renderer.createReferenceScene.mockResolvedValue(scene.instance)
@@ -200,6 +259,7 @@ describe('reference building scene wrapper', () => {
     exposed.enterSystem('hvac')
     exposed.setFloor('F3')
     exposed.selectAsset(null)
+    await flushPromises()
     expect(scene.setSystemFloor).toHaveBeenCalledWith('F3')
     expect(scene.selectAsset).toHaveBeenCalledWith(null)
     wrapper.unmount()

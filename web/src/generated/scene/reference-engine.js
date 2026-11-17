@@ -5,6 +5,8 @@
  * Keep the supplied model identity separate from formally authorized building/equipment IDs.
  * Third-party notices: ./NOTICE.txt.
  */
+import { preparedModel, preparedLandscape, roadDistance } from "./scene-preparation";
+
 const nN = [{ id: "elevator", name: "\u7535\u68AF", description: "\u4E00\u90E8\u5178\u578B\u7535\u68AF \xB7 \u5347\u964D\u6F14\u793A", color: "#247eb1" }, { id: "hvac", name: "\u7A7A\u8C03", description: "\u4E00\u53F0\u5916\u673A + \u4E00\u53F0\u5185\u673A\u793A\u610F", color: "#008577" }, { id: "lighting", name: "\u7167\u660E", description: "\u4E00\u76CF\u5178\u578B\u7167\u660E\u706F\u5177", color: "#a36a0b" }, { id: "fire", name: "\u6D88\u9632", description: "\u4E00\u6BB5\u5178\u578B\u6D88\u9632\u914D\u7535\u6865\u67B6", color: "#b34e39" }];
 function oI(t, e, f) {
   const n = [...f.map((l, W) => W), ...f.slice(1, -1).map((l, W) => f.length - 2 - W)], v = t + e * 3.2, r = Math.floor(v / 10) % n.length, z = v % 10, u = n[r], b = n[(r + 1) % n.length], a = z >= 4, P = a ? Math.min(1, (z - 4) / 6) : 0, s = P * P * (3 - 2 * P), d = f[u].y + (f[b].y - f[u].y) * s, c = z < 1 ? z : z < 2.8 ? 1 : z < 4 ? (4 - z) / 1.2 : 0;
@@ -13468,7 +13470,7 @@ function _6(t) {
   const n = new TM(e);
   return n.colorSpace = Qv, n.wrapS = n.wrapT = e6, n.anisotropy = 8, n;
 }
-function jSt(t) {
+function buildLandscapeTemplate(t) {
   const e = { grass: new x7({ map: _6("grass"), roughness: 1 }), paving: new x7({ map: _6("paving"), roughness: 0.95 }), asphalt: new x7({ map: _6("asphalt"), roughness: 0.96 }) };
   e.grass.map.repeat.set(450, 450), e.paving.map.repeat.set(35, 20), e.asphalt.map.repeat.set(65, 3);
   for (const [A, Q] of Object.entries(e)) Q.onBeforeCompile = (B) => {
@@ -13523,7 +13525,8 @@ vGroundPosition=(modelMatrix*vec4(transformed,1.)).xyz;`), B.fragmentShader = `v
   j.forEach(([A, Q, B, et]) => {
     b(B + 0.25, 0.19, et + 0.25, A, -0.035, Q, n), a(B, et, A, Q, 0.07, e.grass);
   }), a(20, 14, 0, 39, -0.11, e.paving), a(25, 12, -12, -40, -0.11, e.paving);
-  const x = (A, Q) => Math.sqrt(Math.min(...d.filter((B, et) => et % 4 === 0).map((B) => (B.x - A) ** 2 + (B.z - Q) ** 2), ...c.filter((B, et) => et % 3 === 0).map((B) => (B.x - A) ** 2 + (B.z - Q) ** 2))), L = (A, Q) => {
+  const roadPoints = [...d.filter((B, et) => et % 4 === 0), ...c.filter((B, et) => et % 3 === 0)];
+  const x = (A, Q) => roadDistance(roadPoints, A, Q), L = (A, Q) => {
     const B = Math.max(Math.abs(A) - 112, Math.abs(Q) - 73, 0), et = a6.smoothstep(B, 0, 52), nt = a6.smoothstep(x(A, Q), 9, 30);
     return et * nt * (33 * Math.exp(-((A + 155) ** 2 / 18e3 + (Q - 120) ** 2 / 13e3)) + 43 * Math.exp(-((A - 120) ** 2 / 2e4 + (Q + 160) ** 2 / 17e3)) + 8 * Math.exp(-((A + 250) ** 2 / 22e3 + (Q + 270) ** 2 / 32e3)));
   }, O = new j9(1300, 1100, 115, 100);
@@ -13625,6 +13628,48 @@ vGroundPosition=(modelMatrix*vec4(transformed,1.)).xyz;`), B.fragmentShader = `v
       tt instanceof Zn && (tt.castShadow = false);
     }), Q.scale.setScalar(0.94 + cf(A) * 0.16), t.add(Q), rt.push({ group: Q, arms: I, legs: U });
   }
+  return { road: P, cars: vt, people: rt };
+}
+
+function jSt(t) {
+  const template = preparedLandscape("landscape:" + import.meta.url, () => {
+    const root = new D3();
+    return { root, ...buildLandscapeTemplate(root) };
+  });
+  // 复用只读几何与固定实例数据；运行对象、材质和GPU资源各场景独立，旧场景释放不能损坏新场景。
+  const root = template.root.clone(true), originals = [], copies = [], geometries = new Map(), materials = new Map(), textures = new Map();
+  template.root.traverse(object => originals.push(object));
+  root.traverse(object => copies.push(object));
+  const objects = new Map(originals.map((object, index) => [object, copies[index]]));
+  function geometry(source) {
+    if (!geometries.has(source)) {
+      const copy = new bv();
+      copy.index = source.index; copy.attributes = { ...source.attributes };
+      copy.groups = source.groups.map(group => ({ ...group })); copy.drawRange = { ...source.drawRange };
+      copy.boundingBox = source.boundingBox?.clone() || null; copy.boundingSphere = source.boundingSphere?.clone() || null;
+      geometries.set(source, copy);
+    }
+    return geometries.get(source);
+  }
+  function material(source) {
+    if (!materials.has(source)) {
+      const copy = source.clone();
+      copy.onBeforeCompile = source.onBeforeCompile; copy.customProgramCacheKey = source.customProgramCacheKey;
+      for (const [name, value] of Object.entries(copy)) if (value instanceof Tv) {
+        if (!textures.has(value)) textures.set(value, value.clone());
+        copy[name] = textures.get(value);
+      }
+      materials.set(source, copy);
+    }
+    return materials.get(source);
+  }
+  root.traverse(object => {
+    if (object.geometry) object.geometry = geometry(object.geometry);
+    if (object.material) object.material = Array.isArray(object.material) ? object.material.map(material) : material(object.material);
+  });
+  t.add(root);
+  const P = template.road, vt = template.cars.map(object => objects.get(object));
+  const rt = template.people.map(person => ({ group: objects.get(person.group), arms: person.arms.map(object => objects.get(object)), legs: person.legs.map(object => objects.get(object)) }));
   return (A) => {
     vt.forEach((Q, B) => {
       const et = B % 2 ? 1 : -1, nt = ((B / 6 + A * 6e-3 * et) % 1 + 1) % 1, I = P.getPointAt(nt), U = P.getTangentAt(nt), J = et * 2.5;
@@ -13637,6 +13682,7 @@ vGroundPosition=(modelMatrix*vec4(transformed,1.)).xyz;`), B.fragmentShader = `v
     });
   };
 }
+
 const YE = { type: "change" };
 const _M = { type: "start" };
 const DE = { type: "end" };
@@ -14075,7 +14121,7 @@ function YSt(t, e, f, n, v, r, z, hvac = null) {
   const P = t.children.filter((B) => B !== b && B !== a && !f.includes(B) && !B.isLight), s = f.map((B) => {
     const et = B.material;
     return { mesh: B, m: et, opacity: et.opacity, transparent: et.transparent, depthWrite: et.depthWrite };
-  }), d = /* @__PURE__ */ new Map(), c = [], l = [], W = [...Z1, ...FE.filter(asset => asset.system !== "hvac" && asset.system !== "lighting"), ...(hvac?.units || []).map(unit => ({ id: unit.id, label: unit.id + " · " + unit.name, system: "hvac", floor: "F3", center: [unit.xyz[0], unit.xyz[2], -unit.xyz[1]], bounds: null, kind: unit.type }))];
+  }), d = /* @__PURE__ */ new Map(), c = [], l = [], W = [...Z1, ...FE.filter(asset => asset.system !== "hvac" && asset.system !== "lighting"), ];
   let X = 0, y = null, m = null, j = 0, x = !matchMedia("(prefers-reduced-motion: reduce)").matches, L = 0, O = "normal", N = "\u5168\u90E8";
   const i = /* @__PURE__ */ new Map();
   let H = () => {
@@ -14356,7 +14402,12 @@ function YSt(t, e, f, n, v, r, z, hvac = null) {
   }
   const hvacFloor = new D3(), hvacBounds = new c9();
   b.add(hvacFloor); d.set("hvac", hvacFloor);
-  if (hvac) for (const entry of hvac.meshes) {
+  const hvacLabels = [];
+  function setHvacData(data) {
+    if (hvac) return;
+    hvac = data;
+    W.push(...data.units.map(unit => ({ id: unit.id, label: unit.id + " · " + unit.name, system: "hvac", floor: "F3", center: [unit.xyz[0], unit.xyz[2], -unit.xyz[1]], bounds: null, kind: unit.type })));
+  for (const entry of hvac.meshes) {
     const name = entry.material, equipment = entry.group === "units", services = entry.group === "services";
     const color = equipment ? (/Grille/.test(name) ? "#174774" : "#247cb4") : services ? (/RF_/.test(name) ? "#0879ad" : /Drain/.test(name) ? "#269b91" : /Duct/.test(name) ? "#4c87b0" : "#899eaf") : /glass/i.test(name) ? "#aac5d7" : /Stone|floor/.test(name) ? "#dae4e9" : "#bdcdd8";
     const opacity = equipment || services ? 1 : /glass/i.test(name) ? .18 : /Stone|floor/.test(name) ? .96 : .62;
@@ -14365,7 +14416,6 @@ function YSt(t, e, f, n, v, r, z, hvac = null) {
     hvacFloor.add(mesh);
     hvacBounds.expandByPoint(new ht(...entry.bounds[0])); hvacBounds.expandByPoint(new ht(...entry.bounds[1]));
   }
-  const hvacLabels = [];
   for (const id of ["F3-IDU-001", "F3-IDU-038", "F3-IDU-051", "F3-IDU-100"]) {
     const unit = hvac?.units.find(unit => unit.id === id);
     if (!unit) continue;
@@ -14376,6 +14426,7 @@ function YSt(t, e, f, n, v, r, z, hvac = null) {
     const leader = new qK(geometry, new iM({ color: "#246998", transparent: true, opacity: .85, depthTest: false, depthWrite: false }));
     leader.renderOrder = 31; hvacFloor.add(leader);
     hvacLabels.push({ id, anchor, label, leader });
+  }
   }
   function hvacContext() {
     if (hvacBounds.isEmpty()) return;
@@ -14513,7 +14564,7 @@ function YSt(t, e, f, n, v, r, z, hvac = null) {
     }), I = vt.intersectObjects(nt, false)[0];
     I && R(I.object.userData.assetId);
   };
-  return v.addEventListener("pointerdown", A), v.addEventListener("pointerup", Q), { enter: k, focus: R, update: K, assets: W, setScenario(B) {
+  return v.addEventListener("pointerdown", A), v.addEventListener("pointerup", Q), { enter: k, focus: R, update: K, assets: W, setHvacData, setScenario(B) {
     O = B;
   }, setFloor(B) {
     N = y === "hvac" ? "F3" : B, m = null, V.visible = false, G();
@@ -14560,7 +14611,11 @@ vSurfacePosition=position;`), z.fragmentShader = qSt + z.fragmentShader;
 ` + u);
   }, v.customProgramCacheKey = () => n ? "glazing-v2" : /stone|plaster|roof|concrete/.test(e) ? "mineral-v2" : "solid-v2", v;
 }
-async function RSt(t, e) {
+async function RSt(t, e, signal) {
+  signal?.throwIfAborted();
+  const buildingInput = preparedModel(new URL("./building-scene.bin.gz", import.meta.url));
+  // 提前发起资源读取，与本场景的WebGL初始化并行；拒绝仍由后续await及原有释放路径处理。
+  void buildingInput.catch(() => {});
   const f = new mSt({ antialias: true, alpha: false, powerPreference: "high-performance" });
   // Physical render pixels follow DPR; display pixels must remain tied to the viewport.
   Object.assign(f.domElement.style, { display: "block", width: "100%", height: "100%" });
@@ -14588,7 +14643,7 @@ async function RSt(t, e) {
   l.gpu = String(X ? W.getParameter(X.UNMASKED_RENDERER_WEBGL) : W.getParameter(W.RENDERER));
   let y = false, m = true, j = true, x = 0, L = 0, O = 0, N = Fb[0].span, i, H;
   const M = /* @__PURE__ */ new Map();
-  let p, T = false;
+  let p, T = false, preloadFrame = 0, preloadTimer = 0, hvacPending = null, hvacReady = false;
   const w = (G, R, k) => {
     c.enabled = false, c.minDistance = 5, i = { start: performance.now(), pos: d.position.clone(), target: c.target.clone(), span: N, preset: { position: G, target: R, span: k } }, matchMedia("(prefers-reduced-motion: reduce)").matches && (d.position.fromArray(G), c.target.fromArray(R), N = k, i = void 0, c.update(), Y());
   }, Y = () => {
@@ -14602,7 +14657,7 @@ async function RSt(t, e) {
   f.domElement.addEventListener("webglcontextlost", D);
   function V() {
     if (y) return;
-    y = true, H == null || H.dispose(), m = false, l.active = false, cancelAnimationFrame(x), q.disconnect(), c.dispose(), f.domElement.removeEventListener("webglcontextlost", D);
+    y = true, cancelAnimationFrame(preloadFrame), clearTimeout(preloadTimer), H == null || H.dispose(), m = false, l.active = false, cancelAnimationFrame(x), q.disconnect(), c.dispose(), f.domElement.removeEventListener("webglcontextlost", D);
     const G = /* @__PURE__ */ new Set(), R = /* @__PURE__ */ new Set(), k = /* @__PURE__ */ new Set();
     n.traverse((K) => {
       const _ = K;
@@ -14614,35 +14669,54 @@ async function RSt(t, e) {
     }), G.forEach((K) => K.dispose()), R.forEach((K) => K.dispose()), k.forEach((K) => K.dispose()), u.dispose(), P.dispose(), a.dispose(), s.shadow.dispose(), f.renderLists.dispose(), f.dispose(), f.forceContextLoss(), f.domElement.remove();
   }
   try {
-    const G = new Uint8Array(await (await fetch(new URL("./building-scene.bin.gz", import.meta.url))).arrayBuffer()), R = G[0] === 31 && G[1] === 139 ? await new Response(new Blob([G]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer() : G.buffer, k = new Uint8Array(R), K = new DataView(R).getUint32(0, true), _ = JSON.parse(new TextDecoder().decode(k.subarray(4, 4 + K))), vt = k.subarray(4 + K), rt = [];
-    for (const U of _.meshes) {
-      let J = U.offset;
-      const g = new Float32Array(vt.slice(J, J += U.vertices * 12).buffer), tt = new Int16Array(vt.slice(J, J += U.vertices * 6).buffer), zt = new Uint32Array(vt.slice(J, J + U.indices * 4).buffer), ut = new bv();
-      ut.setAttribute("position", new ov(g, 3)), ut.setAttribute("normal", new ov(tt, 3, true)), ut.setIndex(new ov(zt, 1)), ut.computeBoundingSphere();
-      const Pt = new Zn(ut, FSt(U.material));
-      Pt.name = U.material, Pt.castShadow = !/glass/.test(U.material.toLowerCase()), Pt.receiveShadow = true, n.add(Pt), rt.push(Pt), M.set(U.material, ut);
-    }
-    const hvacResponse = await fetch(new URL("./f3-hvac.bin.gz", import.meta.url));
-    if (!hvacResponse.ok) throw Error("F3 model resource unavailable");
-    const hvacBytes = new Uint8Array(await hvacResponse.arrayBuffer());
-    const hvacBuffer = hvacBytes[0] === 31 && hvacBytes[1] === 139 ? await new Response(new Blob([hvacBytes]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer() : hvacBytes.buffer;
-    const hvacHeaderSize = new DataView(hvacBuffer).getUint32(0, true), hvacArray = new Uint8Array(hvacBuffer);
-    const hvacData = JSON.parse(new TextDecoder().decode(hvacArray.subarray(4, 4 + hvacHeaderSize))), hvacBody = hvacArray.subarray(4 + hvacHeaderSize);
-    for (const mesh of hvacData.meshes) {
-      const start = mesh.offset, positionsEnd = start + mesh.vertices * 12;
-      const geometry = new bv();
-      geometry.setAttribute("position", new ov(new Float32Array(hvacBody.slice(start, positionsEnd).buffer), 3));
-      geometry.setAttribute("normal", new ov(new Int16Array(hvacBody.slice(positionsEnd, positionsEnd + mesh.vertices * 6).buffer), 3, true));
-      geometry.computeBoundingSphere(); mesh.geometry = geometry;
-    }
+    // 环境反射原本就排除建筑网格；保持相同景观与光照，在模型下载期间完成CPU及GPU准备。
     const A = jSt(n);
     A(0), f.shadowMap.needsUpdate = true;
     const Q = new NK(256, { type: Ba }), B = new OK(0.5, 1800, Q);
-    B.position.set(0, 18, 0), rt.forEach((U) => U.visible = false), B.update(f, n);
+    B.position.set(0, 18, 0), B.update(f, n);
     const et = a.fromCubemap(Q.texture);
-    rt.forEach((U) => U.visible = true), P.dispose(), P = et, n.environment = P.texture, Q.dispose(), f.shadowMap.needsUpdate = true, H = YSt(n, d, rt, M, t, w, () => {
+    P.dispose(), P = et, n.environment = P.texture, Q.dispose(), f.shadowMap.needsUpdate = true;
+    const data = await buildingInput, rt = [];
+    signal?.throwIfAborted();
+    function meshGeometry(entry) {
+      const geometry = new bv();
+      geometry.setAttribute("position", new ov(entry.positions, 3));
+      geometry.setAttribute("normal", new ov(entry.normals, 3, true));
+      if (entry.index) geometry.setIndex(new ov(entry.index, 1));
+      geometry.computeBoundingSphere();
+      return geometry;
+    }
+    for (const entry of data.meshes) {
+      const geometry = meshGeometry(entry), mesh = new Zn(geometry, FSt(entry.material));
+      mesh.name = entry.material; mesh.castShadow = !/glass/.test(entry.material.toLowerCase()); mesh.receiveShadow = true;
+      n.add(mesh); rt.push(mesh); M.set(entry.material, geometry);
+    }
+    function prepareSystem(topic) {
+      if (topic !== "hvac" || hvacReady || y) return Promise.resolve();
+      if (hvacPending) return hvacPending;
+      hvacPending = preparedModel(new URL("./f3-hvac.bin.gz", import.meta.url)).then(model => {
+        if (y) return;
+        const prepared = { ...model, meshes: model.meshes.map(entry => ({ ...entry, geometry: meshGeometry(entry) })) };
+        H.setHvacData(prepared); hvacReady = true; f.shadowMap.needsUpdate = true;
+      }).catch(error => { hvacPending = null; throw error; });
+      return hvacPending;
+    }
+    // 外观先绘制；专业资源至多一份预取，隐藏/释放时取消尚未开始的工作，失败由实际进入时重试。
+    function queuePreload() {
+      if (y || !m || document.hidden || hvacReady || hvacPending || preloadFrame || preloadTimer) return;
+      preloadFrame = requestAnimationFrame(() => {
+        preloadFrame = requestAnimationFrame(() => {
+          preloadFrame = 0;
+          preloadTimer = setTimeout(() => {
+            preloadTimer = 0;
+            if (!y && m && !document.hidden) void prepareSystem("hvac").catch(() => {});
+          }, 200);
+        });
+      });
+    }
+    H = YSt(n, d, rt, M, t, w, () => {
       return p || { position: d.position.toArray(), target: c.target.toArray(), span: N };
-    }, hvacData), H.setReturn(() => {
+    }, null), H.setReturn(() => {
       p && w(p.position, p.target, p.span);
     });
     const nt = (U, J = false) => {
@@ -14664,7 +14738,7 @@ async function RSt(t, e) {
       f.render(n, d), l.renderMs.push(performance.now() - g), l.renderMs.length > 90 && l.renderMs.shift(), l.frames++, l.triangles = f.info.render.triangles, l.drawCalls = f.info.render.calls, l.geometryCount = f.info.memory.geometries, l.textureCount = f.info.memory.textures;
     };
     if (nt("front", true), A(0), Y(), W.isContextLost()) throw Error("WebGL context lost");
-    return l.ready = true, { stats: l, preset: nt, dispose: V, viewState() {
+    return l.ready = true, { stats: l, preset: nt, dispose: V, prepareSystem, viewState() {
       return { position: d.position.toArray(), target: c.target.toArray(), transition: !!i, opaque: rt.every((U) => U.material.opacity === 1) };
     }, enterSystem(U) {
       U && !p && (p = { position: d.position.toArray(), target: c.target.toArray(), span: N }, T = c.enabled), H == null || H.enter(U);
@@ -14685,7 +14759,9 @@ async function RSt(t, e) {
     }, setMotion(U) {
       j = U;
     }, setActive(U) {
-      m = U && !document.hidden, l.active = m, cancelAnimationFrame(x), x = 0, m && (L = performance.now(), x = requestAnimationFrame(I));
+      m = U && !document.hidden, l.active = m, cancelAnimationFrame(x), x = 0;
+      if (m) { L = performance.now(); x = requestAnimationFrame(I); queuePreload(); }
+      else { cancelAnimationFrame(preloadFrame); clearTimeout(preloadTimer); preloadFrame = 0; preloadTimer = 0; }
     }, setFree(U) {
       c.enabled = U;
     }, reset() {
