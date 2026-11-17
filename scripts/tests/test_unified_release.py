@@ -52,6 +52,7 @@ class ArtifactTest(unittest.TestCase):
         result = self.build('shared', 'iot_platform')
         self.assertEqual(shared.sha(self.jar), before)
         self.assertEqual(result['manifest']['sourceMigration'], '121')
+        self.assertEqual(result['manifest']['backupPolicy'], 'FROZEN_SINGLE_RESTORE_V1')
         with zipfile.ZipFile(self.root / 'candidate' / shared.JAR) as jar:
             shared.unified_shared_package(jar, result['manifest'])
             self.assertIn(b'room-sensor.enabled=true', jar.read('BOOT-INF/classes/application.properties'))

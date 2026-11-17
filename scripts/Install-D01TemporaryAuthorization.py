@@ -560,6 +560,9 @@ def package_manifest(raw):
                 and hashlib.sha256(jar).hexdigest() == manifest.get("backendJarSha256")
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
         target = manifest["expectedMigration"]
+        require("backupPolicy" not in manifest or
+                (target == "123" and manifest["backupPolicy"] == "FROZEN_SINGLE_RESTORE_V1"),
+                "D01_BACKUP_POLICY_INVALID")
         source = manifest.get("sourceMigration", str(int(target) - 1) if int(target) <= 85 else None)
         require(valid_schema_plan(source, target, manifest.get("releaseMode", "SCHEMA_UPGRADE")),
                 "D01_PACKAGE_SCHEMA_PLAN_REQUIRED")
@@ -610,6 +613,7 @@ def package_manifest(raw):
             if target == "123":
                 require(manifest.get("artifactMode") == "UNIFIED_SHARED_121_123"
                         and manifest.get("expectedDatabase") == "iot_platform"
+                        and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1"
                         and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.get("screenBuildingCode", "")),
                         "D01_UNIFIED_PACKAGE_PLAN_REQUIRED")
                 require(packaged.read("BOOT-INF/classes/application.properties").decode("utf-8")
@@ -691,7 +695,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
             "D01_EXPECTED_SERVICE_USER_REQUIRED")
     previous = str((BASE / "current").resolve())
     require(Path(previous).is_relative_to(BASE / "releases"), "D01_CURRENT_OUTSIDE_TEST_RELEASES")
-    # 本轮只授权在线备份/恢复核验；源结构校验只需双库SELECT，不提前要求或授予升级DDL权限。
+    # 演练只校验源结构；正式维护仍提前核验目标迁移权限，不在发布过程中临时授予DDL权限。
     schema, backup, credential_report = credentials(jar, files["d01_credentials.py"],
                                                    source_schema if rehearsal_only else target_schema,
                                                    "APPLICATION_ONLY" if rehearsal_only else release_mode)
@@ -699,6 +703,9 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     sudoers = "# One installed D01 operation; no wildcard arguments or SETENV.\n"
     sudoers += "Defaults!" + str(LAUNCHER) + " env_reset, !setenv, secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n"
     allowed_actions = REHEARSAL_ACTIONS if rehearsal_only else ACTIONS
+    if not rehearsal_only and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1":
+        allowed_actions = tuple(action for action in allowed_actions if action not in
+                                ("online-backup", "export-online", "record-online-restore"))
     sudoers += "user1 ALL=(root) NOPASSWD: " + ", ".join(str(LAUNCHER) + " " + action for action in allowed_actions) + "\n"
     launcher = "#!/bin/sh\nexec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 /usr/bin/python3 -I " + str(INSTALL / "d01_maintenance.py") + ' "$@"\n'
     config = {"format": "D01_TEMP_AUTH_V1", "user": "user1", "expires_at": expires,
@@ -710,6 +717,8 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
               "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
               "authorization_reference": authorization_reference or "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
+    if "backupPolicy" in manifest:
+        config["backup_policy"] = manifest["backupPolicy"]
     if rehearsal_only:
         require((source_schema, target_schema) in (("93", "121"), ("121", "123")), "D01_REHEARSAL_SCHEMA_PLAN_REQUIRED")
         config["rehearsal_only"] = True
@@ -755,6 +764,8 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     print("Existing credentials and direct privileges verified. Application services have not been stopped or restarted.")
     if rehearsal_only:
         print("Rehearsal-only: online backup and isolated restore verification only; shared freeze, migration and cutover are prohibited.")
+    elif config.get("backup_policy") == "FROZEN_SINGLE_RESTORE_V1":
+        print("Single final backup: prepare, readiness checks, freeze, backup, isolated restore, migrate, cutover. No duplicate online backup/restore.")
     else:
         print("Actual backup and isolated restore verification are still required before freeze.")
 

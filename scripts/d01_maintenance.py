@@ -35,6 +35,17 @@ def require(ok, code):
         raise RuntimeError(code)
 
 
+def single_final_restore(config):
+    policy = config.get("backup_policy")
+    if policy is None:
+        return False
+    # 只接受本轮管理员固定包中的明确策略；旧授权及其他版本不能借此跳过在线阶段。
+    require(policy == "FROZEN_SINGLE_RESTORE_V1"
+            and (config.get("source_schema"), config.get("target_schema"), config.get("release_mode"))
+            == ("121", "123", "SCHEMA_UPGRADE"), "D01_BACKUP_POLICY_INVALID")
+    return not config.get("rehearsal_only", False)
+
+
 def failure_code(error):
     value = str(error)
     return value if re.fullmatch(r"[A-Z][A-Z0-9_]{3,160}", value) else "D01_FAILURE_" + type(error).__name__
@@ -272,15 +283,34 @@ class Maintenance:
         self.release.checked_restore(self.backup_directory(online), folder / "report.json")
         self.record("ONLINE_VERIFIED" if online else "RESTORE_VERIFIED")
 
+    def final_backup_readiness(self):
+        """停写前只读检查备份路径、源实例与客户端，不导出数据或生成恢复报告。"""
+        self.release.check_unchanged(self.release.protected_json(self.state))
+        tool = self.backup_tool
+        tool._output_root(self.private, tool.DEFAULT_MIN_FREE_BYTES)
+        tool._credentials(self.backup_credentials)
+        protected(INSTALL / "taosdump-d01")
+        sources = self.targets()
+        for engine, destination in (("mysql", "/var/lib/mysql"), ("tdengine", "/var/lib/taos")):
+            tool._container("/usr/bin/docker", sources[engine + "_container"], sources[engine + "_volume"],
+                            destination, subprocess.run)
+        library = tool._output(["/usr/bin/docker", "exec", sources["tdengine_container"],
+                                "sha256sum", tool.TD_LIBRARY], "TDENGINE_CLIENT_ABI_CHECK_FAILED", subprocess.run)
+        require(library == tool.TD_LIBRARY_SHA256 + "  " + tool.TD_LIBRARY, "TDENGINE_CLIENT_ABI_MISMATCH")
+
     def freeze(self):
-        self.phase(("ONLINE_VERIFIED",))
+        single = single_final_restore(self.config)
+        self.phase(("PREPARED",) if single else ("ONLINE_VERIFIED",))
         check = bounded_input()
         require(set(check) == {"checked_at", "no_other_deployment", "external_writers_fenced", "reference"}
                 and check["no_other_deployment"] is True and check["external_writers_fenced"] is True
                 and type(check["checked_at"]) is int and 0 <= time.time() - check["checked_at"] <= 120
                 and isinstance(check["reference"], str) and 0 < len(check["reference"]) <= 512,
                 "D01_RECENT_WINDOW_CHECK_REQUIRED")
-        self.release.checked_restore(self.private / "online-backup", self.private / "online-restore/report.json")
+        if single:
+            self.final_backup_readiness()
+        else:
+            self.release.checked_restore(self.private / "online-backup", self.private / "online-restore/report.json")
         self.record("FREEZING", window_check=check, stop_requested_at=int(time.time()))
         self.release.freeze(self.state, True, False, True, self.config["authorization_reference"])
         self.record("FROZEN", stopped_at=int(time.time()))
@@ -342,6 +372,8 @@ def main():
     config = load_config(verify_code=action != "revoke")
     require(action == "revoke" or not config.get("rehearsal_only", False) or action in REHEARSAL_ACTIONS,
             "D01_REHEARSAL_ONLY_ACTION_REQUIRED")
+    require(action == "revoke" or not single_final_restore(config) or action not in
+            ("online-backup", "export-online", "record-online-restore"), "D01_SINGLE_RESTORE_ONLY_ACTION_REQUIRED")
     require(os.geteuid() == 0, "D01_ROOT_REQUIRED")
     os.environ.clear()
     os.environ.update(SAFE_ENV)

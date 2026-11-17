@@ -414,6 +414,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 
     def test_missing_recent_writer_evidence_never_stops_services(self):
         operation = object.__new__(bridge.Maintenance)
+        operation.config = {}
         operation.operation = {"phase": "ONLINE_VERIFIED"}
         operation.release = Mock()
         for record in ({}, {"checked_at": 0, "no_other_deployment": True,
@@ -425,6 +426,7 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 
     def test_stages_cannot_skip_online_restore_final_restore_or_migration(self):
         operation = object.__new__(bridge.Maintenance)
+        operation.config = {}
         operation.operation = {"phase": "PREPARED"}
         operation.release = Mock()
         for method in (operation.freeze, operation.backup, operation.migrate, operation.cutover):

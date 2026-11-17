@@ -68,6 +68,7 @@ def build(environment, jar, frontend, destination, commit, database):
                 "sourceJarSha256": sha(jar), "backendJarSha256": sha(destination / JAR),
                 "webIndexSha256": fingerprints["index.html"]}
     if environment == "shared":
+        manifest["backupPolicy"] = "FROZEN_SINGLE_RESTORE_V1"
         with zipfile.ZipFile(destination / JAR) as candidate:
             unified_shared_package(candidate, manifest)
     (destination / "MANIFEST.txt").write_text("".join(k + "=" + v + "\n" for k, v in manifest.items()), encoding="utf-8")

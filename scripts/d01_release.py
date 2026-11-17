@@ -106,7 +106,8 @@ def unified_shared_package(jar, manifest):
     """新授权只覆盖已运行 V121 到 V123；保留原房间接入边界，不重复初始化绑定。"""
     require(manifest.get("artifactMode") == "UNIFIED_SHARED_121_123"
             and manifest.get("sourceMigration") == "121" and manifest.get("expectedMigration") == "123"
-            and manifest.get("expectedDatabase") == "iot_platform",
+            and manifest.get("expectedDatabase") == "iot_platform"
+            and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1",
             "D01_UNIFIED_PACKAGE_PLAN_REQUIRED")
     require(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.get("screenBuildingCode", "")),
             "D01_UNIFIED_BUILDING_REQUIRED")
