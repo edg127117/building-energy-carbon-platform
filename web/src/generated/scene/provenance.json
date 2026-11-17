@@ -11,7 +11,8 @@
     "Constrain DPR canvas display size; reduce slab clutter and keep elevator labels readable in whole-building view",
     "Elevator-led target shift and moderate dolly-in bounded by actual facade vertices; readable floor labels and moderately translucent building context",
     "Replace HVAC prototype boxes with the repaired F3 floor and existing system geometry; enlarge floor framing and label four registered indoor units",
-    "Display six-floor lighting with detailed instanced fixtures and schematic branches; place lighting callouts outside the model and compact elevator floor callouts beside its shaft with projected leaders; display the elevator name instead of its identifier"
+    "Display six-floor lighting with detailed instanced fixtures and schematic branches; place lighting callouts outside the model and compact elevator floor callouts beside its shaft with projected leaders; display the elevator name instead of its identifier",
+    "Reuse bounded read-only model and fixed landscape preparation; load building geometry alongside the renderer and prepare HVAC after the exterior frame, with independent disposable scene resources"
   ],
   "telemetry": false,
   "hvacFloor": {

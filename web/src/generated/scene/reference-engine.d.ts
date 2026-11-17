@@ -109,6 +109,7 @@ export interface ReferenceScene {
   readonly stats: ReferenceSceneStats
   preset(id: string, immediate?: boolean): void
   dispose(): void
+  prepareSystem(topic: string): Promise<void>
   viewState(): {
     readonly position: number[]
     readonly target: number[]
@@ -130,6 +131,6 @@ export interface ReferenceScene {
   getCanvas(): HTMLCanvasElement
 }
 
-export function createReferenceScene(stage: HTMLElement, onContextLost: () => void): Promise<ReferenceScene>
+export function createReferenceScene(stage: HTMLElement, onContextLost: () => void, signal?: AbortSignal): Promise<ReferenceScene>
 
 export const referenceViews: readonly ReferenceView[]

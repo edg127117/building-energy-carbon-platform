@@ -6,9 +6,12 @@ import { t } from '@/locales'
 import { authorizedPages } from '@/app/navigation/catalog'
 import { useSession } from '@/modules/auth/public'
 import { useShellStore } from './providers/shell-store'
+import { clearScenePreparationCache } from '@/generated/scene/scene-preparation'
 const router = useRouter()
 const route = useRoute()
 const shell = useShellStore()
+// 仅清理静态模型准备数据；账号切换时不保留旧缓存，也不改变业务会话和查询生命周期。
+watch(() => useSession().token, clearScenePreparationCache, { flush: 'sync' })
 // 异步页面导入失败时当前外壳保持可用，不暴露内部路径和加载异常。
 const removeError = router.onError(() => { shell.navigationFailed = true })
 const removeAfter = router.afterEach((to, _from, failure) => {
