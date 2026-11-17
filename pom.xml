@@ -193,6 +193,11 @@
           <include>V*.sql</include>
         </includes>
       </resource>
+      <resource>
+        <directory>src/env/room-sensor</directory>
+        <targetPath>db/room-sensor</targetPath>
+        <includes><include>*.sql</include></includes>
+      </resource>
     </resources>
     <plugins>
       <plugin>

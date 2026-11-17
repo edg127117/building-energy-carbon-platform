@@ -5,6 +5,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Set;
 
 /** 独立维护进程，只运行 Flyway，不启动采集、审核、重算或定时任务。 */
@@ -26,8 +27,8 @@ public final class D01SchemaMigration {
     static void run(String action, Map<String, String> environment) {
         String target = target(action);
         boolean upgrade = action.startsWith("upgrade");
-        // V89–V92 未进入本包；V93 从已发布 V88 单独增加历史计量表，仍只允许一条迁移。
-        String expected = upgrade ? ("93".equals(target) ? "88" : String.valueOf(Integer.parseInt(target) - 1)) : target;
+        int targetVersion = Integer.parseInt(target);
+        String expected = upgrade ? predecessor(targetVersion) : target;
         String url = required(environment, "D01_JDBC_URL");
         if (!url.startsWith("jdbc:mysql://") || url.matches("(?is).*[?&](user|password)=.*")) {
             throw new IllegalArgumentException("D01_JDBC_URL_WITHOUT_CREDENTIALS_REQUIRED");
@@ -55,9 +56,8 @@ public final class D01SchemaMigration {
             Flyway.configure().dataSource(source).locations("classpath:db/migration/mysql")
                     .target(expected).baselineOnMigrate(false).cleanDisabled(true).load().validate();
             var pending = flyway.info().pending();
-            if ("93".equals(target) && (pending.length != 1 || !"93".equals(pending[0].getVersion().getVersion()))) {
-                throw new IllegalStateException("D01_V93_SINGLE_MIGRATION_REQUIRED");
-            }
+            requireSingleTargetPending(target, java.util.Arrays.stream(pending)
+                    .map(migration -> migration.getVersion().getVersion()).toList());
             if (flyway.migrate().migrationsExecuted != 1) {
                 throw new IllegalStateException("D01_EXACTLY_ONE_MIGRATION_REQUIRED");
             }
@@ -121,14 +121,33 @@ public final class D01SchemaMigration {
                 throw new IllegalStateException("D01_V88_DEFAULT_YEAR_CONSTRAINT_INCOMPLETE");
             }
         }
-        if ("93".equals(target) && jdbc.queryForObject("""
+        if (targetVersion >= 93 && jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE()
                 AND table_name='biz_historical_metering_scope' AND engine='InnoDB'
                 AND table_collation='utf8mb4_unicode_ci'
                 """, Integer.class) != 1) {
             throw new IllegalStateException("D01_V93_HISTORICAL_METERING_TABLE_INCOMPLETE");
         }
+        if (targetVersion >= 94) {
+            SharedAlignmentSchemaContract.validate(jdbc, targetVersion);
+        }
         System.out.println("D01_SCHEMA_VALIDATED=" + target);
+    }
+
+    static String predecessor(int version) {
+        return switch (version) {
+            case 93 -> "88";
+            case 94 -> "93";
+            case 110 -> "107";
+            default -> Integer.toString(version - 1);
+        };
+    }
+
+    static void requireSingleTargetPending(String target, List<String> pendingVersions) {
+        if (pendingVersions.size() != 1 || !target.equals(pendingVersions.getFirst())) {
+            throw new IllegalStateException("93".equals(target)
+                    ? "D01_V93_SINGLE_MIGRATION_REQUIRED" : "D01_SINGLE_TARGET_MIGRATION_REQUIRED");
+        }
     }
 
     static String target(String action) {
@@ -140,6 +159,34 @@ public final class D01SchemaMigration {
             case "validate87", "upgrade87" -> "87";
             case "validate88", "upgrade88" -> "88";
             case "validate93", "upgrade93" -> "93";
+            case "validate94", "upgrade94" -> "94";
+            case "validate95", "upgrade95" -> "95";
+            case "validate96", "upgrade96" -> "96";
+            case "validate97", "upgrade97" -> "97";
+            case "validate98", "upgrade98" -> "98";
+            case "validate99", "upgrade99" -> "99";
+            case "validate100", "upgrade100" -> "100";
+            case "validate101", "upgrade101" -> "101";
+            case "validate102", "upgrade102" -> "102";
+            case "validate103", "upgrade103" -> "103";
+            case "validate104", "upgrade104" -> "104";
+            case "validate105", "upgrade105" -> "105";
+            case "validate106", "upgrade106" -> "106";
+            case "validate107", "upgrade107" -> "107";
+            case "validate110", "upgrade110" -> "110";
+            case "validate111", "upgrade111" -> "111";
+            case "validate112", "upgrade112" -> "112";
+            case "validate113", "upgrade113" -> "113";
+            case "validate114", "upgrade114" -> "114";
+            case "validate115", "upgrade115" -> "115";
+            case "validate116", "upgrade116" -> "116";
+            case "validate117", "upgrade117" -> "117";
+            case "validate118", "upgrade118" -> "118";
+            case "validate119", "upgrade119" -> "119";
+            case "validate120", "upgrade120" -> "120";
+            case "validate121", "upgrade121" -> "121";
+            case "validate122", "upgrade122" -> "122";
+            case "validate123", "upgrade123" -> "123";
             default -> throw new IllegalArgumentException("D01_SCHEMA_ACTION_REQUIRED");
         };
     }

@@ -2,12 +2,15 @@ package com.platform.carbon;
 
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 单通道合并设备突发输入，数据库租约支持多实例和重启恢复，调度线程只负责唤醒。 */
 @Component
 @org.springframework.context.annotation.Profile("!test")
+// 可在保留共享数据配置的同时单独关闭该后台扫描；默认保持既有运行方式。
+@ConditionalOnProperty(prefix="dynamic-electricity",name="live-enabled",havingValue="true",matchIfMissing=true)
 public class DynamicElectricityLiveWorker implements AutoCloseable {
     private final DynamicElectricityLiveService service;
     private final AtomicBoolean active=new AtomicBoolean();

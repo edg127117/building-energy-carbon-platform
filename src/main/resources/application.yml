@@ -99,6 +99,9 @@ mqtt:
     standard-upstream: ${MQTT_STANDARD_UPSTREAM_TOPIC:device/telemetry/up}
     # 受 ACL 保护的适配器到平台内部 V2 Topic，不要求设备直接发布。
     v2-upstream: ${MQTT_V2_UPSTREAM_TOPIC:platform/telemetry/v2/up}
+    # 逗号分隔的精确主题；仅计数并记录到达元信息，不解析或保存载荷，默认不订阅。
+    receive-only-upstream: ${MQTT_RECEIVE_ONLY_UPSTREAM_TOPICS:}
+    room-sensor-upstream: ${MQTT_ROOM_SENSOR_UPSTREAM_TOPICS:}
     # 未绑定设备的永久拒绝也经该可信内部路由通知代理适配器。
     v2-adapter-ack: ${MQTT_V2_ADAPTER_ACK_TOPIC:platform/telemetry/v2/ack/adapter}
 
@@ -361,3 +364,8 @@ telemetry-conflicts:
   max-pending-derived-tasks: ${TELEMETRY_CONFLICT_MAX_PENDING_DERIVED_TASKS:50000}
   unverified-days: ${TELEMETRY_CONFLICT_UNVERIFIED_DAYS:7}
   recovery-delay-ms: ${TELEMETRY_CONFLICT_RECOVERY_DELAY_MS:60000}
+
+room-sensor:
+  enabled: ${ROOM_SENSOR_ENABLED:false}
+  flush-delay-ms: ${ROOM_SENSOR_FLUSH_DELAY_MS:1000}
+  cleanup-delay-ms: ${ROOM_SENSOR_CLEANUP_DELAY_MS:60000}

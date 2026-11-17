@@ -198,6 +198,8 @@ jobs:
         run: >-
           ./mvnw --batch-mode --no-transfer-progress -DskipTests package
           dependency:build-classpath -Dmdep.outputFile=target/reporting-release-classpath.txt
+      - name: Verify shared-alignment safety offline
+        run: python3 -m unittest discover -s scripts/tests -p 'test_d01_*.py'
       - name: Rehearse MySQL upgrades, V88 application-only validation and dual-database restore
         env:
           REPORTING_RELEASE_ISOLATED: 'true'

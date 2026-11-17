@@ -15,6 +15,7 @@ import com.platform.iot.mqtt.MqttSslContextFactory;
 import com.platform.iot.mqtt.MqttTlsException;
 import com.platform.iot.mqtt.MqttTlsProperties;
 import com.platform.iot.quality.DataPointConfigSnapshotUnavailableException;
+import com.platform.iot.roomsensor.RoomSensorIngestor;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.eclipse.paho.client.mqttv3.IMqttClient;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
@@ -27,6 +28,7 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -55,13 +57,18 @@ import javax.net.ssl.HttpsURLConnection;
         havingValue = "true",
         matchIfMissing = true)
 /**
- * 本地平台旧单点、标准多字段及V2 MQTT连接入口。
+ * 本地平台旧单点、标准多字段、V2及仅接收验证的MQTT连接入口。
  *
  * <p>该配置连接指定Broker，并按精确Topic把旧单点报文交给
  * {@link HvacMqttMessageHandler}，把标准多字段报文交给
  * {@link StandardTelemetryMqttMessageHandler}。配置层只负责协议路由和 QoS 1 ACK，
  * 不解析设备归属，也不直接访问MySQL或TDengine。V2应用ACK在回调外发布，
  * 发布成功后才确认原始入站消息；失败保留冻结回执和重投条件。</p>
+ *
+ * <p>仅接收验证路由通过配置显式选择精确Topic，只记录到达元信息和计数。
+ * 它不解析或保存载荷，传输确认不表示业务持久化，也不产生应用ACK。</p>
+ * <p>房间传感器使用另一路精确主题交给厂家适配入口，在 MySQL 提交待投递观测后确认；
+ * TDengine 的后台投递不阻塞 MQTT 回调。设备采用 QoS 0 时，断线及接收端提交失败仍可能丢失消息。</p>
  *
  * <p>业务拒绝和无法通过重投修复的 JSON 毒消息会确认；本地配置快照不可用、
  * TDengine 写入失败或未分类运行时异常不确认。初次连接失败由独立调度器持续重试，
@@ -107,6 +114,15 @@ public class MqttConfig {
 
     @Value("${mqtt.topics.v2-upstream:platform/telemetry/v2/up}")
     private String[] v2UpstreamTopics;
+
+    @Value("${mqtt.topics.receive-only-upstream:}")
+    private String[] receiveOnlyUpstreamTopics;
+
+    @Value("${mqtt.topics.room-sensor-upstream:}")
+    private String[] roomSensorUpstreamTopics;
+
+    @Autowired(required = false)
+    private RoomSensorIngestor roomSensorIngestor;
 
     @Value("${mqtt.initial-retry-millis:5000}")
     private long initialRetryMillis;
@@ -282,6 +298,19 @@ public class MqttConfig {
                     }
 
                     long localReceivedTime = System.currentTimeMillis();
+                    if (containsTopic(roomSensorUpstreamTopics, topic)) {
+                        // 接收时间在回调入口冻结；MySQL提交失败由既有异常分支保留重投条件。
+                        roomSensorIngestor.accept(topic, payloadBytes, localReceivedTime, message.isRetained());
+                        return;
+                    }
+                    if (containsTopic(receiveOnlyUpstreamTopics, topic)) {
+                        // 联调阶段只证明字节已到达本进程；不解析、保存载荷或产生业务持久化回执。
+                        meterRegistry.counter("iot.mqtt.receive_only.messages", "topic", topic)
+                                .increment();
+                        log.info("MQTT报文已到达平台（仅接收）: topic={}, bytes={}, qos={}, retained={}",
+                                topic, payloadBytes.length, message.getQos(), message.isRetained());
+                        return;
+                    }
                     if (containsTopic(v2UpstreamTopics, topic)) {
                         if (message.isDuplicate()) {
                             meterRegistry.counter("iot.telemetry.v2.broker_redelivery")
@@ -429,17 +458,30 @@ public class MqttConfig {
         Set<String> legacy = topicSet(upstreamTopics);
         Set<String> standard = topicSet(standardUpstreamTopics);
         Set<String> v2 = topicSet(v2UpstreamTopics);
+        Set<String> receiveOnly = topicSet(receiveOnlyUpstreamTopics);
+        Set<String> roomSensors = topicSet(roomSensorUpstreamTopics);
+        if (java.util.stream.Stream.concat(receiveOnly.stream(), roomSensors.stream())
+                .anyMatch(topic -> topic.contains("+") || topic.contains("#"))) {
+            log.error("MQTT客户端初始化失败：验证及房间传感器必须配置精确主题");
+            return false;
+        }
+        if (!roomSensors.isEmpty() && roomSensorIngestor == null) {
+            log.error("MQTT客户端初始化失败：房间传感器主题已配置但入库模块未启用");
+            return false;
+        }
         if (legacy.isEmpty() || standard.isEmpty() || v2.isEmpty()) {
             log.error("MQTT客户端初始化失败：旧单点、标准V1和V2上行主题都必须配置");
             return false;
         }
         Set<String> all = new LinkedHashSet<>();
-        int configuredCount = legacy.size() + standard.size() + v2.size();
+        int configuredCount = legacy.size() + standard.size() + v2.size() + receiveOnly.size() + roomSensors.size();
         all.addAll(legacy);
         all.addAll(standard);
         all.addAll(v2);
+        all.addAll(receiveOnly);
+        all.addAll(roomSensors);
         if (all.size() != configuredCount) {
-            log.error("MQTT客户端初始化失败：旧单点、标准V1与V2主题不能重叠");
+            log.error("MQTT客户端初始化失败：各协议路由主题不能重叠");
             return false;
         }
         return true;
@@ -449,6 +491,8 @@ public class MqttConfig {
         Set<String> topics = new LinkedHashSet<>(topicSet(upstreamTopics));
         topics.addAll(topicSet(standardUpstreamTopics));
         topics.addAll(topicSet(v2UpstreamTopics));
+        topics.addAll(topicSet(receiveOnlyUpstreamTopics));
+        topics.addAll(topicSet(roomSensorUpstreamTopics));
         return topics;
     }
 

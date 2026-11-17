@@ -1,6 +1,7 @@
 package com.platform.carbon;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -25,6 +26,8 @@ import java.util.Collections;
 /** 完整正文按引用保护清理；旧V2轻量标记核对自包含输入后删除，其他入口保留原消息指纹。 */
 @Component
 @Profile("!test")
+// 保留共享数据配置时可独立关闭证据清理；默认保持既有运行方式。
+@ConditionalOnProperty(prefix="dynamic-electricity",name="evidence-retention-enabled",havingValue="true",matchIfMissing=true)
 final class DynamicElectricityEvidenceRetention {
     private static final Logger log=LoggerFactory.getLogger(DynamicElectricityEvidenceRetention.class);
     private static final long RETENTION_MS=Duration.ofDays(180).toMillis();
