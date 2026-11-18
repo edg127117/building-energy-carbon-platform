@@ -17,6 +17,7 @@ import zipfile
 
 BASE = Path('/home/user1/deployments/building-energy-carbon-test')
 BACKEND = 'building-energy-carbon-test-platform.service'
+WEB = 'building-energy-carbon-test-nginx.service'
 JAR = 'building-energy-carbon-platform.jar'
 STAGED = 'application-only-stage.json'
 MIGRATIONS = 'BOOT-INF/classes/db/migration/mysql/'
@@ -42,8 +43,8 @@ def command(*args):
     return result.stdout.strip()
 
 
-def service_property(name):
-    return command('systemctl', 'show', BACKEND, '-p', name, '--value')
+def service_property(name, service=BACKEND):
+    return command('systemctl', 'show', service, '-p', name, '--value')
 
 
 def current_release():
@@ -133,6 +134,8 @@ def runtime_boundary():
     env = dict(s.split(b'=', 1) for s in Path('/proc', pid, 'environ').read_bytes().split(b'\0') if b'=' in s)
     require(all(env.get(key.encode()) == val.encode() for key, val in expected.items()), 'V123_RUNTIME_DDL_OR_TARGET_MISMATCH')
     config = [service_property('FragmentPath'), *service_property('DropInPaths').split(),
+              service_property('FragmentPath', WEB), *service_property('DropInPaths', WEB).split(),
+              str(BASE / 'shared/nginx-user.conf'),
               *re.findall(r'(/\S+) \(ignore_errors=(?:yes|no)\)', service_property('EnvironmentFiles'))]
     return {p: sha(Path(p)) for p in config}
 
@@ -175,10 +178,11 @@ def wait_ready(web_hash, timeout=85):
 
 def cutover(previous, target, new, config, history):
     try:
-        command('/usr/bin/systemctl', 'stop', BACKEND)
+        command('/usr/bin/systemctl', 'stop', WEB, BACKEND)
         require(service_property('ActiveState') == 'inactive', 'V123_BACKEND_MUST_STOP_BEFORE_SWITCH')
         switch_current(target)
-        command('/usr/bin/systemctl', 'start', BACKEND)
+        # 网页服务 Requires 后端。停止后端会连带停网页，启动时要显式带上两者。
+        command('/usr/bin/systemctl', 'start', BACKEND, WEB)
         wait_ready(new['webIndexSha256'])
         require(runtime_boundary() == config and schema_history() == history, 'V123_RUNTIME_OR_SCHEMA_CHANGED')
     except Exception:
@@ -186,10 +190,10 @@ def cutover(previous, target, new, config, history):
         live = current_release()
         require(live in (previous, target), 'V123_CURRENT_CHANGED_DURING_CUTOVER')
         if live == target:
-            command('/usr/bin/systemctl', 'stop', BACKEND)
+            command('/usr/bin/systemctl', 'stop', WEB, BACKEND)
             require(service_property('ActiveState') == 'inactive', 'V123_BACKEND_MUST_STOP_BEFORE_ROLLBACK')
             switch_current(previous)
-        command('/usr/bin/systemctl', 'start', BACKEND)
+        command('/usr/bin/systemctl', 'start', BACKEND, WEB)
         wait_ready(sha(previous / 'web/index.html'))
         print('V123_APPLICATION_ROLLED_BACK', flush=True)
         raise

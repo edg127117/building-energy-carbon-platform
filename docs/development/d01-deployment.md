@@ -360,6 +360,6 @@ V122/V123 尚未发布，已移除其硬编码 `USE iot_platform`，由已核验
 
 适用于业务写入仍与当前 V123 应用兼容的改动。使用共享端原建筑编码构建前端，再通过 `build_unified_release.py shared --application-only` 组包。清单声明 `sourceMigration=123`、`expectedMigration=123` 和 `artifactMode=SHARED_APP_123`。
 
-由运行用户在服务器执行 `d01_application_only_123.py stage <发布名> <包SHA256> --archive <incoming内包路径>`。此步骤验证包、编译后的建筑编码和原包的数据库脚本与运行配置资源，输出候选状态摘要。管理员核验入口脚本摘要后执行 `apply <发布名> <候选状态SHA256>`。入口只暂停并启动共享端后端服务，原子切换 `current`，保留旧发布供启动失败时回退。
+由运行用户在服务器执行 `d01_application_only_123.py stage <发布名> <包SHA256> --archive <incoming内包路径>`。此步骤验证包、编译后的建筑编码和原包的数据库脚本与运行配置资源，输出候选状态摘要。管理员核验入口脚本摘要后执行 `apply <发布名> <候选状态SHA256>`。入口暂停共享端网页和后端服务，原子切换 `current` 后启动这两个服务，保留旧发布供启动失败时回退。
 
 换包前后只读核对 Flyway 历史，保持应用内 Flyway、字符集修复和 TDengine 初始化关闭。这个入口不执行迁移、数据库备份或恢复，也不沿用第 14 节的升级授权。

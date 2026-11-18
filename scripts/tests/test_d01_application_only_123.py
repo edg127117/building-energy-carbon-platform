@@ -60,7 +60,10 @@ class V123ApplicationOnlyTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, 'not ready'):
                     release.cutover(old, new, {'webIndexSha256': 'new'}, {}, '')
             self.assertEqual(switch.call_args_list, [mock.call(new), mock.call(old)])
-            self.assertEqual([call.args[1] for call in command.call_args_list], ['stop', 'start', 'stop', 'start'])
+            self.assertEqual([call.args[1:] for call in command.call_args_list], [
+                ('stop', release.WEB, release.BACKEND), ('start', release.BACKEND, release.WEB),
+                ('stop', release.WEB, release.BACKEND), ('start', release.BACKEND, release.WEB),
+            ])
 
 
 if __name__ == '__main__':
