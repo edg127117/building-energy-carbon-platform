@@ -11,13 +11,15 @@ import subprocess
 import tarfile
 import zipfile
 
-from d01_release import ALIGNMENT_DEFAULTS, JAR, frontend_fingerprint, require, sha, unified_shared_package
+from d01_release import (ALIGNMENT_DEFAULTS, JAR, frontend_fingerprint, packaged_upgrade_steps,
+                         require, sha, unified_shared_package)
 
 SCRIPTS = {121: "V121__mysql_room_sensor_ingestion.sql", 122: "V122__mysql_ledger_display_rules.sql",
            123: "V123__mysql_device_communication.sql"}
 
 
-def build(environment, jar, frontend, destination, commit, database, application_only=False):
+def build(environment, jar, frontend, destination, commit, database, application_only=False, source_schema=None):
+    require(not application_only or source_schema is None, "UNIFIED_CONFLICTING_SCHEMA_OPTIONS")
     require(environment in ("shared", "demo"), "UNIFIED_ENVIRONMENT_REQUIRED")
     require(re.fullmatch(r"[a-f0-9]{40}", commit), "UNIFIED_COMMIT_REQUIRED")
     require(re.fullmatch(r"[A-Za-z0-9_]{1,64}", database), "UNIFIED_DATABASE_REQUIRED")
@@ -43,8 +45,13 @@ def build(environment, jar, frontend, destination, commit, database, application
                 "UNIFIED_SOURCE_JAR_REQUIRED")
         versions = [int(m[1]) for name in names if
                     (m := re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name))]
-        require(versions and max(versions) == 123 and len(set(versions)) == len(versions),
+        require(versions and max(versions) >= 123 and len(set(versions)) == len(versions),
                 "UNIFIED_MIGRATION_SEQUENCE_INVALID")
+        target_schema = max(versions)
+        if source_schema is None and not application_only:
+            require(target_schema == 123, "UNIFIED_SOURCE_SCHEMA_REQUIRED")
+        steps = (packaged_upgrade_steps(source, source_schema, str(target_schema))
+                 if source_schema is not None else ())
         for version, filename in SCRIPTS.items():
             sql = source.read("BOOT-INF/classes/db/migration/mysql/" + filename)
             require(version == 121 or not re.search(rb"(?i)\bUSE\s+", sql), "UNIFIED_CROSS_DATABASE_SQL_FORBIDDEN")
@@ -67,14 +74,18 @@ def build(environment, jar, frontend, destination, commit, database, application
                 "expectedDatabase": database, "screenBuildingCode": info["buildingCode"],
                 "sourceJarSha256": sha(jar), "backendJarSha256": sha(destination / JAR),
                 "webIndexSha256": fingerprints["index.html"]}
-    if environment == "shared":
+    if environment == "shared" and not application_only:
         manifest["backupPolicy"] = "FROZEN_SINGLE_RESTORE_V1"
-        with zipfile.ZipFile(destination / JAR) as candidate:
-            unified_shared_package(candidate, manifest)
+        if source_schema is None:
+            with zipfile.ZipFile(destination / JAR) as candidate:
+                unified_shared_package(candidate, manifest)
+    if steps:
+        manifest.update(sourceMigration=source_schema, expectedMigration=str(target_schema),
+                        artifactMode=f"{environment.upper()}_SCHEMA_UPGRADE",
+                        migrationSteps=",".join(map(str, steps)))
     if application_only:
-        manifest.update(sourceMigration="123", releaseMode="APPLICATION_ONLY",
-                        artifactMode="SHARED_APP_123" if environment == "shared" else "DEMO_APP_123")
-        manifest.pop("backupPolicy", None)
+        manifest.update(sourceMigration=str(target_schema), expectedMigration=str(target_schema),
+                        releaseMode="APPLICATION_ONLY", artifactMode=f"{environment.upper()}_APP_{target_schema}")
     (destination / "MANIFEST.txt").write_text("".join(k + "=" + v + "\n" for k, v in manifest.items()), encoding="utf-8")
     (destination / "FRONTEND_SHA256.json").write_text(json.dumps(fingerprints, sort_keys=True, indent=2), encoding="utf-8")
     with tarfile.open(archive, "w:gz") as package:
@@ -89,12 +100,14 @@ def main():
     for name in ("jar", "frontend", "destination"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--database", required=True)
-    parser.add_argument("--application-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--application-only", action="store_true")
+    mode.add_argument("--source-schema", help="实际源库版本号，如 123，目标版本和迁移顺序取自 JAR")
     args = parser.parse_args()
     require(not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(), "UNIFIED_CLEAN_COMMIT_REQUIRED")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     print(json.dumps(build(args.environment, args.jar, args.frontend, args.destination, commit, args.database,
-                           application_only=args.application_only)))
+                           application_only=args.application_only, source_schema=args.source_schema)))
 
 
 if __name__ == "__main__":

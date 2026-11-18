@@ -16,14 +16,17 @@ public final class DemoSchemaMigration {
     }
 
     static void run(String action, Map<String, String> environment) {
-        if (!ACTIONS.contains(action)) throw new IllegalArgumentException("DEMO_SCHEMA_ACTION_REQUIRED");
+        if (!ACTIONS.contains(action) && (!action.matches("(?:validate|upgrade)[1-9][0-9]{2,8}")
+                || Integer.parseInt(action.replaceFirst("^(?:validate|upgrade)", "")) <= 123)) {
+            throw new IllegalArgumentException("DEMO_SCHEMA_ACTION_REQUIRED");
+        }
         String database = environment.get("DEMO_EXPECTED_DATABASE");
         if (database == null || !database.matches("[A-Za-z0-9_]{1,64}")
                 || Set.of("iot_platform", "iot_platform_archive", "mysql", "sys", "information_schema", "performance_schema")
                         .contains(database.toLowerCase(java.util.Locale.ROOT))) {
             throw new IllegalArgumentException("DEMO_ACTIVE_DATABASE_REQUIRED");
         }
-        // 连接仍由独立维护凭据提供；这里只改变明确核验的库名，不放开旧版本或 repair/baseline。
+        // 独立库名须与运行实例一致，迁移仍经过共用入口的前驱和单步检查。
         D01SchemaMigration.runForDatabase(action, environment, database);
         System.out.println("DEMO_SCHEMA_VALIDATED=" + D01SchemaMigration.target(action));
     }

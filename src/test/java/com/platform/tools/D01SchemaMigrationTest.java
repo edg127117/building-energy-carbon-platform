@@ -32,7 +32,7 @@ class D01SchemaMigrationTest {
     }
 
     @Test
-    void permitsOnlyExplicitMigrationActions() {
+    void retainsHistoricalActionsAndRequiresCredentialsForLaterVersions() {
         for (String version : new String[]{"83", "84", "85", "86", "87", "88", "93", "94", "95", "96",
                 "97", "98", "99", "100", "101", "102", "103", "104", "105", "106", "107",
                 "110", "111", "112", "113", "114", "115", "116", "117", "118", "119", "120", "121", "122", "123"}) {
@@ -40,9 +40,12 @@ class D01SchemaMigrationTest {
             if (!version.equals("83")) assertEquals(version, D01SchemaMigration.target("upgrade" + version));
         }
         for (String action : new String[]{"upgrade83", "upgrade89", "validate89", "upgrade108", "upgrade109",
-                "validate108", "validate109", "validate124", "upgrade124", "repair", "clean", "baseline", "85"}) {
+                "validate108", "validate109", "repair", "clean", "baseline", "85"}) {
             assertThrows(IllegalArgumentException.class, () -> D01SchemaMigration.run(action, Map.of()));
         }
+        assertEquals("124", D01SchemaMigration.target("validate124"));
+        var error = assertThrows(IllegalArgumentException.class, () -> D01SchemaMigration.run("validate124", Map.of()));
+        assertEquals("D01_REQUIRED_D01_JDBC_URL", error.getMessage());
     }
 
     @Test
