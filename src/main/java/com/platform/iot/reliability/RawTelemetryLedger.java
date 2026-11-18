@@ -215,7 +215,10 @@ public class RawTelemetryLedger {
     public Map<String, Selection> selections(Collection<String> pointIds, long from, long to) {
         if (pointIds.isEmpty()) return Map.of();
         String marks = String.join(",", Collections.nCopies(pointIds.size(), "?"));
-        List<Object> args = new ArrayList<>(pointIds); args.add(from); args.add(to);
+        // 原始意图按写入时的大小写归一键命中 (point_key,event_ms) 主键，避免实时读取扫描历史账本。
+        List<Object> args = new ArrayList<>(pointIds.stream()
+                .map(id -> id == null ? null : id.toLowerCase(Locale.ROOT)).toList());
+        args.add(from); args.add(to);
         Map<String, Selection> result = new HashMap<>();
         // 两类来源必须在同一 SQL 快照读取，避免批准恰好发生在两次查询之间而读到交接前后两份值。
         // selection_version 也指向待审提交，普通取值证据仍指向最后一次普通处置。
@@ -224,7 +227,7 @@ public class RawTelemetryLedger {
                   (SELECT MAX(r.version_no) FROM biz_telemetry_resolution r WHERE r.point_key=i.point_key
                     AND r.event_ms=i.event_ms AND r.energy_correction_version IS NULL) AS direct_version,
                   NULL AS original_value,NULL AS corrected_value,NULL AS correction_version_id
-                 FROM biz_telemetry_raw_intent i WHERE i.point_id IN (%s)
+                 FROM biz_telemetry_raw_intent i WHERE i.point_key IN (%s)
                  AND i.event_ms>=? AND i.event_ms<? AND i.selected_json IS NOT NULL LIMIT 5001)
                 UNION ALL
                 (SELECT c.meter_point_id,CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0)),
@@ -234,7 +237,8 @@ public class RawTelemetryLedger {
                 AND CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0))>=?
                 AND CAST(SUBSTRING(c.original_fact_identity,LOCATE('@',c.original_fact_identity)+1) AS DECIMAL(20,0))<? LIMIT 5001)
                 """.formatted(marks,marks);
-        args.addAll(new ArrayList<>(args));
+        // 能源审核账本使用原测点 ID；不能把原始意图的归一键当作其外键。
+        args.addAll(pointIds); args.add(from); args.add(to);
         final int[] counts={0,0};
         jdbc.query(sql,(ResultSet rs)->{
             String correction=rs.getString("correction_version_id");

@@ -87,8 +87,8 @@ export function getEquipment(equipmentId: string) {
   return requestApi<AssetEquipmentDetail>({ method: 'get', url: `${basePath}/equipment/${encoded(equipmentId)}` })
 }
 
-export function getEquipmentReadings(equipmentId: string) {
-  return requestApi<AssetEquipmentReadings>({ method: 'get', url: `${basePath}/equipment/${encoded(equipmentId)}/readings` })
+export function getEquipmentReadings(equipmentId: string, signal?: AbortSignal) {
+  return requestApi<AssetEquipmentReadings>({ method: 'get', url: `${basePath}/equipment/${encoded(equipmentId)}/readings`, signal })
 }
 
 export function getEquipmentTrendHistory(equipmentId: string, params: AssetEquipmentTrendQuery) {

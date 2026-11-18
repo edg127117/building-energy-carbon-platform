@@ -17,8 +17,9 @@ SCRIPTS = {121: "V121__mysql_room_sensor_ingestion.sql", 122: "V122__mysql_ledge
            123: "V123__mysql_device_communication.sql"}
 
 
-def build(environment, jar, frontend, destination, commit, database):
+def build(environment, jar, frontend, destination, commit, database, application_only=False):
     require(environment in ("shared", "demo"), "UNIFIED_ENVIRONMENT_REQUIRED")
+    require(not application_only or environment == "shared", "UNIFIED_APPLICATION_ONLY_SHARED_REQUIRED")
     require(re.fullmatch(r"[a-f0-9]{40}", commit), "UNIFIED_COMMIT_REQUIRED")
     require(re.fullmatch(r"[A-Za-z0-9_]{1,64}", database), "UNIFIED_DATABASE_REQUIRED")
     require((environment == "shared" and database == "iot_platform") or
@@ -71,6 +72,9 @@ def build(environment, jar, frontend, destination, commit, database):
         manifest["backupPolicy"] = "FROZEN_SINGLE_RESTORE_V1"
         with zipfile.ZipFile(destination / JAR) as candidate:
             unified_shared_package(candidate, manifest)
+    if application_only:
+        manifest.update(sourceMigration="123", releaseMode="APPLICATION_ONLY", artifactMode="SHARED_APP_123")
+        del manifest["backupPolicy"]
     (destination / "MANIFEST.txt").write_text("".join(k + "=" + v + "\n" for k, v in manifest.items()), encoding="utf-8")
     (destination / "FRONTEND_SHA256.json").write_text(json.dumps(fingerprints, sort_keys=True, indent=2), encoding="utf-8")
     with tarfile.open(archive, "w:gz") as package:
@@ -85,10 +89,12 @@ def main():
     for name in ("jar", "frontend", "destination"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--database", required=True)
+    parser.add_argument("--application-only", action="store_true")
     args = parser.parse_args()
     require(not subprocess.check_output(["git", "status", "--porcelain"], text=True).strip(), "UNIFIED_CLEAN_COMMIT_REQUIRED")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    print(json.dumps(build(args.environment, args.jar, args.frontend, args.destination, commit, args.database)))
+    print(json.dumps(build(args.environment, args.jar, args.frontend, args.destination, commit, args.database,
+                           application_only=args.application_only)))
 
 
 if __name__ == "__main__":
