@@ -18,6 +18,7 @@ import {
 import type { DaikinDevice, DeviceCurrent, StateSummary } from '../models/daikin'
 import type { HvacControlBatch, HvacControlOperation } from '../models/hvac-control'
 import { useDaikinResource } from '../composables/use-daikin-resource'
+import { hydrateDeviceReadings } from '../composables/hydrate-device-readings'
 import { useHvacControlAccess } from '../composables/use-hvac-control-access'
 import DaikinDeviceDetail from './DaikinDeviceDetail.vue'
 import HvacBatchControlPanel from './HvacBatchControlPanel.vue'
@@ -357,7 +358,10 @@ function pillToneClass(status: DaikinQuickStatus): string {
 
 function search() {
   const nextKeyword = searchInput.value.trim()
-  if (keyword.value !== nextKeyword) clearBatchSelection()
+  if (keyword.value !== nextKeyword) {
+    clearBatchSelection()
+    resetCardTelemetryReads()
+  }
   keyword.value = nextKeyword
   selected.value = null
   if (page.value === 1) load()
@@ -371,13 +375,19 @@ function selectQuickStatus(status: DaikinQuickStatus) {
 
 let timer: ReturnType<typeof setInterval> | undefined
 let disposed = false
-let telemetrySeq = 0
+let telemetryReads = new AbortController()
 let listRequestSeq = 0
 let listRequests = 0
 let statusRefreshQueued = false
 let nextTelemetryAt = 0
 const telemetryObservedAt = new Map<string, number>()
-const telemetryPending = new Map<string, number>()
+const telemetryPending = new Set<string>()
+
+function resetCardTelemetryReads() {
+  telemetryReads.abort()
+  telemetryPending.clear()
+  telemetryReads = new AbortController()
+}
 
 function cardStatus(snapshot: DeviceCurrent) {
   const findField = (name: string) => {
@@ -399,18 +409,16 @@ function cardStatus(snapshot: DeviceCurrent) {
 }
 
 async function hydrateCardTelemetry(items: DaikinDevice[]) {
-  const seq = telemetrySeq
-  await Promise.all(items.map(async item => {
-    if (telemetryPending.get(item.equipmentId) === seq) return
-    telemetryPending.set(item.equipmentId, seq)
+  const { signal } = telemetryReads
+  const pending = items.filter(item => !telemetryPending.has(item.equipmentId))
+  pending.forEach(item => telemetryPending.add(item.equipmentId))
+  await hydrateDeviceReadings(pending, signal, async item => {
     try {
       const isOutdoor = item.deviceKind === 'OUTDOOR'
-      const [curRes, roomRes, setRes] = await Promise.all([
-        daikinApi.current(item.equipmentId).catch(() => null),
-        isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'roomTemp').catch(() => null),
-        isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'temperature').catch(() => null),
-      ])
-      if (disposed || seq !== telemetrySeq) return
+      const curRes = await daikinApi.current(item.equipmentId, signal).catch(() => null)
+      const roomRes = isOutdoor || signal.aborted ? null : await daikinApi.temperature(item.equipmentId, 'roomTemp', signal).catch(() => null)
+      const setRes = isOutdoor || signal.aborted ? null : await daikinApi.temperature(item.equipmentId, 'temperature', signal).catch(() => null)
+      if (signal.aborted) return
       const prior = cardTelemetry.value[item.equipmentId]
       const statusFresh = curRes && (curRes.lastValidAt ?? 0) >= (telemetryObservedAt.get(item.equipmentId) ?? 0)
       cardTelemetry.value[item.equipmentId] = {
@@ -425,9 +433,9 @@ async function hydrateCardTelemetry(items: DaikinDevice[]) {
     } catch {
       // 单台卡片摘要补全失败不阻断主列表渲染。
     } finally {
-      if (telemetryPending.get(item.equipmentId) === seq) telemetryPending.delete(item.equipmentId)
+      if (!signal.aborted) telemetryPending.delete(item.equipmentId)
     }
-  }))
+  })
 }
 
 watch(() => devices.data.value, val => {
@@ -445,8 +453,7 @@ async function load(cursor?: string, silent = false, withTelemetry = true) {
     if (disposed || seq !== listRequestSeq || devices.error.value) return
     const items = devices.data.value?.items ?? []
     // 高频列表只读平台摘要；仅首次出现的卡片补全温度，既有温度仍按分钟刷新。
-    const telemetryItems = withTelemetry ? items : items.filter(item => !cardTelemetry.value[item.equipmentId]
-      && telemetryPending.get(item.equipmentId) !== telemetrySeq)
+    const telemetryItems = withTelemetry ? items : items.filter(item => !cardTelemetry.value[item.equipmentId])
     if (telemetryItems.length) void hydrateCardTelemetry(telemetryItems)
   } finally {
     listRequests--
@@ -513,26 +520,28 @@ watch(building, () => {
   devices.clear()
   cardTelemetry.value = {}
   telemetryObservedAt.clear()
-  telemetrySeq++
+  resetCardTelemetryReads()
   exceptions.clear()
   load()
 })
 watch([kind, space, state, exceptionFilter], () => {
-  telemetrySeq++
+  resetCardTelemetryReads()
   clearBatchSelection()
   page.value = 1
   selected.value = null
   load()
 })
 watch(page, () => {
-  telemetrySeq++
+  resetCardTelemetryReads()
   selected.value = null
   load()
 })
 
 onMounted(async () => {
-  if (!props.alarms) await controlAccess.refresh()
-  await buildings.run(hvacControlApi.buildings)
+  await Promise.all([
+    props.alarms ? undefined : controlAccess.refresh(),
+    buildings.run(hvacControlApi.buildings),
+  ])
   if (disposed) return
   const requestedBuilding = typeof route.query.buildingId === 'string' ? route.query.buildingId : ''
   building.value = buildings.data.value?.find(item => item.buildingId === requestedBuilding)?.buildingId ?? buildings.data.value?.[0]?.buildingId ?? ''
@@ -552,6 +561,7 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   disposed = true
+  telemetryReads.abort()
   clearInterval(timer)
   document.removeEventListener('visibilitychange', visibilityChanged)
 })

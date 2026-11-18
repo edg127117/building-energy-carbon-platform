@@ -238,6 +238,30 @@ describe('RunningOverviewPage', () => {
     wrapper.unmount()
   })
 
+  it('总览为导航保留连接，离开页面后不再启动排队的设备读取', async () => {
+    const initial = await daikinApi.devices('BLD001', 1)
+    const third = { ...initial.items[0]!, equipmentId: 'eq-idu-309', equipmentCode: 'IDU-309-1' }
+    vi.mocked(daikinApi.devices).mockResolvedValue({ total: 3, items: [...initial.items, third] })
+    const current = await daikinApi.current('eq-idu-308')
+    const requests: Array<{ signal?: AbortSignal; finish: () => void }> = []
+    vi.mocked(daikinApi.current).mockClear().mockImplementation((_, signal) => new Promise(resolve => {
+      requests.push({ signal, finish: () => resolve(current) })
+    }))
+
+    const wrapper = mount(RunningOverviewPage, { global: { stubs: { DaikinDeviceDetail: true } } })
+    await flushPromises()
+    expect(requests).toHaveLength(2)
+    expect(daikinApi.temperature).not.toHaveBeenCalled()
+
+    wrapper.unmount()
+    expect(requests.every(request => request.signal?.aborted)).toBe(true)
+    requests.forEach(request => request.finish())
+    await flushPromises()
+    expect(requests).toHaveLength(2)
+    expect(daikinApi.temperature).not.toHaveBeenCalled()
+    expect(daikinApi.observedRuntime).not.toHaveBeenCalled()
+  })
+
   it.each([false, true])('总览外机采用字段自身的新鲜度，计数与表格一致 stale=%s', async stale => {
     const initial = await daikinApi.devices('BLD001', 1)
     const outdoor = { ...initial.items[0]!, deviceKind: 'OUTDOOR', lastValidAt: 2000, unitStatus: null, onOff: null }

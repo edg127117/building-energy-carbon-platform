@@ -104,6 +104,21 @@ class TelemetryConflictTest {
         doThrow(new BusinessException(403,"无建筑权限")).when(scope).checkAccess(9L,List.of("BUILDING_OWNER"),"B1");
         assertThatThrownBy(()->conflicts.detail(9,List.of("BUILDING_OWNER"),"P1",view.eventTime())).isInstanceOf(BusinessException.class);
     }
+    @Test void ordinarySelectionUsesCanonicalPointIdentityWithinTheRequestedWindow(){
+        conflict();
+        var detail=conflicts.detail(7,List.of("BUILDING_OWNER"),"P1",event(0).eventTime());
+        transaction(()->conflicts.resolve(7,List.of("BUILDING_OWNER"),"P1",detail.eventTime(),
+                new TelemetryConflictService.ResolveRequest(detail.variants().getFirst().evidenceId(),
+                        detail.revision(),"设备报文核实","工单1")));
+
+        var selections=ledger.selections(List.of("p1","P2"),detail.eventTime(),detail.eventTime()+1);
+        assertThat(selections).hasSize(1);
+        assertThat(selections.get(RawTelemetryLedger.identity("P1",detail.eventTime())))
+                .isEqualTo(new RawTelemetryLedger.Selection("P1",detail.eventTime(),100,120,"telemetry:1"));
+        assertThat(ledger.selections(List.of("P2"),detail.eventTime(),detail.eventTime()+1)).isEmpty();
+        assertThat(ledger.selections(List.of("p1"),detail.eventTime()-1,detail.eventTime())).isEmpty();
+        assertThat(ledger.selections(List.of("p1"),detail.eventTime()+1,detail.eventTime()+2)).isEmpty();
+    }
     @Test void auditFailureRollsBackValueAndResolutionAndOutbox(){
         conflict();var view=conflicts.detail(7,List.of("BUILDING_OWNER"),"P1",event(0).eventTime());
         doThrow(new IllegalStateException("audit unavailable")).when(audit).append(any());

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { hydrateDeviceReadings } from '../composables/hydrate-device-readings'
 import { useRouter } from 'vue-router'
 import {
   ElAlert,
@@ -99,7 +100,7 @@ const refreshTick = ref(0)
 const activeMeterDrawer = ref<AssetEquipment | null>(null)
 const meterDrawerOpen = ref(false)
 
-let telemetrySeq = 0
+let overviewReads: AbortController | undefined
 
 function isColdSourceAsset(item: AssetEquipment): boolean {
   return ['CHILLER', 'TOWER', 'PUMP', 'AHU', 'BOILER'].includes(item.category ?? '')
@@ -574,18 +575,15 @@ function openMeterDrawer(row: AssetEquipment | Record<string, unknown>) {
   meterDrawerOpen.value = true
 }
 
-async function hydrateOverviewTelemetry(items: DaikinDevice[]) {
-  const seq = ++telemetrySeq
-  await Promise.all(items.map(async item => {
+function hydrateOverviewTelemetry(items: DaikinDevice[], signal: AbortSignal) {
+  return hydrateDeviceReadings(items, signal, async item => {
     try {
       const isOutdoor = item.deviceKind === 'OUTDOOR'
-      const [curRes, roomRes, setRes, runtimeRes] = await Promise.all([
-        daikinApi.current(item.equipmentId).catch(() => null),
-        isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'roomTemp').catch(() => null),
-        isOutdoor ? Promise.resolve(null) : daikinApi.temperature(item.equipmentId, 'temperature').catch(() => null),
-        daikinApi.observedRuntime(item.equipmentId, 'DAY').catch(() => null),
-      ])
-      if (seq !== telemetrySeq) return
+      const curRes = await daikinApi.current(item.equipmentId, signal).catch(() => null)
+      const roomRes = isOutdoor || signal.aborted ? null : await daikinApi.temperature(item.equipmentId, 'roomTemp', signal).catch(() => null)
+      const setRes = isOutdoor || signal.aborted ? null : await daikinApi.temperature(item.equipmentId, 'temperature', signal).catch(() => null)
+      const runtimeRes = signal.aborted ? null : await daikinApi.observedRuntime(item.equipmentId, 'DAY', undefined, signal).catch(() => null)
+      if (signal.aborted) return
       const findField = (name: string) => {
         const f = curRes?.fields?.find(row => row.fieldName === name)
         return f && f.status === 'PRESENT' && f.valueVisible ? f.normalizedValue : null
@@ -607,17 +605,17 @@ async function hydrateOverviewTelemetry(items: DaikinDevice[]) {
     } catch {
       // 单设备补全失败不阻断运行总览主界面。
     }
-  }))
+  })
 }
 
-async function hydrateMeterTelemetry(meters: AssetEquipment[]) {
-  await Promise.all(meters.map(async meter => {
+function hydrateMeterTelemetry(meters: AssetEquipment[], signal: AbortSignal) {
+  return hydrateDeviceReadings(meters, signal, async meter => {
     const phase = getMeterPhaseType(meter)
     if (!phase) return
     try {
       const reader = useEquipmentReadings()
-      const res = await reader.load(meter.equipmentId, true)
-      if (!res?.points) return
+      const res = await reader.load(meter.equipmentId, true, signal)
+      if (signal.aborted || !res?.points) return
       if (phase === '3P') {
         const m = extractThreePhaseMetrics(res.points)
         meterTelemetryMap.value[meter.equipmentId] = {
@@ -634,7 +632,7 @@ async function hydrateMeterTelemetry(meters: AssetEquipment[]) {
     } catch {
       // 单块电表读数拉取失败不阻断其它表计展示。
     }
-  }))
+  })
 }
 
 function formatMeterCoverageScope(raw: AssetEquipment | Record<string, unknown>): string {
@@ -654,7 +652,10 @@ function formatMeterInstallLocation(raw: AssetEquipment | Record<string, unknown
 }
 
 async function loadBuildingOverview() {
+  overviewReads?.abort()
   if (!buildingId.value) return
+  overviewReads = new AbortController()
+  const { signal } = overviewReads
   selectedSpaceName.value = ''
   selectedMeterId.value = ''
   selectedDaikinId.value = null
@@ -663,12 +664,13 @@ async function loadBuildingOverview() {
     daikinDevices.run(() => daikinApi.devices(buildingId.value, 1, '', '', '', '', undefined)),
     assetManagement.setEquipmentQuery({ buildingId: buildingId.value, page: 1, size: 100 }).catch(() => null),
   ])
+  if (signal.aborted) return
   lastUpdatedAt.value = new Date().toISOString()
   if (daikinDevices.data.value?.items?.length) {
-    void hydrateOverviewTelemetry(daikinDevices.data.value.items)
+    void hydrateOverviewTelemetry(daikinDevices.data.value.items, signal)
   }
   if (meterAssets.value.length) {
-    void hydrateMeterTelemetry(meterAssets.value)
+    void hydrateMeterTelemetry(meterAssets.value, signal)
     const coverageMeterIds = meterAssets.value
       .filter(item => isMeterCoverageEquipment(item))
       .map(item => item.equipmentId)
@@ -689,6 +691,7 @@ onMounted(async () => {
   await buildings.run(listAccessibleBuildings)
   buildingId.value = buildings.data.value?.[0]?.buildingId ?? ''
 })
+onBeforeUnmount(() => overviewReads?.abort())
 </script>
 
 <template>

@@ -355,3 +355,11 @@ V122/V123 尚未发布，已移除其硬编码 `USE iot_platform`，由已核验
 独立备份清单格式为 `UNIFIED_DEMO_BACKUP_V1`，记录 `freezeSha256`、`database`、`mysqlSourceId`、`tdengineSourceId` 及 `files` 的相对路径和 SHA256，至少包含实际目标 MySQL 库与 `tdengine/` 内容。恢复报告沿用 `D01_RESTORE_VERIFIED_V1`，绑定清单与证据摘要；两个恢复容器必须带本操作 `bec.operation` 标签、使用不同于源实例的独立卷且不发布数据库端口。证据须包含实际执行所得 `database`、`source`、`restored` 指纹，完整且一致才能通过，不能手填成功或引用旧报告。
 
 冻结后先完成实际备份/恢复，再逐步迁移，最后克隆本实例应用与 Web 容器启动。迁移失败或候选可能写入后启动失败，只停止候选并保留状态和数据；停止失败单独记录，不自动重启旧应用或恢复旧库。健康检查只证明启动，不代替发布后大屏、台账及共享接入业务核对。两套维护窗口分别确认，不重启数据库、Broker 或其他站点。
+
+## 15. 共享测试 V123 同版本换应用
+
+适用于业务写入仍与当前 V123 应用兼容的改动。使用共享端原建筑编码构建前端，再通过 `build_unified_release.py shared --application-only` 组包。清单声明 `sourceMigration=123`、`expectedMigration=123` 和 `artifactMode=SHARED_APP_123`。
+
+由运行用户在服务器执行 `d01_application_only_123.py stage <发布名> <包SHA256> --archive <incoming内包路径>`。此步骤验证包、编译后的建筑编码和原包的数据库脚本与运行配置资源，输出候选状态摘要。管理员核验入口脚本摘要后执行 `apply <发布名> <候选状态SHA256>`。入口暂停共享端网页和后端服务，原子切换 `current` 后启动这两个服务，保留旧发布供启动失败时回退。
+
+换包前后只读核对 Flyway 历史，保持应用内 Flyway、字符集修复和 TDengine 初始化关闭。这个入口不执行迁移、数据库备份或恢复，也不沿用第 14 节的升级授权。

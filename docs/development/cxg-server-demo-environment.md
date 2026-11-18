@@ -31,6 +31,10 @@ Compose 中的私密文件使用相对于发布目录的 `../../private/`。不�
 
 ## 运维入口
 
+### V123 同版本换应用
+
+使用本实例原建筑编码构建前端，通过 `build_unified_release.py demo --application-only` 为实际独立库组包。`demo_release.py prepare` 比对新旧包的迁移与运行配置资源，再由 `switch-app --state <候选状态文件>` 切换本实例的网页和应用容器。当前库须为 V123，迁移历史只读核对。保留原配置、公开静态入口和数据库容器，候选启动关闭 Flyway、字符集修复和 TDengine 初始化。新应用启动失败且确认停止后，可重新启动原应用容器。
+
 ### 19080 前端构建与发布校验
 
 19080 的大屏建筑绑定由 [`frontend-build.json`](../../src/env/cxg-demo/frontend-build.json) 固定为 `CXG_F1_F6_HOURLY_V4`。该编码是非敏感的部署配置，不是数据库凭据。前端通过 `VITE_SCREEN_BUILDING_CODE` 在构建时读取它；服务器运行后修改环境变量不会修复已经生成的静态文件。
