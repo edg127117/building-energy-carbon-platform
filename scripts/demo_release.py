@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from d01_application_only_123 import runtime_resources
 from d01_release import JAR, protected_json, require, sha, stage_package, write_state
 
 BASE = Path("/home/user1/deployments/building-energy-carbon-demo")
@@ -181,14 +182,26 @@ def prepare(archive, expected_sha):
         require(member.isfile() and member.size <= 64 * 1024, "DEMO_MANIFEST_SIZE_INVALID")
         raw = package.extractfile(member).read()
     manifest = dict(line.split("=", 1) for line in raw.decode().splitlines() if "=" in line)
-    require(manifest.get("artifactMode") == "UNIFIED_DEMO_120_123"
-            and manifest.get("sourceMigration") == "120" and manifest.get("expectedMigration") == "123"
+    application_only = manifest.get("artifactMode") == "DEMO_APP_123"
+    plan = ("123", "APPLICATION_ONLY") if application_only else ("120", "SCHEMA_UPGRADE")
+    require(manifest.get("artifactMode") in ("DEMO_APP_123", "UNIFIED_DEMO_120_123")
+            and (manifest.get("sourceMigration"), manifest.get("releaseMode", "SCHEMA_UPGRADE")) == plan
+            and manifest.get("expectedMigration") == "123"
             and manifest.get("expectedDatabase") == baseline["database"]
             and re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "DEMO_PACKAGE_PLAN_MISMATCH")
     release = BASE / "releases" / ("unified-" + manifest["commit"][:12] + "-19080")
     stage_package(archive, release)
     require(sha(release / JAR) == manifest["backendJarSha256"]
             and sha(release / "web/index.html") == manifest["webIndexSha256"], "DEMO_PACKAGE_HASH_MISMATCH")
+    if application_only:
+        previous = Path(baseline["previousRelease"])
+        old_manifest = dict(line.split("=", 1) for line in (previous / "MANIFEST.txt").read_text().splitlines() if "=" in line)
+        page, = (release / "web/assets").glob("FinalBPage-*.js")
+        binding = re.search(r'__name:"FinalBPage",setup\(\w+\)\{const \w+="([^"]*)"', page.read_text(encoding="utf-8"))
+        require(old_manifest.get("expectedMigration") == "123" and binding
+                and binding[1] == manifest["screenBuildingCode"] == old_manifest.get("screenBuildingCode"),
+                "DEMO_APP_ONLY_BASELINE_OR_BINDING_CHANGED")
+        require(runtime_resources(previous / JAR) == runtime_resources(release / JAR), "DEMO_RUNTIME_RESOURCES_CHANGED")
     # Keep old lazy chunks and the separately maintained public entry byte-for-byte.
     preserved_web = {}
     oldroot = Path(baseline["oldWebRoot"])
@@ -210,7 +223,7 @@ def prepare(archive, expected_sha):
     state = {**baseline, "phase": "PREPARED", "operation": operation, "release": str(release),
              "commit": manifest["commit"], "jarSha256": manifest["backendJarSha256"],
              "webSha256": manifest["webIndexSha256"], "buildingCode": manifest["screenBuildingCode"],
-             "preservedWeb": preserved_web, "candidateStarted": False}
+             "preservedWeb": preserved_web, "candidateStarted": False, "releaseMode": plan[1]}
     unchanged(state)
     path = release / "operation.json"
     write_state(path, state, new=True)
@@ -336,7 +349,7 @@ def migrate(path, backup_file, report_file):
                 {"freezeSha256": sha(path), "jarSha256": state["jarSha256"]}, new=True)
 
 
-def clone(old, name, replacements):
+def clone(old, name, replacements, *, extra_args=()):
     config, host = copy.deepcopy(old["Config"]), copy.deepcopy(old["HostConfig"])
     host["Binds"] = [replacements.get(x.split(":")[1], x.split(":")[0]) + ":" + ":".join(x.split(":")[1:])
                      for x in (host.get("Binds") or [])]
@@ -349,6 +362,9 @@ def clone(old, name, replacements):
     host["NetworkMode"] = primary
     config.update(Hostname="", Image=old["Image"], HostConfig=host,
                   NetworkingConfig={"EndpointsConfig": {primary: networks[primary]}})
+    if extra_args:
+        keys = {arg.partition("=")[0] for arg in extra_args}
+        config["Cmd"] = [arg for arg in config["Cmd"] if arg.partition("=")[0] not in keys] + list(extra_args)
     created = api("POST", "/containers/create?name=" + name, config)["Id"]
     for network, endpoint in networks.items():
         if network != primary:
@@ -432,9 +448,101 @@ def cutover(path, backup_file, report_file):
         raise
 
 
+def application_history(state):
+    # 核对现有独立库的 Flyway 历史，连接自身只读，不执行维护迁移命令。
+    result = subprocess.run(["docker", "exec", state["mysqlId"], "sh", "-c",
+                             'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot -N -B "$1" -e "$2"',
+                             "_", state["database"], "SET SESSION TRANSACTION READ ONLY; "
+                             "SELECT version,checksum,success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank;"],
+                            capture_output=True, text=True, timeout=15)
+    history = result.stdout.strip()
+    last = history.splitlines()[-1].split("\t") if history else []
+    require(result.returncode == 0 and len(last) == 3 and last[0] == "123" and last[2] == "1",
+            "DEMO_APP_ONLY_LIVE_V123_REQUIRED")
+    return history
+
+
+def check_application_web(web_hash):
+    with urllib.request.urlopen("http://127.0.0.1:19080/", timeout=5) as response:
+        require(hashlib.sha256(response.read()).hexdigest() == web_hash, "DEMO_WEB_RESPONSE_MISMATCH")
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:19080/api/auth/me", timeout=5) as response:
+            require(response.status == 200, "DEMO_PROXY_NOT_READY")
+    except urllib.error.HTTPError as error:
+        require(error.code == 401, "DEMO_PROXY_NOT_READY")
+
+
+def switch_application(path):
+    state = state_file(path)
+    require(state.get("releaseMode") == "APPLICATION_ONLY" and state["phase"] == "PREPARED",
+            "DEMO_APP_ONLY_PREPARED_REQUIRED")
+    unchanged(state)
+    history = application_history(state)
+    before = Path(state["previousRelease"])
+    target = Path(state["release"])
+    require(runtime_resources(before / JAR) == runtime_resources(target / JAR), "DEMO_RUNTIME_RESOURCES_CHANGED")
+    require(sha(target / "web/index.html") == state["webSha256"]
+            and sha(target / "nginx.conf") == state["oldNginxSha256"], "DEMO_CANDIDATE_WEB_CHANGED")
+    require(all(sha(target / "web" / relative) == digest for relative, digest in state["preservedWeb"].items()),
+            "DEMO_EXISTING_WEB_CHANGED")
+    require(not Path(state["holdPath"]).exists(), "DEMO_MAINTENANCE_ALREADY_ACTIVE")
+    old_app, old_web = state["appId"], state["webId"]
+    name = "v123-app-" + state["commit"][:12]
+    # 原演示容器会在启动时让 Flyway 检查库。只换应用时显式关闭这三个数据库结构入口。
+    app = clone(inspect(old_app), name + "-app", {"/app/application.jar": str(target / JAR)},
+                extra_args=("--spring.flyway.enabled=false", "--tdengine.initialization-enabled=false",
+                            "--database.charset-fix.enabled=false"))
+    web = clone(inspect(old_web), name + "-web", {"/usr/share/nginx/html": str(target / "web"),
+                "/etc/nginx/conf.d/default.conf": str(target / "nginx.conf")})
+    link = BASE / (".current-app-" + state["operation"])
+    state.update(phase="STARTING", candidateStarted=True, candidateApp=app, candidateWeb=web)
+    write_state(path, state)
+    try:
+        for identifier in (old_web, old_app):
+            api("POST", "/containers/" + identifier + "/stop?t=30")
+            require(not inspect(identifier)["State"]["Running"], "DEMO_ORIGINAL_STILL_RUNNING")
+        api("POST", "/containers/" + app + "/start")
+        healthy(app, state["appNetwork"])
+        api("POST", "/containers/" + web + "/start")
+        deadline = time.monotonic() + 12
+        while True:
+            try:
+                check_application_web(state["webSha256"])
+                break
+            except (OSError, RuntimeError):
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(1)
+        require(application_history(state) == history, "DEMO_APP_ONLY_SCHEMA_HISTORY_CHANGED")
+        unchanged(state)
+        runtime = json.loads((before / "runtime.json").read_text())
+        runtime.update(appId=app, webId=web, commit=state["commit"], jarSha256=state["jarSha256"], release=str(target))
+        write_state(target / "runtime.json", runtime, new=True)
+        link.symlink_to(target)
+        link.replace(BASE / "current")
+    except BaseException:
+        for identifier in (web, app):
+            if inspect(identifier)["State"]["Running"]:
+                api("POST", "/containers/" + identifier + "/stop?t=30")
+                require(not inspect(identifier)["State"]["Running"], "DEMO_APP_ONLY_ROLLBACK_STOP_FAILED")
+        require((BASE / "current").resolve() == before, "DEMO_CURRENT_CHANGED")
+        # 同 V123 且保持原写入协议，启动失败可以重新启用原应用，不回退数据库。
+        api("POST", "/containers/" + old_app + "/start")
+        healthy(old_app, state["appNetwork"])
+        api("POST", "/containers/" + old_web + "/start")
+        state["phase"] = "APPLICATION_ROLLED_BACK"
+        write_state(path, state)
+        raise
+    finally:
+        link.unlink(missing_ok=True)
+    state["phase"] = "AWAITING_BUSINESS_ACCEPTANCE"
+    write_state(path, state)
+    return {"action": "switch-app", "complete": True, "commit": state["commit"], "schema": 123}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("inspect", "prepare", "status", "validate-source", "freeze", "migrate", "cutover"))
+    parser.add_argument("action", choices=("inspect", "prepare", "status", "validate-source", "freeze", "migrate", "cutover", "switch-app"))
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--sha256")
     parser.add_argument("--state", type=Path)
@@ -459,6 +567,10 @@ def main():
             require(args.state is not None, "DEMO_STATE_ARGUMENT_REQUIRED")
             if args.action == "status":
                 result = state_file(args.state)
+            elif args.action == "switch-app":
+                result = switch_application(args.state)
+            elif state_file(args.state).get("releaseMode") == "APPLICATION_ONLY":
+                raise RuntimeError("DEMO_APP_ONLY_REQUIRES_SWITCH_APP")
             elif args.action == "validate-source":
                 state = state_file(args.state)
                 require(state["phase"] == "PREPARED", "DEMO_PREPARED_STATE_REQUIRED")

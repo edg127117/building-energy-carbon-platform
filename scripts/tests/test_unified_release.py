@@ -42,10 +42,17 @@ class ArtifactTest(unittest.TestCase):
         (self.web / 'index.html').write_text('fixture')
         (self.web / 'assets/FinalBPage-test.js').write_text('__name:"FinalBPage",setup(e){const a="BUILDING"')
 
-    def build(self, environment, database, **metadata):
+    def build(self, environment, database, *, application_only=False, **metadata):
         (self.web / 'release-build.json').write_text(json.dumps({
             'environment': environment, 'buildingCode': 'BUILDING', **metadata}))
-        return builder.build(environment, self.jar, self.web, self.root / 'candidate', 'a' * 40, database)
+        return builder.build(environment, self.jar, self.web, self.root / 'candidate', 'a' * 40, database,
+                             application_only=application_only)
+
+    def test_demo_application_bundle_is_explicitly_same_schema_and_keeps_jar_resources(self):
+        result = self.build('demo', 'independent_fixture', application_only=True)['manifest']
+        self.assertEqual((result['artifactMode'], result['releaseMode'], result['sourceMigration'],
+                          result['expectedMigration']), ('DEMO_APP_123', 'APPLICATION_ONLY', '123', '123'))
+        self.assertEqual(demo.runtime_resources(self.jar), demo.runtime_resources(self.root / 'candidate' / shared.JAR))
 
     def test_shared_keeps_six_runtime_boundaries_and_does_not_modify_source_jar(self):
         before = shared.sha(self.jar)
@@ -138,7 +145,7 @@ class DemoBoundaryTest(unittest.TestCase):
 
     def test_candidate_clones_existing_limits_config_networks_and_image(self):
         old = {'Id': '1' * 64, 'Image': 'sha256:pinned', 'Name': '/old-app',
-               'Config': {'Env': ['BUSINESS=kept'], 'Cmd': ['original']},
+               'Config': {'Env': ['BUSINESS=kept'], 'Cmd': ['original', '--spring.flyway.enabled=true']},
                'HostConfig': {'Binds': ['/old.jar:/app/application.jar:ro', '/private.yml:/config/backend.yml:ro'],
                               'Memory': 1073741824, 'NetworkMode': 'app', 'Privileged': False},
                'NetworkSettings': {'Networks': {'app': {'Aliases': ['canonical-app'], 'IPAddress': 'old-address'},
@@ -146,11 +153,13 @@ class DemoBoundaryTest(unittest.TestCase):
         original = copy.deepcopy(old)
         actual = {'Mounts': [{'Destination': '/app/application.jar', 'Source': '/new.jar'}]}
         with patch.object(demo, 'api', return_value={'Id': '2' * 64}) as api, patch.object(demo, 'inspect', return_value=actual):
-            demo.clone(old, 'candidate', {'/app/application.jar': '/new.jar'})
+            demo.clone(old, 'candidate', {'/app/application.jar': '/new.jar'},
+                       extra_args=('--spring.flyway.enabled=false',))
         self.assertEqual(old, original)
         created = api.call_args_list[0].args[2]
         self.assertEqual(created['Image'], 'sha256:pinned')
         self.assertEqual(created['Env'], ['BUSINESS=kept'])
+        self.assertEqual(created['Cmd'], ['original', '--spring.flyway.enabled=false'])
         self.assertEqual(created['HostConfig']['Memory'], 1073741824)
         self.assertIn('/private.yml:/config/backend.yml:ro', created['HostConfig']['Binds'])
         self.assertIn('canonical-app', created['NetworkingConfig']['EndpointsConfig']['app']['Aliases'])
@@ -165,6 +174,16 @@ class DemoBoundaryTest(unittest.TestCase):
                     action(Path('operation'), Path('backup'), Path('report'))
                 schema.assert_not_called()
                 api.assert_not_called()
+
+    def test_application_switch_requires_read_only_v123_check_before_stopping_any_container(self):
+        state = {'phase': 'PREPARED', 'releaseMode': 'APPLICATION_ONLY'}
+        with patch.object(demo, 'state_file', return_value=state), patch.object(demo, 'unchanged'), \
+                patch.object(demo, 'application_history', side_effect=RuntimeError('not V123')), \
+                patch.object(demo, 'schema_job') as migrate, patch.object(demo, 'api') as api:
+            with self.assertRaisesRegex(RuntimeError, 'not V123'):
+                demo.switch_application(Path('operation'))
+            api.assert_not_called()
+            migrate.assert_not_called()
 
     def test_restore_rejects_source_volumes_and_exposed_database_ports(self):
         with tempfile.TemporaryDirectory() as directory:
