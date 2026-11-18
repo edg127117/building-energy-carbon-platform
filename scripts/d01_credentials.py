@@ -137,7 +137,9 @@ def check_containers():
 
 
 def mysql_rights(output, role, target_schema="84", release_mode="SCHEMA_UPGRADE"):
-    require(target_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_SCHEMA_TARGET_REQUIRED")
+    require(target_schema in ("84", "85", "86", "87", "88", "93", "121", "123")
+            or (re.fullmatch(r"[1-9][0-9]{2,8}", target_schema) and int(target_schema) > 123),
+            "D01_SCHEMA_TARGET_REQUIRED")
     require(release_mode == "SCHEMA_UPGRADE" or (release_mode == "APPLICATION_ONLY" and target_schema in ("88", "93", "121")),
             "D01_CREDENTIAL_RELEASE_MODE_REQUIRED")
     lines = output.splitlines()

@@ -67,8 +67,62 @@ def require(condition, code):
         raise RuntimeError(code)
 
 
-def migration_versions(source, target):
+def reusable_upgrade(source, target):
+    return (isinstance(source, str) and isinstance(target, str)
+            and re.fullmatch(r"[1-9][0-9]{2,8}", source)
+            and re.fullmatch(r"[1-9][0-9]{2,8}", target)
+            and 123 <= int(source) < int(target))
+
+
+def mysql_migrations(jar):
+    migrations = {}
+    for name in jar.namelist():
+        match = re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V([0-9]{1,9})__[^/]+\.sql", name)
+        if match:
+            version = int(match[1])
+            require(version not in migrations, "RELEASE_DUPLICATE_MIGRATION_VERSION")
+            migrations[version] = name
+    return migrations
+
+
+def packaged_upgrade_steps(jar, source, target):
+    migrations = mysql_migrations(jar)
+    require(reusable_upgrade(source, target) and int(source) in migrations
+            and max(migrations) == int(target), "RELEASE_MIGRATION_RANGE_MISMATCH")
+    versions = tuple(sorted(v for v in migrations if v > int(source)))
+    for version in versions:
+        require(not re.search(rb"(?i)\bUSE\s+", jar.read(migrations[version])),
+                "RELEASE_CROSS_DATABASE_SQL_FORBIDDEN")
+    return versions
+
+
+def verified_upgrade_steps(jar, manifest, environment):
+    source, target = manifest.get("sourceMigration"), manifest.get("expectedMigration")
+    require(manifest.get("artifactMode") == f"{environment.upper()}_SCHEMA_UPGRADE"
+            and manifest.get("releaseMode") == "SCHEMA_UPGRADE", "RELEASE_ENVIRONMENT_OR_MODE_MISMATCH")
+    versions = packaged_upgrade_steps(jar, source, target)
+    require(manifest.get("migrationSteps") == ",".join(map(str, versions)), "RELEASE_MIGRATION_STEPS_MISMATCH")
+    return versions
+
+
+def verify_migration_history(previous, candidate, source):
+    with zipfile.ZipFile(previous) as current:
+        before = mysql_migrations(current)
+        after = mysql_migrations(candidate)
+        require(before and max(before) == int(source)
+                and {v: name for v, name in after.items() if v <= int(source)} == before
+                and all(current.read(name) == candidate.read(name) for name in before.values()),
+                "RELEASE_EXISTING_MIGRATION_CHANGED")
+
+
+def migration_versions(source, target, steps=None):
     """只展开已批准路径；版本跳号不是待补迁移，也不接受调用者任意指定 SQL。"""
+    if reusable_upgrade(source, target):
+        require(isinstance(steps, list) and steps and all(type(v) is int for v in steps),
+                "RELEASE_MIGRATION_STEPS_REQUIRED")
+        require(steps == sorted(set(steps)) and int(source) < steps[0] and steps[-1] == int(target),
+                "RELEASE_MIGRATION_STEPS_INVALID")
+        return tuple(steps)
     if (source, target) == ("93", "121"):
         return ALIGNMENT_VERSIONS
     if (source, target) == ("88", "93"):
@@ -269,13 +323,15 @@ def prepare(name, archive, expected_sha, credentials):
         stage_package(archive, target)
         manifest = dict(line.split("=", 1) for line in (target / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         target_schema = manifest.get("expectedMigration")
-        require(target_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_SUPPORTED_PACKAGE_REQUIRED")
+        new_upgrade = reusable_upgrade(manifest.get("sourceMigration"), target_schema)
+        require(new_upgrade or target_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_SUPPORTED_PACKAGE_REQUIRED")
         # 同版本换包必须显式声明并核验原结构，不能借空迁移区间跳过数据库校验。
         source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1) if int(target_schema) <= 85 else None)
         state.update(source_schema=source_schema, target_schema=target_schema)
         if "releaseMode" in manifest:
             state["release_mode"] = manifest["releaseMode"]
-        validate_schema_plan(state)
+        if not new_upgrade:
+            validate_schema_plan(state)
         require(re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "D01_COMMIT_REQUIRED")
         require(sha(target / JAR) == manifest["backendJarSha256"] and
                 sha(target / "web/index.html") == manifest["webIndexSha256"], "D01_PACKAGE_CONTENT_MISMATCH")
@@ -310,6 +366,22 @@ def prepare(name, archive, expected_sha, credentials):
                 jar.read("BOOT-INF/classes/com/platform/tools/SharedAlignmentSchemaContract.class")
                 state["alignment"] = {key: manifest[key] for key in
                                       ("roomSensorBuildingId", "roomSensorSpaceId", "roomSensorMysqlSha256", "roomSensorTdSha256")}
+            if new_upgrade:
+                require(manifest.get("expectedDatabase") == "iot_platform"
+                        and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1"
+                        and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.get("screenBuildingCode", "")),
+                        "D01_UNIFIED_PACKAGE_PLAN_REQUIRED")
+                current_manifest = dict(line.split("=", 1) for line in
+                                        (current / "MANIFEST.txt").read_text().splitlines() if "=" in line)
+                require(current_manifest.get("expectedMigration") == source_schema
+                        and current_manifest.get("screenBuildingCode") == manifest["screenBuildingCode"],
+                        "D01_UPGRADE_BASELINE_OR_BINDING_CHANGED")
+                steps = verified_upgrade_steps(jar, manifest, "shared")
+                verify_migration_history(current / JAR, jar, source_schema)
+                with zipfile.ZipFile(current / JAR) as previous:
+                    properties = "BOOT-INF/classes/application.properties"
+                    require(jar.read(properties) == previous.read(properties), "D01_ALIGNMENT_RUNTIME_BOUNDARY_MISMATCH")
+                state["migration_steps"] = list(steps)
             if target_schema == "123":
                 unified_shared_package(jar, manifest)
                 require(all(key not in current_runtime or current_runtime[key] == value
@@ -318,6 +390,8 @@ def prepare(name, archive, expected_sha, credentials):
                 if int(target_schema) >= version:
                     jar.read(migration)
             jar.read("BOOT-INF/classes/com/platform/tools/D01SchemaMigration.class")
+        if new_upgrade:
+            validate_schema_plan(state)
         state["jar_sha256"] = sha(target / JAR)
         state["web_sha256"] = sha(target / "web/index.html")
         schema("validate" + state["source_schema"], state, credentials)
@@ -386,7 +460,7 @@ def schema(action, state, credentials):
     target = target_schema(state)
     source = state.get("source_schema", "83")
     allowed = ("validate" + source, "validate" + target,
-               *("upgrade" + str(v) for v in migration_versions(source, target)))
+               *("upgrade" + str(v) for v in migration_versions(source, target, state.get("migration_steps"))))
     if target == "121":
         allowed += ("bootstrap121",)
     require(action in allowed, "D01_SCHEMA_ACTION_NOT_AUTHORIZED")
@@ -401,6 +475,10 @@ def schema(action, state, credentials):
         require(values["user"] != actual_runtime.get("MYSQL_USER", "platform_app"), "D01_SEPARATE_MIGRATION_ACCOUNT_REQUIRED")
     env = {**os.environ, "D01_JDBC_URL": values["url"], "D01_JDBC_USER": values["user"],
            "D01_JDBC_PASSWORD": values["password"], "D01_WRITERS_FROZEN": "true"}
+    if action.startswith("upgrade") and reusable_upgrade(source, target):
+        versions = migration_versions(source, target, state.get("migration_steps"))
+        index = versions.index(int(action.removeprefix("upgrade")))
+        env["D01_EXPECTED_PREDECESSOR"] = str(versions[index - 1]) if index else source
     bootstrap = action == "bootstrap121"
     if bootstrap:
         env.update(D01_ROOM_BUILDING_ID=state["alignment"]["roomSensorBuildingId"],
@@ -441,6 +519,9 @@ def validate_schema_plan(state):
     target = state.get("target_schema", "84")
     source = state.get("source_schema", "83")
     mode = state.get("release_mode", "SCHEMA_UPGRADE")
+    if mode == "SCHEMA_UPGRADE" and reusable_upgrade(source, target):
+        migration_versions(source, target, state.get("migration_steps"))
+        return target
     require((mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93")))
             or (mode == "SCHEMA_UPGRADE" and (source, target) in
                 (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"), ("121", "123"))),
@@ -545,7 +626,7 @@ def migrate(state_path, backup_dir, credentials, restore_report=None, td_credent
         schema("validate" + target, state, credentials)
         return
     # 每个独立进程只执行一条迁移；任一步失败保留冻结现场，不自动重试、repair 或启动旧应用。
-    versions = migration_versions(state.get("source_schema", "83"), target)
+    versions = migration_versions(state.get("source_schema", "83"), target, state.get("migration_steps"))
     for index, version in enumerate(versions):
         if index:
             inactive()

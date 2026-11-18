@@ -173,7 +173,7 @@ def retry_baseline(state, prepared, *, allow_other_restart=False):
     allowed_runtime_keys = RUNTIME_REQUIRED | set(TDENGINE_TARGET) | set(ALIGNMENT_ENV)
     legacy_runtime = runtime_keys == RUNTIME_REQUIRED
     extended_runtime = (RUNTIME_REQUIRED | set(TDENGINE_TARGET)) <= runtime_keys <= allowed_runtime_keys
-    schema121 = state.get("target_schema") in ("121", "123")
+    schema121 = int(state.get("target_schema", "84")) >= 121
     require(isinstance(runtime, dict) and (legacy_runtime or extended_runtime)
             and (not schema121 or extended_runtime)
             and (not schema121 or all(runtime.get(key) == value for key, value in TDENGINE_TARGET.items()))
@@ -202,11 +202,19 @@ def retry_baseline(state, prepared, *, allow_other_restart=False):
             'D01_OTHER_SITE_CHANGED')
 
 
+def reusable_upgrade(source, target):
+    return (isinstance(source, str) and isinstance(target, str)
+            and re.fullmatch(r"[1-9][0-9]{2,8}", source)
+            and re.fullmatch(r"[1-9][0-9]{2,8}", target)
+            and 123 <= int(source) < int(target))
+
+
 def valid_schema_plan(source, target, mode="SCHEMA_UPGRADE"):
     # 与发布状态机一致；未显式授权的同版本包不能被默认为“不需要迁移”。
     return (mode == "APPLICATION_ONLY" and (source, target) in (("88", "88"), ("93", "93"))) or (
-        mode == "SCHEMA_UPGRADE" and (source, target) in
-        (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"), ("121", "123")))
+        mode == "SCHEMA_UPGRADE" and
+        (reusable_upgrade(source, target) or (source, target) in
+         (("83", "84"), ("84", "85"), ("85", "86"), ("85", "87"), ("86", "87"), ("87", "88"), ("88", "93"), ("93", "121"), ("121", "123"))))
 
 
 def failed_online_state_path(private, config, operation):
@@ -363,9 +371,30 @@ def authorization_release_id(commit, rehearsal_only=False):
     return "d01-" + commit[:12] + ("-rehearsal" if rehearsal_only else "")
 
 
-def retire_completed(next_release, source_schema="84"):
+def compatible_replacement(candidate, current, source_schema):
+    def runtime_resources(path):
+        with zipfile.ZipFile(path) as jar:
+            return {name: hashlib.sha256(jar.read(name)).digest() for name in jar.namelist()
+                    if not name.endswith("/") and name.startswith((
+                        "BOOT-INF/classes/db/migration/mysql/", "BOOT-INF/classes/db/room-sensor/",
+                        "BOOT-INF/classes/application"))}
+
+    properties = dict(line.split("=", 1) for line in (current / "MANIFEST.txt").read_text().splitlines() if "=" in line)
+    require(properties.get("sourceMigration") == properties.get("expectedMigration") == source_schema
+            and properties.get("artifactMode") == f"SHARED_APP_{source_schema}"
+            and properties.get("releaseMode") == "APPLICATION_ONLY"
+            and properties.get("expectedDatabase") == "iot_platform"
+            and properties.get("backendJarSha256") == hashlib.sha256((current / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
+            and runtime_resources(candidate / "building-energy-carbon-platform.jar") ==
+                runtime_resources(current / "building-energy-carbon-platform.jar"),
+            "D01_OLD_BASELINE_JAR_CHANGED")
+
+
+def retire_completed(next_release, source_schema="84", *, allow_application_update=False):
     """只归档与新源版本一致、已撤销且仍在运行的完成记录；不重置失败现场或删除备份。"""
-    require(source_schema in ("84", "85", "86", "87", "88", "93", "121", "123"), "D01_COMPLETED_SOURCE_REQUIRED")
+    require(source_schema in ("84", "85", "86", "87", "88", "93", "121", "123")
+            or (allow_application_update and re.fullmatch(r"[1-9][0-9]{2,8}", source_schema)
+                and int(source_schema) >= 123), "D01_COMPLETED_SOURCE_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
     paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
@@ -395,14 +424,17 @@ def retire_completed(next_release, source_schema="84"):
             and state.get("target_schema", "84") == source_schema
             and state.get("release") == str(candidate) and current.is_relative_to(BASE / "releases"),
             "D01_OLD_BASELINE_CHANGED")
-    # 后续前端发布可以更换目录，但不能替换已核验的后端。完成维护后允许服务正常重启。
+    # 后续同结构换包可更新 JAR；归档前仍核验已完成记录及数据库相关资源。
     # 已完成且撤销的窗口不再固定其他站点的历史 PID；新 prepare 会重新固定本轮进程。
     retry_baseline(state, int(time.time()), allow_other_restart=True)
     require(state.get("config_hashes") == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
     require(hashlib.sha256((candidate / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
-            == state.get("jar_sha256") == config.get("jar_sha256")
-            == hashlib.sha256((current / "building-energy-carbon-platform.jar").read_bytes()).hexdigest(),
-            "D01_OLD_BASELINE_JAR_CHANGED")
+            == state.get("jar_sha256") == config.get("jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
+    if allow_application_update and current != candidate:
+        compatible_replacement(candidate, current, source_schema)
+    else:
+        require(hashlib.sha256((current / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
+                == state.get("jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
     for artifact in (BASE / "incoming" / (next_release + "-authorized.tar.gz"), BASE / "releases" / next_release):
         require(not artifact.exists() and not artifact.is_symlink(), "D01_NEW_RELEASE_ALREADY_EXISTS")
     require(set(config.get("code_sha256", {})) == {name for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
@@ -555,13 +587,14 @@ def package_manifest(raw):
         manifest = dict(line.split("=", 1) for line in archive.extractfile("MANIFEST.txt").read().decode().splitlines() if "=" in line)
         jar = archive.extractfile("building-energy-carbon-platform.jar").read()
         index = archive.extractfile("web/index.html").read()
-        require(manifest.get("expectedMigration") in ("84", "85", "86", "87", "88", "93", "121", "123")
+        new_upgrade = reusable_upgrade(manifest.get("sourceMigration"), manifest.get("expectedMigration"))
+        require((new_upgrade or manifest.get("expectedMigration") in ("84", "85", "86", "87", "88", "93", "121", "123"))
                 and re.fullmatch("[a-f0-9]{40}", manifest.get("commit", ""))
                 and hashlib.sha256(jar).hexdigest() == manifest.get("backendJarSha256")
                 and hashlib.sha256(index).hexdigest() == manifest.get("webIndexSha256"), "D01_PACKAGE_MANIFEST_INVALID")
         target = manifest["expectedMigration"]
         require("backupPolicy" not in manifest or
-                (target == "123" and manifest["backupPolicy"] == "FROZEN_SINGLE_RESTORE_V1"),
+                ((target == "123" or new_upgrade) and manifest["backupPolicy"] == "FROZEN_SINGLE_RESTORE_V1"),
                 "D01_BACKUP_POLICY_INVALID")
         source = manifest.get("sourceMigration", str(int(target) - 1) if int(target) <= 85 else None)
         require(valid_schema_plan(source, target, manifest.get("releaseMode", "SCHEMA_UPGRADE")),
@@ -610,6 +643,23 @@ def package_manifest(raw):
                             "D01_ROOM_RESOURCE_HASH_MISMATCH")
                 packaged.read("BOOT-INF/classes/com/platform/tools/D01RoomSensorBootstrap.class")
                 packaged.read("BOOT-INF/classes/com/platform/tools/SharedAlignmentSchemaContract.class")
+            if new_upgrade:
+                steps = sorted(v for v in versions if v > int(source))
+                require(len(set(versions)) == len(versions) and int(source) in versions
+                        and manifest.get("migrationSteps") == ",".join(map(str, steps))
+                        and manifest.get("artifactMode") == "SHARED_SCHEMA_UPGRADE"
+                        and manifest.get("expectedDatabase") == "iot_platform"
+                        and manifest.get("backupPolicy") == "FROZEN_SINGLE_RESTORE_V1"
+                        and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", manifest.get("screenBuildingCode", "")),
+                        "D01_UNIFIED_PACKAGE_PLAN_REQUIRED")
+                require(packaged.read("BOOT-INF/classes/application.properties").decode("utf-8")
+                        == "".join(k + "=" + v + "\n" for k, v in ALIGNMENT_DEFAULTS.items()),
+                        "D01_ALIGNMENT_RUNTIME_BOUNDARY_MISMATCH")
+                for name in packaged.namelist():
+                    match = re.fullmatch(r"BOOT-INF/classes/db/migration/mysql/V(\d+)__[^/]+\.sql", name)
+                    if match and int(match[1]) in steps:
+                        require(not re.search(rb"(?i)\bUSE\s+", packaged.read(name)),
+                                "D01_UNIFIED_CROSS_DATABASE_SQL_FORBIDDEN")
             if target == "123":
                 require(manifest.get("artifactMode") == "UNIFIED_SHARED_121_123"
                         and manifest.get("expectedDatabase") == "iot_platform"
@@ -680,9 +730,14 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
         require(INSTALL.exists() or INSTALL.is_symlink(), "D01_REHEARSAL_AUTH_NOT_FOUND")
         retire_revoked_rehearsal(release, source_schema)
     if replace_revoked_completed:
-        require(target_schema in ("85", "86", "87", "88", "93", "121", "123"), "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
+        require(reusable_upgrade(source_schema, target_schema)
+                or target_schema in ("85", "86", "87", "88", "93", "121", "123"),
+                "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
         if INSTALL.exists() or INSTALL.is_symlink():
-            retire_completed(release, source_schema)
+            if reusable_upgrade(source_schema, target_schema):
+                retire_completed(release, source_schema, allow_application_update=True)
+            else:
+                retire_completed(release, source_schema)
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
         retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release=release,
                               source_schema=source_schema, target_schema=target_schema, release_mode=release_mode)
@@ -717,6 +772,8 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
               "code_sha256": {name: hashlib.sha256(files[name]).hexdigest() for name in FILES if name.endswith(".py") or name == "taosdump-d01"},
               "sudoers_sha256": hashlib.sha256(sudoers.encode()).hexdigest(),
               "authorization_reference": authorization_reference or "D01 test maintenance approved; HTTP/MQTT unrecoverable gaps accepted"}
+    if reusable_upgrade(source_schema, target_schema):
+        config["migration_steps"] = list(map(int, manifest["migrationSteps"].split(",")))
     if "backupPolicy" in manifest:
         config["backup_policy"] = manifest["backupPolicy"]
     if rehearsal_only:

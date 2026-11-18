@@ -10,6 +10,7 @@ import java.util.Set;
 
 /** 独立维护进程，只运行 Flyway，不启动采集、审核、重算或定时任务。 */
 public final class D01SchemaMigration {
+    private static final int LATEST_ALIGNMENT_SCHEMA = 123;
     private static final Set<String> TABLES = Set.of("biz_telemetry_raw_intent",
             "biz_telemetry_conflict_evidence", "biz_telemetry_conflict_owner", "biz_telemetry_resolution",
             "biz_telemetry_retention_boundary", "biz_telemetry_conflict_budget", "biz_telemetry_message_intent",
@@ -36,7 +37,7 @@ public final class D01SchemaMigration {
         String target = target(action);
         boolean upgrade = action.startsWith("upgrade");
         int targetVersion = Integer.parseInt(target);
-        String expected = upgrade ? predecessor(targetVersion) : target;
+        String expected = upgrade ? upgradePredecessor(targetVersion, environment) : target;
         String url = required(environment, "D01_JDBC_URL");
         if (!url.startsWith("jdbc:mysql://") || url.matches("(?is).*[?&](user|password)=.*")) {
             throw new IllegalArgumentException("D01_JDBC_URL_WITHOUT_CREDENTIALS_REQUIRED");
@@ -137,9 +138,23 @@ public final class D01SchemaMigration {
             throw new IllegalStateException("D01_V93_HISTORICAL_METERING_TABLE_INCOMPLETE");
         }
         if (targetVersion >= 94) {
-            SharedAlignmentSchemaContract.validate(jdbc, targetVersion);
+            // 保留旧对齐版本的结构约束，新迁移由 Flyway 校验脚本与执行历史。
+            SharedAlignmentSchemaContract.validate(jdbc, Math.min(targetVersion, LATEST_ALIGNMENT_SCHEMA));
         }
         System.out.println("D01_SCHEMA_VALIDATED=" + target);
+    }
+
+    private static String upgradePredecessor(int version, Map<String, String> environment) {
+        if (version <= LATEST_ALIGNMENT_SCHEMA) {
+            return predecessor(version);
+        }
+        // 新版本的前驱取自已核验的发布清单，SQL 编号可以跳号。
+        String previous = required(environment, "D01_EXPECTED_PREDECESSOR");
+        if (!previous.matches("[1-9][0-9]{2,8}") || Integer.parseInt(previous) < 123
+                || Integer.parseInt(previous) >= version) {
+            throw new IllegalArgumentException("D01_SCHEMA_PREDECESSOR_INVALID");
+        }
+        return previous;
     }
 
     static String predecessor(int version) {
@@ -159,6 +174,12 @@ public final class D01SchemaMigration {
     }
 
     static String target(String action) {
+        if (action.matches("(?:validate|upgrade)[1-9][0-9]{2,8}")) {
+            String version = action.replaceFirst("^(?:validate|upgrade)", "");
+            if (Integer.parseInt(version) > LATEST_ALIGNMENT_SCHEMA) {
+                return version;
+            }
+        }
         return switch (action) {
             case "validate83" -> "83";
             case "validate84", "upgrade84" -> "84";

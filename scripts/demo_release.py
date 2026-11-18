@@ -15,9 +15,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 
-from d01_application_only_123 import runtime_resources
-from d01_release import JAR, protected_json, require, sha, stage_package, write_state
+from d01_application_only_123 import runtime_resources, validate_history
+from d01_release import (JAR, migration_versions, protected_json, require, reusable_upgrade, sha,
+                         stage_package, verified_upgrade_steps, verify_migration_history, write_state)
 
 BASE = Path("/home/user1/deployments/building-energy-carbon-demo")
 BACKUP_FORMAT = "UNIFIED_DEMO_BACKUP_V1"
@@ -182,26 +184,39 @@ def prepare(archive, expected_sha):
         require(member.isfile() and member.size <= 64 * 1024, "DEMO_MANIFEST_SIZE_INVALID")
         raw = package.extractfile(member).read()
     manifest = dict(line.split("=", 1) for line in raw.decode().splitlines() if "=" in line)
-    application_only = manifest.get("artifactMode") == "DEMO_APP_123"
-    plan = ("123", "APPLICATION_ONLY") if application_only else ("120", "SCHEMA_UPGRADE")
-    require(manifest.get("artifactMode") in ("DEMO_APP_123", "UNIFIED_DEMO_120_123")
-            and (manifest.get("sourceMigration"), manifest.get("releaseMode", "SCHEMA_UPGRADE")) == plan
-            and manifest.get("expectedMigration") == "123"
-            and manifest.get("expectedDatabase") == baseline["database"]
+    mode = manifest.get("releaseMode", "SCHEMA_UPGRADE")
+    version = manifest.get("expectedMigration", "")
+    application_only = mode == "APPLICATION_ONLY"
+    new_upgrade = mode == "SCHEMA_UPGRADE" and reusable_upgrade(manifest.get("sourceMigration"), version)
+    if application_only:
+        require(re.fullmatch(r"[1-9][0-9]{2,8}", version) and int(version) >= 123
+                and manifest.get("sourceMigration") == version
+                and manifest.get("artifactMode") == f"DEMO_APP_{version}", "DEMO_PACKAGE_PLAN_MISMATCH")
+    elif not new_upgrade:
+        require(mode == "SCHEMA_UPGRADE" and manifest.get("sourceMigration") == "120" and version == "123"
+                and manifest.get("artifactMode") == "UNIFIED_DEMO_120_123", "DEMO_PACKAGE_PLAN_MISMATCH")
+    require(manifest.get("expectedDatabase") == baseline["database"]
             and re.fullmatch(r"[a-f0-9]{40}", manifest.get("commit", "")), "DEMO_PACKAGE_PLAN_MISMATCH")
     release = BASE / "releases" / ("unified-" + manifest["commit"][:12] + "-19080")
     stage_package(archive, release)
     require(sha(release / JAR) == manifest["backendJarSha256"]
             and sha(release / "web/index.html") == manifest["webIndexSha256"], "DEMO_PACKAGE_HASH_MISMATCH")
-    if application_only:
-        previous = Path(baseline["previousRelease"])
+    previous = Path(baseline["previousRelease"])
+    steps = ()
+    if new_upgrade:
+        with zipfile.ZipFile(release / JAR) as candidate:
+            steps = verified_upgrade_steps(candidate, manifest, "demo")
+            verify_migration_history(previous / JAR, candidate, manifest["sourceMigration"])
+    if application_only or new_upgrade:
         old_manifest = dict(line.split("=", 1) for line in (previous / "MANIFEST.txt").read_text().splitlines() if "=" in line)
         page, = (release / "web/assets").glob("FinalBPage-*.js")
         binding = re.search(r'__name:"FinalBPage",setup\(\w+\)\{const \w+="([^"]*)"', page.read_text(encoding="utf-8"))
-        require(old_manifest.get("expectedMigration") == "123" and binding
+        require(old_manifest.get("expectedMigration") == manifest["sourceMigration"] and binding
                 and binding[1] == manifest["screenBuildingCode"] == old_manifest.get("screenBuildingCode"),
                 "DEMO_APP_ONLY_BASELINE_OR_BINDING_CHANGED")
-        require(runtime_resources(previous / JAR) == runtime_resources(release / JAR), "DEMO_RUNTIME_RESOURCES_CHANGED")
+        if application_only:
+            require(runtime_resources(previous / JAR, version) == runtime_resources(release / JAR, version),
+                    "DEMO_RUNTIME_RESOURCES_CHANGED")
     # Keep old lazy chunks and the separately maintained public entry byte-for-byte.
     preserved_web = {}
     oldroot = Path(baseline["oldWebRoot"])
@@ -223,7 +238,9 @@ def prepare(archive, expected_sha):
     state = {**baseline, "phase": "PREPARED", "operation": operation, "release": str(release),
              "commit": manifest["commit"], "jarSha256": manifest["backendJarSha256"],
              "webSha256": manifest["webIndexSha256"], "buildingCode": manifest["screenBuildingCode"],
-             "preservedWeb": preserved_web, "candidateStarted": False, "releaseMode": plan[1]}
+             "preservedWeb": preserved_web, "candidateStarted": False, "releaseMode": mode, "expectedMigration": version}
+    if steps:
+        state.update(sourceMigration=manifest["sourceMigration"], migrationSteps=list(steps))
     unchanged(state)
     path = release / "operation.json"
     write_state(path, state, new=True)
@@ -237,8 +254,15 @@ def state_file(path):
     return state
 
 
+def schema_versions(state):
+    source = state.get("sourceMigration", "120")
+    target = state.get("expectedMigration", "123")
+    return source, target, migration_versions(source, target, state.get("migrationSteps"))
+
+
 def schema_job(state, action, *, read_only=False):
-    require(action in ("validate120", "upgrade121", "upgrade122", "upgrade123", "validate123"),
+    source, target, versions = schema_versions(state)
+    require(action in ("validate" + source, "validate" + target, *(f"upgrade{v}" for v in versions)),
             "DEMO_SCHEMA_ACTION_REQUIRED")
     if action.startswith("upgrade"):
         require(state["phase"] == "FROZEN" and not inspect(state["appId"])["State"]["Running"],
@@ -254,6 +278,9 @@ def schema_job(state, action, *, read_only=False):
     environment = {**os.environ, "D01_JDBC_URL": url, "D01_JDBC_USER": "root",
                    "DEMO_EXPECTED_DATABASE": state["database"],
                    "D01_WRITERS_FROZEN": "false" if read_only else "true"}
+    if action.startswith("upgrade") and reusable_upgrade(source, target):
+        index = versions.index(int(action.removeprefix("upgrade")))
+        environment["D01_EXPECTED_PREDECESSOR"] = str(versions[index - 1]) if index else source
     script = ('IFS= read -r D01_JDBC_PASSWORD; export D01_JDBC_PASSWORD; '
               'exec java -Dloader.main=com.platform.tools.DemoSchemaMigration -cp /candidate.jar '
               'org.springframework.boot.loader.launch.PropertiesLauncher "$1"')
@@ -264,6 +291,8 @@ def schema_job(state, action, *, read_only=False):
                "--entrypoint", "sh"]
     for key in ("D01_JDBC_URL", "D01_JDBC_USER", "DEMO_EXPECTED_DATABASE", "D01_WRITERS_FROZEN"):
         command += ["--env", key]
+    if "D01_EXPECTED_PREDECESSOR" in environment:
+        command += ["--env", "D01_EXPECTED_PREDECESSOR"]
     command += [app["Image"], "-ceu", script, "release-schema", action]
     result = subprocess.run(command, input=(secret + "\n").encode(), env=environment, capture_output=True, timeout=300)
     require(result.returncode == 0 and ("DEMO_SCHEMA_VALIDATED=" + re.search(r"[0-9]+$", action)[0]).encode()
@@ -275,6 +304,8 @@ def freeze(path, approval_reference, writers_fenced, ingress_retained, accept_in
     require(state["phase"] == "PREPARED" and approval_reference and writers_fenced
             and ingress_retained != accept_ingress_loss, "DEMO_MAINTENANCE_APPROVAL_REQUIRED")
     unchanged(state)
+    if "migrationSteps" in state:
+        schema_job(state, "validate" + state["sourceMigration"], read_only=True)
     hold = Path(state["holdPath"])
     require(not hold.exists(), "DEMO_HOLD_ALREADY_EXISTS")
     hold.write_text(state["operation"] + "\n")
@@ -342,8 +373,8 @@ def migrate(path, backup_file, report_file):
     started = Path(state["release"]) / "migration-started.json"
     require(not started.exists(), "DEMO_MIGRATION_NOT_REENTRANT")
     write_state(started, {"freezeSha256": sha(path), "startedAt": int(time.time())}, new=True)
-    for action in ("upgrade121", "upgrade122", "upgrade123"):
-        schema_job(state, action)
+    for version in schema_versions(state)[2]:
+        schema_job(state, f"upgrade{version}")
     # Keep the frozen state immutable: final backup and restore evidence remain bound to these exact bytes.
     write_state(Path(state["release"]) / "schema-ready.json",
                 {"freezeSha256": sha(path), "jarSha256": state["jarSha256"]}, new=True)
@@ -400,7 +431,7 @@ def cutover(path, backup_file, report_file):
     checked_restore(state, path, backup_file, report_file)
     ready = protected_json(Path(state["release"]) / "schema-ready.json")
     require(ready == {"freezeSha256": sha(path), "jarSha256": state["jarSha256"]}, "DEMO_SCHEMA_NOT_READY")
-    schema_job(state, "validate123")
+    schema_job(state, "validate" + state.get("expectedMigration", "123"))
     app = web = None
     try:
         app = clone(inspect(state["appId"]), "unified-" + state["commit"][:12] + "-app",
@@ -456,9 +487,8 @@ def application_history(state):
                              "SELECT version,checksum,success FROM flyway_schema_history WHERE version IS NOT NULL ORDER BY installed_rank;"],
                             capture_output=True, text=True, timeout=15)
     history = result.stdout.strip()
-    last = history.splitlines()[-1].split("\t") if history else []
-    require(result.returncode == 0 and len(last) == 3 and last[0] == "123" and last[2] == "1",
-            "DEMO_APP_ONLY_LIVE_V123_REQUIRED")
+    require(result.returncode == 0, "DEMO_APP_ONLY_HISTORY_UNAVAILABLE")
+    validate_history(history, state.get("expectedMigration", "123"))
     return history
 
 
@@ -480,14 +510,17 @@ def switch_application(path):
     history = application_history(state)
     before = Path(state["previousRelease"])
     target = Path(state["release"])
-    require(runtime_resources(before / JAR) == runtime_resources(target / JAR), "DEMO_RUNTIME_RESOURCES_CHANGED")
+    version = state.get("expectedMigration", "123")
+    require(sha(target / JAR) == state["jarSha256"], "DEMO_CANDIDATE_JAR_CHANGED")
+    require(runtime_resources(before / JAR, version) == runtime_resources(target / JAR, version),
+            "DEMO_RUNTIME_RESOURCES_CHANGED")
     require(sha(target / "web/index.html") == state["webSha256"]
             and sha(target / "nginx.conf") == state["oldNginxSha256"], "DEMO_CANDIDATE_WEB_CHANGED")
     require(all(sha(target / "web" / relative) == digest for relative, digest in state["preservedWeb"].items()),
             "DEMO_EXISTING_WEB_CHANGED")
     require(not Path(state["holdPath"]).exists(), "DEMO_MAINTENANCE_ALREADY_ACTIVE")
     old_app, old_web = state["appId"], state["webId"]
-    name = "v123-app-" + state["commit"][:12]
+    name = f"v{version}-app-" + state["commit"][:12]
     # 原演示容器会在启动时让 Flyway 检查库。只换应用时显式关闭这三个数据库结构入口。
     app = clone(inspect(old_app), name + "-app", {"/app/application.jar": str(target / JAR)},
                 extra_args=("--spring.flyway.enabled=false", "--tdengine.initialization-enabled=false",
@@ -526,7 +559,7 @@ def switch_application(path):
                 api("POST", "/containers/" + identifier + "/stop?t=30")
                 require(not inspect(identifier)["State"]["Running"], "DEMO_APP_ONLY_ROLLBACK_STOP_FAILED")
         require((BASE / "current").resolve() == before, "DEMO_CURRENT_CHANGED")
-        # 同 V123 且保持原写入协议，启动失败可以重新启用原应用，不回退数据库。
+        # 数据结构和写入协议兼容时，可重新启用原应用并保留既有数据。
         api("POST", "/containers/" + old_app + "/start")
         healthy(old_app, state["appNetwork"])
         api("POST", "/containers/" + old_web + "/start")
@@ -537,7 +570,7 @@ def switch_application(path):
         link.unlink(missing_ok=True)
     state["phase"] = "AWAITING_BUSINESS_ACCEPTANCE"
     write_state(path, state)
-    return {"action": "switch-app", "complete": True, "commit": state["commit"], "schema": 123}
+    return {"action": "switch-app", "complete": True, "commit": state["commit"], "schema": int(version)}
 
 
 def main():
@@ -575,8 +608,9 @@ def main():
                 state = state_file(args.state)
                 require(state["phase"] == "PREPARED", "DEMO_PREPARED_STATE_REQUIRED")
                 unchanged(state)
-                schema_job(state, "validate120", read_only=True)
-                result = {"validated": "120", "database": state["database"]}
+                version = state.get("sourceMigration", "120")
+                schema_job(state, "validate" + version, read_only=True)
+                result = {"validated": version, "database": state["database"]}
             elif args.action == "freeze":
                 freeze(args.state, args.approval_reference, args.writers_fenced, args.ingress_retained, args.accept_ingress_loss)
                 result = {"phase": "FROZEN"}

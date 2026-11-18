@@ -42,11 +42,11 @@ class ArtifactTest(unittest.TestCase):
         (self.web / 'index.html').write_text('fixture')
         (self.web / 'assets/FinalBPage-test.js').write_text('__name:"FinalBPage",setup(e){const a="BUILDING"')
 
-    def build(self, environment, database, *, application_only=False, **metadata):
+    def build(self, environment, database, *, application_only=False, source_schema=None, name="candidate", **metadata):
         (self.web / 'release-build.json').write_text(json.dumps({
             'environment': environment, 'buildingCode': 'BUILDING', **metadata}))
-        return builder.build(environment, self.jar, self.web, self.root / 'candidate', 'a' * 40, database,
-                             application_only=application_only)
+        return builder.build(environment, self.jar, self.web, self.root / name, 'a' * 40, database,
+                             application_only=application_only, source_schema=source_schema)
 
     def test_demo_application_bundle_is_explicitly_same_schema_and_keeps_jar_resources(self):
         result = self.build('demo', 'independent_fixture', application_only=True)['manifest']
@@ -84,6 +84,40 @@ class ArtifactTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'CROSS_DATABASE_SQL'):
             self.build('shared', 'iot_platform')
         self.assertFalse((self.root / 'candidate').exists())
+
+    def test_new_versions_reuse_both_package_modes(self):
+        for environment, database in (("shared", "iot_platform"), ("demo", "independent_fixture")):
+            self.build(environment, database, application_only=True, name=f"{environment}-live")
+        with zipfile.ZipFile(self.jar, "a") as jar:
+            jar.writestr("BOOT-INF/classes/db/migration/mysql/V124__fixture.sql", "CREATE TABLE fixture(id INT);")
+        for environment, database in (("shared", "iot_platform"), ("demo", "independent_fixture")):
+            with self.subTest(environment=environment):
+                upgrade = self.build(environment, database, source_schema="123", name=f"{environment}-upgrade")
+                switch = self.build(environment, database, application_only=True, name=f"{environment}-app")
+                live_jar = self.root / f"{environment}-live" / shared.JAR
+                with zipfile.ZipFile(self.root / f"{environment}-upgrade" / shared.JAR) as candidate:
+                    self.assertEqual(shared.verified_upgrade_steps(candidate, upgrade["manifest"], environment), (124,))
+                    shared.verify_migration_history(live_jar, candidate, "123")
+                    with self.assertRaisesRegex(RuntimeError, "ENVIRONMENT_OR_MODE_MISMATCH"):
+                        shared.verified_upgrade_steps(candidate, upgrade["manifest"],
+                                                      "demo" if environment == "shared" else "shared")
+                    with self.assertRaisesRegex(RuntimeError, "MIGRATION_STEPS_MISMATCH"):
+                        shared.verified_upgrade_steps(candidate, {**upgrade["manifest"], "migrationSteps": "125"}, environment)
+                self.assertEqual(switch["manifest"]["sourceMigration"], "124")
+                self.assertEqual(switch["manifest"]["expectedMigration"], "124")
+                self.assertNotIn("backupPolicy", switch["manifest"])
+                self.assertEqual(demo.runtime_resources(self.root / f"{environment}-upgrade" / shared.JAR, "124"),
+                                 demo.runtime_resources(self.root / f"{environment}-app" / shared.JAR, "124"))
+
+    def test_simulated_124_migration_commands_use_verified_steps(self):
+        versions = shared.migration_versions("123", "126", [124, 126])
+        self.assertEqual(versions, (124, 126))
+        self.assertEqual(demo.schema_versions({"sourceMigration": "123", "expectedMigration": "126",
+                                              "migrationSteps": [124, 126]}), ("123", "126", versions))
+        for steps in (None, [124], [126, 124], [123, 126], [124, 124, 126]):
+            with self.assertRaisesRegex(RuntimeError, "MIGRATION_STEPS"):
+                shared.validate_schema_plan({"source_schema": "123", "target_schema": "126",
+                                             "migration_steps": steps})
 
     def test_only_new_explicit_upgrade_pair_is_added(self):
         self.assertEqual(shared.migration_versions('121', '123'), (122, 123))
@@ -184,6 +218,43 @@ class DemoBoundaryTest(unittest.TestCase):
                 demo.switch_application(Path('operation'))
             api.assert_not_called()
             migrate.assert_not_called()
+
+    def test_v124_failed_candidate_restarts_original_application_and_web(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            previous, target = root / 'current', root / 'releases/candidate'
+            previous.mkdir()
+            (target / 'web').mkdir(parents=True)
+            source_jar(previous / shared.JAR)
+            with zipfile.ZipFile(previous / shared.JAR, "a") as jar:
+                jar.writestr("BOOT-INF/classes/db/migration/mysql/V124__fixture.sql", "SELECT 1;")
+            (target / shared.JAR).write_bytes((previous / shared.JAR).read_bytes())
+            (target / 'web/index.html').write_text('index')
+            (target / 'nginx.conf').write_text('nginx')
+            state = {
+                'phase': 'PREPARED', 'releaseMode': 'APPLICATION_ONLY', 'expectedMigration': '124',
+                'previousRelease': str(previous), 'release': str(target), 'operation': 'op', 'commit': 'a' * 40,
+                'appId': 'old-app', 'webId': 'old-web', 'appNetwork': 'private_network',
+                'holdPath': str(root / 'hold'), 'jarSha256': shared.sha(target / shared.JAR),
+                'webSha256': shared.sha(target / 'web/index.html'), 'oldNginxSha256': shared.sha(target / 'nginx.conf'),
+                'preservedWeb': {},
+            }
+            live = {'old-app': True, 'old-web': True, 'new-app': False, 'new-web': False}
+
+            def container_action(method, route):
+                _, _, identifier, action = route.split('/')
+                live[identifier] = action == 'start'
+
+            with patch.object(demo, 'BASE', root), patch.object(demo, 'state_file', return_value=state), \
+                    patch.object(demo, 'unchanged'), patch.object(demo, 'application_history', return_value='history'), \
+                    patch.object(demo, 'clone', side_effect=('new-app', 'new-web')), \
+                    patch.object(demo, 'inspect', side_effect=lambda identifier: {'State': {'Running': live[identifier]}}), \
+                    patch.object(demo, 'api', side_effect=container_action), patch.object(demo, 'write_state'), \
+                    patch.object(demo, 'healthy', side_effect=[RuntimeError('not ready'), None]):
+                with self.assertRaisesRegex(RuntimeError, 'not ready'):
+                    demo.switch_application(Path('operation'))
+            self.assertEqual(state['phase'], 'APPLICATION_ROLLED_BACK')
+            self.assertEqual(live, {'old-app': True, 'old-web': True, 'new-app': False, 'new-web': False})
 
     def test_restore_rejects_source_volumes_and_exposed_database_ports(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -289,6 +360,21 @@ class SharedUpgradeTest(unittest.TestCase):
         fixtures.credential_source.mysql_rights(select_only, 'migration', '121', 'APPLICATION_ONLY')
         with self.assertRaisesRegex(RuntimeError, 'MIGRATION_PRIVILEGES'):
             fixtures.credential_source.mysql_rights(select_only, 'migration', '123')
+
+    def test_installer_reads_new_schema_plan_from_the_actual_archive(self):
+        from test_d01_maintenance import installer
+        fixture = ArtifactTest()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        with zipfile.ZipFile(fixture.jar, "a") as jar:
+            jar.writestr("BOOT-INF/classes/db/migration/mysql/V124__fixture.sql", "CREATE TABLE fixture(id INT);")
+        result = fixture.build("shared", "iot_platform", source_schema="123")
+        manifest, _ = installer.package_manifest(Path(result["archive"]).read_bytes())
+        self.assertEqual(manifest["migrationSteps"], "124")
+        state = {"source_schema": "123", "target_schema": "124", "migration_steps": [124],
+                 "release_mode": "SCHEMA_UPGRADE", "backup_policy": manifest["backupPolicy"]}
+        from test_d01_maintenance import bridge
+        self.assertTrue(bridge.single_final_restore(state))
 
     def test_revoked_new_rehearsal_can_be_archived_without_removing_source_or_backup(self):
         import test_d01_maintenance as fixtures

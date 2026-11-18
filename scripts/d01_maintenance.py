@@ -39,10 +39,13 @@ def single_final_restore(config):
     policy = config.get("backup_policy")
     if policy is None:
         return False
-    # 只接受本轮管理员固定包中的明确策略；旧授权及其他版本不能借此跳过在线阶段。
+    # 仅管理员固定的明确升级计划采用单次最终备份和恢复策略。
+    source, target = config.get("source_schema", ""), config.get("target_schema", "")
+    generic = (re.fullmatch(r"[1-9][0-9]{2,8}", source) and re.fullmatch(r"[1-9][0-9]{2,8}", target)
+               and 123 <= int(source) < int(target) and bool(config.get("migration_steps")))
     require(policy == "FROZEN_SINGLE_RESTORE_V1"
-            and (config.get("source_schema"), config.get("target_schema"), config.get("release_mode"))
-            == ("121", "123", "SCHEMA_UPGRADE"), "D01_BACKUP_POLICY_INVALID")
+            and config.get("release_mode") == "SCHEMA_UPGRADE"
+            and ((source, target) == ("121", "123") or generic), "D01_BACKUP_POLICY_INVALID")
     return not config.get("rehearsal_only", False)
 
 
@@ -203,7 +206,7 @@ class Maintenance:
                 and state["web_sha256"] == self.config["web_sha256"], "D01_TRUSTED_JAR_REQUIRED")
         target = self.config.get("target_schema", "84")
         source = self.config.get("source_schema", str(int(target) - 1))
-        versions = self.release.migration_versions(source, target)
+        versions = self.release.migration_versions(source, target, self.config.get("migration_steps"))
         actions = ("validate" + source, "validate" + target,
                    *("upgrade" + str(v) for v in versions))
         if target == "121":
@@ -211,6 +214,7 @@ class Maintenance:
         require(self.release.target_schema(state) == target
                 and state.get("source_schema", "83") == source
                 and state.get("release_mode", "SCHEMA_UPGRADE") == self.config.get("release_mode", "SCHEMA_UPGRADE")
+                and state.get("migration_steps") == self.config.get("migration_steps")
                 and action in actions,
                 "D01_AUTH_SCHEMA_MISMATCH")
         if self.config.get("rehearsal_only", False):

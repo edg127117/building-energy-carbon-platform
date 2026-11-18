@@ -281,7 +281,14 @@ class PrivilegeBoundaryTest(unittest.TestCase):
             operation = object.__new__(bridge.Maintenance)
             operation.release = Mock(JAR=jar.name)
             operation.release.target_schema.side_effect = lambda state: state.get("target_schema", "84")
-            operation.release.migration_versions.side_effect = lambda source, target: (93,) if (source, target) == ("88", "93") else tuple(range(int(source) + 1, int(target) + 1))
+            def migration_versions(source, target, steps=None):
+                if steps is not None:
+                    return tuple(steps)
+                if (source, target) == ("88", "93"):
+                    return (93,)
+                return tuple(range(int(source) + 1, int(target) + 1))
+
+            operation.release.migration_versions.side_effect = migration_versions
             operation.schema_credentials = root / "private/schema.json"
             operation.config = {"jar_sha256": bridge.digest(jar), "web_sha256": "b" * 64}
             operation.original_schema = Mock()
@@ -322,6 +329,15 @@ class PrivilegeBoundaryTest(unittest.TestCase):
                 for action in ("upgrade89", "upgrade90", "upgrade91", "upgrade92", "upgrade88", "validate87"):
                     with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
                         operation.schema(action, historical, operation.schema_credentials)
+                operation.config.update(source_schema="123", target_schema="126", migration_steps=[124, 126])
+                reusable = {**state, "source_schema": "123", "target_schema": "126", "migration_steps": [124, 126]}
+                for action in ("validate123", "upgrade124", "upgrade126", "validate126"):
+                    operation.schema(action, reusable, operation.schema_credentials)
+                with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                    operation.schema("upgrade125", reusable, operation.schema_credentials)
+                with self.assertRaisesRegex(RuntimeError, "AUTH_SCHEMA_MISMATCH"):
+                    operation.schema("upgrade124", {**reusable, "migration_steps": [124, 125, 126]},
+                                     operation.schema_credentials)
 
     def test_application_only_schema_wrapper_binds_mode_and_has_no_upgrade_action(self):
         with tempfile.TemporaryDirectory() as directory:
