@@ -204,7 +204,24 @@ export type AssetEquipmentReadings = {
   buildingId: string
   generatedAt: number
   points: AssetPointReading[]
+  roomSensors?: AssetRoomSensorReading[]
 }
+
+export type AssetRoomSensorReading = {
+  sourceId: string
+  lastObservedAt: number | null
+} & (
+  | { kind: 'DOOR'; currentOpen: boolean | null; lastObservedOpen: boolean | null }
+  | { kind: 'RADAR'; currentCount: number | null; lastObservedCount: number | null }
+)
+
+export type AssetRoomSensorHistory = {
+  sourceId: string
+  truncated: boolean
+} & (
+  | { kind: 'DOOR'; samples: { observedAt: number; open: boolean }[] }
+  | { kind: 'RADAR'; intervalSeconds: number; samples: { observedAt: number; count: number }[] }
+)
 
 export type AssetPointTrendSeries = {
   pointCode: string
@@ -219,6 +236,7 @@ export type AssetEquipmentTrendHistory = {
   startTime: string
   endTime: string
   series: AssetPointTrendSeries[]
+  roomSensors?: AssetRoomSensorHistory[]
 }
 
 export type AssetEquipmentTrendQuery = {

@@ -1,4 +1,4 @@
-import type { AssetEquipment, AssetSpace } from './assets'
+import type { AssetEquipment, AssetRoomSensorReading, AssetSpace } from './assets'
 
 export type LedgerGroup = 'ALL' | 'POWER' | 'HVAC' | 'RENEWABLE' | 'WATER' | 'ENVIRONMENT' | 'UNCLASSIFIED'
 export const ledgerGroups: LedgerGroup[] = ['ALL', 'POWER', 'HVAC', 'RENEWABLE', 'WATER', 'ENVIRONMENT', 'UNCLASSIFIED']
@@ -72,6 +72,7 @@ export type AssetLedgerItem = {
   operation: LedgerOperationState
   communication: LedgerCommunicationState
   displayPoint: LedgerDisplayPoint
+  roomSensor?: AssetRoomSensorReading | null
 }
 
 export type AssetLedgerQuery = {

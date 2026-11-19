@@ -54,6 +54,8 @@ function ledgerItem(row: AssetEquipmentDetail, professionalGroup: LedgerGroup, d
 let wrapper: ReturnType<typeof mount>
 let rows: AssetEquipmentDetail[]
 let ledgerRows: AssetLedgerItem[]
+const originalScroll = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView')
+const scrollIntoView = vi.fn()
 const submit = async () => { await wrapper.get('form.ledger-search').trigger('submit'); await flushPromises() }
 async function chooseBuilding(value: string) {
   const select = wrapper.findAllComponents(ElSelect)[0]!
@@ -92,6 +94,7 @@ function ledgerPage(query: AssetLedgerQuery): AssetLedgerPage {
 
 beforeEach(async () => {
   vi.resetAllMocks()
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: scrollIntoView })
   navigation.path = '/operations/devices/businessDevices'
   navigation.query = {}
   rows = [equipment('E1'), equipment('M1', 'ELECTRIC_METER'), equipment('U1', 'CUSTOM_TYPE')]
@@ -111,7 +114,13 @@ beforeEach(async () => {
   wrapper = mount(EquipmentPointPage, { global: { directives: { loading: {} }, stubs: { ChartView: { template: '<div data-test="chart-stub" />' } } } })
   await flushPromises()
 })
-afterEach(() => wrapper.unmount())
+afterEach(() => {
+  wrapper.unmount()
+  if (originalScroll) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScroll)
+  else Reflect.deleteProperty(HTMLElement.prototype, 'scrollIntoView')
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+})
 
 describe('原型设备综合台账', () => {
   it('使用后端分页聚合，不拉取旧设备列表或逐行补读数来推断台账', () => {
@@ -163,6 +172,27 @@ describe('原型设备综合台账', () => {
     expect(assets.listAssetLedger).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '301', spaceId: 'S1', professionalGroup: 'ALL' }))
   })
 
+  it('楼层交给后端汇总，整栋建筑入口请求建筑下的全部设备', async () => {
+    const tree = wrapper.findComponent(ElTree)
+    tree.vm.$emit('node-click', { spaceId: 'F3', spaceType: 'FLOOR' }, {}, {}, new MouseEvent('click'))
+    await flushPromises()
+    expect(assets.listAssetLedger).toHaveBeenLastCalledWith(expect.objectContaining({ buildingId: 'B1', spaceId: 'F3' }))
+
+    const roots = tree.props('data')
+    expect(roots).toHaveLength(1)
+    expect(roots[0]).toMatchObject({ key: 'building:B1', label: '建筑一', children: [{ key: 'space:F3', spaceId: 'F3' }] })
+    await tree.findAll('.el-tree-node__content')[0]!.trigger('click')
+    await flushPromises()
+    expect(assets.listAssetLedger).toHaveBeenLastCalledWith(expect.objectContaining({ buildingId: 'B1', spaceId: undefined }))
+    expect(wrapper.get('[data-group="ALL"]').text()).toContain('(3)')
+
+    tree.vm.$emit('node-click', { spaceId: 'F3', spaceType: 'FLOOR' }, {}, {}, new MouseEvent('click'))
+    await flushPromises()
+    tree.vm.$emit('node-click', { key: 'space:S_B1', spaceId: 'S_B1', label: '建筑一' }, {}, {}, new MouseEvent('click'))
+    await flushPromises()
+    expect(assets.listAssetLedger).toHaveBeenLastCalledWith(expect.objectContaining({ buildingId: 'B1', spaceId: 'S_B1' }))
+  })
+
   it('列表始终使用后端 displayPoint；右栏切换真实测点不会改写主表', async () => {
     const passport = wrapper.findComponent(EquipmentRuntimePassport)
     expect(passport.props('selectedPointId')).toBe('P1')
@@ -174,6 +204,19 @@ describe('原型设备综合台账', () => {
     expect(wrapper.get('.equipment-table').text()).toContain('室内温度')
     expect(wrapper.get('.equipment-table').text()).toContain('0 °C')
     expect(wrapper.get('.equipment-table').text()).not.toContain('999')
+  })
+
+  it('电表默认功率与实时卡片共用瓦和读数精度', async () => {
+    const meter = ledgerItem(rows[1]!, 'POWER')
+    const point = { ...reading('P1', 0.022), pointName: '输入功率', unit: 'kW' }
+    ledgerRows = [{ ...meter, displayPoint: { ...meter.displayPoint, ...point, status: 'AVAILABLE' } }]
+    vi.mocked(assets.getEquipmentReadings).mockResolvedValue({
+      equipmentId: 'M1', buildingId: 'B1', generatedAt: eventTime, points: [point],
+    })
+    await wrapper.get('.page-heading button').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.equipment-table').text()).toContain('22 W')
+    expect(wrapper.findComponent(EquipmentRuntimePassport).get('[data-test="reading-value"]').text()).toContain('22 W')
   })
 
   it('建筑切换和聚合失败会撤下旧详情，不用旧分类或假数据回退', async () => {
@@ -189,12 +232,59 @@ describe('原型设备综合台账', () => {
     expect(wrapper.findComponent(EquipmentRuntimePassport).props('equipment')).toBeNull()
   })
 
-  it('收起与恢复右栏，完整设备护照和电表档案仍保留有效业务能力', async () => {
+  it('在可见页面更新雷达当前值，保留历史和选中设备，离开雷达列表后停止刷新', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    const unit = { ...equipment('RADAR1'), typeCode: 'RADAR_SENSOR' }
+    const sensor = { kind: 'RADAR' as const, sourceId: 'RADAR-SOURCE', currentCount: 0, lastObservedCount: 0, lastObservedAt: eventTime }
+    const item = { ...ledgerItem(unit, 'ENVIRONMENT', 'UNCONFIGURED'), roomSensor: sensor }
+    rows.push(unit)
+    ledgerRows.unshift(item)
+    let snapshotAt = eventTime
+    vi.mocked(assets.listAssetLedger).mockImplementation(async query => ({ ...ledgerPage(query), generatedAt: snapshotAt }))
+    vi.mocked(assets.getEquipmentReadings).mockResolvedValue({ equipmentId: unit.equipmentId, buildingId: 'B1', generatedAt: eventTime + 1_000, points: [], roomSensors: [sensor] })
+    await wrapper.get('[data-group="ENVIRONMENT"]').trigger('click')
+    await flushPromises()
+    const table = wrapper.get('.equipment-table')
+    const reading = () => wrapper.get('[data-test="room-sensor-value"]').text()
+    expect(table.text()).toContain('0 人')
+    expect(reading()).toBe('0 人')
+    vi.mocked(assets.getEquipment).mockClear()
+    vi.mocked(assets.getEquipmentReadings).mockClear()
+    vi.mocked(assets.getEquipmentTrendHistory).mockClear()
+    ledgerRows[0] = { ...item, roomSensor: { ...sensor, currentCount: null } }
+    snapshotAt = eventTime + 10_000
+    await vi.advanceTimersByTimeAsync(5_000)
+    await flushPromises()
+    expect(table.text()).toContain('最后有效观测 0 人')
+    expect(reading()).toBe('未知')
+    expect(assets.getEquipment).not.toHaveBeenCalled()
+    expect(assets.getEquipmentReadings).not.toHaveBeenCalled()
+    expect(assets.getEquipmentTrendHistory).not.toHaveBeenCalled()
+    ledgerRows[0] = { ...item, roomSensor: { ...sensor, currentCount: 1, lastObservedCount: 1, lastObservedAt: snapshotAt } }
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(reading()).toBe('1 人')
+    vi.mocked(assets.listAssetLedger).mockRejectedValueOnce(new Error('network'))
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(reading()).toBe('未知')
+    expect(wrapper.get('.ledger-summary').text()).toContain('读数自动刷新暂不可用')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(reading()).toBe('1 人')
+    await wrapper.get('[data-group="HVAC"]').trigger('click')
+    await flushPromises()
+    const requests = vi.mocked(assets.listAssetLedger).mock.calls.length
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(assets.listAssetLedger).toHaveBeenCalledTimes(requests)
+  })
+
+  it('重新展开时定位到设备详情，完整设备护照和电表档案仍可使用', async () => {
     wrapper.findComponent(EquipmentRuntimePassport).vm.$emit('collapse')
     await flushPromises()
     expect(wrapper.get('.ledger-layout').classes()).toContain('is-collapsed')
-    await wrapper.findAll('button').find(button => button.text().includes('查看右侧读数'))!.trigger('click')
+    expect(wrapper.find('.ledger-passport').exists()).toBe(false)
+    await wrapper.get('.table-navigation button').trigger('click')
     await flushPromises()
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
+    expect(scrollIntoView.mock.contexts[0]).toBe(wrapper.get('.ledger-passport').element)
     wrapper.findComponent(EquipmentRuntimePassport).vm.$emit('archive')
     await flushPromises()
     expect(wrapper.findComponent(ElTabs).props('modelValue')).toBe('archive')

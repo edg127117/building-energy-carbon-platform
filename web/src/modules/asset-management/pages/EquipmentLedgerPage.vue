@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ElAlert, ElButton, ElDrawer, ElEmpty, ElForm, ElInput, ElMessage, ElOption, ElPagination,
   ElPopover, ElPopconfirm, ElSelect, ElSkeleton, ElTable, ElTableColumn, ElTag, ElTabs, ElTabPane, ElTree,
-  Cpu, Pencil, Plus, RefreshCw, Search, Trash2, Building2, LayoutGrid, Zap, Snowflake, Sun, Cloud, CircleHelp, WifiOff, Layers,
+  Cpu, Pencil, Plus, RefreshCw, Search, Trash2, Building2, LayoutGrid, Zap, Snowflake, Sun, Cloud, CircleHelp, CircleMinus, Link2, Unlink2, Layers,
 } from '@/shared/ui'
 import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import { t } from '@/locales'
@@ -18,7 +18,7 @@ import { useAssetManagement } from '../composables/use-asset-management'
 import { useMeterCoverage } from '../composables/use-meter-coverage'
 import { useLedgerScope } from '../composables/use-ledger-scope'
 import { useLedgerRuntime } from '../composables/use-ledger-runtime'
-import { canRunAssetAction, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint, type AssetSpace } from '../models/assets'
+import { canRunAssetAction, type AssetEquipmentDetail, type AssetEquipmentQuery, type AssetPoint, type AssetRoomSensorReading, type AssetSpace } from '../models/assets'
 import {
   filterLedgerSpaces,
   isLedgerCommunicationDelayed,
@@ -29,6 +29,8 @@ import {
   type AssetLedgerPage,
   type LedgerGroup,
 } from '../models/ledger'
+import { formatLedgerPointValue, ledgerPointDisplay } from '../models/point-display'
+import { roomSensorEvidence, roomSensorName, roomSensorValue } from '../models/room-sensor-display'
 
 defineProps<{ title?: string; panel?: boolean }>()
 const route = useRoute()
@@ -57,18 +59,74 @@ const editingEquipment = ref<AssetEquipmentDetail | null>(null)
 const editingPoint = ref<AssetPoint | null>(null)
 const selectedEquipment = computed(() => management.selectedEquipment.value?.equipmentId === selectedId.value ? management.selectedEquipment.value : null)
 const selectedRow = computed(() => inventory.data.value?.items.find(item => item.equipment.equipmentId === selectedId.value) ?? null)
-const selectedReadings = computed(() => runtime.readings.value)
+function displayedSensor(sensor: AssetRoomSensorReading) {
+  return sensor.kind === 'RADAR' && inventory.refreshFailed.value ? { ...sensor, currentCount: null } : sensor
+}
+const selectedReadings = computed(() => {
+  const readings = runtime.readings.value
+  if (!readings?.roomSensors?.length) return readings
+  const snapshot = inventory.data.value
+  const radar = selectedRow.value?.roomSensor
+  // 后到的设备详情不一定更新。列表与详情只采用同一来源、查询时间更新的人数观测。
+  const useSnapshot = snapshot && snapshot.generatedAt >= readings.generatedAt && radar?.kind === 'RADAR'
+  return {
+    ...readings,
+    roomSensors: readings.roomSensors.map(sensor =>
+      displayedSensor(useSnapshot && sensor.kind === 'RADAR' && sensor.sourceId === radar.sourceId ? radar : sensor)),
+  }
+})
 const selectedPointId = computed(() => selectedPoints.get(selectedId.value) ?? '')
 const equipmentSubmitting = computed(() => editingEquipment.value ? management.pending.value.has('equipment:update:' + editingEquipment.value.equipmentId) : management.pending.value.has('equipment:create'))
 const pointSubmitting = computed(() => editingPoint.value ? management.pending.value.has('point:update:' + editingPoint.value.pointId) : false)
 const filteredSpaces = computed(() => filterLedgerSpaces(filterScope.scopeSpaces.value, spaceKeyword.value))
 const currentBuildingName = computed(() => management.buildingOptions.value.find(item => item.value === filters.buildingId)?.label ?? t('assetManagement.equipment.allBuildings'))
+type LedgerTreeNode = { key: string; label: string; spaceId?: string; children: LedgerTreeNode[] }
+function spaceTreeNode(space: AssetSpace): LedgerTreeNode {
+  return { key: 'space:' + space.spaceId, label: space.spaceName, spaceId: space.spaceId, children: space.children.map(spaceTreeNode) }
+}
+// 建筑根按建筑查询；真实空间节点始终按档案 ID 查询，即使空间与建筑同名。
+const buildingTree = computed<LedgerTreeNode[]>(() => {
+  if (!filters.buildingId || (spaceKeyword.value.trim() && !filteredSpaces.value.length)) return []
+  return [{ key: 'building:' + filters.buildingId, label: currentBuildingName.value, children: filteredSpaces.value.map(spaceTreeNode) }]
+})
 const groupIcons = { ALL: LayoutGrid, POWER: Zap, HVAC: Snowflake, RENEWABLE: Sun, WATER: Cloud, ENVIRONMENT: Cpu, UNCLASSIFIED: CircleHelp }
 const ledgerItems = computed(() => inventory.data.value?.items ?? [])
+const hasRadar = computed(() => ledgerItems.value.some(item => item.roomSensor?.kind === 'RADAR' || item.equipment.typeCode === 'RADAR_SENSOR'))
+const radarRefreshIntervalMs = 5_000
+let radarRefreshTimer: number | undefined
 let queryGeneration = 0
 let buildingGeneration = 0
 let disposed = false
-onBeforeUnmount(() => { disposed = true; queryGeneration++; buildingGeneration++ })
+onBeforeUnmount(() => {
+  disposed = true
+  queryGeneration++
+  buildingGeneration++
+  window.clearInterval(radarRefreshTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+})
+
+async function refreshRadarSnapshot() {
+  await inventory.refresh()
+  if (disposed || inventory.loading.value || !selectedId.value || selectedRow.value) return
+  selectedId.value = ''
+  selectedPoints.clear()
+  runtime.clear()
+  await management.selectEquipment(null)
+}
+
+function syncRadarRefresh() {
+  window.clearInterval(radarRefreshTimer)
+  if (!hasRadar.value || document.hidden) return
+  // 刷新聚合快照使后端重新判定有效期，无需重复加载历史曲线和设备档案。
+  radarRefreshTimer = window.setInterval(refreshRadarSnapshot, radarRefreshIntervalMs)
+}
+
+function onVisibilityChange() {
+  syncRadarRefresh()
+  if (!document.hidden && hasRadar.value) void refreshRadarSnapshot()
+}
+
+watch(hasRadar, syncRadarRefresh)
 function groupCount(group: LedgerGroup) {
   const count = inventory.data.value?.groupCounts[group]
   return typeof count === 'number' && Number.isFinite(count) ? String(count) : '—'
@@ -76,20 +134,25 @@ function groupCount(group: LedgerGroup) {
 function asLedgerItem(value: unknown): AssetLedgerItem { return value as AssetLedgerItem }
 function readingTime(value: number | null) { return value == null ? t('common.missing') : new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(value) }
 function displayPointStatus(item: AssetLedgerItem) { return ledgerText(`displayPoint.${item.displayPoint.status}`) }
-function displayPointName(item: AssetLedgerItem) { return item.displayPoint.pointName || item.displayPoint.pointCode || '—' }
+function displayPointName(item: AssetLedgerItem) {
+  return item.roomSensor ? roomSensorName(item.roomSensor) : item.displayPoint.pointName || item.displayPoint.pointCode || '—'
+}
 function displayPointValue(item: AssetLedgerItem) {
+  if (item.roomSensor) return roomSensorValue(displayedSensor(item.roomSensor))
   const value = ledgerDisplayPointValue(item.displayPoint)
   if (value == null) return '—'
-  return `${formatNumber(value)}${item.displayPoint.unit ? ` ${item.displayPoint.unit}` : ''}`
+  const { unit, multiplier } = ledgerPointDisplay(item.displayPoint.unit, item.equipment.category)
+  return formatLedgerPointValue(value * multiplier, unit)
 }
 function displayPointEvidence(item: AssetLedgerItem) {
+  if (item.roomSensor) return roomSensorEvidence(displayedSensor(item.roomSensor))
   const point = item.displayPoint
   if (point.status !== 'AVAILABLE') return displayPointStatus(item)
   const quality = point.dataQuality == null ? ledgerText('qualityUnknown') : `Q${point.dataQuality}`
   return `${quality} · ${readingTime(point.eventTime)}`
 }
 function displayPointTooltip(item: AssetLedgerItem) {
-  return item.displayPoint.status === 'AVAILABLE' ? displayPointEvidence(item) : displayPointStatus(item)
+  return displayPointEvidence(item)
 }
 function operationText(item: AssetLedgerItem) {
   const state = item.operation
@@ -111,20 +174,24 @@ function hasSummaryValue(key: keyof AssetLedgerPage['summary']) {
 async function selectRow(row: AssetLedgerItem) {
   selectedId.value = row.equipment.equipmentId
   passportOpen.value = true
-  const pointId = row.displayPoint.pointId
+  const pointId = row.roomSensor ? null : row.displayPoint.pointId
   if (pointId) selectedPoints.set(row.equipment.equipmentId, pointId)
   else selectedPoints.delete(row.equipment.equipmentId)
   runtime.clear()
   void runtime.loadReadings(row.equipment)
   try { await management.selectEquipment(row.equipment.equipmentId) } catch { /* 详情错误在右栏独立显示。 */ }
-  if (selectedId.value === row.equipment.equipmentId && pointId) void runtime.loadTrend(row.equipment.equipmentId)
+  if (selectedId.value === row.equipment.equipmentId && (pointId || row.roomSensor)) void runtime.loadTrend(row.equipment.equipmentId)
 }
 function selectPoint(pointId: string) {
   if (!selectedRow.value || !selectedReadings.value?.points.some(point => point.pointId === pointId)) return
   selectedPoints.set(selectedId.value, pointId)
   void runtime.loadTrend(selectedId.value)
 }
-function showReadings() { passportOpen.value = true; passportElement.value?.scrollIntoView({ block: 'nearest' }) }
+async function showReadings() {
+  passportOpen.value = true
+  await nextTick()
+  passportElement.value?.scrollIntoView({ block: 'nearest' })
+}
 async function reloadLedger(preferredId = selectedId.value, resetPage = true) {
   if (disposed) return
   const owner = ++queryGeneration
@@ -161,9 +228,18 @@ async function buildingFilterChanged(buildingId: string | undefined) {
   await filterScope.loadScope(buildingId).catch(() => undefined)
   if (owner === buildingGeneration) await reloadLedger()
 }
-async function selectLedgerSpace(space: AssetSpace | null) { filters.spaceId = space?.spaceId; await reloadLedger() }
+async function selectLedgerSpace(node: LedgerTreeNode) {
+  filters.spaceId = node.spaceId
+  await reloadLedger()
+}
 async function resetFilters() { filters.spaceId = undefined; filters.systemGroupId = undefined; filters.keyword = ''; filters.typeCode = undefined; spaceKeyword.value = ''; activeGroup.value = 'ALL'; await reloadLedger() }
-watch(ledgerItems, items => { void meterCoverage.loadListCoverages(filters.buildingId, items.map(item => item.equipment).filter(isMeterEquipment).map(item => item.equipmentId)).catch(() => undefined) })
+const meterIds = computed<string[]>(previous => {
+  const ids = ledgerItems.value.map(item => item.equipment).filter(isMeterEquipment).map(item => item.equipmentId)
+  return previous?.length === ids.length && previous.every((id, index) => id === ids[index]) ? previous : ids
+})
+watch([() => filters.buildingId, meterIds], ([buildingId, ids]) => {
+  void meterCoverage.loadListCoverages(buildingId, ids).catch(() => undefined)
+})
 async function openEquipment(equipmentId: string, showPoints = false) {
   selectedId.value = equipmentId
   activeDetailTab.value = showPoints ? 'points' : 'archive'
@@ -268,6 +344,7 @@ function can(value: unknown, action: string) {
 function asPoint(value: unknown): AssetPoint { return value as AssetPoint }
 
 onMounted(async () => {
+  document.addEventListener('visibilitychange', onVisibilityChange)
   try {
     await management.ensureBuildingOptions()
     if (disposed) return
@@ -311,37 +388,36 @@ onMounted(async () => {
       <span>
         <LayoutGrid aria-hidden="true" />{{ ledgerText('assets') }}<strong>{{ summaryValue('assets') }}</strong>{{ ledgerText('unitAssets') }}</span>
       <span>
-        <WifiOff aria-hidden="true" />{{ ledgerText('online') }}<strong>{{ summaryValue('online') }}</strong>{{ ledgerText('unitAssets') }}
+        <Link2 class="ledger-summary__online-icon" aria-hidden="true" />{{ ledgerText('online') }}<strong>{{ summaryValue('online') }}</strong>{{ ledgerText('unitAssets') }}
         <small v-if="hasSummaryValue('delayed')">{{ ledgerText('onlineDelayed', { total: summaryValue('delayed') }) }}</small>
       </span>
       <span>
-        <WifiOff aria-hidden="true" />{{ ledgerText('offline') }}<strong>{{ summaryValue('offline') }}</strong>{{ ledgerText('unitAssets') }}</span>
+        <Unlink2 class="ledger-summary__offline-icon" aria-hidden="true" />{{ ledgerText('offline') }}<strong>{{ summaryValue('offline') }}</strong>{{ ledgerText('unitAssets') }}</span>
       <span>
-        <WifiOff aria-hidden="true" />{{ ledgerText('communicationUnknown') }}<strong>{{ summaryValue('communicationUnknown') }}</strong>{{ ledgerText('unitAssets') }}</span>
+        <CircleHelp class="ledger-summary__unknown-icon" aria-hidden="true" />{{ ledgerText('communicationUnknown') }}<strong>{{ summaryValue('communicationUnknown') }}</strong>{{ ledgerText('unitAssets') }}</span>
       <span>
-        <WifiOff aria-hidden="true" />{{ ledgerText('notMonitored') }}<strong>{{ summaryValue('notMonitored') }}</strong>{{ ledgerText('unitAssets') }}</span>
+        <CircleMinus class="ledger-summary__not-monitored-icon" aria-hidden="true" />{{ ledgerText('notMonitored') }}<strong>{{ summaryValue('notMonitored') }}</strong>{{ ledgerText('unitAssets') }}</span>
       <span>
         <Cpu aria-hidden="true" />{{ ledgerText('points') }}<strong>{{ summaryValue('points') }}</strong>{{ ledgerText('unitPoints') }}</span>
       <span v-if="inventory.data.value">
         <Layers aria-hidden="true" />{{ ledgerText('generatedAt') }}<strong>{{ formatDateTime(inventory.data.value.generatedAt) }}</strong>
       </span>
+      <span v-if="inventory.refreshFailed.value" role="status">{{ ledgerText('refreshUnavailable') }}</span>
     </section>
     <div class="ledger-layout" :class="{ 'is-collapsed': !passportOpen }">
       <aside class="ledger-spaces" :aria-label="ledgerText('buildingSpaces')">
         <h2>
           <Building2 aria-hidden="true" />{{ ledgerText('buildingSpaces') }}
         </h2>
-        <p>{{ currentBuildingName }}</p>
         <ElSelect v-model="filters.buildingId" clearable filterable :aria-label="t('assetManagement.labels.building')" :placeholder="t('assetManagement.equipment.allBuildings')" @change="buildingFilterChanged">
           <ElOption v-for="item in management.buildingOptions.value" :key="item.value" :label="item.label" :value="item.value" />
         </ElSelect>
         <label class="space-search-label">{{ ledgerText('spaceSearch') }}<ElInput v-model="spaceKeyword" clearable :placeholder="ledgerText('spaceSearchPlaceholder')" />
         </label>
-        <ElButton class="all-spaces" :type="!filters.spaceId ? 'primary' : 'default'" plain @click="selectLedgerSpace(null)">{{ t('assetManagement.equipment.allSpaces') }}</ElButton>
         <div class="space-tree-region">
           <ElSkeleton v-if="filterScope.scopeLoading.value" :rows="4" animated />
           <ElAlert v-else-if="filterScope.scopeError.value" :title="filterScope.scopeError.value.message" type="error" :closable="false" />
-          <ElTree v-else :data="filteredSpaces" node-key="spaceId" :props="{ label: 'spaceName', children: 'children' }" :current-node-key="filters.spaceId" :empty-text="ledgerText('noSpaceMatch')" highlight-current default-expand-all :expand-on-click-node="false" @node-click="selectLedgerSpace" />
+          <ElTree v-else :data="buildingTree" node-key="key" :current-node-key="filters.spaceId ? 'space:' + filters.spaceId : 'building:' + filters.buildingId" :empty-text="ledgerText('noSpaceMatch')" highlight-current default-expand-all :expand-on-click-node="false" @node-click="selectLedgerSpace" />
         </div>
         <div class="system-filter">
           <label>{{ ledgerText('systemFilter') }}<ElSelect v-model="filters.systemGroupId" clearable :aria-label="ledgerText('systemFilter')" :placeholder="t('assetManagement.equipment.allSystems')" :disabled="!filters.buildingId || filterScope.scopeLoading.value" @change="query">
@@ -352,7 +428,7 @@ onMounted(async () => {
             <summary>{{ ledgerText('advancedFilters') }}</summary>
             <ElInput v-model="filters.typeCode" clearable :aria-label="t('assetManagement.labels.equipmentType')" :placeholder="t('assetManagement.equipment.typePlaceholder')" @change="query" />
           </details>
-          <p>{{ t('assetManagement.associations.filterHint') }}</p>
+          <p>{{ ledgerText('spaceFilterHint') }}</p>
         </div>
       </aside>
       <section class="ledger-center">
@@ -369,14 +445,14 @@ onMounted(async () => {
         </ElForm>
         <div class="table-navigation">
           <p>{{ ledgerText('tableHint') }}</p>
-          <ElButton text @click="showReadings">{{ ledgerText('viewReadings') }}{{ ' →' }}</ElButton>
+          <ElButton text @click="showReadings">{{ ledgerText('viewReadings') }}</ElButton>
         </div>
         <ElAlert v-if="inventory.error.value" :title="inventory.error.value" type="error" :closable="false">
           <ElButton text @click="query">{{ ledgerText('retry') }}</ElButton>
         </ElAlert>
         <div class="ledger-table-region">
           <ElTable class="equipment-table" :data="ledgerItems" row-key="equipment.equipmentId" :current-row-key="selectedId" highlight-current-row height="100%" @row-click="selectRow">
-            <ElTableColumn :label="ledgerText('equipmentColumn')" min-width="160">
+            <ElTableColumn :label="ledgerText('equipmentColumn')" min-width="140">
               <template #default="{ row }">
                 <div class="ledger-name-cell">
                   <component :is="groupIcons[asLedgerItem(row).professionalGroup]" aria-hidden="true" />
@@ -387,7 +463,7 @@ onMounted(async () => {
                 </div>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="ledgerText('spaceColumn')" min-width="145">
+            <ElTableColumn :label="ledgerText('spaceColumn')" min-width="105">
               <template #default="{ row }">
                 <div class="ledger-stacked">
                   <span>{{ row.equipment.spaceName || t('common.missing') }}</span>
@@ -395,7 +471,7 @@ onMounted(async () => {
                 </div>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="ledgerText('runtimeColumn')" min-width="125">
+            <ElTableColumn :label="ledgerText('runtimeColumn')" min-width="105">
               <template #default="{ row }">
                 <div class="ledger-stacked ledger-state">
                   <span v-if="asLedgerItem(row).operation.applicable">{{ operationText(asLedgerItem(row)) }}</span>
@@ -403,7 +479,7 @@ onMounted(async () => {
                 </div>
               </template>
             </ElTableColumn>
-            <ElTableColumn :label="ledgerText('mainPointColumn')" min-width="195">
+            <ElTableColumn :label="ledgerText('mainPointColumn')" min-width="125">
               <template #default="{ row }">
                 <div class="ledger-stacked">
                   <span>{{ displayPointName(asLedgerItem(row)) }}</span>
@@ -615,7 +691,7 @@ onMounted(async () => {
   </section>
 </template>
 <style scoped>
-.equipment-page { --bec-ledger-left: calc(var(--bec-ref-space-64) * 2 + var(--bec-ref-space-48) + var(--bec-ref-space-4)); --bec-ledger-right: calc(var(--bec-ref-space-64) * 5 + var(--bec-ref-space-32)); height: 100%; min-height: 0; display: flex; flex-direction: column; gap: var(--bec-space-group); }
+.equipment-page { --bec-ledger-left: calc(var(--bec-ref-space-64) * 2 + var(--bec-ref-space-48) + var(--bec-ref-space-4)); --bec-ledger-right: clamp(calc(var(--bec-ref-space-64) * 5 + var(--bec-ref-space-32)), 33%, calc(var(--bec-ref-space-64) * 7 + var(--bec-ref-space-32))); container: equipment-ledger / inline-size; height: 100%; min-height: 0; display: flex; flex-direction: column; gap: var(--bec-space-group); }
 .page-heading { display: flex; align-items: start; justify-content: space-between; gap: var(--bec-space-group); flex-wrap: wrap; flex-shrink: 0; }
 h1,h2,h3,p { margin: 0; }
 h1 { font-size: var(--bec-ref-font-24); font-weight: var(--bec-font-weight-heading); }
@@ -636,14 +712,17 @@ h1 svg,h2 svg { width: var(--bec-icon-small); height: var(--bec-icon-small); col
 .ledger-summary { display: flex; align-items: center; flex-wrap: wrap; gap: var(--bec-space-section); padding: var(--bec-space-group); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-control); flex-shrink: 0; font-size: var(--bec-ref-font-12); color: var(--bec-color-text-secondary); }
 .ledger-summary span { display: inline-flex; gap: var(--bec-ref-space-4); align-items: center; }
 .ledger-summary svg { width: var(--bec-icon-small); height: var(--bec-icon-small); }
+.ledger-summary__online-icon { color: var(--bec-color-success); }
+.ledger-summary__offline-icon { color: var(--bec-color-error); }
+.ledger-summary__unknown-icon { color: var(--bec-color-warning); }
+.ledger-summary__not-monitored-icon { color: var(--bec-color-text-secondary); }
 .ledger-summary strong { color: var(--bec-color-text-primary); }
 .ledger-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: var(--bec-ledger-left) minmax(0,1fr) var(--bec-ledger-right); background: var(--bec-color-surface); border: var(--bec-border-width) solid var(--bec-color-border); border-radius: var(--bec-radius-control); overflow: hidden; }
 .ledger-layout.is-collapsed { grid-template-columns: var(--bec-ledger-left) minmax(0,1fr); }
 .ledger-spaces { background: var(--bec-color-surface-secondary); padding: var(--bec-space-group); display: flex; flex-direction: column; gap: var(--bec-space-group); min-width: 0; overflow: auto; border-right: var(--bec-border-width) solid var(--bec-color-border); font-size: var(--bec-ref-font-12); }
 .ledger-spaces :deep(.el-select) { width: 100%; }
 .space-search-label { display: grid; gap: var(--bec-ref-space-4); color: var(--bec-color-text-secondary); }
-.all-spaces { width: 100%; margin: 0; justify-content: flex-start; }
-.space-tree-region { flex: 1; min-height: var(--bec-ref-space-64); }
+.space-tree-region { flex: 1; min-height: var(--bec-ref-space-64); overflow: auto; }
 .space-tree-region :deep(.el-tree) { background: transparent; font-size: var(--bec-ref-font-12); }
 .space-tree-region :deep(.el-tree-node__content) { min-height: var(--bec-ref-space-40); }
 .system-filter { display: grid; gap: var(--bec-space-group); border-top: var(--bec-border-width) solid var(--bec-color-divider); padding-top: var(--bec-space-group); color: var(--bec-color-text-secondary); }
@@ -688,6 +767,17 @@ h1 svg,h2 svg { width: var(--bec-icon-small); height: var(--bec-icon-small); col
 .detail-fields dd { margin: 0; overflow-wrap: anywhere; }
 .drawer-section,.detail-section { min-width: 0; }
 .detail-pending { padding: var(--bec-space-section); color: var(--bec-color-text-secondary); }
-@media (max-width: 1200px) { .equipment-page { height: auto; } .ledger-layout { min-height: calc(var(--bec-ref-space-64) * 10); } .ledger-passport { overflow: auto; } }
-@media (max-width: 900px) { .ledger-layout,.ledger-layout.is-collapsed { display: flex; flex-direction: column; overflow: visible; } .ledger-spaces { max-height: calc(var(--bec-ref-space-64) * 5); } .ledger-center { min-height: calc(var(--bec-ref-space-64) * 8); } .ledger-passport { border-left: 0; border-top: var(--bec-border-width) solid var(--bec-color-border); min-height: calc(var(--bec-ref-space-64) * 8); } .heading-actions { width: 100%; } }
+@container equipment-ledger (max-width: 1260px) {
+  .ledger-layout,.ledger-layout.is-collapsed { flex: none; grid-template-columns: var(--bec-ledger-left) minmax(0,1fr); overflow: visible; }
+  .ledger-spaces { max-height: calc(var(--bec-ref-space-64) * 8); }
+  .ledger-center { height: calc(var(--bec-ref-space-64) * 8); }
+  .ledger-passport { grid-column: 2; border-left: 0; border-top: var(--bec-border-width) solid var(--bec-color-border); }
+  .ledger-passport :deep(.runtime-passport) { height: auto; }
+}
+@container equipment-ledger (max-width: 700px) {
+  .ledger-layout,.ledger-layout.is-collapsed { grid-template-columns: minmax(0,1fr); }
+  .ledger-spaces { max-height: calc(var(--bec-ref-space-64) * 5); }
+  .ledger-list-heading,.table-navigation { flex-wrap: wrap; }
+  .ledger-passport { grid-column: 1; }
+}
 </style>

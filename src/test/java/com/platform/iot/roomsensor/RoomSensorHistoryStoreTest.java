@@ -5,6 +5,7 @@ import com.platform.config.TdengineProperties;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -53,6 +54,17 @@ class RoomSensorHistoryStoreTest {
         assertThat(sql.getAllValues()).containsExactly(
                 "DELETE FROM iot_telemetry.st_radar_observation WHERE ts < 1000",
                 "DELETE FROM iot_telemetry.st_door_observation WHERE ts < 1000");
+    }
+
+    @Test void latestRadarCountIsRestrictedToTheCurrentBindingAndReceiptTime() {
+        var source = new RoomSensorSource("source", "MSR01_RADAR", "/radar", "AC233FC2B716", "AC233FC2B716",
+                "identity", "equipment", "building", "room", 0);
+        assertThat(store().latestRadar(source, 1000)).isEmpty();
+        verify(td).query(eq("SELECT received_at,target_count FROM iot_telemetry.st_radar_observation"
+                + " WHERE source_id='source' AND building_id='building' AND identity_id='identity' AND equip_id='equipment'"
+                + " AND space_id='room' AND gateway_mac='AC233FC2B716' AND device_mac='AC233FC2B716' AND received_at<=1000"
+                + " AND target_count IS NOT NULL ORDER BY received_at DESC,ts DESC LIMIT 1"),
+                org.mockito.ArgumentMatchers.<RowMapper<RoomSensorHistoryStore.RadarReading>>any());
     }
 
     private RoomSensorHistoryStore store() {

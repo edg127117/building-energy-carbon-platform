@@ -14,6 +14,8 @@ import jakarta.validation.constraints.*;
 public class CommunicationProperties {
     private boolean scanEnabled = true;
     @Min(5) @Max(86400) private int defaultPeriodSeconds = 60;
+    @Min(5) @Max(86400) private int s4DoorTimeoutSeconds = 600;
+    @Min(5) @Max(86400) private int msr01RadarTimeoutSeconds = 60;
     @Min(1) @Max(1000) private int batchSize = 200;
     @Min(15) @Max(300) private int sourceLeaseSeconds = 45;
 }

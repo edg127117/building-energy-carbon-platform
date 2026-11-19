@@ -22,6 +22,7 @@ import com.platform.iot.onboarding.model.entity.BizProductPointTemplate;
 import com.platform.iot.deviceparameter.DeviceParameterLegacyCompatibilityService;
 import com.platform.iot.qualityusage.QualityUsageModels;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
+import com.platform.iot.roomsensor.RoomSensorReadings;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.iot.temporal.model.RawTrendBucket;
@@ -31,6 +32,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.util.List;
 import java.time.Instant;
@@ -60,6 +62,7 @@ class AssetManagementServiceTest {
     @Mock private DeviceParameterLegacyCompatibilityService parameterCompatibilityService;
     @Mock private HvacRawEventRepository rawEventRepository;
     @Mock private QualityUsagePolicyResolver qualityUsageResolver;
+    @Mock private ObjectProvider<RoomSensorReadings> roomSensorReadings;
 
     @InjectMocks private AssetManagementService service;
 

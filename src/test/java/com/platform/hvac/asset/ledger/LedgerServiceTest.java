@@ -62,7 +62,9 @@ class LedgerServiceTest {
         service = new LedgerService(jdbc, rawEvents, quality, new ObjectMapper(),
                 new com.platform.iot.communication.DeviceCommunicationService(jdbc,
                         new org.springframework.jdbc.datasource.DataSourceTransactionManager(dataSource),
-                        new com.platform.iot.communication.CommunicationProperties(), java.time.Clock.systemUTC(),60));
+                        new com.platform.iot.communication.CommunicationProperties(), java.time.Clock.systemUTC(),60),
+                new org.springframework.beans.factory.support.StaticListableBeanFactory()
+                        .getBeanProvider(com.platform.iot.roomsensor.RoomSensorReadings.class));
         when(rawEvents.findLatestByEquipmentPoints(anyString(), anyString(), anyCollection()))
                 .thenReturn(List.of());
         when(quality.runtimeContext()).thenReturn(context);
@@ -114,6 +116,50 @@ class LedgerServiceTest {
         assertThat(item(afterRevoke, "E_HVAC").classificationRevision()).isEqualTo(2);
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_ledger_config_audit "
                 + "WHERE config_kind='EQUIPMENT_CLASSIFICATION' AND target_id='E_HVAC'", Long.class)).isEqualTo(2L);
+    }
+
+    @Test
+    void aggregatesSpaceSubtreeBeforePaginationAndKeepsWholeBuildingAndRoomDistinct() {
+        type("T_HVAC", 1);
+        type("T_POWER", 1);
+        rule("T_HVAC", "HVAC", true, null, null, 1);
+        rule("T_POWER", "POWER", false, null, null, 1);
+        equipment("E_FLOOR", "B1", "T_POWER", "F3", "G1", "楼层电表");
+        equipment("E_ROOM", "B1", "T_HVAC", "R303", "G1", "房间空调");
+        equipment("E_CABINET", "B1", "T_POWER", "CAB", "G1", "房间下级空间电表");
+        equipment("E_OTHER_FLOOR", "B1", "T_HVAC", "F5", "G1", "另一楼层空调");
+        equipment("E_UNASSIGNED", "B1", "T_HVAC", null, "G1", "未关联空间空调");
+        equipment("E_CROSS", "B2", "T_HVAC", "B2_ROOM", "G1", "另一建筑空调");
+        jdbc.update("UPDATE biz_space SET parent_space_id='F3' WHERE space_id IN ('R303','B2_ROOM')");
+        jdbc.update("UPDATE biz_space SET parent_space_id='R303' WHERE space_id='CAB'");
+        point("P_FLOOR", "E_FLOOR", "B1", "MAIN", "P", "ONLINE");
+        point("P_ROOM", "E_ROOM", "B1", "MAIN", "roomTemp", "ONLINE");
+
+        var wholeBuilding = service.query(1, 20, "B1", null, null, null, null, "ALL", ADMIN);
+        assertThat(wholeBuilding.total()).isEqualTo(5);
+        assertThat(item(wholeBuilding, "E_UNASSIGNED").equipment().spaceId()).isNull();
+
+        var floor = service.query(1, 1, "B1", "F3", null, null, null, "ALL", ADMIN);
+        assertThat(floor.total()).isEqualTo(3);
+        assertThat(floor.groupCounts()).containsEntry("ALL", 3L).containsEntry("POWER", 2L).containsEntry("HVAC", 1L);
+        assertThat(floor.summary()).extracting(LedgerSummary::assets, LedgerSummary::points, LedgerSummary::notMonitored)
+                .containsExactly(3L, 2L, 3L);
+        assertThat(floor.items()).hasSize(1);
+
+        var filtered = service.query(1, 20, "B1", "F3", null, null, null, "HVAC", ADMIN);
+        assertThat(filtered.groupCounts()).isEqualTo(floor.groupCounts());
+        assertThat(filtered.summary().assets()).isEqualTo(1);
+        assertThat(filtered.items()).extracting(row -> row.equipment().equipmentId()).containsExactly("E_ROOM");
+
+        var room = service.query(1, 20, null, "R303", null, null, null, "ALL", ADMIN);
+        assertThat(room.items()).extracting(row -> row.equipment().equipmentId())
+                .containsExactlyInAnyOrder("E_ROOM", "E_CABINET");
+        assertThat(service.query(1, 20, "B2", "F3", null, null, null, "ALL", ADMIN).total()).isZero();
+        assertThat(service.query(1, 20, "B1", "MISSING", null, null, null, "ALL", ADMIN).total()).isZero();
+
+        jdbc.update("UPDATE biz_space SET del_flag=1 WHERE space_id='R303'");
+        var afterRemoval = service.query(1, 20, "B1", "F3", null, null, null, "ALL", ADMIN);
+        assertThat(afterRemoval.items()).extracting(row -> row.equipment().equipmentId()).containsExactly("E_FLOOR");
     }
 
     @Test
@@ -339,6 +385,7 @@ class LedgerServiceTest {
     private void createArchiveTables() {
         jdbc.execute("CREATE TABLE building(building_id VARCHAR(32) PRIMARY KEY,building_name VARCHAR(100))");
         jdbc.execute("CREATE TABLE biz_space(space_id VARCHAR(32),building_id VARCHAR(32),space_name VARCHAR(100),"
+                + "parent_space_id VARCHAR(32),del_flag INT NOT NULL DEFAULT 0,"
                 + "PRIMARY KEY(space_id,building_id))");
         jdbc.execute("CREATE TABLE biz_system_group(system_group_id VARCHAR(32),building_id VARCHAR(32),"
                 + "system_group_name VARCHAR(100),PRIMARY KEY(system_group_id,building_id))");
@@ -382,7 +429,7 @@ class LedgerServiceTest {
 
     private void equipment(String equipmentId, String buildingId, String typeCode, String spaceId, String groupId, String name) {
         ensureBuilding(buildingId);
-        ensureSpace(spaceId, buildingId);
+        if (spaceId != null) ensureSpace(spaceId, buildingId);
         ensureSystemGroup(groupId, buildingId);
         jdbc.update("INSERT INTO biz_equipment(equip_id,building_id,equip_code,equip_name,type_code,equip_category,"
                         + "space_id,system_group_id,product_id,create_time,update_time,del_flag) "

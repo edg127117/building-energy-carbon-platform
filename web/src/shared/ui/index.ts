@@ -16,7 +16,7 @@ export { default as zhCn } from 'element-plus/es/locale/lang/zh-cn'
 export {
   Sun, CloudSun, CloudDrizzle, CloudRain, CloudRainWind, CloudSnow, CloudLightning, CloudFog, Snowflake, Wind, CircleHelp,
   ArrowLeft, BookOpen, Boxes, Building2, Check, ChevronDown, CircleAlert, CircleCheck, Cloud,
-  CircleX, Clock, Cpu, Eye, FileClock, Info, Link2, LogOut, Maximize, Menu,
+  CircleMinus, CircleX, Clock, Cpu, Eye, FileClock, Info, Link2, Unlink2, LogOut, Maximize, Menu,
   Minimize, Monitor, PanelLeftClose, PanelLeftOpen, Pencil, Plus, RefreshCw,
   RotateCcw, Search, Settings2, ShieldCheck, Trash2, User, Users, WifiOff, X,
   LayoutGrid, Bell, UserRound, ArrowRight, Activity, House, Zap, Leaf, Wrench, ChartNoAxesCombined, Cable, Network, Sigma, SlidersHorizontal, Layers,

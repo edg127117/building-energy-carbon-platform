@@ -33,12 +33,14 @@ import com.platform.iot.qualityusage.QualityUsageModels.Decision;
 import com.platform.iot.qualityusage.QualityUsageModels.Resolution;
 import com.platform.iot.qualityusage.QualityUsageModels.ResolutionContext;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
+import com.platform.iot.roomsensor.RoomSensorReadings;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LatestRawReading;
 import com.platform.iot.temporal.model.RawTrendBucket;
 import com.platform.system.mapper.SysUserBuildingMapper;
 import com.platform.system.model.entity.SysUserBuilding;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
@@ -95,6 +97,7 @@ public class AssetManagementService {
     private final DeviceParameterLegacyCompatibilityService parameterCompatibilityService;
     private final HvacRawEventRepository rawEventRepository;
     private final QualityUsagePolicyResolver qualityUsageResolver;
+    private final ObjectProvider<RoomSensorReadings> roomSensorReadings;
 
     public PageResponse<BuildingView> listBuildings(
             int page, int size, String keyword, Collection<String> roles) {
@@ -349,8 +352,11 @@ public class AssetManagementService {
         List<PointReadingView> readings = points.stream()
                 .map(point -> readingView(point, latestByPoint.get(point.getPointId()), policyContext))
                 .toList();
-        return new EquipmentReadingsView(
-                equipmentId, equipment.getBuildingId(), System.currentTimeMillis(), readings);
+        long generatedAt = System.currentTimeMillis();
+        RoomSensorReadings sensors = roomSensorReadings.getIfAvailable();
+        List<RoomSensorReadings.Reading> roomSensors = sensors == null ? List.of()
+                : sensors.read(equipment.getBuildingId(), equipmentId, generatedAt);
+        return new EquipmentReadingsView(equipmentId, equipment.getBuildingId(), generatedAt, readings, roomSensors);
     }
 
     private PointReadingView readingView(
@@ -422,8 +428,12 @@ public class AssetManagementService {
                         point.getPointCode(), point.getPointName(), point.getUnit(),
                         List.copyOf(dataByPoint.getOrDefault(point.getPointId(), List.of()))))
                 .toList();
+        RoomSensorReadings sensors = roomSensorReadings.getIfAvailable();
+        var roomHistory = sensors == null ? List.<RoomSensorReadings.History>of()
+                : sensors.readHistory(equipment.getBuildingId(), equipmentId, startTime.toEpochMilli(),
+                        endTime.toEpochMilli(), effectiveInterval);
         return new EquipmentTrendHistoryView(
-                equipmentId, equipment.getBuildingId(), startTime, endTime, series);
+                equipmentId, equipment.getBuildingId(), startTime, endTime, series, roomHistory);
     }
 
     private static void validateTrendRange(

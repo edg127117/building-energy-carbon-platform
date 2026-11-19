@@ -24,6 +24,10 @@ import static com.platform.iot.communication.CommunicationModels.*;
 @Service
 @Slf4j
 public class DeviceCommunicationService {
+    private static final String S4_DOOR = "S4_DOOR";
+    private static final String MSR01_RADAR = "MSR01_RADAR";
+    // 雷达的专用超时短于通用延迟窗口，须在通讯超时前提示上报延迟。
+    private static final long MSR01_RADAR_REPORT_DELAY_MILLIS = 40_000L;
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final CommunicationProperties properties;
@@ -71,7 +75,7 @@ public class DeviceCommunicationService {
             long at=Math.min(signal.observedAt(), signal.receivedAt());
             if(scope.updated()!=null&&at<scope.updated().getTime())return false;
             if (at<=0 || signal.observedAt()>now+jitter || signal.receivedAt()>now+jitter
-                    || now-at>offlineMillis(policy.periodSeconds())) return false;
+                    || now-at>offlineMillis(scope, policy)) return false;
             Target target=ensure(scope,policy,now);
             if (at<=target.lastEvidenceAt() || signal.evidenceKey().equals(target.evidenceKey())) return false;
             // 新鲜且可归属的首包本身也证明当前入口可工作，不等待下一次连接健康脉冲。
@@ -118,7 +122,7 @@ public class DeviceCommunicationService {
             long now=clock.millis();
             Target target=ensure(scope,policy,now);
             View view=evaluate(scope,policy,target,now);
-            boolean alarm=target.alarm() || view.applicable() && "OFFLINE".equals(view.value());
+            boolean alarm=view.alarmOpen() || target.alarm() && !"WAITING_INITIAL_CONTACT".equals(view.reason());
             jdbc.update("UPDATE biz_device_comm_target SET state=?,reason=?,report_delayed=?,alarm_open=?,good_count=?,revision=revision+1 WHERE identity_id=?",
                     view.value(),view.reason(),view.delayed(),alarm,"OFFLINE".equals(view.value())?0:target.goodCount(),identityId);
             transition(scope,target.state(),view.value(),view.reason(),now,policy.revision());
@@ -150,8 +154,18 @@ public class DeviceCommunicationService {
         valid+=" AND x.source_key=("+source+")";
         String gatewayDown="EXISTS(SELECT 1 FROM biz_device_comm_source gw WHERE gw.source_key=x.gateway_key AND gw.observer_id='GATEWAY' AND gw.health='DOWN')";
         String healthy="EXISTS(SELECT 1 FROM biz_device_comm_source cs WHERE cs.source_key=("+source+") AND cs.health='HEALTHY' AND cs.lease_until>:commNow)";
-        String expired=":commNow>=COALESCE(NULLIF(x.last_contact_at,0),x.monitoring_since,:commNow)+("+period+")*3000+"+jitter;
-        String delayed=":commNow>=x.last_contact_at+("+period+")*2000+"+jitter;
+        String s4Door="i.expected_profile_code='"+S4_DOOR+"'";
+        String radar="i.expected_profile_code='"+MSR01_RADAR+"'";
+        String awaitingRoomSensorContact="(("+s4Door+" OR "+radar+") AND x.last_contact_at=0)";
+        String timeout="CASE WHEN "+s4Door+" THEN "+properties.getS4DoorTimeoutSeconds()*1000L
+                +" WHEN "+radar+" THEN "+properties.getMsr01RadarTimeoutSeconds()*1000L
+                +" ELSE ("+period+")*3000+"+jitter+" END";
+        String deadline="(CASE WHEN "+awaitingRoomSensorContact+" THEN NULL ELSE COALESCE(NULLIF(x.last_contact_at,0),x.monitoring_since,:commNow)+("
+                +timeout+") END)";
+        String expired=":commNow>="+deadline;
+        String reportDelay="CASE WHEN "+radar+" THEN "+MSR01_RADAR_REPORT_DELAY_MILLIS
+                +" ELSE ("+period+")*2000+"+jitter+" END";
+        String delayed=":commNow>=x.last_contact_at+("+reportDelay+")";
         String negative="x.negative_at>0 AND x.negative_at>=x.last_contact_at";
         String base="""
             FROM biz_device_identity i JOIN biz_equipment e ON e.equip_id=i.equip_id AND e.building_id=i.building_id AND e.del_flag=0
@@ -168,10 +182,11 @@ public class DeviceCommunicationService {
               AND COALESCE(pp.monitored,pf.monitored,pdflt.monitored,1)=1 /* COMM_SCOPE_FILTER */
             """;
         String state="CASE WHEN x.identity_id IS NULL OR NOT ("+valid+") THEN 'UNKNOWN' WHEN "+gatewayDown
-                +" OR ("+negative+") THEN 'OFFLINE' WHEN NOT ("+healthy+") THEN 'UNKNOWN' WHEN "+expired
+                +" OR ("+negative+") THEN 'OFFLINE' WHEN "+awaitingRoomSensorContact+" THEN 'UNKNOWN' WHEN NOT ("+healthy+") THEN 'UNKNOWN' WHEN "+expired
                 +" THEN 'OFFLINE' WHEN x.last_contact_at=0 THEN 'UNKNOWN' ELSE 'ONLINE' END";
         String reason="CASE WHEN x.identity_id IS NULL THEN 'WAITING_INITIAL_CONTACT' WHEN NOT ("+valid+") THEN 'STALE_SCOPE'"
                 +" WHEN "+gatewayDown+" THEN 'UPSTREAM_GATEWAY_OFFLINE' WHEN "+negative+" THEN 'DEVICE_REPORTED_OFFLINE'"
+                +" WHEN "+awaitingRoomSensorContact+" THEN 'WAITING_INITIAL_CONTACT'"
                 +" WHEN NOT ("+healthy+") THEN 'PLATFORM_PIPELINE_UNAVAILABLE' WHEN "+expired+" THEN 'DEVICE_TIMEOUT'"
                 +" WHEN x.last_contact_at=0 THEN 'WAITING_INITIAL_CONTACT' WHEN "+delayed+" THEN 'REPORT_DELAYED'"
                 +" WHEN i.identity_type='DAIKIN_UNIT' THEN 'LIVE_POLL' ELSE 'LIVE_TELEMETRY' END";
@@ -182,7 +197,7 @@ public class DeviceCommunicationService {
                 +" WHEN SUM(CASE WHEN q.communication_value='UNKNOWN' THEN 1 ELSE 0 END)>0 THEN MAX(CASE WHEN q.communication_value='UNKNOWN' THEN q.reason END) ELSE MAX(q.reason) END AS reason,"
                 +" MAX(q.observed_at) AS observed_at,CASE WHEN COUNT(DISTINCT q.source_key)>1 THEN 'MULTIPLE' ELSE MAX(q.source_key) END AS source_key,MAX(CASE WHEN q.communication_value='OFFLINE' THEN 1 ELSE q.alarm_open END) AS alarm_open,MAX(q.next_deadline) AS next_deadline,MAX(q.policy_revision) AS policy_revision FROM (SELECT e.equip_id,e.building_id,"
                 +state+" AS communication_value,"+reason+" AS reason,CASE WHEN "+valid+" THEN NULLIF(x.last_contact_at,0) ELSE NULL END AS observed_at,"
-                +source+" AS source_key,CASE WHEN "+valid+" THEN x.alarm_open ELSE 0 END AS alarm_open,COALESCE(NULLIF(x.last_contact_at,0),x.monitoring_since,:commNow)+("+period+")*3000+"+jitter+" AS next_deadline,COALESCE(pp.revision,pf.revision,pdflt.revision,1) AS policy_revision "+base+") q GROUP BY q.equip_id,q.building_id";
+                +source+" AS source_key,CASE WHEN "+valid+" AND NOT "+awaitingRoomSensorContact+" THEN x.alarm_open ELSE 0 END AS alarm_open,"+deadline+" AS next_deadline,COALESCE(pp.revision,pf.revision,pdflt.revision,1) AS policy_revision "+base+") q GROUP BY q.equip_id,q.building_id";
     }
 
     public List<Policy> policies() { return jdbc.query("SELECT * FROM biz_device_comm_policy ORDER BY scope_key",(rs,n)->new Policy(rs.getString("scope_key"),rs.getInt("period_seconds"),rs.getBoolean("monitored"),rs.getString("evidence"),rs.getLong("revision"))); }
@@ -286,14 +301,19 @@ public class DeviceCommunicationService {
     private View evaluate(Scope s,Policy p,Target t,long now) {
         if(!s.eligible()||!p.monitored())return View.unmonitored();
         if(!s.token().equals(t.token()))return new View(true,"UNKNOWN","STALE_SCOPE",s.source(),null,"DEVICE",false,false,null,p.revision());
-        long deadline=(t.lastContact()>0?t.lastContact():t.since())+offlineMillis(p.periodSeconds());
         Long last=t.lastContact()>0?t.lastContact():null;
+        // 房间传感器从首条有效通讯开始计时，避免把尚未观测到的设备判为超时。
+        Long deadline=last==null && (S4_DOOR.equals(s.profile()) || MSR01_RADAR.equals(s.profile())) ? null
+                : (t.lastContact()>0?t.lastContact():t.since()) + offlineMillis(s, p);
         if(t.gateway()!=null && sourceDown(t.gateway()))return new View(true,"OFFLINE","UPSTREAM_GATEWAY_OFFLINE",s.source(),last,"DEVICE",false,true,deadline,p.revision());
         if(t.negativeAt()>0 && t.negativeAt()>=t.lastContact())return new View(true,"OFFLINE","DEVICE_REPORTED_OFFLINE",s.source(),last,"DEVICE",false,true,deadline,p.revision());
+        if(deadline==null)return waiting(s,p);
         if(!sourceHealthy(s.source(),now))return new View(true,"UNKNOWN","PLATFORM_PIPELINE_UNAVAILABLE",s.source(),last,"DEVICE",false,t.alarm(),deadline,p.revision());
         if(now>=deadline)return new View(true,"OFFLINE","DEVICE_TIMEOUT",s.source(),last,"DEVICE",false,true,deadline,p.revision());
         if(last==null)return waiting(s,p);
-        boolean delayed=now-last>=2L*p.periodSeconds()*1000+jitter(p.periodSeconds());
+        long reportDelay=MSR01_RADAR.equals(s.profile()) ? MSR01_RADAR_REPORT_DELAY_MILLIS
+                : 2L*p.periodSeconds()*1000+jitter(p.periodSeconds());
+        boolean delayed=now-last>=reportDelay;
         return new View(true,"ONLINE",delayed?"REPORT_DELAYED":s.source().startsWith("DAIKIN:")?"LIVE_POLL":"LIVE_TELEMETRY",s.source(),last,"DEVICE",delayed,t.alarm(),deadline,p.revision());
     }
     private boolean sourceHealthy(String source,long now) { return jdbc.queryForObject("SELECT COUNT(*) FROM biz_device_comm_source WHERE source_key=? AND health='HEALTHY' AND lease_until>?",Integer.class,source,now)>0; }
@@ -304,6 +324,13 @@ public class DeviceCommunicationService {
     }
     public static long jitter(int period) { return Math.max(15_000L,period*200L); }
     public static long offlineMillis(int period) { return period*3000L+jitter(period); }
+    private long offlineMillis(Scope scope, Policy policy) {
+        return switch (scope.profile()) {
+            case S4_DOOR -> properties.getS4DoorTimeoutSeconds() * 1000L;
+            case MSR01_RADAR -> properties.getMsr01RadarTimeoutSeconds() * 1000L;
+            default -> offlineMillis(policy.periodSeconds());
+        };
+    }
     private static String hash(String text) { try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)));}catch(Exception impossible){throw new IllegalStateException(impossible);} }
     private static BusinessException invalid(String message){return new BusinessException(400,"COMMUNICATION_VALIDATION_FAILED",message);}
     private static BusinessException conflict(){return new BusinessException(409,"COMMUNICATION_REVISION_CONFLICT","通讯策略已变更，请重新读取");}

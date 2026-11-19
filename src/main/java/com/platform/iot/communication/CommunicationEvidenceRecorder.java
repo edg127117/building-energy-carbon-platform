@@ -6,6 +6,7 @@ import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.daikin.model.DaikinDeviceObservation;
 import com.platform.iot.daikin.model.DaikinFieldValue;
 import com.platform.iot.daikin.monitoring.DaikinMonitoringTargets;
+import com.platform.iot.roomsensor.RoomSensorSource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -48,6 +49,14 @@ public class CommunicationEvidenceRecorder {
             if(identities.size()!=1)return;
             safe(new Signal((String)identities.getFirst().get("identity_id"),event.equipId(),event.buildingId(),"MQTT","LEGACY:"+event.eventTime(),event.eventTime(),event.receivedTime(),false,"LIVE_TELEMETRY",null,(String)identities.getFirst().get("expected_profile_code")));
         } catch(RuntimeException failed) { log.warn("通讯证据身份查询失败 equipmentId={} cause={}",event.equipId(),failed.getClass().getSimpleName()); }
+    }
+    /** 房间传感器设备时间原样归档，通讯超时使用 MQTT 回调接收时刻。 */
+    public void roomSensor(RoomSensorSource source, long receivedAt) {
+        if (Boolean.FALSE.equals(LIVE.get())) return;
+        String protocol = source.protocol();
+        if (!"S4_DOOR".equals(protocol) && !"MSR01_RADAR".equals(protocol)) return;
+        safe(new Signal(source.identityId(), source.equipId(), source.buildingId(), "MQTT",
+                protocol + ":" + receivedAt, receivedAt, receivedAt, false, "LIVE_TELEMETRY", null, protocol));
     }
     /** 继承单点先校验正式别名/设备身份，量程错误仍可证明通讯；不接受未归属载荷续租。 */
     public void legacyEnvelope(java.util.Map<String,Object> payload,long received,String sourceSystem) {

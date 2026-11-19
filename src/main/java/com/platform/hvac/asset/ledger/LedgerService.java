@@ -7,10 +7,12 @@ import com.platform.hvac.asset.api.AssetManagementContracts.PointSummary;
 import com.platform.hvac.asset.service.AssetErrors;
 import com.platform.iot.qualityusage.QualityUsagePolicyResolver;
 import com.platform.iot.qualityusage.QualityUsageModels.Decision;
+import com.platform.iot.roomsensor.RoomSensorReadings;
 import com.platform.iot.temporal.HvacRawEventRepository;
 import com.platform.iot.temporal.model.LatestRawReading;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -51,6 +53,7 @@ public class LedgerService {
     private final QualityUsagePolicyResolver quality;
     private final ObjectMapper json;
     private final com.platform.iot.communication.DeviceCommunicationService communication;
+    private final ObjectProvider<RoomSensorReadings> roomSensorReadings;
 
     public LedgerPage query(int page, int size, String buildingId, String spaceId, String systemGroupId,
                             String typeCode, String keyword, String professionalGroup, Set<String> roles) {
@@ -64,7 +67,6 @@ public class LedgerService {
         String from=FROM+" LEFT JOIN ("+communication.equipmentProjectionSql()+") cm ON cm.equip_id=e.equip_id AND cm.building_id=e.building_id ";
         StringBuilder where = new StringBuilder(" WHERE e.del_flag=0");
         filter(where, params, "buildingId", "e.building_id", buildingId);
-        filter(where, params, "spaceId", "e.space_id", spaceId);
         filter(where, params, "systemGroupId", "e.system_group_id", systemGroupId);
         filter(where, params, "typeCode", "e.type_code", typeCode);
         if (StringUtils.hasText(keyword)) {
@@ -72,6 +74,7 @@ public class LedgerService {
             params.put("keyword", "%" + keyword.trim() + "%");
         }
         var named = new NamedParameterJdbcTemplate(jdbc);
+        filterSpaceScope(named, where, params, spaceId);
         Map<String, Long> counts = new LinkedHashMap<>();
         for (String key : List.of("ALL", "POWER", "HVAC", "RENEWABLE", "WATER", "ENVIRONMENT", "UNCLASSIFIED")) counts.put(key, 0L);
         named.query("SELECT " + GROUP_SQL + " AS professional_group,COUNT(*) AS n" + from + where
@@ -103,12 +106,59 @@ public class LedgerService {
         List<Row> rows = named.query(select + from + where + " ORDER BY e.create_time DESC,e.equip_id LIMIT :limit OFFSET :offset", params, this::row);
         Map<String, List<Point>> points = loadPoints(rows);
         Map<String, List<NativeState>> states = loadStates(rows);
+        RoomSensorReadings sensors = roomSensorReadings.getIfAvailable();
         List<LedgerItem> items = rows.stream().map(row -> new LedgerItem(row.equipment(), row.group(), row.source(),
                 row.revision(), row.classificationRevision(), operation(row, states.getOrDefault(row.equipment().equipmentId(), List.of()), now),
                 row.communication(),
-                displayPoint(row, points.getOrDefault(row.equipment().equipmentId(), List.of())))).toList();
+                displayPoint(row, points.getOrDefault(row.equipment().equipmentId(), List.of())),
+                roomSensorReading(sensors, row.equipment(), now))).toList();
         return new LedgerPage(page, size, total, items, counts,
                 new LedgerSummary(total, pointTotal == null ? 0 : pointTotal, ((Number)summary.get("online_count")).longValue(), ((Number)summary.get("offline_count")).longValue(), ((Number)summary.get("unknown_count")).longValue(), 0, ((Number)summary.get("not_monitored")).longValue(), ((Number)summary.get("delayed_count")).longValue()), now);
+    }
+
+    /** 楼层与房间共用空间子树口径。先锁定所属建筑，再将同一范围用于计数、摘要和分页。 */
+    private void filterSpaceScope(NamedParameterJdbcTemplate named, StringBuilder where,
+                                  Map<String, Object> params, String spaceId) {
+        if (!StringUtils.hasText(spaceId)) return;
+        String sql = """
+                SELECT scoped_space.space_id,scoped_space.parent_space_id,scoped_space.building_id,
+                       selected.space_id AS selected_id
+                FROM biz_space selected
+                JOIN biz_space scoped_space ON scoped_space.building_id=selected.building_id AND scoped_space.del_flag=0
+                WHERE selected.space_id=:selectedSpaceId AND selected.del_flag=0
+                """;
+        Map<String, Object> scopeParams = new HashMap<>();
+        scopeParams.put("selectedSpaceId", spaceId);
+        if (params.containsKey("buildingId")) {
+            sql += " AND selected.building_id=:buildingId";
+            scopeParams.put("buildingId", params.get("buildingId"));
+        }
+        var spaces = named.query(sql, scopeParams, (rs, ignored) -> new SpaceLink(
+                rs.getString("space_id"), rs.getString("parent_space_id"), rs.getString("building_id"),
+                rs.getString("selected_id")));
+        if (spaces.isEmpty()) {
+            where.append(" AND 1=0");
+            return;
+        }
+        String scopedBuilding = spaces.getFirst().buildingId();
+        if (spaces.stream().anyMatch(space -> !scopedBuilding.equals(space.buildingId()))) {
+            where.append(" AND 1=0");
+            return;
+        }
+        Map<String, List<String>> children = new HashMap<>();
+        for (SpaceLink space : spaces) {
+            children.computeIfAbsent(space.parentId(), key -> new ArrayList<>()).add(space.id());
+        }
+        Set<String> scope = new HashSet<>();
+        var pending = new ArrayDeque<String>();
+        pending.add(spaces.getFirst().selectedId());
+        while (!pending.isEmpty()) {
+            String next = pending.removeFirst();
+            if (scope.add(next)) pending.addAll(children.getOrDefault(next, List.of()));
+        }
+        if (!params.containsKey("buildingId")) filter(where, params, "buildingId", "e.building_id", scopedBuilding);
+        where.append(" AND e.space_id IN (:spaceIds)");
+        params.put("spaceIds", scope);
     }
 
     public List<TypeRule> rules(Set<String> roles) {
@@ -247,6 +297,16 @@ public class LedgerService {
         return unknown("UNRECOGNIZED_STATE", field, state.observedAt(), scope);
     }
 
+    private RoomSensorReadings.Reading roomSensorReading(RoomSensorReadings sensors, EquipmentListItemView equipment, long now) {
+        if (sensors == null) return null;
+        try {
+            return sensors.defaultReading(equipment.buildingId(), equipment.equipmentId(), equipment.typeCode(), now).orElse(null);
+        } catch (RuntimeException e) {
+            log.warn("台账房间传感器读数不可用 equipmentId={} cause={}", equipment.equipmentId(), e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
     private LedgerDisplayPoint displayPoint(Row row, List<Point> points) {
         if (row.component() == null || row.suffix() == null) return missingPoint("UNCONFIGURED", "TYPE_DISPLAY_RULE_NOT_CONFIGURED");
         List<Point> matched = points.stream().filter(p -> Objects.equals(p.component(), row.component()) && Objects.equals(p.suffix(), row.suffix())).toList();
@@ -303,6 +363,7 @@ public class LedgerService {
                     kind, target, userId, json.writeValueAsString(before), json.writeValueAsString(after));
         } catch (JsonProcessingException ex) { throw new IllegalStateException("无法保存展示配置审计", ex); }
     }
+    private record SpaceLink(String id, String parentId, String buildingId, String selectedId) { }
     private record Row(EquipmentListItemView equipment, String group, String source, long revision, long classificationRevision, boolean operationApplicable, String component, String suffix, LedgerState communication) { }
     private record Point(String id, String equipmentId, String buildingId, String code, String name, String unit, String component, String suffix, String status) { }
     private record NativeState(String identityId, String kind, String field, String value, String status, Long observedAt, boolean valid) { }

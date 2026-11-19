@@ -108,7 +108,9 @@ class LedgerMysqlIntegrationTest {
                 anyLong(), eq(0))).thenReturn(new QualityUsageModels.Resolution(QualityUsageModels.Decision.ALLOW,
                 0, QualityUsageModels.POINT_REALTIME_VIEW, QualityUsageModels.PolicySource.SYSTEM_DEFAULT_Q0_ONLY,
                 null, 1L, "QUALITY_ALLOWED"));
-        var service = new LedgerService(jdbc, raw, quality, new ObjectMapper(), communication);
+        var service = new LedgerService(jdbc, raw, quality, new ObjectMapper(), communication,
+                new org.springframework.beans.factory.support.StaticListableBeanFactory()
+                        .getBeanProvider(com.platform.iot.roomsensor.RoomSensorReadings.class));
         var all = service.query(1, 20, "LEDGER_IT", null, null, null, null, "ALL", Set.of("PLATFORM_ADMIN"));
         assertThat(all.total()).isEqualTo(2);
         assertThat(all.summary().online()).isEqualTo(1);

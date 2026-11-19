@@ -5,6 +5,7 @@ import com.platform.iot.communication.CommunicationModels.GatewayRequest;
 import com.platform.iot.communication.CommunicationModels.PolicyRequest;
 import com.platform.iot.communication.CommunicationModels.Signal;
 import com.platform.iot.communication.CommunicationModels.View;
+import com.platform.iot.roomsensor.RoomSensorSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -86,6 +87,87 @@ class DeviceCommunicationServiceTest {
                 .containsExactlyInAnyOrder(
                         org.assertj.core.groups.Tuple.tuple("ONLINE", "LIVE_TELEMETRY"),
                         org.assertj.core.groups.Tuple.tuple("OFFLINE", "DEVICE_TIMEOUT"));
+    }
+
+    @Test
+    void s4DoorWaitsForFirstContactAndTimesOutAtTenMinutes() {
+        addMqttIdentity("I1", "E1", "B1");
+        jdbc.update("UPDATE biz_device_identity SET expected_profile_code='S4_DOOR' WHERE identity_id='I1'");
+        healthy("MQTT");
+        service.reconcile("I1");
+        clock.advance(600_000);
+        healthy("MQTT");
+        service.reconcile("I1");
+        assertView(service.equipment("E1", "B1"), "UNKNOWN", "WAITING_INITIAL_CONTACT", false, false);
+        assertThat(service.equipment("E1", "B1").nextDeadline()).isNull();
+
+        long receivedAt = clock.millis();
+        assertThat(service.observe(signal("I1", "E1", "B1", "MQTT", "first-door-contact", receivedAt, false, "LIVE_TELEMETRY"))).isTrue();
+        clock.set(receivedAt + 134_999);
+        assertView(service.equipment("E1", "B1"), "ONLINE", "LIVE_TELEMETRY", false, false);
+        clock.advance(1);
+        service.reconcile("I1");
+        assertView(service.equipment("E1", "B1"), "ONLINE", "REPORT_DELAYED", true, false);
+        assertThat(targetLong("I1", "report_delayed")).isEqualTo(1);
+
+        clock.set(receivedAt + 599_999);
+        healthy("MQTT");
+        assertThat(service.equipment("E1", "B1").value()).isEqualTo("ONLINE");
+        assertThat(service.equipment("E1", "B1").nextDeadline()).isEqualTo(receivedAt + 600_000);
+        clock.advance(1);
+        service.reconcile("I1");
+        assertView(service.equipment("E1", "B1"), "OFFLINE", "DEVICE_TIMEOUT", false, true);
+        assertThat(target("I1", "state")).isEqualTo("OFFLINE");
+        assertThat(service.observe(signal("I1", "E1", "B1", "MQTT", "new-door-contact", clock.millis(), false, "LIVE_TELEMETRY"))).isTrue();
+        assertThat(service.equipment("E1", "B1").value()).isEqualTo("ONLINE");
+    }
+
+    @Test
+    void radarCorrectsLegacyTimeoutAndUsesItsOwnDelayAndOfflineBoundaries() {
+        addIdentity("I1", "E1", "B1", "MAC", "MSR01_RADAR");
+        service.reconcile("I1");
+        jdbc.update("UPDATE biz_device_comm_target SET state='OFFLINE',reason='DEVICE_TIMEOUT',alarm_open=1 WHERE identity_id='I1'");
+        clock.advance(600_000);
+        healthy("MQTT");
+        assertView(service.equipment("E1", "B1"), "UNKNOWN", "WAITING_INITIAL_CONTACT", false, false);
+        assertThat(service.equipment("E1", "B1").nextDeadline()).isNull();
+        service.reconcile("I1");
+        assertThat(target("I1", "state")).isEqualTo("UNKNOWN");
+        assertThat(targetLong("I1", "alarm_open")).isZero();
+
+        var recorder = new CommunicationEvidenceRecorder(service, jdbc);
+        var radar = new RoomSensorSource("S1", "MSR01_RADAR", "/radar", "M1", "M1", "I1", "E1", "B1", "R1", 0L);
+        long receivedAt = clock.millis();
+        recorder.roomSensor(radar, receivedAt);
+        assertView(service.equipment("E1", "B1"), "ONLINE", "LIVE_TELEMETRY", false, false);
+        assertThat(service.equipment("E1", "B1").nextDeadline()).isEqualTo(receivedAt + 60_000);
+
+        clock.set(receivedAt + 39_999);
+        service.reconcile("I1");
+        assertView(service.equipment("E1", "B1"), "ONLINE", "LIVE_TELEMETRY", false, false);
+        assertThat(targetLong("I1", "report_delayed")).isZero();
+        clock.advance(1);
+        service.reconcile("I1");
+        assertView(service.equipment("E1", "B1"), "ONLINE", "REPORT_DELAYED", true, false);
+        assertThat(targetLong("I1", "report_delayed")).isEqualTo(1);
+        assertThat(target("I1", "reason")).isEqualTo("REPORT_DELAYED");
+
+        clock.set(receivedAt + 59_999);
+        assertView(service.equipment("E1", "B1"), "ONLINE", "REPORT_DELAYED", true, false);
+
+        clock.advance(1);
+        service.sourceHealth("MQTT", "FAILED", clock.millis());
+        assertView(service.equipment("E1", "B1"), "UNKNOWN", "PLATFORM_PIPELINE_UNAVAILABLE", false, false);
+        healthy("MQTT");
+        service.reconcile("I1");
+        assertView(service.equipment("E1", "B1"), "OFFLINE", "DEVICE_TIMEOUT", false, true);
+        assertThat(target("I1", "state")).isEqualTo("OFFLINE");
+
+        recorder.roomSensor(radar, clock.millis());
+        assertView(service.equipment("E1", "B1"), "ONLINE", "LIVE_TELEMETRY", false, true);
+        assertThat(targetLong("I1", "report_delayed")).isZero();
+        service.savePolicy("DEFAULT", new PolicyRequest(60, false, "暂停通讯监测", 1), 7L, ADMIN);
+        assertThat(service.equipment("E1", "B1")).isEqualTo(View.unmonitored());
     }
 
     @Test
