@@ -2,7 +2,9 @@ package com.platform.iot.roomsensor;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.iot.communication.CommunicationEvidenceRecorder;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -11,10 +13,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 /** MQTT 厂家适配入口；只在可信绑定下将裁剪后的观测提交 MySQL，随后由后台投递 TDengine。 */
 @Service
@@ -25,19 +29,28 @@ public class RoomSensorIngestor {
     private final RoomSensorParser parser;
     private final ObjectMapper mapper;
     private final MeterRegistry meters;
+    private final BiConsumer<RoomSensorSource, Long> recordCommunication;
 
+    @Autowired
     public RoomSensorIngestor(@Qualifier("mysqlJdbcTemplate") JdbcTemplate mysql,
-            RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters) {
+            RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters, CommunicationEvidenceRecorder communication) {
+        this(mysql, parser, mapper, meters, communication::roomSensor);
+    }
+
+    RoomSensorIngestor(JdbcTemplate mysql, RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters,
+            BiConsumer<RoomSensorSource, Long> recordCommunication) {
         this.mysql = mysql;
         this.parser = parser;
         this.mapper = mapper;
         this.meters = meters;
+        this.recordCommunication = recordCommunication;
         tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(mysql.getDataSource())));
     }
 
     public void accept(String topic, byte[] payload, long receivedAt, boolean retained) {
-        // 保留消息没有本次实际采样时间，不能伪装成刚发生的观测或刷新门状态有效期。
+        // 保留消息不能充当本次观测或通讯证据。
         if (retained) { count("retained_ignored"); return; }
+        List<RoomSensorSource> communicatingSources = new ArrayList<>();
         Integer written = tx.execute(status -> {
             List<RoomSensorSource> sources = mysql.query("""
                     SELECT s.source_id,s.protocol,s.topic,s.gateway_mac,s.last_storage_ts,
@@ -61,9 +74,11 @@ public class RoomSensorIngestor {
             for (RoomSensorSource source : sources) {
                 // MySQL 默认排序规则不区分大小写，MQTT Topic 却区分；必须在接受观测前精确复核。
                 if (!source.topic().equals(topic)) continue;
-                List<RoomSensorParser.Value> values;
-                try { values = parser.parse(source, payload); }
+                RoomSensorParser.Parsed parsed;
+                try { parsed = parser.parse(source, payload); }
                 catch (IOException invalid) { count("invalid_json"); return 0; }
+                if (parsed.communicationEvidence()) communicatingSources.add(source);
+                var values = parsed.values();
                 long storageTs = source.lastStorageTs();
                 for (var value : values) {
                     // TDengine 毫秒主键需唯一。技术键在 MySQL 行锁下分配并持久化；业务时间始终用 receivedAt。
@@ -83,6 +98,8 @@ public class RoomSensorIngestor {
             }
             return total;
         });
+        // 先提交房间观测，再记录通讯证据，避免与通讯状态机的身份锁逆序。
+        communicatingSources.forEach(source -> recordCommunication.accept(source, receivedAt));
         if (written != null && written > 0) meters.counter("iot.room_sensor.observations", "stage", "queued").increment(written);
         else count("no_valid_observation");
     }

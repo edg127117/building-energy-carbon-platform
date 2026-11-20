@@ -1,5 +1,6 @@
 package com.platform.hvac.asset.api;
 
+import com.platform.iot.roomsensor.RoomSensorReadings;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -253,12 +254,13 @@ public final class AssetManagementContracts {
             long updateTime) {
     }
 
-    @Schema(description = "设备当前测点的最近原始事件；HAS_DATA 仅表示存在原始证据")
+    @Schema(description = "设备普通测点读数与房间传感器观测；HAS_DATA 仅表示存在原始证据")
     public record EquipmentReadingsView(
             String equipmentId,
             String buildingId,
             long generatedAt,
-            List<PointReadingView> points) {
+            List<PointReadingView> points,
+            List<RoomSensorReadings.Reading> roomSensors) {
     }
 
     public record PointReadingView(
@@ -281,7 +283,8 @@ public final class AssetManagementContracts {
             String buildingId,
             Instant startTime,
             Instant endTime,
-            List<PointTrendSeriesView> series) {
+            List<PointTrendSeriesView> series,
+            List<RoomSensorReadings.History> roomSensors) {
     }
 
     public record PointTrendSeriesView(

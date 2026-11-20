@@ -34,8 +34,10 @@ class RoomSensorParserTest {
                  "radar":{"type":"coord","num":"4","coords":[[1,2],[3,4]]}}
                 """.formatted(timestamp);
 
-        List<RoomSensorParser.Value> values = parser.parse(radarSource(), payload.getBytes());
+        var parsed = parser.parse(radarSource(), payload.getBytes());
+        List<RoomSensorParser.Value> values = parsed.values();
 
+        assertTrue(parsed.communicationEvidence());
         assertEquals(1, values.size());
         RoomSensorParser.Value value = values.get(0);
         assertEquals(timestamp, value.deviceTime());
@@ -99,20 +101,25 @@ class RoomSensorParserTest {
     }
 
     @Test
-    void ignoresInfoCombinationFramesAndGatewayHeartbeat() throws IOException {
+    void infoFramesProveContactWithoutRefreshingDoorPosition() throws IOException {
         String ca00 = "0201061BFF3906CA00AE3B8A0000C364610244000001200000860012BFD7CD";
         String ca02 = "0201060FFF3906CA02623331342D6486FA83C9";
-        List<RoomSensorParser.Value> values = parseDoor(doorPayload(
-                sensor(DOOR_MAC, OPEN_TIME, ca00),
-                sensor(DOOR_MAC, OPEN_TIME, ca02)));
-
-        assertTrue(values.isEmpty());
+        for (String frame : List.of(ca00, ca02)) {
+            var parsed = parser.parse(doorSource(), doorPayload(sensor(DOOR_MAC, OPEN_TIME, frame)).getBytes());
+            assertTrue(parsed.communicationEvidence());
+            assertTrue(parsed.values().isEmpty());
+        }
+        assertFalse(parser.parse(doorSource(), doorPayload().getBytes()).communicationEvidence());
+        assertFalse(parser.parse(doorSource(), doorPayload(sensor(DOOR_MAC, OPEN_TIME,
+                ca00.replace("AE3B8A0000C3", "BB3B8A0000C3"))).getBytes()).communicationEvidence());
+        assertFalse(parser.parse(doorSource(), doorPayload(sensor(DOOR_MAC, OPEN_TIME,
+                ca02.substring(0, ca02.length() - 2))).getBytes()).communicationEvidence());
     }
 
     @Test
     void rejectsNonArrayWrongGatewayAndWrongSensor() throws IOException {
-        assertTrue(parser.parse(doorSource(), "{}".getBytes()).isEmpty());
-        assertTrue(parser.parse(doorSource(), "[]".getBytes()).isEmpty());
+        assertTrue(parser.parse(doorSource(), "{}".getBytes()).values().isEmpty());
+        assertTrue(parser.parse(doorSource(), "[]".getBytes()).values().isEmpty());
         assertTrue(parseDoor(doorPayloadWithGateway("001122334455",
                 sensor(DOOR_MAC, OPEN_TIME, OPEN_FRAME))).isEmpty());
         assertTrue(parseDoor(doorPayload(
@@ -133,11 +140,11 @@ class RoomSensorParserTest {
 
     private List<RoomSensorParser.Value> parseRadar(String radarFields, String sequence, String mac) throws IOException {
         String payload = "{\"mac\":\"" + mac + "\"," + sequence + ",\"radar\":{" + radarFields + "}}";
-        return parser.parse(radarSource(), payload.getBytes());
+        return parser.parse(radarSource(), payload.getBytes()).values();
     }
 
     private List<RoomSensorParser.Value> parseDoor(String payload) throws IOException {
-        return parser.parse(doorSource(), payload.getBytes());
+        return parser.parse(doorSource(), payload.getBytes()).values();
     }
 
     private static RoomSensorSource radarSource() {

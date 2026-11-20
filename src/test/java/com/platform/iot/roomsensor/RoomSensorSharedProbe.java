@@ -53,7 +53,7 @@ public final class RoomSensorSharedProbe {
         var meters = new SimpleMeterRegistry();
         var properties = new TdengineProperties(); properties.setDatabase("room_sensor_probe");
         var history = new RoomSensorHistoryStore(td, properties, mapper);
-        var ingest = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters);
+        var ingest = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, (source, at) -> { });
         var worker = new RoomSensorWorker(mysql, mapper, history, meters);
 
         long now = System.currentTimeMillis();

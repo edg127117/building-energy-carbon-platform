@@ -1,6 +1,7 @@
 package com.platform.hvac.asset.ledger;
 
 import com.platform.hvac.asset.api.AssetManagementContracts.EquipmentListItemView;
+import com.platform.iot.roomsensor.RoomSensorReadings;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
@@ -18,7 +19,8 @@ public final class LedgerContracts {
                                 long communicationUnknown, long communicationError, long notMonitored, long delayed) { }
     public record LedgerItem(EquipmentListItemView equipment, String professionalGroup,
                              String classificationSource, long ruleRevision, long classificationRevision, LedgerState operation,
-                             LedgerState communication, LedgerDisplayPoint displayPoint) { }
+                             LedgerState communication, LedgerDisplayPoint displayPoint,
+                             RoomSensorReadings.Reading roomSensor) { }
     public record LedgerState(boolean applicable, String value, String reason, String source,
                               Long observedAt, String scope) { }
     public record LedgerDisplayPoint(String status, String reason, String pointId, String pointCode,

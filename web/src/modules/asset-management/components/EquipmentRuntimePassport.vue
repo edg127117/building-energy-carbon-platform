@@ -31,6 +31,9 @@ import {
   type LedgerCommunicationState,
   type LedgerOperationState,
 } from '../models/ledger'
+import { formatLedgerPointNumber, formatLedgerPointValue, ledgerPointDisplay } from '../models/point-display'
+import { peopleTrendAxis, presentRuntimeTrend, runtimeTrendAxis } from '../models/runtime-trend'
+import { roomSensorDoorValue, roomSensorEvidence, roomSensorName, roomSensorValue } from '../models/room-sensor-display'
 
 const props = withDefaults(defineProps<{
   equipment: AssetEquipmentDetail | null
@@ -83,6 +86,20 @@ const operationState = computed(() => ledgerForEquipment.value?.operation ?? nul
 const communicationState = computed(() => ledgerForEquipment.value?.communication ?? null)
 
 const points = computed(() => readingsForEquipment.value?.points ?? [])
+const roomSensors = computed(() => readingsForEquipment.value?.roomSensors ?? [])
+const trendSensor = computed(() => selectedPoint.value ? null : ledgerForEquipment.value?.roomSensor ?? null)
+const readingCards = computed(() => points.value.map(point => {
+  const { unit, multiplier } = ledgerPointDisplay(point.unit, props.equipment?.category)
+  // 使用状态先于单位换算，避免展示后端意外携带的阻断值。
+  const allowedValue = point.usageStatus.trim().toUpperCase() === 'AVAILABLE' ? point.value : null
+  return {
+    point,
+    unit,
+    value: allowedValue != null && Number.isFinite(allowedValue)
+      ? formatLedgerPointNumber(allowedValue * multiplier, unit)
+      : text('unavailable'),
+  }
+}))
 
 const selectedPoint = computed<AssetPointReading | null>(() => {
   if (!props.selectedPointId) return null
@@ -90,9 +107,16 @@ const selectedPoint = computed<AssetPointReading | null>(() => {
 })
 
 const trendForEquipment = computed<AssetEquipmentTrendHistory | null>(() => {
-  if (!props.equipment || props.trend?.equipmentId !== props.equipment.equipmentId) return null
+  if (!props.equipment || props.trend?.equipmentId !== props.equipment.equipmentId
+    || (props.trend.buildingId != null && props.trend.buildingId !== props.equipment.buildingId)) return null
   return props.trend
 })
+
+const sensorHistory = computed(() => {
+  const sensor = trendSensor.value
+  return sensor ? trendForEquipment.value?.roomSensors?.find(item => item.sourceId === sensor.sourceId && item.kind === sensor.kind) : undefined
+})
+const doorHistory = computed(() => sensorHistory.value?.kind === 'DOOR' ? sensorHistory.value.samples.slice().reverse() : [])
 
 // 历史接口按测点编码返回；未显式选择时不能擅自把首条曲线当作主测点。
 const selectedSeries = computed<AssetPointTrendSeries | null>(() => {
@@ -101,16 +125,38 @@ const selectedSeries = computed<AssetPointTrendSeries | null>(() => {
 })
 
 const trendRange = computed(() => {
-  const timestamps = (selectedSeries.value?.data ?? [])
-    .map(([time]) => time)
-    .filter((time): time is number => Number.isFinite(time))
-  if (timestamps.length === 0) return null
-  return { start: Math.min(...timestamps), end: Math.max(...timestamps) }
+  const trend = trendForEquipment.value
+  if (!trend) return null
+  const start = Date.parse(trend.startTime)
+  const end = Date.parse(trend.endTime)
+  return Number.isFinite(start) && Number.isFinite(end) && start < end ? { start, end } : null
 })
 
-const trendHasValues = computed(() => (selectedSeries.value?.data ?? []).some(([time, value]) =>
-  Number.isFinite(time) && value != null && Number.isFinite(value),
-))
+const trendTitle = computed(() => {
+  if (trendSensor.value) return text(trendSensor.value.kind === 'DOOR' ? 'roomSensor.doorHistory' : 'roomSensor.radarHistory')
+  return selectedPoint.value ? text('trendPointTitle', { name: selectedPoint.value.pointName }) : text('trendTitle')
+})
+const trendDisplay = computed(() => {
+  const history = sensorHistory.value
+  const range = trendRange.value
+  if (history?.kind !== 'RADAR' || !range) return presentRuntimeTrend(selectedSeries.value, props.equipment?.category)
+  const interval = history.intervalSeconds * 1000
+  const data: AssetPointTrendSeries['data'] = []
+  // 服务端返回每个非空时间桶的最后一次人数。空桶断线，保留实际观测时间和整数人数。
+  let previousBucket = -1
+  for (const sample of history.samples) {
+    const bucket = Math.floor((sample.observedAt - range.start) / interval)
+    if (previousBucket >= 0 && bucket > previousBucket + 1) data.push([range.start + (previousBucket + 1) * interval, null])
+    data.push([sample.observedAt, sample.count])
+    previousBucket = bucket
+  }
+  return {
+    data,
+    unit: text('roomSensor.peopleUnit'),
+    lastValidAt: history.samples.at(-1)?.observedAt ?? null,
+    hasGaps: data.some(([, value]) => value == null),
+  }
+})
 
 const equipmentLocation = computed(() => {
   if (!props.equipment) return text('unconfigured')
@@ -121,8 +167,15 @@ const equipmentLocation = computed(() => {
 
 const trendOption = computed<ChartOption>(() => {
   const series = selectedSeries.value
+  const radar = sensorHistory.value?.kind === 'RADAR'
+  const name = radar ? text('roomSensor.radar') : series?.pointName
   const range = trendRange.value
-  const data = series?.data.map(([time, value]) => [time, value] as [number, number | null]) ?? []
+  const { data, unit } = trendDisplay.value
+  const axis = radar ? peopleTrendAxis(data) : runtimeTrendAxis(data, unit, {
+    pointCode: series?.pointCode,
+    category: props.equipment?.category,
+  })
+  const spansDays = range != null && new Date(range.start).toDateString() !== new Date(range.end).toDateString()
 
   return {
     animation: false,
@@ -135,82 +188,81 @@ const trendOption = computed<ChartOption>(() => {
     },
     tooltip: {
       trigger: 'axis',
-      axisPointer: { type: 'cross' },
-      formatter: (params: unknown) => formatTrendTooltip(params, series),
+      renderMode: 'richText',
+      axisPointer: { type: 'line' },
+      formatter: (params: unknown) => formatTrendTooltip(params, name, unit),
     },
     xAxis: {
       type: 'time',
-      min: range?.start,
+      // 首个分钟桶可能只覆盖请求起点之后的部分，仍保留该桶的起始时间。
+      min: range ? Math.min(range.start, data[0]?.[0] ?? range.start) : undefined,
       max: range?.end,
+      splitNumber: 4,
       axisLabel: {
-        formatter: (value: number | string) => formatTrendTick(value),
+        hideOverlap: true,
+        formatter: (value: number | string) => formatTrendTick(value, spansDays),
       },
     },
     yAxis: {
       type: 'value',
-      name: series?.unit ?? '',
+      name: unit,
       scale: true,
+      min: axis?.min,
+      max: axis?.max,
+      interval: axis?.interval,
+      axisLabel: { formatter: axis?.formatter },
     },
-    series: series
+    series: name
       ? [{
-          name: series.pointName,
+          name,
           type: 'line',
+          step: radar ? 'end' : undefined,
           data,
           connectNulls: false,
-          showSymbol: data.length <= 100,
+          showSymbol: true,
           symbol: 'circle',
+          symbolSize: (_value: unknown, { dataIndex }: { dataIndex: number }) =>
+            data.length <= 100 || (data[dataIndex - 1]?.[1] == null && data[dataIndex + 1]?.[1] == null) ? 4 : 0,
         }]
       : [],
   } as ChartOption
 })
-
-function isReadingAvailable(reading: AssetPointReading): boolean {
-  return reading.usageStatus.trim().toUpperCase() === 'AVAILABLE'
-}
 
 function formatNumber(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return text('unavailable')
   return new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 2 }).format(value)
 }
 
-// 后端应已清空阻断值；展示层仍以 usageStatus 复核，避免异常负载泄露不允许使用的数值。
-function formatReadingValue(reading: AssetPointReading): string {
-  return isReadingAvailable(reading) ? formatNumber(reading.value) : text('unavailable')
-}
-
-function formatValueWithUnit(value: number | null | undefined, unit: string | null | undefined): string {
-  const formatted = formatNumber(value)
-  return unit?.trim() ? `${formatted} ${unit}` : formatted
-}
-
 function formatEventTime(value: number | null | undefined): string {
   return value == null || !Number.isFinite(value) ? text('unavailable') : formatDateTime(value)
 }
 
-function formatTrendTick(value: number | string): string {
+function formatTrendTick(value: number | string, spansDays: boolean): string {
   const time = Number(value)
   if (!Number.isFinite(time)) return text('unavailable')
   const date = new Date(time)
   return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
+    ...(spansDays ? { month: '2-digit', day: '2-digit' } as const : {}),
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   }).format(date)
 }
 
-function formatTrendTooltip(params: unknown, series: AssetPointTrendSeries | null): string {
+function formatTrendTooltip(params: unknown, pointName: string | undefined, unit: string): string {
   const item = Array.isArray(params) ? params[0] : params
   const value = item && typeof item === 'object'
     ? (item as { data?: unknown; value?: unknown }).data ?? (item as { value?: unknown }).value
     : null
   if (!Array.isArray(value) || typeof value[0] !== 'number') return text('unavailable')
+  if (typeof value[1] !== 'number' || !Number.isFinite(value[1])) {
+    return [formatEventTime(value[0]), text('trendGap')].join('\n')
+  }
   return [
     formatEventTime(value[0]),
     text('trendTooltip', {
-      name: series?.pointName ?? text('unavailable'),
-      value: formatValueWithUnit(typeof value[1] === 'number' ? value[1] : null, series?.unit),
+      name: pointName ?? text('unavailable'),
+      value: formatLedgerPointValue(value[1], unit),
     }),
   ].join('\n')
 }
@@ -343,42 +395,54 @@ function selectPoint(pointId: string): void {
             type="error"
             show-icon
           />
-          <div v-else-if="points.length" class="runtime-passport__reading-grid" data-test="reading-grid">
-            <button
-              v-for="point in points"
-              :key="point.pointId"
-              class="runtime-passport__reading-card"
-              :class="{ 'runtime-passport__reading-card--selected': point.pointId === selectedPointId }"
-              type="button"
-              :aria-pressed="point.pointId === selectedPointId"
-              data-test="reading-card"
-              @click="selectPoint(point.pointId)"
-            >
-              <span class="runtime-passport__reading-name">{{ point.pointName || point.pointCode }}</span>
-              <strong class="runtime-passport__reading-value" data-test="reading-value">
-                {{ formatReadingValue(point) }}
-                <small v-if="point.unit">{{ point.unit }}</small>
-              </strong>
-              <span class="runtime-passport__quality" :class="`runtime-passport__quality--${qualityKey(point.dataQuality)}`">
-                {{ text(`quality.${qualityKey(point.dataQuality)}`) }}
-              </span>
-              <span class="runtime-passport__reading-time">{{ formatEventTime(point.eventTime) }}</span>
-              <span class="runtime-passport__reading-evidence">
-                {{ text(`usage.${usageKey(point.usageStatus)}`) }}
-              </span>
-            </button>
-          </div>
-          <div v-else class="runtime-passport__substate" data-test="readings-empty">
-            {{ text('noReadings') }}
-          </div>
+          <template v-else>
+            <div v-if="roomSensors.length" class="runtime-passport__status-grid">
+              <div v-for="sensor in roomSensors" :key="sensor.sourceId" data-test="room-sensor-reading">
+                <span>{{ roomSensorName(sensor) }}</span>
+                <strong data-test="room-sensor-value">{{ roomSensorValue(sensor) }}</strong>
+                <small>{{ roomSensorEvidence(sensor) }}</small>
+              </div>
+            </div>
+            <div v-if="readingCards.length" class="runtime-passport__reading-grid" data-test="reading-grid">
+              <button
+                v-for="{ point, value, unit } in readingCards"
+                :key="point.pointId"
+                class="runtime-passport__reading-card"
+                :class="{ 'runtime-passport__reading-card--selected': point.pointId === selectedPointId }"
+                type="button"
+                :aria-pressed="point.pointId === selectedPointId"
+                data-test="reading-card"
+                @click="selectPoint(point.pointId)"
+              >
+                <span class="runtime-passport__reading-name">{{ point.pointName || point.pointCode }}</span>
+                <strong class="runtime-passport__reading-value" data-test="reading-value">
+                  {{ value }}
+                  <small v-if="unit">{{ unit }}</small>
+                </strong>
+                <span class="runtime-passport__quality" :class="`runtime-passport__quality--${qualityKey(point.dataQuality)}`">
+                  {{ text(`quality.${qualityKey(point.dataQuality)}`) }}
+                </span>
+                <span class="runtime-passport__reading-time">{{ formatEventTime(point.eventTime) }}</span>
+                <span class="runtime-passport__reading-evidence">
+                  {{ text(`usage.${usageKey(point.usageStatus)}`) }}
+                </span>
+              </button>
+            </div>
+            <div v-else-if="!roomSensors.length" class="runtime-passport__substate" data-test="readings-empty">
+              {{ text('noReadings') }}
+            </div>
+          </template>
         </section>
 
         <section class="runtime-passport__section">
           <div class="runtime-passport__section-heading">
             <ChartNoAxesCombined aria-hidden="true" />
-            <h3>{{ text('trendTitle') }}</h3>
+            <h3 data-test="trend-title">{{ trendTitle }}</h3>
           </div>
-          <div v-if="!selectedPoint" class="runtime-passport__chart-state" data-test="trend-no-selection">
+          <p v-if="trendSensor?.kind === 'DOOR'" class="runtime-passport__trend-range">{{ text('roomSensor.doorPeriod') }}</p>
+          <p v-else-if="sensorHistory?.kind === 'RADAR'" class="runtime-passport__trend-range">{{ text('roomSensor.radarPeriod', { seconds: sensorHistory.intervalSeconds }) }}</p>
+          <p v-else-if="selectedPoint" class="runtime-passport__trend-range">{{ text('trendPeriod') }}</p>
+          <div v-if="!selectedPoint && !trendSensor" class="runtime-passport__chart-state" data-test="trend-no-selection">
             {{ text('trendSelectPoint') }}
           </div>
           <div v-else-if="trendLoading" class="runtime-passport__chart-state" data-test="trend-loading">
@@ -393,19 +457,34 @@ function selectPoint(pointId: string): void {
             type="error"
             show-icon
           />
-          <div v-else-if="!trendHasValues" class="runtime-passport__chart-state" data-test="trend-empty">
-            {{ text('trendNoData') }}
+          <template v-else-if="trendSensor?.kind === 'DOOR' && doorHistory.length">
+            <ul class="runtime-passport__door-history" data-test="door-history">
+              <li v-for="(reading, index) in doorHistory" :key="`${reading.observedAt}:${index}`">
+                <span>{{ formatEventTime(reading.observedAt) }}</span>
+                <strong>{{ roomSensorDoorValue(reading.open) }}</strong>
+              </li>
+            </ul>
+          </template>
+          <div v-else-if="trendDisplay.lastValidAt == null" class="runtime-passport__chart-state" data-test="trend-empty">
+            {{ text(trendSensor ? 'roomSensor.historyEmpty' : 'trendNoData') }}
           </div>
           <template v-else>
             <ChartView
               class="runtime-passport__chart"
               :option="trendOption"
-              :accessible-label="text('trendAccessible')"
+              :accessible-label="trendTitle"
             />
             <p v-if="trendRange" class="runtime-passport__trend-range" data-test="trend-range">
               {{ text('trendRange', { start: formatEventTime(trendRange.start), end: formatEventTime(trendRange.end) }) }}
             </p>
+            <p class="runtime-passport__trend-range" data-test="trend-last">
+              {{ text('trendLast', { time: formatEventTime(trendDisplay.lastValidAt) }) }}
+            </p>
+            <p v-if="trendDisplay.hasGaps" class="runtime-passport__trend-range" data-test="trend-gap">
+              {{ text('trendGapNote') }}
+            </p>
           </template>
+          <p v-if="sensorHistory?.truncated" class="runtime-passport__trend-range">{{ text('roomSensor.historyTruncated') }}</p>
         </section>
 
         <details class="runtime-passport__details">
@@ -441,7 +520,6 @@ function selectPoint(pointId: string): void {
             <div><dt>{{ text('ratedCapacity') }}</dt><dd>{{ parameterValue(equipment.ratedCapacity) }}</dd></div>
             <div><dt>{{ text('ratedPower') }}</dt><dd>{{ parameterValue(equipment.ratedPower) }}</dd></div>
             <div><dt>{{ text('designCop') }}</dt><dd>{{ parameterValue(equipment.designCop) }}</dd></div>
-            <div><dt>{{ text('parameterGovernanceStatus') }}</dt><dd>{{ parameterValue(equipment.parameterGovernanceStatus) }}</dd></div>
           </dl>
         </section>
 
@@ -749,6 +827,22 @@ function selectPoint(pointId: string): void {
 
 .runtime-passport__trend-range {
   overflow-wrap: anywhere;
+}
+
+.runtime-passport__door-history {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: var(--bec-chart-height);
+  overflow: auto;
+}
+
+.runtime-passport__door-history li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--bec-space-tight);
+  padding: var(--bec-space-tight) 0;
+  border-bottom: var(--bec-border-width) solid var(--bec-color-divider);
 }
 
 .runtime-passport__details summary {

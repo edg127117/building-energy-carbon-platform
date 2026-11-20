@@ -2,6 +2,7 @@ package com.platform.iot.roomsensor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.config.TdengineProperties;
+import com.platform.iot.communication.CommunicationEvidenceRecorder;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
@@ -20,9 +21,11 @@ import static org.mockito.Mockito.mock;
 class RoomSensorConfigurationTest {
     private final ApplicationContextRunner context = new ApplicationContextRunner()
             .withUserConfiguration(Scheduling.class, RoomSensorSchedulingConfig.class, RoomSensorIngestor.class,
-                    RoomSensorParser.class, RoomSensorWorker.class, RoomSensorHistoryStore.class)
+                    RoomSensorParser.class, RoomSensorWorker.class, RoomSensorHistoryStore.class,
+                    RoomSensorDoorStateService.class, RoomSensorRadarStateService.class)
             .withBean(ObjectMapper.class, ObjectMapper::new)
             .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
+            .withBean(CommunicationEvidenceRecorder.class, () -> mock(CommunicationEvidenceRecorder.class))
             .withBean(TdengineProperties.class, () -> {
                 var properties = new TdengineProperties(); properties.setDatabase("test_room_sensor"); return properties;
             })
@@ -37,6 +40,8 @@ class RoomSensorConfigurationTest {
     @Test void disabledByDefaultCreatesNoWriterOrScheduler() {
         context.run(app -> assertThat(app).hasNotFailed().doesNotHaveBean(RoomSensorIngestor.class)
                 .doesNotHaveBean(RoomSensorWorker.class).doesNotHaveBean(RoomSensorHistoryStore.class)
+                .doesNotHaveBean(RoomSensorDoorStateService.class)
+                .doesNotHaveBean(RoomSensorRadarStateService.class)
                 .doesNotHaveBean("roomSensorTaskScheduler"));
     }
 
@@ -44,7 +49,9 @@ class RoomSensorConfigurationTest {
         context.withPropertyValues("room-sensor.enabled=true", "room-sensor.flush-delay-ms=3600000",
                 "room-sensor.cleanup-delay-ms=3600000").run(app -> assertThat(app).hasNotFailed()
                 .hasSingleBean(RoomSensorIngestor.class).hasSingleBean(RoomSensorWorker.class)
-                .hasSingleBean(RoomSensorHistoryStore.class).hasBean("roomSensorTaskScheduler"));
+                .hasSingleBean(RoomSensorHistoryStore.class).hasSingleBean(RoomSensorDoorStateService.class)
+                .hasSingleBean(RoomSensorRadarStateService.class)
+                .hasBean("roomSensorTaskScheduler"));
     }
 
     @TestConfiguration(proxyBeanMethods = false)

@@ -105,4 +105,28 @@ describe('台账分页聚合查询', () => {
 
     expect(state.data.value?.items[0]?.equipment.equipmentId).toBe('NEW-EQUIPMENT')
   })
+
+  it('后台刷新不清空列表，且切换建筑后丢弃迟到的刷新结果', async () => {
+    let finishRefresh!: (value: AssetLedgerPage) => void
+    const oldQuery = query('OLD')
+    const newQuery = query('NEW')
+    vi.mocked(listAssetLedger)
+      .mockResolvedValueOnce(response(oldQuery, 'OLD-EQUIPMENT'))
+      .mockImplementationOnce(() => new Promise(resolve => { finishRefresh = resolve }))
+      .mockResolvedValueOnce(response(newQuery, 'NEW-EQUIPMENT'))
+    const state = scope()
+
+    await state.load(oldQuery)
+    const pending = state.refresh()
+    await state.refresh()
+    expect(listAssetLedger).toHaveBeenCalledTimes(2)
+    expect(state.data.value?.items[0]?.equipment.equipmentId).toBe('OLD-EQUIPMENT')
+    expect(state.loading.value).toBe(false)
+
+    await state.load(newQuery)
+    finishRefresh(response(oldQuery, 'OUTDATED'))
+    await pending
+
+    expect(state.data.value?.items[0]?.equipment.equipmentId).toBe('NEW-EQUIPMENT')
+  })
 })

@@ -2,10 +2,13 @@ package com.platform.hvac.asset.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.iot.roomsensor.RoomSensorReadings;
+import com.platform.iot.temporal.HvacRawEventRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,7 +16,12 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -29,6 +37,8 @@ class AssetManagementApiContractTest {
     @Autowired private ObjectMapper objectMapper;
     @Autowired private JdbcTemplate jdbc;
     @Autowired private org.mybatis.spring.SqlSessionTemplate sqlSession;
+    @MockBean private RoomSensorReadings roomSensorReadings;
+    @MockBean private HvacRawEventRepository rawEvents;
 
     @Test
     @Transactional
@@ -225,6 +235,23 @@ class AssetManagementApiContractTest {
                         .content("{\"buildingId\":\"BLD001\",\"systemName\":\"校验测试\",\"systemCode\":\"VALIDATION_SYS\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.systemCode").value("VALIDATION_SYS"));
+    }
+
+    @Test
+    void returnsRoomSensorObservationsAlongsideExistingReadings() throws Exception {
+        when(roomSensorReadings.read(eq("BLD001"), eq("EQUIP_WCR_B1"), anyLong())).thenReturn(List.of(
+                new RoomSensorReadings.Reading("door", RoomSensorReadings.Kind.DOOR, null, false, null, null, 1_000L),
+                new RoomSensorReadings.Reading("radar", RoomSensorReadings.Kind.RADAR, null, null, 0, 0, 2_000L)));
+        mockMvc.perform(get("/v1/assets/equipment/EQUIP_WCR_B1/readings")
+                        .header("Authorization", "Bearer " + login("admin", "123456")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.points").isArray())
+                .andExpect(jsonPath("$.data.roomSensors[0].kind").value("DOOR"))
+                .andExpect(jsonPath("$.data.roomSensors[0].currentOpen").doesNotExist())
+                .andExpect(jsonPath("$.data.roomSensors[0].lastObservedOpen").value(false))
+                .andExpect(jsonPath("$.data.roomSensors[0].lastObservedAt").value(1_000))
+                .andExpect(jsonPath("$.data.roomSensors[1].kind").value("RADAR"))
+                .andExpect(jsonPath("$.data.roomSensors[1].currentCount").value(0));
     }
 
     private String login(String username, String password) throws Exception {
