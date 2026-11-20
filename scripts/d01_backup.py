@@ -38,8 +38,11 @@ TD_DATABASE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 TD_USER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 TD_CLIENT = Path(__file__).resolve().with_name("taosdump-d01")
-TD_LIBRARY = "/usr/local/taos/driver/libtaos.so.3.2.3.0"
-TD_LIBRARY_SHA256 = "4fd407d18c1c70576b0fb0e511043080f7cef863b73759d4cd95eee686fa1b91"
+TD_LIBRARY = "/usr/lib/libtaos.so.1"
+TD_LIBRARY_SHA256S = {
+    "3.2.3.0": "4fd407d18c1c70576b0fb0e511043080f7cef863b73759d4cd95eee686fa1b91",
+    "3.3.0.0": "2d07f8f7075f004fd0d5f876169b1f731e253c10f6727e9686921d5874696a86",
+}
 
 
 class BackupError(RuntimeError):
@@ -60,8 +63,8 @@ cat > "$config"
 mysqldump --defaults-extra-file="$config" --single-transaction --routines --events --triggers --databases iot_platform iot_platform_archive
 """
 
-# The pinned D01 client reads a complete bounded password line; the bundled
-# 3.2.3.0 client silently truncates stdin passwords to 20 bytes. No CLI secret.
+# The D01 client reads a complete bounded line. The bundled 3.2.3.0 and
+# 3.3.0.0 clients truncate passwords entered through stdin.
 TAOS_DUMP_SCRIPT = """set -eu
 umask 077
 IFS= read -r td_user
@@ -215,6 +218,16 @@ def _run(command: Sequence[str], code: str, *, runner: Any = None, input_data: O
 def _output(command: Sequence[str], code: str, runner: Any) -> str:
     value = _run(command, code, runner=runner).stdout
     return (value.decode("utf-8", errors="replace") if isinstance(value, bytes) else str(value or "")).strip()
+
+
+def verify_tdengine_client_abi(docker: str, container: str, runner: Any) -> None:
+    # Check the library link used by the client. Checking versioned files by
+    # name can falsely accept a stale library left alongside the active one.
+    checksum = _output([docker, "exec", container, "sha256sum", TD_LIBRARY],
+                       "TDENGINE_CLIENT_ABI_CHECK_FAILED", runner)
+    expected = {digest + "  " + TD_LIBRARY for digest in TD_LIBRARY_SHA256S.values()}
+    if checksum not in expected:
+        raise _fail("TDENGINE_CLIENT_ABI_MISMATCH")
 
 
 def _container(docker: str, name: str, volume: str, destination: str, runner: Any) -> dict[str, str]:
@@ -392,12 +405,7 @@ def _dump_tdengine(output: Path, credentials: dict[str, str], docker: str, conta
     try:
         if not TD_CLIENT.is_file() or TD_CLIENT.is_symlink():
             raise _fail("TDENGINE_PINNED_CLIENT_MISSING")
-        # This native client is validated against this exact runtime library.
-        # A different server image requires a new isolated export/restore drill.
-        actual_library = _output([docker, "exec", container, "sha256sum", TD_LIBRARY],
-                                 "TDENGINE_CLIENT_ABI_CHECK_FAILED", runner)
-        if actual_library != TD_LIBRARY_SHA256 + "  " + TD_LIBRARY:
-            raise _fail("TDENGINE_CLIENT_ABI_MISMATCH")
+        verify_tdengine_client_abi(docker, container, runner)
         _run([docker, "exec", container, "sh", "-ceu", 'umask 077; mkdir -- "$1"; mkdir -- "$1/payload"',
               "d01-taos-prepare", temporary], "TDENGINE_TEMP_CREATE_FAILED", runner=runner)
         _run([docker, "cp", str(TD_CLIENT), container + ":" + temporary + "/client"],

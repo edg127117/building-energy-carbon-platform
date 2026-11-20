@@ -60,6 +60,17 @@ ALIGNMENT_ENV = {
     "ALARM_ENABLED": "false",
 }
 TDENGINE_TARGET = {"TDENGINE_HOST": "127.0.0.1", "TDENGINE_PORT": "16041"}
+TDENGINE_PRE_CUTOVER = {
+    "TDENGINE_PORT": "16041",
+    "TDENGINE_CONTAINER_NAME": "building-energy-carbon-test-tdengine",
+    "TDENGINE_VOLUME_NAME": "building-energy-carbon-platform-test-tdengine-data",
+}
+TDENGINE_3300_TARGET = {
+    "TDENGINE_PORT": "16042",
+    "TDENGINE_CONTAINER_NAME": "building-energy-carbon-test-tdengine-3300",
+    "TDENGINE_VOLUME_NAME": "building-energy-carbon-test-tdengine-3300-data",
+}
+S02_RUNTIME = "/etc/building-energy-carbon-test/s02-runtime.env"
 
 
 def require(ok, code):
@@ -167,7 +178,7 @@ def retry_configuration():
     return {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in sorted(set(paths))}
 
 
-def retry_baseline(state, prepared, *, allow_other_restart=False):
+def retry_baseline(state, prepared, *, allow_other_restart=False, accept_tdengine_3300_cutover=False):
     runtime = state["runtime_controls"]
     runtime_keys = set(runtime) if isinstance(runtime, dict) else set()
     allowed_runtime_keys = RUNTIME_REQUIRED | set(TDENGINE_TARGET) | set(ALIGNMENT_ENV)
@@ -193,7 +204,12 @@ def retry_baseline(state, prepared, *, allow_other_restart=False):
     entries = (Path('/proc') / pid / 'environ').read_bytes().decode().split('\0')
     actual = {key: value for entry in entries if '=' in entry
               for key, value in [entry.split('=', 1)] if key in runtime}
-    require(actual == runtime and runtime.get('AUDIT_ENVIRONMENT_MODE') == 'TEST', "D01_OLD_RUNTIME_CHANGED")
+    expected = runtime
+    if accept_tdengine_3300_cutover:
+        require(all(runtime.get(key) == value for key, value in TDENGINE_PRE_CUTOVER.items()),
+                "D01_3300_OLD_TARGET_MISMATCH")
+        expected = {**runtime, **TDENGINE_3300_TARGET}
+    require(actual == expected, "D01_OLD_RUNTIME_CHANGED")
     other = Path('/var/www/iot-platform/current')
     other_pid = run('/usr/bin/systemctl', 'show', 'nginx.service', '-p', 'MainPID', '--value')
     require(str(other.resolve()) == state['other_release'] and os.readlink(other) == state['other_link']
@@ -237,7 +253,21 @@ def failed_online_state_path(private, config, operation):
     return misplaced, True
 
 
-def retire_failed_prepare(*, online_backup=False, next_release=None, source_schema="83", target_schema="84", release_mode="SCHEMA_UPGRADE"):
+def verified_staged_artifacts(config, release):
+    incoming = BASE / "incoming" / config["archive_name"]
+    candidate = BASE / "releases" / release
+    uid = pwd.getpwnam("user1").pw_uid
+    for artifact, digest in ((incoming, config["archive_sha256"]),
+                             (candidate / "building-energy-carbon-platform.jar", config["jar_sha256"]),
+                             (candidate / "web/index.html", config["web_sha256"])):
+        require(artifact.is_file() and artifact.stat().st_uid == uid
+                and not any(part.is_symlink() for part in (artifact, *artifact.parents))
+                and hashlib.sha256(artifact.read_bytes()).hexdigest() == digest, "D01_OLD_RELEASE_ARTIFACT_CHANGED")
+    return incoming, candidate
+
+
+def retire_failed_prepare(*, online_backup=False, next_release=None, source_schema="83", target_schema="84",
+                          release_mode="SCHEMA_UPGRADE", next_archive_sha=None, next_commit=None):
     """Archive only an explicitly requested, revoked pre-freeze attempt."""
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
@@ -309,18 +339,24 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
                 == state.get("previous_jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
         hashes = state.get("config_hashes")
         require(isinstance(hashes, dict) and hashes and hashes == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
-        uid = pwd.getpwnam('user1').pw_uid
-        for artifact, sha in ((BASE / 'incoming' / config['archive_name'], config['archive_sha256']),
-                              (BASE / 'releases' / release / 'building-energy-carbon-platform.jar', config['jar_sha256']),
-                              (BASE / 'releases' / release / 'web/index.html', config['web_sha256'])):
-            require(artifact.is_file() and artifact.stat().st_uid == uid
-                    and not any(part.is_symlink() for part in (artifact, *artifact.parents))
-                    and hashlib.sha256(artifact.read_bytes()).hexdigest() == sha, 'D01_OLD_RELEASE_ARTIFACT_CHANGED')
+        verified_staged_artifacts(config, release)
         if not before_dump:
             partial = private / 'online-backup/mysql.sql'
             require(partial.is_file() and not partial.is_symlink(), 'D01_OLD_PARTIAL_BACKUP_MISSING')
             trusted_parent(partial)
             require(partial.is_file() and partial.stat().st_size > 0, 'D01_OLD_PARTIAL_BACKUP_MISSING')
+    elif operation.get("failure_code") == "RELEASE_EXISTING_MIGRATION_CHANGED":
+        # This prepare gate runs after staging and before recording a prepared
+        # state. A corrected package can reuse the release name after archival.
+        state_path = private / ("d01-" + release + ".json")
+        require(not rehearsal and release_mode == "SCHEMA_UPGRADE" and reusable_upgrade(source_schema, target_schema)
+                and next_release == release and next_commit == config.get("commit")
+                and re.fullmatch(r"[a-f0-9]{40}", next_commit or "")
+                and re.fullmatch(r"[a-f0-9]{64}", next_archive_sha or "")
+                and next_archive_sha != config.get("archive_sha256")
+                and not state_path.exists() and not state_path.is_symlink(),
+                "D01_CORRECTED_MIGRATION_PACKAGE_REQUIRED")
+        paths += verified_staged_artifacts(config, release)
     else:
         for artifact in (BASE / "incoming" / config["archive_name"], BASE / "releases" / release):
             require(not artifact.exists() and not artifact.is_symlink(), "D01_OLD_PREPARE_ARTIFACTS_REQUIRE_REVIEW")
@@ -354,7 +390,9 @@ def retire_failed_prepare(*, online_backup=False, next_release=None, source_sche
     # History is intentionally outside CREATED: a later installation failure
     # must never erase the previous attempt's audit/recovery evidence.
     try:
-        for source, name in zip(paths, ("tools", "data", "launcher", "authorization.service", "authorization.timer")):
+        names = ("tools", "data", "launcher", "authorization.service", "authorization.timer",
+                 "staged-incoming.tar.gz", "staged-release")
+        for source, name in zip(paths, names):
             source.rename(archive / name)
         run("/usr/bin/systemctl", "daemon-reload")
     except Exception:
@@ -390,11 +428,14 @@ def compatible_replacement(candidate, current, source_schema):
             "D01_OLD_BASELINE_JAR_CHANGED")
 
 
-def retire_completed(next_release, source_schema="84", *, allow_application_update=False):
+def retire_completed(next_release, source_schema="84", *, allow_application_update=False,
+                     accept_tdengine_3300_cutover=False):
     """只归档与新源版本一致、已撤销且仍在运行的完成记录；不重置失败现场或删除备份。"""
     require(source_schema in ("84", "85", "86", "87", "88", "93", "121", "123")
             or (allow_application_update and re.fullmatch(r"[1-9][0-9]{2,8}", source_schema)
                 and int(source_schema) >= 123), "D01_COMPLETED_SOURCE_REQUIRED")
+    require(not accept_tdengine_3300_cutover or (allow_application_update and int(source_schema) >= 123),
+            "D01_3300_COMPLETED_UPGRADE_REQUIRED")
     require(not SUDOERS.exists() and not SUDOERS.is_symlink(), "D01_OLD_AUTH_STILL_PRESENT")
     private = DATA / "private"
     paths = (INSTALL, DATA, LAUNCHER, UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer"))
@@ -426,8 +467,19 @@ def retire_completed(next_release, source_schema="84", *, allow_application_upda
             "D01_OLD_BASELINE_CHANGED")
     # 后续同结构换包可更新 JAR；归档前仍核验已完成记录及数据库相关资源。
     # 已完成且撤销的窗口不再固定其他站点的历史 PID；新 prepare 会重新固定本轮进程。
-    retry_baseline(state, int(time.time()), allow_other_restart=True)
-    require(state.get("config_hashes") == retry_configuration(), "D01_OLD_CONFIGURATION_CHANGED")
+    retry_baseline(state, int(time.time()), allow_other_restart=True,
+                   accept_tdengine_3300_cutover=accept_tdengine_3300_cutover)
+    old_hashes = state.get("config_hashes")
+    current_hashes = retry_configuration()
+    if accept_tdengine_3300_cutover:
+        # Keep the completed window's original fingerprints in its archive.
+        require(isinstance(old_hashes, dict) and old_hashes.keys() == current_hashes.keys(),
+                "D01_OLD_CONFIGURATION_CHANGED")
+        changed = {path for path, digest in old_hashes.items() if current_hashes[path] != digest}
+        require(S02_RUNTIME in changed and changed <= {S02_RUNTIME, str(BASE / "shared/server.env")},
+                "D01_OLD_CONFIGURATION_CHANGED")
+    else:
+        require(old_hashes == current_hashes, "D01_OLD_CONFIGURATION_CHANGED")
     require(hashlib.sha256((candidate / "building-energy-carbon-platform.jar").read_bytes()).hexdigest()
             == state.get("jar_sha256") == config.get("jar_sha256"), "D01_OLD_BASELINE_JAR_CHANGED")
     if allow_application_update and current != candidate:
@@ -698,7 +750,7 @@ def credentials(jar, source, target_schema="84", release_mode="SCHEMA_UPGRADE"):
 
 def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revoked_online_backup=False,
             replace_revoked_completed=False, replace_revoked_rehearsal=False,
-            authorization_reference=None, rehearsal_only=False):
+               accept_tdengine_3300_cutover=False, authorization_reference=None, rehearsal_only=False):
     global TIMER_ATTEMPTED
     require(os.geteuid() == 0, "D01_ADMIN_REQUIRED")
     require(sys.stdin.isatty(), "D01_ADMIN_TERMINAL_REQUIRED")
@@ -712,6 +764,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     require(hashlib.sha256(raw).hexdigest() == expected_sha, "D01_BUNDLE_HASH_MISMATCH")
     files = bundle_files(raw)
     manifest, jar = package_manifest(files["release.tar.gz"])
+    archive_sha = hashlib.sha256(files["release.tar.gz"]).hexdigest()
     target_schema = manifest.get("expectedMigration", "84")
     source_schema = manifest.get("sourceMigration", str(int(target_schema) - 1))
     release_mode = manifest.get("releaseMode", "SCHEMA_UPGRADE")
@@ -725,7 +778,15 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     require(target_schema == "84" or (isinstance(authorization_reference, str)
             and 0 < len(authorization_reference.strip()) <= 512
             and not any(c in authorization_reference for c in "\0\r\n")), "D01_NEW_MAINTENANCE_REFERENCE_REQUIRED")
+    require(not accept_tdengine_3300_cutover or
+            (replace_revoked_completed and not rehearsal_only and release_mode == "SCHEMA_UPGRADE"
+             and reusable_upgrade(source_schema, target_schema) and INSTALL.exists()),
+            "D01_3300_COMPLETED_UPGRADE_REQUIRED")
     release = authorization_release_id(manifest["commit"], rehearsal_only)
+    checked_credentials = None
+    if accept_tdengine_3300_cutover:
+        # Verify access to the live instance before moving the revoked records.
+        checked_credentials = credentials(jar, files["d01_credentials.py"], target_schema, release_mode)
     if replace_revoked_rehearsal:
         require(INSTALL.exists() or INSTALL.is_symlink(), "D01_REHEARSAL_AUTH_NOT_FOUND")
         retire_revoked_rehearsal(release, source_schema)
@@ -735,12 +796,14 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
                 "D01_COMPLETED_REPLACEMENT_TARGET_REQUIRED")
         if INSTALL.exists() or INSTALL.is_symlink():
             if reusable_upgrade(source_schema, target_schema):
-                retire_completed(release, source_schema, allow_application_update=True)
+                retire_completed(release, source_schema, allow_application_update=True,
+                                 accept_tdengine_3300_cutover=accept_tdengine_3300_cutover)
             else:
                 retire_completed(release, source_schema)
     if (replace_revoked_prepare or replace_revoked_online_backup) and (INSTALL.exists() or INSTALL.is_symlink()):
         retire_failed_prepare(online_backup=replace_revoked_online_backup, next_release=release,
-                              source_schema=source_schema, target_schema=target_schema, release_mode=release_mode)
+                              source_schema=source_schema, target_schema=target_schema, release_mode=release_mode,
+                              next_archive_sha=archive_sha, next_commit=manifest["commit"])
     for destination in (INSTALL, DATA, LAUNCHER, SUDOERS,
                         UNITS / (TIMER + ".service"), UNITS / (TIMER + ".timer")):
         trusted_parent(destination.parent)
@@ -751,9 +814,11 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     previous = str((BASE / "current").resolve())
     require(Path(previous).is_relative_to(BASE / "releases"), "D01_CURRENT_OUTSIDE_TEST_RELEASES")
     # 演练只校验源结构；正式维护仍提前核验目标迁移权限，不在发布过程中临时授予DDL权限。
-    schema, backup, credential_report = credentials(jar, files["d01_credentials.py"],
-                                                   source_schema if rehearsal_only else target_schema,
-                                                   "APPLICATION_ONLY" if rehearsal_only else release_mode)
+    if checked_credentials is None:
+        checked_credentials = credentials(jar, files["d01_credentials.py"],
+                                          source_schema if rehearsal_only else target_schema,
+                                          "APPLICATION_ONLY" if rehearsal_only else release_mode)
+    schema, backup, credential_report = checked_credentials
     expires = int(time.time()) + 24 * 3600
     sudoers = "# One installed D01 operation; no wildcard arguments or SETENV.\n"
     sudoers += "Defaults!" + str(LAUNCHER) + " env_reset, !setenv, secure_path=/usr/sbin:/usr/bin:/sbin:/bin\n"
@@ -765,7 +830,7 @@ def install(bundle, expected_sha, *, replace_revoked_prepare=False, replace_revo
     launcher = "#!/bin/sh\nexec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 /usr/bin/python3 -I " + str(INSTALL / "d01_maintenance.py") + ' "$@"\n'
     config = {"format": "D01_TEMP_AUTH_V1", "user": "user1", "expires_at": expires,
               "release": release, "archive_name": release + "-authorized.tar.gz", "previous_release": previous,
-              "archive_sha256": hashlib.sha256(files["release.tar.gz"]).hexdigest(),
+              "archive_sha256": archive_sha,
               "jar_sha256": manifest["backendJarSha256"], "web_sha256": manifest["webIndexSha256"],
               "commit": manifest["commit"],
               "source_schema": source_schema, "target_schema": target_schema, "release_mode": release_mode,
@@ -837,6 +902,8 @@ if __name__ == "__main__":
                         help="archive a revoked failed online backup; keep partial backups and old release artifacts")
     parser.add_argument("--replace-revoked-completed", action="store_true",
                         help="archive revoked completed records matching the new source version; preserve all backups")
+    parser.add_argument("--accept-tdengine-3300-cutover", action="store_true",
+                        help="acknowledge the verified shared TDengine cutover when archiving a revoked completed upgrade")
     parser.add_argument("--replace-revoked-rehearsal", action="store_true",
                         help="archive only a revoked online-verified rehearsal that never froze or switched the old release")
     parser.add_argument("--authorization-reference", help="non-secret reference to the new approved maintenance and ingress-loss decision")
@@ -848,7 +915,8 @@ if __name__ == "__main__":
         install(args.bundle, args.sha256, replace_revoked_prepare=args.replace_revoked_prepare,
                 replace_revoked_online_backup=args.replace_revoked_online_backup,
                 replace_revoked_completed=args.replace_revoked_completed,
-                replace_revoked_rehearsal=args.replace_revoked_rehearsal, authorization_reference=args.authorization_reference,
+                replace_revoked_rehearsal=args.replace_revoked_rehearsal,
+                accept_tdengine_3300_cutover=args.accept_tdengine_3300_cutover, authorization_reference=args.authorization_reference,
                 rehearsal_only=args.rehearsal_only)
     except BaseException as error:
         try:
