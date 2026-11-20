@@ -4,10 +4,13 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.framework.exception.BusinessException;
 import com.platform.framework.web.PageResponse;
+import com.platform.iot.daikin.monitoring.DaikinTemperatureQueryService;
+import com.platform.iot.roomsensor.RoomSensorObservation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import lombok.extern.slf4j.Slf4j;
 
@@ -19,6 +22,8 @@ import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import static com.platform.alarm.AlarmModels.*;
+import static com.platform.alarm.ComfortAlarmSource.DOOR_RULE;
+import static com.platform.alarm.ComfortAlarmSource.PMV_RULE;
 
 @Service
 @Slf4j
@@ -32,6 +37,20 @@ public class AlarmService {
     private static final String HISTORY = "/operations/alarms/historyAlarms";
     private static final String CONFIG = "/configuration/rules/alarmRules";
     private static final long FRESH_MS = 120_000;
+    // 老事件只保存空间名。设备和唯一历史空间名必须同时匹配，房间徽标与详情使用同一归属。
+    private static final String LEGACY_EVENT_ROOM = """
+            (SELECT e.space_id FROM biz_equipment e
+             JOIN biz_space s ON s.building_id=e.building_id AND s.space_id=e.space_id AND s.del_flag=0
+             WHERE e.building_id=biz_alarm_event.building_id AND e.equip_id=biz_alarm_event.object_id
+               AND e.del_flag=0 AND s.space_name=biz_alarm_event.space_name
+               AND NOT EXISTS (SELECT 1 FROM biz_space other WHERE other.building_id=s.building_id
+                   AND other.space_name=s.space_name AND other.space_id<>s.space_id))
+            """;
+    private static final List<String> SEVERITY_ORDER = List.of("URGENT", "IMPORTANT", "WARNING", "GENERAL", "INFO");
+    private static final String SEVERITY_RANK = """
+            CASE severity WHEN 'URGENT' THEN 0 WHEN 'IMPORTANT' THEN 1 WHEN 'WARNING' THEN 2
+                WHEN 'GENERAL' THEN 3 ELSE 4 END
+            """;
     private final JdbcTemplate jdbc;
     private final AlarmAccess access;
     private final AlarmDeviceSource devices;
@@ -46,6 +65,8 @@ public class AlarmService {
     private AlarmTemplateCatalog templateCatalog;
     @Autowired(required=false)
     private com.platform.iot.temporal.HvacRawEventRepository rawEvents;
+    @Autowired(required = false)
+    private ComfortAlarmSource comfort;
 
     @Autowired
     public AlarmService(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc, AlarmAccess access,
@@ -423,7 +444,7 @@ public class AlarmService {
         if (at == null || clock.millis() - at.longValue() > FRESH_MS) return unavailable("报警判定结果尚未更新");
         String deviceReason = (String) scope.get("device_reason"), emissionReason = (String) scope.get("emission_reason");
         List<Event> active = active(building).stream().filter(e -> e.silencedUntil() == null || e.silencedUntil() <= clock.millis()).toList();
-        Map<String, Event> primary = active.stream().filter(e -> e.category().equals("DEVICE"))
+        Map<String, Event> primary = active.stream().filter(e -> e.objectType().equals("DEVICE"))
                 .collect(Collectors.toMap(Event::objectId, Function.identity(), (a, b) -> primaryRank(a.type()) <= primaryRank(b.type()) ? a : b));
         List<Group> deviceGroups = List.of("OFFLINE","QUALITY","VALUE","FAULT").stream()
                 .map(type -> new Group(type, primary.values().stream().filter(e -> e.type().equals(type)).count())).toList();
@@ -437,14 +458,46 @@ public class AlarmService {
         return events(user, roles, building, history, type, page, size, null, null, null, null, null);
     }
 
+    @Transactional(readOnly = true)
+    public Map<String, String> activeRoomLevels(Long user, Set<String> roles, String building, Set<String> rooms) {
+        if (rooms.isEmpty()) return Map.of();
+        access.require(user, roles, building, LIVE, false);
+        var reader = new org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate(jdbc);
+        String sql = """
+                SELECT scope_id, MIN(severity_rank) FROM (
+                    SELECT COALESCE(space_id, %s) AS scope_id, %s AS severity_rank
+                    FROM biz_alarm_event WHERE building_id=:building AND category='DEVICE' AND status='ACTIVE'
+                      AND (silenced_until IS NULL OR silenced_until<=:now)
+                ) scoped WHERE scope_id IN (:rooms) GROUP BY scope_id
+                """.formatted(LEGACY_EVENT_ROOM, SEVERITY_RANK);
+        return reader.query(sql, Map.of("building", building, "now", clock.millis(), "rooms", rooms), rs -> {
+            var levels = new HashMap<String, String>();
+            while (rs.next()) levels.put(rs.getString(1), SEVERITY_ORDER.get(rs.getInt(2)));
+            return levels;
+        });
+    }
+
     public PageResponse<Event> events(Long user, Set<String> roles, String building, boolean history, String type, int page, int size,
             String alarmType, String state, String keyword, Long fromAt, Long toAt) {
+        return events(user, roles, building, history, type, page, size, alarmType, state, keyword, fromAt, toAt, null);
+    }
+
+    @Transactional(readOnly = true)
+    public PageResponse<Event> events(Long user, Set<String> roles, String building, boolean history, String type, int page, int size,
+            String alarmType, String state, String keyword, Long fromAt, Long toAt, String spaceId) {
         access.require(user, roles, building, history ? HISTORY : LIVE, false);
         if (!Set.of("DEVICE", "EMISSION").contains(type) || page < 1 || page > 10000 || size < 1 || size > 100) {
             throw new BusinessException("报警查询条件无效");
         }
         String where = " WHERE building_id=? AND category=?" + (history ? " AND status IN ('RECOVERED','CLOSED')" : " AND status='ACTIVE'");
         List<Object> args = new ArrayList<>(List.of(building, type));
+        if (spaceId != null) {
+            if (spaceId.isBlank() || spaceId.length() > 32 || history || !type.equals("DEVICE")) {
+                throw new BusinessException("空间筛选仅适用于实时设备报警，且需要有效空间标识");
+            }
+            where += " AND (space_id=? OR (space_id IS NULL AND " + LEGACY_EVENT_ROOM + "=?))";
+            args.addAll(List.of(spaceId, spaceId));
+        }
         if (!blank(alarmType)) {
             requireEventType(alarmType); where += " AND rule_type=?"; args.add(alarmType);
         }
@@ -472,7 +525,9 @@ public class AlarmService {
         if (fromAt != null && toAt != null && fromAt >= toAt) throw new BusinessException("发生时间范围无效");
         Long total = jdbc.queryForObject("SELECT COUNT(*) FROM biz_alarm_event" + where, Long.class, args.toArray());
         args.add(size); args.add((page - 1) * size);
-        var rows = jdbc.query("SELECT * FROM biz_alarm_event" + where + " ORDER BY first_at DESC,id DESC LIMIT ? OFFSET ?",
+        String priority = spaceId == null ? "" : SEVERITY_RANK + ",";
+        var rows = jdbc.query("SELECT * FROM biz_alarm_event" + where + " ORDER BY " + priority
+                        + "first_at DESC,id DESC LIMIT ? OFFSET ?",
                 AlarmService::event, args.toArray());
         return new PageResponse<>(page, size, total == null ? 0 : total, rows);
     }
@@ -490,7 +545,7 @@ public class AlarmService {
                 (rs, n) -> new Log(rs.getLong("at_ms"), number(rs, "actor"), rs.getString("action"), rs.getString("note")), id);
         return new Event(row.id(), row.buildingId(), row.category(), row.type(), row.ruleId(),row.objectId(), row.objectName(),
                 row.spaceName(), row.period(), row.status(), row.severity(), row.description(), row.firstAt(), row.lastAt(),
-                row.recoveredAt(), row.ackBy(), row.ackAt(), row.silencedUntil(), row.ruleRevision(), row.evidence(), row.triggerEvidence(), logs,row.closedAt(),row.closedBy());
+                row.recoveredAt(), row.ackBy(), row.ackAt(), row.silencedUntil(), row.ruleRevision(), row.evidence(), row.triggerEvidence(), logs,row.closedAt(),row.closedBy(),row.spaceId(),row.objectType());
     }
 
     public void action(Long user, Set<String> roles, String building, String id, String action, String note, int minutes) {
@@ -507,8 +562,9 @@ public class AlarmService {
             case "SILENCE" -> {
                 validateNote(note);
                 if (!row.category().equals("DEVICE") || minutes < 1 || minutes > 10080) throw new BusinessException("维护屏蔽时长须为1分钟至7天");
-                // 按设备屏蔽同一次检修涉及的全部活动异常，保留各事件确认记录。
-                for (Event event : active(building).stream().filter(e -> e.category().equals("DEVICE") && e.objectId().equals(row.objectId())).toList()) {
+                // 房间和设备可能复用编号；屏蔽只作用于同类对象。
+                for (Event event : active(building).stream().filter(e -> e.objectType().equals(row.objectType())
+                        && e.objectId().equals(row.objectId())).toList()) {
                     jdbc.update("UPDATE biz_alarm_event SET silenced_until=? WHERE id=?", now + minutes * 60000L, event.id());
                     log(event.id(), now, user, action, note);
                 }
@@ -538,7 +594,9 @@ public class AlarmService {
             for(String id:deviceResult.unavailableRuleIds()) jdbc.update("DELETE FROM biz_alarm_rule_state WHERE building_id=? AND rule_id=?",building,id);
             Set<String> unknownRules=deviceResult.unavailableRuleIds();
             reconcile(building,"DEVICE",deviceResult.candidates(),rules.stream().filter(rule->!unknownRules.contains(rule.id())).toList(),now);
-        } else jdbc.update("DELETE FROM biz_alarm_rule_state WHERE building_id=?",building);
+        } else jdbc.update("DELETE FROM biz_alarm_rule_state WHERE building_id=? AND rule_id NOT IN (?,?)",
+                building, PMV_RULE, DOOR_RULE);
+        if (comfort != null) evaluateComfort(building, now);
         for (Rule rule : rules) if (!rule.enabled()) recoverRule(building, rule.id(), now, "规则停用");
         // 跨月归档独立于新月数据是否已就绪，不能把上月报警冒充当前评价月。
         for (Event event : active(building)) if (event.category().equals("EMISSION") && rules.stream().anyMatch(rule->rule.id().equals(event.ruleId())&&rule.type().equals("QUOTA")) && !month.toString().equals(event.period())) recover(event, now, "评价月份切换");
@@ -587,6 +645,78 @@ public class AlarmService {
                 now, deviceReason, emissionReason, month.toString(), building);
     }
 
+    private void evaluateComfort(String building, long now) {
+        List<ComfortAlarmSource.RoomEvidence> rooms;
+        try {
+            rooms = comfort.load(building, now);
+        } catch (RuntimeException failure) {
+            log.warn("空间报警范围暂不可用，建筑={}，异常类型={}", building, failure.getClass().getSimpleName());
+            jdbc.update("DELETE FROM biz_alarm_rule_state WHERE building_id=? AND rule_id=?", building, PMV_RULE);
+            return;
+        }
+        var candidates = new ArrayList<Candidate>();
+        var active = active(building).stream()
+                .filter(event -> PMV_RULE.equals(event.ruleId()) || DOOR_RULE.equals(event.ruleId())).toList();
+        var preserve = new HashSet<String>();
+        var evidenceByRoom = new HashMap<String, ComfortAlarmSource.RoomEvidence>();
+        for (var room : rooms) {
+            String spaceId = room.space().spaceId();
+            if (room.pmv() == null) {
+                jdbc.update("DELETE FROM biz_alarm_rule_state WHERE building_id=? AND rule_id=? AND object_id=?",
+                        building, PMV_RULE, spaceId);
+                preserve.add(comfortKey(building, PMV_RULE, spaceId, spaceId));
+            } else candidates.add(comfort.pmvCandidate(room));
+            evidenceByRoom.put(spaceId, room);
+            for (var door : room.doors()) {
+                Candidate candidate = comfort.doorCandidate(room, door, now);
+                if (candidate != null) candidates.add(candidate);
+            }
+        }
+        for (Event event : active) {
+            if (PMV_RULE.equals(event.ruleId()) && !evidenceByRoom.containsKey(event.spaceId())) {
+                jdbc.update("DELETE FROM biz_alarm_rule_state WHERE building_id=? AND rule_id=? AND object_id=?",
+                        building, PMV_RULE, event.objectId());
+                preserve.add(key(building, candidateFor(event)));
+            }
+            if (!DOOR_RULE.equals(event.ruleId())) continue;
+            var room = evidenceByRoom.get(event.spaceId());
+            var closedAt = room == null ? null : room.doors().stream()
+                    .filter(door -> event.objectId().equals(door.equipmentId()) && door.closedAt() != null)
+                    .map(door -> door.closedAt()).findFirst().orElse(null);
+            if (closedAt != null && closedAfterOpening(event, closedAt)) {
+                recover(event, closedAt, "门磁确认关门");
+            } else preserve.add(key(building, candidateFor(event)));
+        }
+        reconcile(building, "DEVICE", candidates, ComfortAlarmSource.RULES, now, preserve);
+    }
+
+    /** 只在持久化 CA03 关门事实后解除该门的活动超时；调度扫描可补处理失败的回调。 */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void doorClosed(RoomSensorObservation closed) {
+        if (comfort == null || !Boolean.FALSE.equals(closed.doorOpen()) || !"S4_DOOR".equals(closed.protocol())
+                || closed.receivedAt() > clock.millis()) return;
+        String building = closed.buildingId();
+        String eventKey = comfortKey(building, DOOR_RULE, closed.equipId(), closed.spaceId());
+        if (Boolean.FALSE.equals(jdbc.queryForObject("SELECT EXISTS(SELECT 1 FROM biz_alarm_event WHERE active_key=?)",
+                Boolean.class, eventKey))) return;
+        lock(building);
+        if (!comfort.matchesDoorBinding(closed)) return;
+        var events = jdbc.query("SELECT * FROM biz_alarm_event WHERE active_key=? FOR UPDATE", AlarmService::event, eventKey);
+        if (!events.isEmpty() && closedAfterOpening(events.getFirst(), closed.receivedAt())) {
+            recover(events.getFirst(), closed.receivedAt(), "门磁确认关门");
+        }
+    }
+
+    private boolean closedAfterOpening(Event event, long closedAt) {
+        try {
+            var opened = json.readTree(event.triggerEvidence()).path("openedAt");
+            return opened.isIntegralNumber() && closedAt > opened.longValue();
+        } catch (JsonProcessingException failure) {
+            log.warn("门开报警缺少有效的开启时间，事件={}", event.id());
+            return false;
+        }
+    }
+
     private String validQuota(Quota value, String building, YearMonth month) {
         if (value == null) return "月度配额数据尚未就绪";
         if (value.unavailableReason() != null) return value.unavailableReason();
@@ -599,6 +729,11 @@ public class AlarmService {
 
     /** 按真实观测游标维护跨调度连续时间与恢复周期；同一快照重跑不会推进计数。 */
     private void reconcile(String building, String category, List<Candidate> candidates, List<Rule> rules, long now) {
+        reconcile(building, category, candidates, rules, now, Set.of());
+    }
+
+    private void reconcile(String building, String category, List<Candidate> candidates, List<Rule> rules, long now,
+                           Set<String> preserve) {
         Map<String, Rule> byId = rules.stream().collect(Collectors.toMap(Rule::id, Function.identity()));
         Map<String, Candidate> desired = new LinkedHashMap<>();
         Map<String, Event> activeByKey = new HashMap<>();
@@ -638,7 +773,9 @@ public class AlarmService {
             if (!event.category().equals(category) || !byId.containsKey(event.ruleId())) continue;
             String key = key(building, candidateFor(event));
             Rule rule = byId.get(event.ruleId());
-            if (!desired.containsKey(key) || rule.revision() != event.ruleRevision()) recover(event, now, "条件解除或规则修订");
+            if ((!desired.containsKey(key) && !preserve.contains(key)) || rule.revision() != event.ruleRevision()) {
+                recover(event, now, "条件解除或规则修订");
+            }
             else existing.put(key, event);
         }
         for (var entry : desired.entrySet()) {
@@ -649,22 +786,29 @@ public class AlarmService {
                         now, value.severity(), value.description(), value.evidence(), previous.id());
             } else {
                 String id = UUID.randomUUID().toString();
+                String objectType = PMV_RULE.equals(value.ruleId()) ? "ROOM" : category.equals("DEVICE") ? "DEVICE" : "BUILDING";
                 Long silence = null;
-                if (category.equals("DEVICE")) silence = jdbc.queryForObject("SELECT MAX(silenced_until) FROM biz_alarm_event WHERE building_id=? AND object_id=? AND category='DEVICE' AND silenced_until>?", Long.class, building, value.objectId(), now);
+                if (category.equals("DEVICE")) {
+                    silence = jdbc.queryForObject("""
+                            SELECT MAX(silenced_until) FROM biz_alarm_event WHERE building_id=? AND object_id=?
+                            AND category='DEVICE' AND COALESCE(object_type,'DEVICE')=? AND silenced_until>?
+                            """, Long.class, building, value.objectId(), objectType, now);
+                }
                 jdbc.update("""
                         INSERT INTO biz_alarm_event(id,active_key,building_id,category,rule_id,rule_type,object_id,object_name,space_name,
-                        period,status,severity,description,first_at,last_at,rule_revision,evidence,trigger_evidence,silenced_until)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?,?,?)
+                        period,status,severity,description,first_at,last_at,rule_revision,evidence,trigger_evidence,silenced_until,
+                        space_id,object_type)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?,?,?,?,?,?,?,?,?)
                         """, id, entry.getKey(), building, category, value.ruleId(), value.type(), value.objectId(), value.objectName(),
                         value.spaceName(), value.period(), value.severity(), value.description(), now, now,
-                        byId.get(value.ruleId()).revision(), value.evidence(), value.evidence(), silence);
+                        byId.get(value.ruleId()).revision(), value.evidence(), value.evidence(), silence, value.spaceId(), objectType);
                 log(id, now, null, "TRIGGERED", value.description());
             }
         }
     }
 
     private static Candidate candidateFor(Event event) {
-        return new Candidate(event.type(), event.ruleId(), event.objectId(), "", null, null, null,
+        return new Candidate(event.type(), event.ruleId(), event.objectId(), "", event.spaceId(), null, null,
                 event.period(), "", "", "");
     }
 
@@ -681,8 +825,12 @@ public class AlarmService {
         boolean newer = state.lastAt == null || candidate.observationAt() >= state.lastAt;
         boolean distinct = newer && !key.equals(state.lastKey);
         if (distinct) {
-            boolean continuous = state.lastAt == null || candidate.observationAt() > state.lastAt
-                    && consecutiveCycles(state.lastCycleKey, candidate.observationCycleKey());
+            boolean pmv = PMV_RULE.equals(rule.id());
+            // PMV 绑定与五项输入组成连续性标识；旧读数到期后，即使下一条有效也要重新计时。
+            boolean sameCycle = pmv ? Objects.equals(state.lastCycleKey, candidate.observationCycleKey())
+                    && (state.lastAt == null || !DaikinTemperatureQueryService.isStaleAt(state.lastAt, candidate.observationAt()))
+                    : consecutiveCycles(state.lastCycleKey, candidate.observationCycleKey());
+            boolean continuous = state.lastAt == null || candidate.observationAt() > state.lastAt && sameCycle;
             if (candidate.matched()) {
                 state.triggerSince = state.triggerSince == null || !continuous
                         ? candidate.observationAt() : state.triggerSince;
@@ -697,7 +845,7 @@ public class AlarmService {
                 }
                 // 任一已知反向事实立即打断触发连续时间，即使它仍在同一分钟内。
                 state.triggerSince = null;
-                if (previous != null && !Objects.equals(state.lastCycleKey, candidate.observationCycleKey())) {
+                if (previous != null && (pmv || !Objects.equals(state.lastCycleKey, candidate.observationCycleKey()))) {
                     if (!continuous) {
                         state.recoveryCycles = 0;
                         state.recoverySince = candidate.observationAt();
@@ -735,7 +883,7 @@ public class AlarmService {
         jdbc.update("UPDATE biz_alarm_rule_state SET last_observation_key=?,last_cycle_key=?,last_observation_at=?,trigger_since=?,recovery_cycles=?,recovery_since=? WHERE building_id=? AND rule_id=? AND object_id=?",
                 state.lastKey,state.lastCycleKey,state.lastAt,state.triggerSince,state.recoveryCycles,state.recoverySince,building,rule,object);
     }
-    private static String shortHash(String value) {
+    static String shortHash(String value) {
         try {return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));}
         catch(java.security.NoSuchAlgorithmException exception){throw new IllegalStateException(exception);}
     }
@@ -825,7 +973,16 @@ public class AlarmService {
     private static void requireLegacyRuleType(String type) { if (type==null||!Set.of("OFFLINE","FAULT","QUOTA").contains(type)) throw new BusinessException("旧版规则类型无效"); }
     private static void requireEventType(String type) { if (type==null||!Set.of("OFFLINE","QUALITY","VALUE","FAULT","QUOTA","INTENSITY","MOM","YOY","BASELINE","COMPLETENESS","FORECAST").contains(type)) throw new BusinessException("报警事件类型无效"); }
     private static boolean blank(String text) { return text == null || text.isBlank(); }
-    private static String key(String building, Candidate value) { return building + ":" + value.ruleId() + ":" + value.objectId() + ":" + Objects.toString(value.period(), ""); }
+    private static String key(String building, Candidate value) {
+        if (DOOR_RULE.equals(value.ruleId()) || PMV_RULE.equals(value.ruleId())) {
+            return comfortKey(building, value.ruleId(), value.objectId(), value.spaceId());
+        }
+        return building + ":" + value.ruleId() + ":" + value.objectId() + ":" + Objects.toString(value.period(), "");
+    }
+
+    private static String comfortKey(String building, String rule, String object, String space) {
+        return building + ":" + rule + ":" + object + ":" + space;
+    }
     private Summary unavailable(String reason) { return new Summary(null, null, List.of(), List.of(), clock.millis(), YearMonth.now(clock.withZone(ZoneId.of("Asia/Shanghai"))).minusMonths(1).toString(), reason, reason); }
     private String quotaEvidence(Quota value, int threshold) {
         com.fasterxml.jackson.databind.node.ObjectNode evidence = json.valueToTree(value);
@@ -841,6 +998,8 @@ public class AlarmService {
         return new Event(rs.getString("id"), rs.getString("building_id"), rs.getString("category"), rs.getString("rule_type"),rs.getString("rule_id"),
                 rs.getString("object_id"), rs.getString("object_name"), rs.getString("space_name"), rs.getString("period"),
                 rs.getString("status"), rs.getString("severity"), rs.getString("description"), rs.getLong("first_at"), rs.getLong("last_at"),
-                number(rs,"recovered_at"), number(rs,"ack_by"), number(rs,"ack_at"), number(rs,"silenced_until"), rs.getLong("rule_revision"), rs.getString("evidence"), rs.getString("trigger_evidence"), List.of(),number(rs,"closed_at"),number(rs,"closed_by"));
+                number(rs,"recovered_at"), number(rs,"ack_by"), number(rs,"ack_at"), number(rs,"silenced_until"), rs.getLong("rule_revision"), rs.getString("evidence"), rs.getString("trigger_evidence"), List.of(),number(rs,"closed_at"),number(rs,"closed_by"),
+                rs.getString("space_id"), Objects.requireNonNullElse(rs.getString("object_type"),
+                "DEVICE".equals(rs.getString("category")) ? "DEVICE" : "BUILDING"));
     }
 }

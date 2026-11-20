@@ -57,4 +57,13 @@ class WeatherControllerTest {
         verify(query).hourly(eq(1L),eq(java.util.Set.of("PLATFORM_ADMIN")),eq("b"),eq(com.platform.weather.source.WeatherSourceModels.Product.HISTORY_HOURLY),eq(java.time.Instant.parse("2025-12-31T16:00:00Z")),eq(java.time.Instant.parse("2026-01-01T16:00:00Z")));
         verifyNoInteractions(service);
     }
+    @Test void currentDayUsesBuildingScopeAndReturnsTemperatureHours() throws Exception {
+        var starts=java.time.Instant.parse("2026-09-01T02:00:00Z");
+        when(query.currentDay(eq(1L),any(),eq("b"))).thenReturn(new WeatherModels.CurrentDayWeather(
+                java.time.LocalDate.of(2026,9,1),null,List.of(new WeatherModels.CurrentTemperatureHour(starts,starts,5.1))));
+        mvc.perform(get("/v1/weather/buildings/b/current-day").principal(auth))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.hours[0].celsius").value(5.1));
+        verify(query).currentDay(1L,java.util.Set.of("PLATFORM_ADMIN"),"b");
+        verifyNoInteractions(service);
+    }
 }

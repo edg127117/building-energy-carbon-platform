@@ -14,6 +14,7 @@ import { messages as assetManagement } from '@/modules/asset-management/public'
 import { messages as deviceOnboarding } from '@/modules/device-onboarding/public'
 import { messages as protocolConfiguration } from '@/modules/protocol-configuration/public'
 import { messages as weather } from '@/modules/weather/public'
+import { messages as comfort } from '@/modules/comfort/public'
 import { messages as energyClassification } from '@/modules/energy-classification/public'
 import { messages as telemetryConflicts } from '@/modules/telemetry-conflicts/public'
 
@@ -21,7 +22,7 @@ import { messages as energyReporting } from '@/modules/energy-reporting/public'
 import { messages as alarms } from '@/modules/alarms/public'
 
 export const messages = { common, navigation, validation, error, terminology, workspaces, dashboard, drilldown, trendAnalysis,
-  largeScreen, auth, accessControl, assetManagement, deviceOnboarding, protocolConfiguration, weather, energyClassification, telemetryConflicts, energyReporting, alarms } as const
+  largeScreen, auth, accessControl, assetManagement, deviceOnboarding, protocolConfiguration, weather, comfort, energyClassification, telemetryConflicts, energyReporting, alarms } as const
 
 /** 第一版只注册中文；完整句子通过命名占位符替换，不在组件中拼接文案。 */
 export function t(key: string, params: Record<string, string | number> = {}): string {

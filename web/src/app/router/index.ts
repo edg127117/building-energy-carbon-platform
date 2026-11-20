@@ -11,6 +11,7 @@ import { routes as assetRoutes } from '@/modules/asset-management/public'
 import { routes as deviceRoutes } from '@/modules/device-onboarding/public'
 import { routes as protocolRoutes } from '@/modules/protocol-configuration/public'
 import { routes as dashboardRoutes, useHvacControlAccess } from '@/modules/dashboard/public'
+import { comfortRoute } from '@/modules/comfort/public'
 import { routes as trendRoutes } from '@/modules/trend-analysis/public'
 import { routes as weatherRoutes } from '@/modules/weather/public'
 import { routes as energyClassificationRoutes } from '@/modules/energy-classification/public'
@@ -21,7 +22,7 @@ import { screens } from '@/modules/large-screen/public'
 import { t } from '@/locales'
 
 // 页面能力按职责落位；既有资产权限保持不变，菜单迁移不授予额外业务角色。
-const migratedRoutes = [...alarmRoutes, ...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes, ...weatherRoutes, ...energyClassificationRoutes, ...telemetryConflictRoutes, ...energyReportingRoutes]
+const migratedRoutes = [...alarmRoutes, ...accessRoutes, ...assetRoutes, ...deviceRoutes, ...protocolRoutes, ...dashboardRoutes, comfortRoute, ...weatherRoutes, ...energyClassificationRoutes, ...telemetryConflictRoutes, ...energyReportingRoutes]
 function businessRoute(page: (typeof pages)[number]) {
   if (page.path === '/operations/realtime/hvac') return dashboardRoutes[0]
   if (page.path === '/operations/energy/trend') return trendRoutes[0]

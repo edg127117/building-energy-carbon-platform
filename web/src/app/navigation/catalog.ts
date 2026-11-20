@@ -14,7 +14,7 @@ function group(system: WorkspaceId, groupId: string, children: string[]): PageEn
 export const pages: PageEntry[] = [
   ...screens.map(screen => ({ id: screen.id, system: 'monitor' as const, groupKey: screen.titleKey, titleKey: screen.titleKey, path: screen.path })),
   ...group('operations', 'overview', ['running']),
-  ...group('operations', 'realtime', ['hvac', 'power', 'lighting', 'renewable']),
+  ...group('operations', 'realtime', ['hvac', 'power', 'comfort', 'lighting', 'renewable']),
   ...['overview', 'history'].map(key => ({ id: `operations-weather-${key}`, system: 'operations' as const, groupKey: 'workspaces.weather', titleKey: `weather.${key}Title`, path: `/operations/weather/${key}` })),
   ...group('operations', 'energy', ['energyItems', 'energyZones', 'trend', 'baselineAnalysis', 'diagnosis']),
   ...group('operations', 'carbon', ['carbonOverview', 'carbonDetails', 'trend', 'reduction', 'assets']),

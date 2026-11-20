@@ -32,7 +32,7 @@ public class RoomSensorDoorStateService {
                 .orElseGet(() -> new DoorState(null, null, null));
     }
 
-    private static DoorState project(RoomSensorHistoryStore.DoorReading reading, int freshnessSeconds, long asOf) {
+    static DoorState project(RoomSensorHistoryStore.DoorReading reading, int freshnessSeconds, long asOf) {
         boolean fresh = asOf - reading.receivedAt() < freshnessSeconds * 1000L;
         return new DoorState(fresh ? reading.open() : null, reading.open(), reading.receivedAt());
     }

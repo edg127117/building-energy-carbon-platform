@@ -1,7 +1,9 @@
 package com.platform.iot.daikin.monitoring.query;
 
 import com.platform.framework.exception.BusinessException;
+import com.platform.iot.daikin.control.DaikinControlAccess;
 import com.platform.iot.daikin.monitoring.DaikinMonitoringTargets;
+import com.platform.iot.daikin.monitoring.DaikinTemperatureQueryService;
 import com.platform.iot.daikin.monitoring.state.DaikinMonitoringStateService;
 import com.platform.iot.daikin.mapping.DaikinDevicePageDecoder;
 import com.platform.iot.daikin.model.DaikinDeviceKey;
@@ -34,6 +36,8 @@ class DaikinBuildingMonitoringServiceTest {
     private JdbcTemplate jdbc;
     private BuildingScopeService buildings;
     private SysMenuMapper menus;
+    private DaikinTemperatureQueryService temperatures;
+    private DaikinControlAccess controlAccess;
     private DaikinBuildingMonitoringService service;
 
     @BeforeEach
@@ -58,9 +62,73 @@ class DaikinBuildingMonitoringServiceTest {
                 """);
         buildings = mock(BuildingScopeService.class);
         menus = mock(SysMenuMapper.class);
+        temperatures = mock(DaikinTemperatureQueryService.class);
+        controlAccess = mock(DaikinControlAccess.class);
         var menu = new SysMenu(); menu.setMenuType("C"); menu.setPath("/operations/realtime/hvac");
         when(menus.selectVisibleMenusByUserId(7L)).thenReturn(List.of(menu));
         service = serviceAt(NOW);
+    }
+
+    @Test
+    void roomShowsOffAgreedSettingsMixedRunningSettingsAndStaleUnknown() {
+        for (String id : List.of("IDU7", "IDU8", "IDU15")) {
+            device(id, "B", "INDOOR");
+            state(id, "onOff", "off", "PRESENT", NOW);
+            state(id, "temperature", "24", "PRESENT", NOW);
+            state(id, "fanSpeed", "middle", "PRESENT", NOW);
+            setpoint(id, 24.0);
+        }
+        device("outdoor", "B", "OUTDOOR");
+        var off = service.roomSummary(7L, ROLES, "B", "room");
+        assertThat(off.status()).isEqualTo("AVAILABLE");
+        assertThat(off.total()).isEqualTo(3);
+        assertThat(off.running()).isZero();
+        assertThat(off.fanSpeed()).isEqualTo(new DaikinBuildingMonitoringDtos.RoomSetting<>("middle", "VALUE"));
+        assertThat(off.setpoint()).isEqualTo(new DaikinBuildingMonitoringDtos.RoomSetting<>(24.0, "VALUE"));
+        assertThat(off.airflowSpeed()).isNull();
+        assertThat(off.controlEntryAvailable()).isFalse();
+        jdbc.update("UPDATE biz_daikin_current_state SET normalized_value='on' WHERE field_name='onOff' AND equipment_id IN ('IDU7','IDU8')");
+        jdbc.update("UPDATE biz_daikin_current_state SET normalized_value='middleHigh' WHERE field_name='fanSpeed' AND equipment_id='IDU8'");
+        jdbc.update("UPDATE biz_daikin_current_state SET normalized_value='high' WHERE field_name='fanSpeed' AND equipment_id='IDU15'");
+        setpoint("IDU8", 25.0);
+        when(controlAccess.hasControlEntry(7L, "B", "IDU8")).thenReturn(true);
+        var mixed = service.roomSummary(7L, ROLES, "B", "room");
+        assertThat(mixed.running()).isEqualTo(2);
+        assertThat(mixed.fanSpeed().status()).isEqualTo("MIXED");
+        assertThat(mixed.setpoint().status()).isEqualTo("MIXED");
+        assertThat(mixed.airflowSpeed()).isEqualTo("middleHigh");
+        assertThat(mixed.controlEntryAvailable()).isTrue();
+        assertThat(service.roomSummary(7L, ROLES, "B", "other-room").controlEntryAvailable()).isFalse();
+        verify(controlAccess, never()).hasControlEntry(7L, "B", "outdoor");
+        var stale = serviceAt(NOW + 300_001).roomSummary(7L, ROLES, "B", "room");
+        assertThat(stale.status()).isEqualTo("STALE");
+        assertThat(stale.running()).isNull();
+        assertThat(stale.unknown()).isEqualTo(3);
+        assertThat(stale.lastObservedAt()).isEqualTo(NOW);
+        assertThat(stale.airflowSpeed()).isNull();
+    }
+
+    @Test
+    void roomExcludesMovedSnapshotsAndDoesNotInferAirspeedFromAuto() {
+        for (String id : List.of("a", "b", "other")) {
+            device(id, "B", "INDOOR");
+            state(id, "onOff", "on", "PRESENT", NOW);
+        }
+        jdbc.update("UPDATE biz_equipment SET space_id='adjacent' WHERE equip_id='other'");
+        jdbc.update("UPDATE biz_daikin_current_state SET last_attempt_space_id='adjacent' WHERE equipment_id='b'");
+        state("a", "fanSpeed", "automatic", "PRESENT", NOW);
+        var summary = service.roomSummary(7L, ROLES, "B", "room");
+        assertThat(summary.total()).isEqualTo(2);
+        assertThat(summary.running()).isEqualTo(1);
+        assertThat(summary.status()).isEqualTo("PARTIAL");
+        assertThat(summary.fanSpeed().status()).isEqualTo("PARTIAL");
+        assertThat(summary.airflowSpeed()).isNull();
+    }
+
+    private void setpoint(String unit, double celsius) {
+        var reading = new DaikinTemperatureQueryService.Reading(NOW, celsius, 0, null, false, false);
+        when(temperatures.current(7L, ROLES, unit, "temperature")).thenReturn(
+                new DaikinTemperatureQueryService.Current("temperature", "p-" + unit, "°C", reading, "PRESENT", "PLATFORM_OBSERVED_AT"));
     }
 
     @Test
@@ -250,7 +318,8 @@ class DaikinBuildingMonitoringServiceTest {
 
     private DaikinBuildingMonitoringService serviceAt(long now) {
         var access = new DaikinMonitoringQueryService(jdbc, buildings, menus, Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC));
-        return new DaikinBuildingMonitoringService(jdbc, access, new DaikinMonitoringTargets(jdbc), Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC));
+        return new DaikinBuildingMonitoringService(jdbc, access, new DaikinMonitoringTargets(jdbc), temperatures, controlAccess,
+                Clock.fixed(Instant.ofEpochMilli(now), ZoneOffset.UTC));
     }
 
     private void device(String id, String building, String kind) {
@@ -267,8 +336,8 @@ class DaikinBuildingMonitoringServiceTest {
         jdbc.update("""
                 INSERT INTO biz_daikin_current_state(identity_id,field_name,source_id,pending_id,equipment_id,building_id,
                   space_id,system_group_id,mapping_version,normalized_value,field_status,last_valid_at_ms,last_attempt_at_ms,
-                  last_attempt_building_id,last_attempt_mapping_version,last_round_id)
-                VALUES (?,?,?,?,?,'B','room','group',1,?,?,?,?, 'B',1,1)
+                  last_attempt_building_id,last_attempt_space_id,last_attempt_mapping_version,last_round_id)
+                VALUES (?,?,?,?,?,'B','room','group',1,?,?,?,?, 'B','room',1,1)
                 """, "i-" + id, field, "s-" + id, "p-" + id, id, value, status, at, at);
     }
 

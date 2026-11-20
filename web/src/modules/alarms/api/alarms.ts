@@ -6,6 +6,18 @@ function buildingPath(buildingId: string): string {
 }
 
 type RuleInput = Omit<AlarmRule, 'updatedAt' | 'updatedBy'>
+interface EventQuery {
+  history: boolean
+  type: AlarmCategory
+  page: number
+  size: number
+  state?: 'UNACK' | 'ACK' | 'SILENCED' | 'ACTIVE' | 'RECOVERED' | 'CLOSED'
+  alarmType?: AlarmEvent['type']
+  keyword?: string
+  fromAt?: number
+  toAt?: number
+  spaceId?: string
+}
 
 function rulePayload({ type, enabled, parameter, revision, name, severity, qualityLevel, spaceId, deviceCategory, classification, recoveryCycles, triggerMinutes, recoveryMinutes, conditionLogic, conditions, advanced }: RuleInput) {
   return { type, enabled, parameter, revision, name, severity, qualityLevel, spaceId: spaceId || null, deviceCategory: deviceCategory || null, classification, recoveryCycles, triggerMinutes, recoveryMinutes, conditionLogic, conditions, advanced }
@@ -13,7 +25,19 @@ function rulePayload({ type, enabled, parameter, revision, name, severity, quali
 
 export const alarmsApi = {
   summary: (buildingId: string) => requestApi<AlarmSummary>({ method: 'get', url: `${buildingPath(buildingId)}/summary` }),
-  events: (buildingId: string, options: { history: boolean; type: AlarmCategory; page: number; size: number; state?: 'UNACK' | 'ACK' | 'SILENCED' | 'ACTIVE' | 'RECOVERED' | 'CLOSED'; alarmType?: AlarmEvent['type']; keyword?: string; fromAt?: number; toAt?: number }) => requestApi<AlarmEventPage>({ method: 'get', url: `${buildingPath(buildingId)}/events`, params: { history: options.history, type: options.type, page: options.page, size: options.size, ...(options.state && (!options.history || ['RECOVERED','CLOSED'].includes(options.state)) ? { state: options.state } : {}), ...(options.alarmType ? { alarmType: options.alarmType } : {}), ...(options.keyword?.trim() ? { keyword: options.keyword.trim() } : {}), ...(options.fromAt != null ? { fromAt: options.fromAt } : {}), ...(options.toAt != null ? { toAt: options.toAt } : {}) } }),
+  events: (buildingId: string, options: EventQuery, signal?: AbortSignal) => requestApi<AlarmEventPage>({
+    method: 'get', url: `${buildingPath(buildingId)}/events`,
+    ...(signal ? { signal } : {}),
+    params: {
+      history: options.history, type: options.type, page: options.page, size: options.size,
+      ...(options.state && (!options.history || ['RECOVERED', 'CLOSED'].includes(options.state)) ? { state: options.state } : {}),
+      ...(options.alarmType ? { alarmType: options.alarmType } : {}),
+      ...(options.keyword?.trim() ? { keyword: options.keyword.trim() } : {}),
+      ...(options.fromAt != null ? { fromAt: options.fromAt } : {}),
+      ...(options.toAt != null ? { toAt: options.toAt } : {}),
+      ...(options.spaceId != null ? { spaceId: options.spaceId } : {}),
+    },
+  }),
   event: (buildingId: string, eventId: string) => requestApi<AlarmEvent>({ method: 'get', url: `${buildingPath(buildingId)}/events/${encodeURIComponent(eventId)}` }),
   rules: (buildingId: string) => requestApi<AlarmRule[]>({ method: 'get', url: `${buildingPath(buildingId)}/rules` }),
   ruleOptions: (buildingId: string) => requestApi<RuleOptions>({ method: 'get', url: `${buildingPath(buildingId)}/rules/options` }),

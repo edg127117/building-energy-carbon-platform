@@ -22,6 +22,16 @@ describe('alarmsApi', () => {
     expect(requestApi).toHaveBeenCalledWith({ method: 'get', url: '/v1/alarms/buildings', params: { page: 'history' } })
   })
 
+  it('sends the stable space filter and cancellation signal for room alarms', async () => {
+    const { signal } = new AbortController()
+    requestApi.mockResolvedValueOnce({ items: [], total: 0, page: 1, size: 10 })
+    await alarmsApi.events('B1', { history: false, type: 'DEVICE', page: 1, size: 10, state: 'ACTIVE', spaceId: 'S314' }, signal)
+    expect(requestApi).toHaveBeenCalledWith({
+      method: 'get', url: '/v1/alarms/buildings/B1/events', signal,
+      params: { history: false, type: 'DEVICE', page: 1, size: 10, state: 'ACTIVE', spaceId: 'S314' },
+    })
+  })
+
   it('uses recovered-only history plus a half-open millisecond range', async () => {
     requestApi.mockResolvedValueOnce({ items: [], total: 0, page: 1, size: 20 })
     await alarmsApi.events('B1', { history: true, type: 'DEVICE', page: 1, size: 20, state: 'UNACK', fromAt: 1000, toAt: 2000 })

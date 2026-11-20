@@ -552,6 +552,19 @@ onMounted(async () => {
             <section class="detail-section">
               <h3>{{ t(isMeterEquipment(selectedEquipment) ? 'assetManagement.equipment.archiveSpaceInformation' : 'assetManagement.equipment.installationInformation') }}</h3>
               <dl class="detail-fields">
+                <template v-if="selectedEquipment.contactInstallation">
+                  <div>
+                    <dt>{{ t('assetManagement.equipment.contactKind') }}</dt>
+                    <dd>
+                      {{ selectedEquipment.contactInstallation.kind
+                        ? t(`assetManagement.equipment.contactKinds.${selectedEquipment.contactInstallation.kind}`) : t('common.missing') }}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>{{ t('assetManagement.equipment.contactLocation') }}</dt>
+                    <dd>{{ selectedEquipment.contactInstallation.location || t('common.missing') }}</dd>
+                  </div>
+                </template>
                 <div>
                   <dt>{{ t('assetManagement.labels.building') }}</dt>
                   <dd>{{ selectedEquipment.buildingName || t('common.missing') }}</dd>

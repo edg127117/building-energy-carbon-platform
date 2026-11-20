@@ -57,6 +57,9 @@ public final class WeatherModels {
     public record Forecast(Source preferredSource, Source selectedSource, String fallbackReason,
             String status, String updateStatus, Instant fetchedAt, String datasetId, String coverage, Provenance provenance, List<DaySlot> days) {}
     public record Overview(Binding location, WeatherSeries current, Forecast forecast) {}
+    public record CurrentDayWeather(LocalDate date, WeatherSeries current, List<CurrentTemperatureHour> hours) {}
+    /** 小时坐标和原始气象样本时间均由后端提供，缺测的小时不返回。 */
+    public record CurrentTemperatureHour(Instant startsAt, Instant observedAt, double celsius) {}
     /** 页面能力仅作操作提示，提交时仍复核职责；最新配置可晚于当前生效配置。 */
     public record ManagementView(boolean canManageLocation, boolean canFetchWeather,
             boolean canCalculateEnergy, Binding latestBinding) {}

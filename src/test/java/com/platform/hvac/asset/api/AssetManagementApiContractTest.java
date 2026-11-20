@@ -17,11 +17,13 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -128,6 +130,46 @@ class AssetManagementApiContractTest {
                 .andExpect(jsonPath("$.data.equipmentName").value("关联解除后的台账名称"))
                 .andExpect(jsonPath("$.data.spaceId").isEmpty())
                 .andExpect(jsonPath("$.data.systemGroupId").isEmpty());
+    }
+
+    @Test
+    @Transactional
+    void returnsAndValidatesDoorWindowInstallationInTheExistingEquipmentEditor() throws Exception {
+        String token = login("admin", "123456");
+        String equipmentId = "EQUIP_WCR_B1";
+        jdbc.update("""
+                INSERT INTO biz_equipment_type(type_code,type_name,asset_code_prefix,equip_category,standard_source,status)
+                VALUES ('DOOR_SENSOR','门窗磁','DOOR','SENSOR','ROOM_SENSOR',1)
+                """);
+        jdbc.update("UPDATE biz_equipment SET type_code='DOOR_SENSOR',equip_category='SENSOR' WHERE equip_id=?", equipmentId);
+        when(roomSensorReadings.contactInstallation("BLD001", equipmentId)).thenReturn(Optional.of(
+                new RoomSensorReadings.ContactInstallation("source-1", RoomSensorReadings.ContactKind.WINDOW, "南窗")));
+        JsonNode detail = json(mockMvc.perform(get("/v1/assets/equipment/" + equipmentId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.contactInstallation.kind").value("WINDOW"))
+                .andExpect(jsonPath("$.data.contactInstallation.location").value("南窗"))
+                .andReturn()).path("data");
+
+        var request = objectMapper.createObjectNode();
+        for (String key : new String[]{"buildingId", "equipmentName", "spaceId", "systemGroupId", "manufacturer",
+                "ratedCapacity", "ratedPower", "designCop"}) {
+            request.set(key, detail.get(key));
+        }
+        request.put("status", "ACTIVE");
+        var installation = request.putObject("contactInstallation")
+                .put("sourceId", "source-1").put("kind", "WINDOW").put("location", "北窗");
+        mockMvc.perform(put("/v1/assets/equipment/" + equipmentId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk());
+        verify(roomSensorReadings).updateContactInstallation("BLD001", equipmentId, "source-1",
+                RoomSensorReadings.ContactKind.WINDOW, "北窗");
+        installation.put("location", " ");
+        mockMvc.perform(put("/v1/assets/equipment/" + equipmentId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

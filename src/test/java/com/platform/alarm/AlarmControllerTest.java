@@ -12,6 +12,7 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import java.util.List;
+import java.util.Set;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -65,6 +66,47 @@ class AlarmControllerTest {
         mvc.perform(get("/v1/alarms/buildings/B/events/"+id).principal(user)).andExpect(status().isNotFound());
         mvc.perform(post("/v1/alarms/buildings/A/events/"+id+"/silence").principal(user)
                 .contentType("application/json").content("{\"minutes\":0,\"note\":\"检修\"}")).andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void liveRoomFilterRanksEventsAndRejectsAmbiguousOrMovedDeviceScope() throws Exception {
+        fixture.jdbc.update("INSERT INTO biz_space VALUES ('R314','A','B314',0),('R313','A','B313',0)");
+        fixture.jdbc.update("""
+                INSERT INTO biz_equipment VALUES
+                ('E314','内机 7','A','R314','IDU','HVAC',0),('E313','内机 6','A','R313','IDU','HVAC',0)
+                """);
+        insertRoomEvent("urgent", "E314", "B314", "URGENT", 10);
+        insertRoomEvent("general", "E314", "B314", "GENERAL", 20);
+        insertRoomEvent("moved", "E313", "B314", "URGENT", 30);
+        insertRoomEvent("silenced", "E313", "B313", "URGENT", 40);
+        fixture.jdbc.update("UPDATE biz_alarm_event SET silenced_until=? WHERE id='silenced'", fixture.clock.millis() + 60_000);
+        org.assertj.core.api.Assertions.assertThat(fixture.service.activeRoomLevels(1L, AlarmChainTest.ADMIN,
+                "A", Set.of("R313", "R314"))).containsOnlyKeys("R314").containsEntry("R314", "URGENT");
+        String base = "/v1/alarms/buildings/A/events";
+
+        mvc.perform(get(base).param("spaceId", "R314").param("state", "ACTIVE").param("size", "1").principal(user))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items[0].id").value("urgent"));
+        mvc.perform(get(base).param("spaceId", "R314").param("state", "ACTIVE").param("size", "1").param("page", "2").principal(user))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.items[0].id").value("general"));
+        mvc.perform(get(base).param("spaceId", "R313").param("state", "ACTIVE").principal(user))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(0));
+        mvc.perform(get(base).param("spaceId", "").principal(user)).andExpect(status().isBadRequest());
+        var withoutAlarmMenu = new UsernamePasswordAuthenticationToken(new JwtUserPrincipal(2L, "reader"), null,
+                List.of(new SimpleGrantedAuthority("ROLE_BUILDING_OWNER")));
+        mvc.perform(get(base).param("spaceId", "R314").principal(withoutAlarmMenu)).andExpect(status().isForbidden());
+
+        fixture.jdbc.update("INSERT INTO biz_space VALUES ('OTHER','A','B314',0)");
+        mvc.perform(get(base).param("spaceId", "R314").principal(user))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(0));
+    }
+
+    private void insertRoomEvent(String id, String equipment, String room, String severity, long time) {
+        fixture.jdbc.update("""
+                INSERT INTO biz_alarm_event(id,building_id,category,rule_id,rule_type,object_id,object_name,space_name,
+                    status,severity,description,first_at,last_at,rule_revision,evidence,trigger_evidence)
+                VALUES (?,'A','DEVICE','value','VALUE',?, ?,?,'ACTIVE',?,'设备测点异常',?,?,1,'{}','{}')
+                """, id, equipment, equipment, room, severity, time, time);
     }
 
     @Test

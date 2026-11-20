@@ -66,6 +66,26 @@ class WeatherRepositoryTest {
         assertThat(repo.head("binding",Source.OPEN_METEO,Product.HISTORY_HOURLY,day).id()).isEqualTo(data.id());
         assertThat(repo.job(next.id()).state()).isEqualTo("SUCCEEDED");
     }
+    @Test void publishedCurrentIsBoundedByLocationProductPublicationAndFetchTime() {
+        var start=day.atStartOfDay(ZONE).toInstant();
+        var asOf=start.plusSeconds(1800);
+        var codec=new WeatherCodec(new ObjectMapper().registerModule(new JavaTimeModule()));
+        var payload=new FetchResult(Source.OPEN_METEO,Product.CURRENT,start,null,null,null,List.of(),"test");
+        for (var row:List.of(
+                new Object[]{"latest","binding","OPEN_METEO","CURRENT",asOf,"PUBLISHED"},
+                new Object[]{"first","binding","OPEN_METEO","CURRENT",start,"PUBLISHED"},
+                new Object[]{"other","other","OPEN_METEO","CURRENT",start,"PUBLISHED"},
+                new Object[]{"forecast","binding","OPEN_METEO","FORECAST_HOURLY",start,"PUBLISHED"},
+                new Object[]{"prepared","binding","OPEN_METEO","CURRENT",start,"PREPARED"},
+                new Object[]{"before","binding","OPEN_METEO","CURRENT",start.minusMillis(1),"PUBLISHED"},
+                new Object[]{"future","binding","OPEN_METEO","CURRENT",asOf.plusMillis(1),"PUBLISHED"})) {
+            jdbc.update("""
+                    INSERT INTO biz_weather_dataset(id,binding_id,source,product,fetched_at,content_hash,state,table_name,payload,row_count,created_at)
+                    VALUES (?,?,?,?,?,'test',?,'unused',?,0,0)
+                    """,row[0],row[1],row[2],row[3],((Instant)row[4]).toEpochMilli(),row[5],codec.pack(payload));
+        }
+        assertThat(repo.publishedCurrent("binding",start,asOf)).extracting(Dataset::id).containsExactly("first","latest");
+    }
     private com.platform.weather.energy.DailyElectricityAdapter.DailyResult dayResult(LocalDate date,long start,long end) {
         return new com.platform.weather.energy.DailyElectricityAdapter.DailyResult(date,java.math.BigDecimal.ONE,"COMPLETE",false,start,end,java.math.BigDecimal.ZERO,java.math.BigDecimal.ONE,"relation","quality","INBOUND","kWh",0L,0L,0L,"hash",List.of(),"policy",List.of());
     }

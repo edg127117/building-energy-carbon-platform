@@ -1,9 +1,11 @@
 package com.platform.iot.daikin.monitoring.query;
 
 import com.platform.framework.exception.BusinessException;
+import com.platform.iot.daikin.control.DaikinControlAccess;
 import com.platform.iot.daikin.model.DaikinDeviceKey;
 import com.platform.iot.daikin.monitoring.DaikinMonitoringTargets;
 import com.platform.iot.daikin.monitoring.DaikinMonitoringTargets.Target;
+import com.platform.iot.daikin.monitoring.DaikinTemperatureQueryService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,7 +31,7 @@ import java.util.Set;
 import static com.platform.iot.daikin.monitoring.query.DaikinBuildingMonitoringDtos.*;
 
 /**
- * 只读取 MySQL 正式目标、当前状态和观测日累计；不触发厂家采集，也不把厂家累计或在线时间转换成开机时长。
+ * 从正式目标、已入库状态和观测日累计生成只读汇总；房间设温复用测点质量投影。
  * 每次请求复用暖通菜单及建筑授权，在一致读中完成完整设备范围的汇总，避免前端分页漏计和身份重复计数。
  */
 @Service
@@ -41,30 +43,37 @@ public class DaikinBuildingMonitoringService {
     private static final List<String> MODES = List.of("fan", "cooling", "heating", "dependent", "dry",
             "automaticCooling", "automaticHeating", "ventilationMonitorOnly");
     private static final List<String> SPEEDS = List.of("low", "middle", "high", "automatic", "middleLow", "middleHigh");
+    private static final List<String> FIXED_SPEEDS = List.of("low", "middleLow", "middle", "middleHigh", "high");
     private final JdbcTemplate jdbc;
     private final DaikinMonitoringQueryService access;
     private final DaikinMonitoringTargets targets;
+    private final DaikinTemperatureQueryService temperatures;
+    private final DaikinControlAccess controlAccess;
     private final Clock clock;
 
     @Autowired
     public DaikinBuildingMonitoringService(@Qualifier("mysqlJdbcTemplate") JdbcTemplate jdbc,
-            DaikinMonitoringQueryService access, DaikinMonitoringTargets targets) {
-        this(jdbc, access, targets, Clock.systemUTC());
+            DaikinMonitoringQueryService access, DaikinMonitoringTargets targets, DaikinTemperatureQueryService temperatures,
+            DaikinControlAccess controlAccess) {
+        this(jdbc, access, targets, temperatures, controlAccess, Clock.systemUTC());
     }
 
     DaikinBuildingMonitoringService(JdbcTemplate jdbc, DaikinMonitoringQueryService access,
-                                    DaikinMonitoringTargets targets, Clock clock) {
+                                    DaikinMonitoringTargets targets, DaikinTemperatureQueryService temperatures,
+                                    DaikinControlAccess controlAccess, Clock clock) {
         this.jdbc = jdbc;
         this.access = access;
         this.targets = targets;
+        this.temperatures = temperatures;
+        this.controlAccess = controlAccess;
         this.clock = clock;
     }
 
     public DeviceSummary summary(Long user, Set<String> roles, String buildingId) {
         access.requireBuilding(user, roles, buildingId);
         long now = clock.millis();
-        var equipment = equipment(buildingId);
-        var fields = fields(buildingId);
+        var equipment = equipment(targets.forBuilding(buildingId));
+        var fields = fields(buildingId, null);
         var reasons = new LinkedHashMap<String, Long>();
         var modes = new CategoryCounter(MODES);
         var speeds = new CategoryCounter(SPEEDS);
@@ -78,14 +87,7 @@ public class DaikinBuildingMonitoringService {
                 if (unavailable(field, target, now) == null) expires = Math.min(expires, field.validAt() + FRESH_MS + 1);
             }
             Field power = values.get("onOff");
-            String reason = unavailable(power, target, now);
-            if (reason == null && !Set.of("on", "off").contains(power.value())) reason = "UNKNOWN_VALUE";
-            if (reason == null && (matches(values.get("controller.isConnectionUp"), target, now, "false")
-                    || matches(values.get("inCommunicationError"), target, now, "true"))) reason = "COMMUNICATION_ERROR";
-            if (reason == null && ("on".equals(power.value()) && matches(values.get("unitStatus"), target, now, "stopped")
-                    || "off".equals(power.value()) && matches(values.get("unitStatus"), target, now, "operating"))) {
-                reason = "STATE_CONFLICT";
-            }
+            String reason = unavailablePower(values, target, now);
             if (reason != null) { increment(reasons, reason); continue; }
             if ("off".equals(power.value())) { off++; continue; }
             on++;
@@ -94,6 +96,79 @@ public class DaikinBuildingMonitoringService {
         }
         return new DeviceSummary(buildingId, SCOPE, now, expires, equipment.size(), on, off,
                 equipment.size() - on - off, Map.copyOf(reasons), modes.result(on), speeds.result(on));
+    }
+
+    /** 舒适度入口先验证房间权限；这里复核暖通授权并只读该房间正式设备及同一归属下的观测。 */
+    public RoomSummary roomSummary(Long user, Set<String> roles, String buildingId, String spaceId) {
+        access.requireBuilding(user, roles, buildingId);
+        long now = clock.millis();
+        var equipment = equipment(targets.forRoom(buildingId, spaceId));
+        var fields = equipment.isEmpty() ? Map.<String, Map<String, Field>>of() : fields(buildingId, spaceId);
+        var setpoints = new ArrayList<Double>();
+        var fans = new ArrayList<String>();
+        int running = 0, known = 0, stale = 0, offline = 0, airflow = -1;
+        Long lastObservedAt = null;
+        for (var identities : equipment.values()) {
+            if (identities.size() != 1) continue;
+            Target target = identities.getFirst();
+            var values = fields.getOrDefault(target.identityId(), Map.of());
+            var power = values.get("onOff");
+            String reason = unavailablePower(values, target, now);
+            if (reason == null || "STALE".equals(reason) || "COMMUNICATION_ERROR".equals(reason)) {
+                if (lastObservedAt == null || power.validAt() > lastObservedAt) lastObservedAt = power.validAt();
+            }
+            if (reason != null) {
+                if ("STALE".equals(reason)) stale++;
+                if ("COMMUNICATION_ERROR".equals(reason)) offline++;
+                continue;
+            }
+            known++;
+            boolean isRunning = "on".equals(power.value());
+            if (isRunning) running++;
+            var fan = values.get("fanSpeed");
+            if (unavailable(fan, target, now) == null && SPEEDS.contains(fan.value())) {
+                fans.add(fan.value());
+                if (isRunning) airflow = Math.max(airflow, FIXED_SPEEDS.indexOf(fan.value()));
+            }
+            var setpoint = values.get("temperature");
+            Double temperature = unavailable(setpoint, target, now) == null
+                    ? setpointTemperature(user, roles, target, setpoint.validAt()) : null;
+            if (temperature != null) setpoints.add(temperature);
+        }
+        int total = equipment.size();
+        int unknown = total - known;
+        boolean controlEntryAvailable = equipment.values().stream().filter(identities -> identities.size() == 1)
+                .anyMatch(identities -> controlAccess.hasControlEntry(user, buildingId, identities.getFirst().equipmentId()));
+        return new RoomSummary(total, known == 0 ? null : running, unknown, roomStatus(total, known, stale, offline), lastObservedAt,
+                agreement(setpoints, total), agreement(fans, total), airflow >= 0 ? FIXED_SPEEDS.get(airflow) : null,
+                controlEntryAvailable);
+    }
+
+    private Double setpointTemperature(Long user, Set<String> roles, Target target, long observedAt) {
+        try {
+            var current = temperatures.current(user, roles, target.equipmentId(), "temperature");
+            var reading = current.reading();
+            return "PRESENT".equals(current.fieldStatus()) && reading != null && !reading.stale()
+                    && reading.observedAt() == observedAt && reading.value() != null && Double.isFinite(reading.value())
+                    ? reading.value() : null;
+        } catch (BusinessException ex) {
+            if ("DAIKIN_TEMPERATURE_NOT_BOUND".equals(ex.getErrorCode())) return null;
+            throw ex;
+        }
+    }
+
+    private static <T> RoomSetting<T> agreement(List<T> values, int total) {
+        if (values.isEmpty()) return new RoomSetting<>(null, "MISSING");
+        T first = values.getFirst();
+        if (values.stream().anyMatch(value -> !first.equals(value))) return new RoomSetting<>(null, "MIXED");
+        return values.size() == total ? new RoomSetting<>(first, "VALUE") : new RoomSetting<>(null, "PARTIAL");
+    }
+
+    private static String roomStatus(int total, int known, int stale, int offline) {
+        if (total == 0) return "UNCONFIGURED";
+        if (known > 0) return known == total ? "AVAILABLE" : "PARTIAL";
+        if (offline == total) return "OFFLINE";
+        return stale > 0 ? "STALE" : "UNKNOWN";
     }
 
     public RuntimeRanking ranking(Long user, Set<String> roles, String buildingId, String month, int limit) {
@@ -110,7 +185,7 @@ public class DaikinBuildingMonitoringService {
                 .atStartOfDay(ZONE).toInstant().toEpochMilli();
         if (start > now || start < retentionStart) throw invalidMonth();
         long elapsed = Math.min(now, end) - start;
-        var equipment = equipment(buildingId);
+        var equipment = equipment(targets.forBuilding(buildingId));
         var days = jdbc.query("""
                 SELECT identity_id,mapping_version,day_start_ms,on_ms,covered_ms
                 FROM biz_daikin_observed_runtime_day WHERE building_id=? AND day_start_ms>=? AND day_start_ms<?
@@ -162,9 +237,9 @@ public class DaikinBuildingMonitoringService {
                 elapsed, equipment.size(), candidates.size(), Map.copyOf(excluded), List.copyOf(items));
     }
 
-    private Map<String, List<Target>> equipment(String buildingId) {
+    private static Map<String, List<Target>> equipment(List<Target> targets) {
         Map<String, List<Target>> result = new LinkedHashMap<>();
-        for (Target target : targets.forBuilding(buildingId)) {
+        for (Target target : targets) {
             if (target.key().kind() != DaikinDeviceKey.Kind.INDOOR) continue;
             var values = result.computeIfAbsent(target.equipmentId(), ignored -> new ArrayList<>());
             if (!values.contains(target)) values.add(target);
@@ -172,21 +247,25 @@ public class DaikinBuildingMonitoringService {
         return result;
     }
 
-    private Map<String, Map<String, Field>> fields(String buildingId) {
+    private Map<String, Map<String, Field>> fields(String buildingId, String spaceId) {
         Map<String, Map<String, Field>> result = new HashMap<>();
-        jdbc.query("""
+        String sql = """
                 SELECT c.* FROM biz_daikin_current_state c
                 JOIN biz_daikin_monitoring_target t ON t.identity_id=c.identity_id AND t.active=1
                   AND t.equipment_id=c.equipment_id AND t.building_id=c.building_id AND t.mapping_version=c.mapping_version
                 WHERE t.building_id=? AND c.field_name IN ('onOff','mode','fanSpeed',
-                  'unitStatus','controller.isConnectionUp','inCommunicationError')
-                """, rs -> {
+                  'unitStatus','controller.isConnectionUp','inCommunicationError'%s)
+                """.formatted(spaceId == null ? "" : ",'temperature'");
+        if (spaceId != null) sql += """
+                 AND t.space_id=? AND c.space_id=t.space_id AND c.last_attempt_space_id=t.space_id
+                """;
+        jdbc.query(sql, rs -> {
             Field field = new Field(rs.getString("equipment_id"), rs.getString("source_id"), rs.getString("pending_id"),
                     rs.getString("normalized_value"), rs.getString("field_status"), rs.getObject("last_valid_at_ms", Long.class),
                     rs.getString("building_id"), rs.getInt("mapping_version"), rs.getString("last_attempt_building_id"),
                     rs.getInt("last_attempt_mapping_version"));
             result.computeIfAbsent(rs.getString("identity_id"), ignored -> new HashMap<>()).put(rs.getString("field_name"), field);
-        }, buildingId);
+        }, spaceId == null ? new Object[]{buildingId} : new Object[]{buildingId, spaceId});
         return result;
     }
 
@@ -205,6 +284,20 @@ public class DaikinBuildingMonitoringService {
 
     private static boolean matches(Field field, Target target, long now, String expected) {
         return unavailable(field, target, now) == null && expected.equals(field.value());
+    }
+
+    private static String unavailablePower(Map<String, Field> values, Target target, long now) {
+        Field power = values.get("onOff");
+        String reason = unavailable(power, target, now);
+        if (reason != null) return reason;
+        if (!Set.of("on", "off").contains(power.value())) return "UNKNOWN_VALUE";
+        if (matches(values.get("controller.isConnectionUp"), target, now, "false")
+                || matches(values.get("inCommunicationError"), target, now, "true")) return "COMMUNICATION_ERROR";
+        if ("on".equals(power.value()) && matches(values.get("unitStatus"), target, now, "stopped")
+                || "off".equals(power.value()) && matches(values.get("unitStatus"), target, now, "operating")) {
+            return "STATE_CONFLICT";
+        }
+        return null;
     }
 
     private Map<String, Space> spaces(String buildingId) {

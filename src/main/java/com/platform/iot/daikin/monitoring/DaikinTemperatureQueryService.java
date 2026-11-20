@@ -27,6 +27,7 @@ import java.util.Set;
 @Service
 public class DaikinTemperatureQueryService {
     private static final long RETENTION = 90L * 24 * 60 * 60 * 1000;
+    private static final long FRESHNESS_MILLIS = 300_000;
     private final JdbcTemplate jdbc;
     private final DaikinMonitoringQueryService access;
     private final DataPointConfigProvider points;
@@ -72,14 +73,18 @@ public class DaikinTemperatureQueryService {
                     event.eventTime() / 60000 * 60000, event.dataQuality());
             values.add(new Reading(event.eventTime(), decision.decision() == Decision.ALLOW ? event.value() : null,
                     event.dataQuality(), decision, previous != null && event.eventTime() - previous > 300000,
-                    now - event.eventTime() > 300000));
+                    isStaleAt(event.eventTime(), now)));
             previous = event.eventTime();
         }
         return new History(field, point.pointId(), "°C", List.copyOf(values), more ? previous : null, "PLATFORM_OBSERVED_AT");
     }
 
     public Current current(Long userId, Set<String> roles, String equipmentId, String field) {
-        String building = access.requireEquipment(userId, roles, equipmentId);
+        return currentForBuilding(access.requireEquipment(userId, roles, equipmentId), equipmentId, field, clock.millis());
+    }
+
+    /** 后台报警由可信房间绑定提供建筑及设备；HTTP 查询仍需先校验用户权限。 */
+    public Current currentForBuilding(String building, String equipmentId, String field, long asOf) {
         PointRuntimeConfig point = point(building, equipmentId, field);
         var states = jdbc.query("SELECT field_status,last_valid_at_ms FROM biz_daikin_current_state WHERE equipment_id=? AND building_id=? AND field_name=? ORDER BY last_attempt_at_ms DESC LIMIT 1",
                 (rs, row) -> new CurrentState(rs.getString(1), rs.getObject(2, Long.class)), equipmentId, building, field);
@@ -94,7 +99,11 @@ public class DaikinTemperatureQueryService {
         Resolution decision = quality.resolve(point.pointId(), "POINT_REALTIME_VIEW", event.eventTime() / 60000 * 60000, event.dataQuality());
         return new Current(field, point.pointId(), "°C", new Reading(event.eventTime(),
                 decision.decision() == Decision.ALLOW ? event.value() : null, event.dataQuality(), decision, false,
-                clock.millis() - event.eventTime() > 300000), saved.status(), "PLATFORM_OBSERVED_AT");
+                isStaleAt(event.eventTime(), asOf)), saved.status(), "PLATFORM_OBSERVED_AT");
+    }
+
+    public static boolean isStaleAt(long observedAt, long asOf) {
+        return asOf - observedAt > FRESHNESS_MILLIS;
     }
 
     private PointRuntimeConfig point(String building, String equipment, String field) {

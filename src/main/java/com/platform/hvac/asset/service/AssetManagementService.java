@@ -485,6 +485,13 @@ public class AssetManagementService {
         rejectLegacyParameterChange(currentParameters, request.ratedCapacity(),
                 request.ratedPower(), request.designCop());
         call(() -> equipmentService.update(equipment).getData());
+        if (request.contactInstallation() != null) {
+            var sensors = roomSensorReadings.getIfAvailable();
+            if (sensors == null) throw AssetErrors.error(409, AssetErrors.REFERENCE_CONFLICT, "房间传感器服务未启用");
+            var installation = request.contactInstallation();
+            sensors.updateContactInstallation(existing.getBuildingId(), equipmentId, installation.sourceId(),
+                    installation.kind(), installation.location());
+        }
         return equipmentListView(requireEquipment(equipmentId));
     }
 
@@ -617,6 +624,9 @@ public class AssetManagementService {
         EquipmentAggregate aggregate = aggregate(equipment);
         LegacyProjection parameters = parameterCompatibilityService.read(equipment);
         References refs = equipmentReferences(equipment.getEquipId());
+        var sensors = roomSensorReadings.getIfAvailable();
+        var installation = sensors == null || !"DOOR_SENSOR".equals(equipment.getTypeCode()) ? null
+                : sensors.contactInstallation(equipment.getBuildingId(), equipment.getEquipId()).orElse(null);
         return new EquipmentDetailView(equipment.getEquipId(), equipment.getEquipCode(),
                 equipment.getEquipName(), equipment.getTypeCode(), equipment.getEquipCategory(),
                 equipment.getBuildingId(), aggregate.buildingName(), equipment.getSpaceId(),
@@ -627,7 +637,7 @@ public class AssetManagementService {
                 aggregate.status(), aggregate.expectedProfileCode(), aggregate.lastDiscoveredTime(),
                 aggregate.identities(), aggregate.pointSummary(), refs,
                 actions(refs.points() + refs.identities() == 0),
-                millis(equipment.getUpdateTime(), equipment.getCreateTime()));
+                millis(equipment.getUpdateTime(), equipment.getCreateTime()), installation);
     }
 
     private EquipmentAggregate aggregate(BizEquipment equipment) {

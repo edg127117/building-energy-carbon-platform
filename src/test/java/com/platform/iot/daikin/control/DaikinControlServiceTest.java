@@ -59,6 +59,17 @@ class DaikinControlServiceTest {
         assertThat(f.gateway.writes).hasValue(0);
     }
 
+    @Test void roomControlEntryRequiresCurrentUserAndDeviceGrantWithoutVendorIo() {
+        int reads = f.gateway.reads.get();
+        assertThat(f.access.hasControlEntry(7, "building", "equipment")).isTrue();
+        assertThat(f.access.hasControlEntry(8, "building", "equipment")).isFalse();
+        assertThat(f.access.hasControlEntry(7, "other-building", "equipment")).isFalse();
+        f.jdbc.update("UPDATE biz_daikin_control_grant SET enabled=0 WHERE equipment_id='equipment'");
+        assertThat(f.access.hasControlEntry(7, "building", "equipment")).isFalse();
+        assertThat(f.gateway.reads).hasValue(reads);
+        assertThat(f.gateway.writes).hasValue(0);
+    }
+
     @Test void revocationDuringLivePreflightPreventsSending() {
         var req = f.request(Action.ON_OFF, "on", "request-123");
         f.gateway.onRead = t -> f.jdbc.update("UPDATE sys_user SET status=0 WHERE id=7");

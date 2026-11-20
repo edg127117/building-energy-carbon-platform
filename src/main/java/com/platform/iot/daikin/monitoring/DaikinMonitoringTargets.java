@@ -47,14 +47,18 @@ public class DaikinMonitoringTargets {
         return query(" WHERE e.building_id=? ORDER BY e.equip_id,i.identity_id", buildingId);
     }
 
-    private List<Target> query(String suffix, String parameter) {
+    public List<Target> forRoom(String buildingId, String spaceId) {
+        return query(" WHERE e.building_id=? AND e.space_id=? ORDER BY e.equip_id,i.identity_id", buildingId, spaceId);
+    }
+
+    private List<Target> query(String suffix, Object... parameters) {
         return jdbc.query(SELECT + suffix, (rs, row) -> new Target(
                 new DaikinDeviceKey(rs.getString("source_id"), rs.getString("site_id"),
                         rs.getString("controller_id"), DaikinDeviceKey.Kind.valueOf(rs.getString("device_kind")),
                         rs.getString("unit_id")), rs.getString("pending_id"), rs.getString("identity_id"),
                 rs.getString("identity_value"), rs.getString("expected_profile_code"),
                 rs.getString("equip_id"), rs.getString("equip_code"), rs.getString("building_id"),
-                rs.getString("space_id"), rs.getString("system_group_id"), rs.getInt("mapping_version")), parameter);
+                rs.getString("space_id"), rs.getString("system_group_id"), rs.getInt("mapping_version")), parameters);
     }
 
     public record Target(DaikinDeviceKey key, String pendingId, String identityId, String identityValue,

@@ -1,5 +1,6 @@
 package com.platform.iot.roomsensor;
 
+import com.platform.framework.exception.BusinessException;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,6 +30,33 @@ public class RoomSensorReadings {
     }
 
     public enum Kind { DOOR, RADAR }
+    public enum ContactKind { DOOR, WINDOW }
+    public record ContactInstallation(String sourceId, ContactKind kind, String location) { }
+
+    public Optional<ContactInstallation> contactInstallation(String buildingId, String equipmentId) {
+        var bindings = RoomSensorStateBinding.forEquipmentContact(mysql, buildingId, equipmentId);
+        return bindings.size() == 1 ? Optional.of(installation(bindings.getFirst())) : Optional.empty();
+    }
+
+    /** 同一设备事务内按原来源写入。重新绑定后需重新打开设备详情。 */
+    public void updateContactInstallation(String buildingId, String equipmentId, String sourceId,
+                                          ContactKind kind, String location) {
+        int updated = mysql.update("""
+                UPDATE biz_room_sensor_source SET contact_kind=?,contact_location=?
+                WHERE source_id=? AND protocol='S4_DOOR' AND enabled=1 AND identity_id IN (
+                    SELECT i.identity_id FROM biz_device_identity i
+                    JOIN biz_equipment e ON e.equip_id=i.equip_id AND e.building_id=i.building_id AND e.del_flag=0
+                    JOIN biz_space p ON p.space_id=e.space_id AND p.building_id=e.building_id AND p.del_flag=0
+                    WHERE e.building_id=? AND e.equip_id=? AND p.space_type='ROOM'
+                        AND i.status=1 AND i.identity_type='MAC' AND i.expected_profile_code='S4_DOOR'
+                )
+                """, kind.name(), location.strip(), sourceId, buildingId, equipmentId);
+        if (updated != 1) throw new BusinessException(409, "ROOM_SENSOR_BINDING_CHANGED", "门窗磁绑定已变更，请重新打开设备详情");
+    }
+
+    private static ContactInstallation installation(RoomSensorStateBinding binding) {
+        return new ContactInstallation(binding.source().sourceId(), binding.contactKind(), binding.contactLocation());
+    }
 
     // 当前值为空表示未观测或已过期，最近观测仍保留；0 和关门都是有效观测。
     public record Reading(String sourceId, Kind kind, Boolean currentOpen, Boolean lastObservedOpen,

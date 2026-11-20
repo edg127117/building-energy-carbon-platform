@@ -23,6 +23,11 @@ export interface Forecast {
   provenance: Provenance | null; days: { date: string; sample: Sample | null }[]
 }
 export interface Overview { location: Binding | null; current: WeatherSeries; forecast: Forecast }
+export interface CurrentDayWeather {
+  date: string
+  current: WeatherSeries
+  hours: { startsAt: string; observedAt: string; celsius: number }[]
+}
 export interface DailyWeather {
   date: string; location: Binding | null; sourceDaily: Sample | null; meanTemperature: number | null
   temperatureHours: number; meanHumidity: number | null; humidityHours: number; status: string

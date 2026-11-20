@@ -5,7 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
@@ -27,13 +29,20 @@ public class RoomSensorWorker {
     private final ObjectMapper mapper;
     private final RoomSensorHistoryStore history;
     private final MeterRegistry meters;
+    private final ApplicationEventPublisher events;
 
+    public RoomSensorWorker(JdbcTemplate mysql, ObjectMapper mapper, RoomSensorHistoryStore history, MeterRegistry meters) {
+        this(mysql, mapper, history, meters, ignored -> {});
+    }
+
+    @Autowired
     public RoomSensorWorker(@Qualifier("mysqlJdbcTemplate") JdbcTemplate mysql, ObjectMapper mapper,
-            RoomSensorHistoryStore history, MeterRegistry meters) {
+            RoomSensorHistoryStore history, MeterRegistry meters, ApplicationEventPublisher events) {
         this.mysql = mysql;
         this.mapper = mapper;
         this.history = history;
         this.meters = meters;
+        this.events = events;
         tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(mysql.getDataSource())));
     }
 
@@ -63,8 +72,9 @@ public class RoomSensorWorker {
                 meters.counter("iot.room_sensor.worker", "outcome", "expired").increment();
                 return true;
             }
+            RoomSensorObservation observation;
             try {
-                var observation = mapper.readValue(row.get("observation_json").toString(), RoomSensorObservation.class);
+                observation = mapper.readValue(row.get("observation_json").toString(), RoomSensorObservation.class);
                 if (!id.equals(observation.eventId())) throw new IllegalStateException("Room sensor queue identity mismatch");
                 // MySQL 行锁覆盖写入与读回，防止多个工作进程同时修改同一 TDengine 主键。
                 history.write(observation);
@@ -80,9 +90,14 @@ public class RoomSensorWorker {
             }
             mysql.update("DELETE FROM biz_room_sensor_ingest_pending WHERE event_id=?", id);
             meters.counter("iot.room_sensor.observations", "stage", "stored").increment();
+            if ("S4_DOOR".equals(observation.protocol()) && Boolean.FALSE.equals(observation.doorOpen())) {
+                events.publishEvent(new ConfirmedDoorClosure(observation));
+            }
             return true;
         }));
     }
+
+    public record ConfirmedDoorClosure(RoomSensorObservation observation) { }
 
     @Scheduled(fixedDelayString = "${room-sensor.cleanup-delay-ms:60000}", scheduler = "roomSensorTaskScheduler")
     public void cleanup() {

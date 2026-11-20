@@ -8,10 +8,11 @@ import java.util.Objects;
 import java.util.Optional;
 
 /** 读取当前启用的设备与空间归属，供门磁和雷达按建筑查询最近观测。 */
-record RoomSensorStateBinding(RoomSensorSource source, int freshnessSeconds) {
+record RoomSensorStateBinding(RoomSensorSource source, int freshnessSeconds, String equipmentName,
+                              RoomSensorReadings.ContactKind contactKind, String contactLocation) {
     private static final String ACTIVE_BINDINGS = """
-                SELECT s.source_id,s.protocol,s.topic,s.gateway_mac,s.freshness_seconds,
-                       i.identity_value,i.identity_id,i.expected_profile_code,e.equip_id,e.building_id,e.space_id
+                SELECT s.source_id,s.protocol,s.topic,s.gateway_mac,s.freshness_seconds,s.contact_kind,s.contact_location,
+                       i.identity_value,i.identity_id,i.expected_profile_code,e.equip_id,e.equip_name,e.building_id,e.space_id
                 FROM biz_room_sensor_source s
                 JOIN biz_device_identity i ON i.identity_id=s.identity_id AND i.status=1 AND i.identity_type='MAC'
                 JOIN biz_equipment e ON e.equip_id=i.equip_id AND e.building_id=i.building_id AND e.del_flag=0
@@ -29,6 +30,25 @@ record RoomSensorStateBinding(RoomSensorSource source, int freshnessSeconds) {
                 buildingId, equipmentId);
     }
 
+    static List<RoomSensorStateBinding> forEquipmentContact(JdbcTemplate mysql, String buildingId, String equipmentId) {
+        return query(mysql, ACTIVE_BINDINGS + " AND e.equip_id=? AND p.space_type='ROOM' AND s.protocol='S4_DOOR'",
+                buildingId, equipmentId);
+    }
+
+    static List<RoomSensorStateBinding> findRoom(JdbcTemplate mysql, String buildingId, String spaceId, String protocol) {
+        return query(mysql, ACTIVE_BINDINGS + " AND p.space_type='ROOM' AND e.space_id=? AND s.protocol=? ORDER BY s.source_id",
+                buildingId, spaceId, protocol).stream().filter(binding -> protocol.equals(binding.source().protocol())).toList();
+    }
+
+    static List<RoomSensorStateBinding> findBuildingDoors(JdbcTemplate mysql, String buildingId) {
+        return query(mysql, ACTIVE_BINDINGS + " AND p.space_type='ROOM' AND s.protocol='S4_DOOR' ORDER BY s.source_id", buildingId)
+                .stream().filter(binding -> "S4_DOOR".equals(binding.source().protocol())).toList();
+    }
+
+    String displayName() {
+        return contactLocation == null ? equipmentName : contactLocation;
+    }
+
     private static List<RoomSensorStateBinding> query(JdbcTemplate mysql, String sql, Object... args) {
         return mysql.query(sql, (rs, row) -> {
             String protocol = rs.getString("protocol");
@@ -37,7 +57,9 @@ record RoomSensorStateBinding(RoomSensorSource source, int freshnessSeconds) {
                     rs.getString("gateway_mac").toUpperCase(Locale.ROOT),
                     rs.getString("identity_value").toUpperCase(Locale.ROOT), rs.getString("identity_id"),
                     rs.getString("equip_id"), rs.getString("building_id"), rs.getString("space_id"), 0);
-            return new RoomSensorStateBinding(source, rs.getInt("freshness_seconds"));
+            String kind = rs.getString("contact_kind");
+            return new RoomSensorStateBinding(source, rs.getInt("freshness_seconds"), rs.getString("equip_name"),
+                    kind == null ? null : RoomSensorReadings.ContactKind.valueOf(kind), rs.getString("contact_location"));
         }, args).stream().filter(Objects::nonNull).toList();
     }
 }

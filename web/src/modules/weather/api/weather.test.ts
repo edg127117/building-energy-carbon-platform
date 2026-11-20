@@ -14,6 +14,13 @@ it('sends encoded building paths, half-open hourly bounds and an abort signal', 
   await weatherApi.hourly('a/b', 'HISTORY_HOURLY', '2026-09-01T16:00:00Z', '2026-09-02T16:00:00Z', signal)
   expect(requestApi).toHaveBeenCalledWith(expect.objectContaining({ url: '/v1/weather/buildings/a%2Fb/hourly', signal, params: { product: 'HISTORY_HOURLY', from: '2026-09-01T16:00:00Z', to: '2026-09-02T16:00:00Z' } }))
 })
+it('fetches the current observation and today’s observed hours with one building request', async () => {
+  const signal = new AbortController().signal
+  await weatherApi.currentDay('a/b', signal)
+  expect(requestApi).toHaveBeenCalledWith(expect.objectContaining({
+    method: 'GET', url: '/v1/weather/buildings/a%2Fb/current-day', signal,
+  }))
+})
 it('uses stable page items for jobs and preserves command idempotency header', async () => {
   vi.mocked(requestApi).mockResolvedValueOnce({ items: [{ id: 'job' }], page: 1, size: 10, total: 1 })
   expect((await weatherApi.jobs('b', 1)).items[0].id).toBe('job')
