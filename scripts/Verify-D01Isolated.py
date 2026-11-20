@@ -13,7 +13,9 @@ import shutil
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HERE = ROOT / "target"
 DOCKER = shutil.which("docker") or str(pathlib.Path(os.environ["LOCALAPPDATA"]) / "Programs/DockerDesktop/resources/bin/docker.exe")
-JAVA = str(pathlib.Path(os.environ["JAVA_HOME"]) / "bin/java.exe")
+DOCKER_HOST = "npipe:////./pipe/dockerDesktopLinuxEngine" if os.name == "nt" else "unix:///var/run/docker.sock"
+JAVA_HOME = os.environ.get("JAVA_HOME")
+JAVA = str(pathlib.Path(JAVA_HOME) / "bin" / ("java.exe" if os.name == "nt" else "java")) if JAVA_HOME else "java"
 NONCE = uuid.uuid4().hex[:16]
 LABEL_KEY = "bec.d01.probe"
 LABEL = LABEL_KEY + "=" + NONCE
@@ -36,7 +38,7 @@ def emit(value):
 
 
 def docker(*args, timeout=45):
-    result = subprocess.run([DOCKER, "--host", "npipe:////./pipe/dockerDesktopLinuxEngine", *args], env=ENV, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=timeout)
+    result = subprocess.run([DOCKER, "--host", DOCKER_HOST, *args], env=ENV, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=timeout)
     if result.returncode:
         # Do not echo command arguments, environment, or Docker inspect data.
         raise RuntimeError("docker operation failed: " + args[0] + " " + result.stderr[-800:])

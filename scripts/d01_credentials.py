@@ -25,6 +25,11 @@ EXPECTED = {"MYSQL_HOST": "127.0.0.1", "MYSQL_PORT": "13316",
             "TDENGINE_DATABASE": "iot_telemetry", "SERVER_PORT": "18081",
             "AUDIT_ENVIRONMENT_MODE": "TEST", "MYSQL_FLYWAY_ENABLED": "false",
             "TDENGINE_INITIALIZATION_ENABLED": "false"}
+TDENGINE_3300 = {
+    "TDENGINE_PORT": "16042",
+    "TDENGINE_CONTAINER_NAME": "building-energy-carbon-test-tdengine-3300",
+    "TDENGINE_VOLUME_NAME": "building-energy-carbon-test-tdengine-3300-data",
+}
 
 # This source is part of the administrator-hashed bundle. JDBC checks use the
 # same host endpoint as Flyway; a successful container-local login is not proof
@@ -109,18 +114,21 @@ def runtime_target():
         require(key.decode("utf-8") not in admin_keys, "D01_ADMIN_CREDENTIAL_IN_RUNTIME")
         if separator and key.decode("utf-8") in (*EXPECTED, "MYSQL_USER", "TDENGINE_USER"):
             values[key.decode("utf-8")] = value.decode("utf-8")
-    require(all(values.get(key) == value for key, value in EXPECTED.items()), "D01_CREDENTIAL_TARGET_MISMATCH")
+    # Endpoint, container and volume must match one deployed test instance as a set.
+    targets = (EXPECTED, {**EXPECTED, **TDENGINE_3300})
+    require(any(all(values.get(key) == value for key, value in target.items()) for target in targets),
+            "D01_CREDENTIAL_TARGET_MISMATCH")
     require(values.get("MYSQL_USER") not in (None, "", "root", "platform_migrator"),
             "D01_SEPARATE_MIGRATION_ACCOUNT_REQUIRED")
     require(values.get("TDENGINE_USER") not in (None, "", "root"), "D01_NONROOT_TDENGINE_RUNTIME_REQUIRED")
     return pid, values
 
 
-def check_containers():
+def check_containers(target=EXPECTED):
     identities = {}
-    for engine, destination, port, host_port in (("MYSQL", "/var/lib/mysql", "3306/tcp", "13316"),
-                                                ("TDENGINE", "/var/lib/taos", "6041/tcp", "16041")):
-        name = EXPECTED[engine + "_CONTAINER_NAME"]
+    for engine, destination, port in (("MYSQL", "/var/lib/mysql", "3306/tcp"),
+                                      ("TDENGINE", "/var/lib/taos", "6041/tcp")):
+        name = target[engine + "_CONTAINER_NAME"]
         data = json.loads(command(["/usr/bin/docker", "inspect", name]))
         require(len(data) == 1, "D01_CREDENTIAL_CONTAINER_IDENTITY_MISMATCH")
         item = data[0]
@@ -128,8 +136,8 @@ def check_containers():
         bindings = item.get("NetworkSettings", {}).get("Ports", {}).get(port)
         require(item.get("Name") == "/" + name and item.get("State", {}).get("Running") is True
                 and len(mounts) == 1 and mounts[0].get("Type") == "volume"
-                and mounts[0].get("Name") == EXPECTED[engine + "_VOLUME_NAME"]
-                and bindings == [{"HostIp": "127.0.0.1", "HostPort": host_port}],
+                and mounts[0].get("Name") == target[engine + "_VOLUME_NAME"]
+                and bindings == [{"HostIp": "127.0.0.1", "HostPort": target[engine + "_PORT"]}],
                 "D01_CREDENTIAL_CONTAINER_IDENTITY_MISMATCH")
         require(re.fullmatch(r"[a-f0-9]{64}", item.get("Id", "")), "D01_CREDENTIAL_CONTAINER_IDENTITY_MISMATCH")
         identities[engine] = item["Id"]
@@ -234,9 +242,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def td_query(password, sql):
+def td_query(password, sql, port="16041"):
+    require(port in ("16041", "16042"), "D01_CREDENTIAL_TARGET_MISMATCH")
     token = base64.b64encode(("root:" + password).encode()).decode()
-    request = urllib.request.Request("http://127.0.0.1:16041/rest/sql", data=sql.encode(),
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/rest/sql", data=sql.encode(),
                                      headers={"Authorization": "Basic " + token, "Content-Type": "text/plain"})
     try:
         # Explicitly disable proxies and redirects: credentials must remain on
@@ -252,22 +261,23 @@ def td_query(password, sql):
         raise RuntimeError("D01_TDENGINE_BACKUP_LOGIN_OR_QUERY_FAILED") from None
 
 
-def backup_td_probe(password):
-    users = td_query(password, "SHOW USERS")
+def backup_td_probe(password, port="16041"):
+    users = td_query(password, "SHOW USERS", port)
     require(any(row.get("name") == "root" and row.get("super") == 1 and row.get("enable") == 1 for row in users),
             "D01_TDENGINE_BACKUP_PRIVILEGES_MISSING")
-    databases = td_query(password, "SHOW DATABASES")
+    databases = td_query(password, "SHOW DATABASES", port)
     require(any(row.get("name") == "iot_telemetry" for row in databases), "D01_TDENGINE_SOURCE_DATABASE_MISSING")
 
 
 def discover(jar, target_schema="84", release_mode="SCHEMA_UPGRADE"):
     before = runtime_target()
-    containers = check_containers()
+    target = before[1]
+    containers = check_containers(target)
     values = administrator_values()
     selected, identities, failures = {}, {}, []
     for role, key, probe in (("MYSQL_MIGRATION", "mysql_migration_password", lambda p: migration_probe(jar, p, target_schema, release_mode)),
                              ("MYSQL_BACKUP", "mysql_root_password", lambda p: backup_mysql_probe(p, containers["MYSQL"])),
-                             ("TDENGINE_BACKUP", "td_root_password", backup_td_probe)):
+                             ("TDENGINE_BACKUP", "td_root_password", lambda p: backup_td_probe(p, target["TDENGINE_PORT"]))):
         try:
             password = values.get(key)
             require(isinstance(password, str) and password, "D01_" + role + "_CREDENTIAL_MISSING")
@@ -281,7 +291,7 @@ def discover(jar, target_schema="84", release_mode="SCHEMA_UPGRADE"):
         print(failure)
     require(not failures, "D01_EXISTING_CREDENTIALS_NOT_READY")
     require(identities["MYSQL_MIGRATION"] == identities["MYSQL_BACKUP"], "D01_MYSQL_SOURCE_IDENTITY_MISMATCH")
-    require(check_containers() == containers, "D01_CREDENTIAL_CONTAINERS_CHANGED")
+    require(check_containers(target) == containers, "D01_CREDENTIAL_CONTAINERS_CHANGED")
     require(runtime_target() == before, "D01_RUNNING_TEST_SERVICE_CHANGED")
     schema = {"url": JDBC_URL, "user": "platform_migrator", "password": selected["MYSQL_MIGRATION"]}
     backup = {"mysql": {"user": "root", "password": selected["MYSQL_BACKUP"]},

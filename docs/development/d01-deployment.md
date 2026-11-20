@@ -37,10 +37,12 @@
 - 安装时不再询问数据库密码或凭据路径。只复用既有 S02 维护入口 `/etc/building-energy-carbon-test/s02-admin.json`，要求文件及祖先由 root 持有、不可由普通用户修改、无软链接，文件权限不宽于 0600。从 `mysql_migration_password`、`mysql_root_password`、`td_root_password` 读取已有账号凭据，分别用于 `platform_migrator`、MySQL `root` 和 TDengine `root`；不扫描其他目录、不执行配置文件、不从容器初始化变量推断当前密码，也不创建、改密或重新授权数据库账号。
 - 授权发布前，核对正在运行的测试进程、固定本地端口、容器 ID 和卷，探针结束后复核进程及容器未替换。迁移账号通过发布包内已校验的 JDBC 驱动访问实际 Flyway 端点，备份账号通过固定容器 ID 的 mysql 通道核查登录及权限，并比较两者的服务器 UUID 和实际认证身份；应用 MySQL/TDengine 均须为非 root，且进程不得携带已分离的管理员凭据。保留 S02 双库迁移账号契约，检查主库和归档库的 CREATE/SELECT/INSERT 及 Flyway 写历史权限，再独立检查两库的备份权限；角色间接授权或部分撤销不能未经核实当作完整权限。复用凭据仍需满足至少 16 字符要求。TDengine 在固定回环 REST 入口检查已有管理员权限及源库存在，禁止代理和重定向携带凭据。
 - 缺文件、缺字段、认证失败或权限不足时，输出对应的稳定错误码、不输出密码和原始数据库错误；不发布 sudo 授权、不停止服务。管理员无需猜密码，按缺失项修复既有受保护配置后再执行同一安装命令。安装成功只证明本轮只读登录/权限检查通过，不代表实际 taosdump、完整备份或恢复通过；这些仍是停写前独立门禁。
+- 管理员确认共享 TDengine 已完成从 3.2.3.0 切到 3.3.0.0 后，V123 及后续的升级可以用 `--replace-revoked-completed --accept-tdengine-3300-cutover` 归档前一轮已完成且已撤销的授权。先核验当前凭据及新容器、专用卷和回环端口。与旧记录相比，只接受这三个运行项的固定变动及 `s02-runtime.env`、`shared/server.env` 的差异。其余运行项、配置文件集合、旧发布记录和其他站点仍按原规则校验。新一轮准备以当前配置重新记录基线。
 - 授权有效期为安装后 24 小时；入口自身检查期限，专用 systemd timer 到期移除本次 sudo 白名单和复制的凭据。结束时必须主动执行 `sudo /usr/local/sbin/building-energy-d01-maintenance revoke`，保留备份和审计证据。撤销不启停业务服务；到期或失败时仍处于停机状态，须报告管理员处理，不能为了恢复访问而续期或放宽权限。
 - 撤销不加载或检查备份、迁移模块，避免这些模块损坏阻断清理；仍校验 root 保护配置和本次授权规则。若 launcher、撤销程序或配置本身损坏，或者管理员改过 sudoers，自动清理不能保证完成，必须由管理员核对后撤销本次规则及复制凭据。不可捕获的强杀可能留下未完成安装文件；完成标记缺失时维护动作拒绝，已启用的到期 timer 仍可撤销，不把这种情况描述为安装成功。
 - 失效 timer 只管理本次授权。安装仅新增这组维护文件和 timer，不停止、重启测试服务，也不改应用控制开关。已有同名授权拒绝覆盖；安装失败或中断会停止、禁用本次 timer 并按创建记录清理本轮文件和目录，保留预存文件；清理失败明确报告，由管理员核查对应路径，禁止递归清理测试部署目录。授权规则发布后仍须等待安装完成标志才可执行维护动作。
-- 仅在旧尝试已撤销且失败于 `prepare`、无停写记录、尚未生成 incoming 包或候选目录、旧凭据已删除、timer 已停用、旧程序哈希未变且原服务仍运行时，管理员可显式使用 `--replace-revoked-prepare`。安装器先将固定维护文件及完整记录移入 root 私有的 `/var/lib/building-energy-d01-maintenance-history`，再安装新授权；不删除历史、不改测试发布目录、不允许替换已停写或已迁移的尝试。已生成部分产物或归档路径跨文件系统时提前拒绝；归档中途失败会停止并报告，由管理员核查，不能自动删除或恢复旧授权。
+- 旧尝试已撤销且失败于 `prepare`、无停写记录、旧凭据已删除、timer 已停用、旧程序哈希未变且原服务仍运行时，管理员可显式使用 `--replace-revoked-prepare`。默认要求未生成 incoming 包和候选目录。安装器将固定维护文件及完整记录移入 root 私有的 `/var/lib/building-energy-d01-maintenance-history`，再安装新授权。跨文件系统时提前拒绝，归档中断由管理员核查。
+- V123 及后续数据库升级若在准备时被 `RELEASE_EXISTING_MIGRATION_CHANGED` 拒绝，可用同一提交、同一迁移计划和新摘要的纠正包重试。安装器要求尚未记录准备成功，核验旧暂存包、JAR 和前端首页的所有权及摘要，将暂存包和候选目录连同旧授权记录归档。当前运行目录保持原样。重新准备仍逐字节核验已执行的迁移。
 
 旧版本默认动作顺序：`prepare` → `online-backup` → `export-online` → 隔离实际恢复 → `record-online-restore` → `freeze` → `backup` → `export-backup` → 隔离实际恢复 → `record-restore` → `migrate` → `cutover` → 业务验收 → `revoke`。本轮 V121→V123 的单次最终恢复按第14节执行，不改变旧授权。`status` 只输出阶段、时间和服务状态。导出是备份二进制流，应直接写入受保护文件，不能输出到聊天或普通日志。
 
@@ -52,13 +54,13 @@
 
 ### TDengine 导出客户端与诊断
 
-现场 3.2.3.0 的 `taosdump` 对 stdin 密码使用 `scanf("%20s", ...)`，超过 20 字节会截断。D01 从同一上游提交 `3bb61cc2ccea8e092cc96dc3619969302567fd4d` 构建单独客户端，只将该输入改为有边界的完整行读取，输入过长或缺少换行立即拒绝。构建脚本固定源码和基础镜像摘要；不替换容器自带程序、不升级数据库、不缩短或重设密码，不把密码放进命令行。源码依据：[上游对应版本](https://github.com/taosdata/taos-tools/blob/3bb61cc2ccea8e092cc96dc3619969302567fd4d/src/taosdump.c)。
+TDengine 3.2.3.0 和 3.3.0.0 自带的 `taosdump` 均会截断超过 20 字节的标准输入密码。D01 专用客户端从上游提交 `3bb61cc2ccea8e092cc96dc3619969302567fd4d` 构建，将密码输入改为有边界的完整行读取，输入过长或缺少换行立即拒绝。两版共用同一客户端。密码通过标准输入传递。[客户端上游源码](https://github.com/taosdata/taos-tools/blob/3bb61cc2ccea8e092cc96dc3619969302567fd4d/src/taosdump.c)
 
-在本机 Docker Desktop 构建：`docker build --output type=local,dest=target/d01-taosdump-client scripts/d01-taosdump`。将产物 `taosdump-d01` 和 `LICENSE`（包内名为 `taosdump-LICENSE`）纳入授权包。构建固定基础镜像、上游提交与源码包 SHA256；系统构建依赖来自 Ubuntu 官方仓库，未声称逐字节可重复构建。每轮授权锁定实际产物 SHA256。维护入口每次核验工具哈希，并要求目标原生库与隔离验证版本的 SHA256 一致；仅复制到固定目标容器新建的私有临时目录，单线程导出后清理。备份中不包含工具、密码或原始导出日志。缺少固定客户端或原生库不匹配时拒绝，不能回退到有截断缺陷的旧工具。
+在本机 Docker 构建客户端可用 `docker build --output type=local,dest=target/d01-taosdump-client scripts/d01-taosdump`。将产物 `taosdump-d01` 和 `LICENSE`（包内名为 `taosdump-LICENSE`）纳入授权包。构建固定基础镜像、上游提交和源码包 SHA256，系统依赖来自 Ubuntu 官方仓库。每轮授权锁定实际产物 SHA256。停写前预检与实际导出执行同一项兼容性检查，目标容器的 `/usr/lib/libtaos.so.1` 必须匹配 3.2.3.0 或 3.3.0.0 已验证的 SHA256。导出客户端只复制到固定源容器的新建私有临时目录，单线程导出后清理。备份文件只保留数据及校验所需元数据。
 
 失败诊断保存为私有 `tdengine-diagnostic.json`，只含固定阶段、退出码和白名单类别，例如认证失败、连接失败、空间不足、输入不合法；操作记录也保留该诊断。未知输出标为 `unclassified`，不把未经筛选的 stdout/stderr、SQL、密码或 DSN 写入记录。授权仍需在失败后撤销。
 
-运行 `python scripts/Verify-D01ExportIsolated.py` 可在新建本机容器重现旧客户端长密码失败，并验证修正版导出、新实例恢复、时间/值/质量/标签一致、错误密码拒绝及脱敏诊断。这是合成数据验证；真实备份与恢复仍须在新授权后分别完成。
+按源库版本运行 `python scripts/Verify-D01ExportIsolated.py --tdengine-version 3.3.0.0`，或指定 `3.2.3.0`。脚本使用本机 Docker、固定镜像及新建容器和卷，验证专用客户端的长密码导出及恢复、错误密码拒绝、逐条数据对账和恢复实例重启。正式恢复使用与源库同版本、原生库 SHA256 已核验的隔离容器，通过 `taosdump-d01 -u <恢复账号> -p -i <备份目录>` 导入，密码从标准输入传递。隔离脚本使用合成数据，每轮正式升级仍须对本轮备份实际执行恢复和验收。
 
 ## 3. 维护阶段
 

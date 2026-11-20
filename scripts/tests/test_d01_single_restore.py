@@ -32,8 +32,7 @@ class SingleFinalRestoreTest(unittest.TestCase):
         op.release.protected_json.return_value = {'backup_targets': {
             'mysql_container': 'fixture-mysql', 'mysql_volume': 'fixture-mysql-volume',
             'tdengine_container': 'fixture-td', 'tdengine_volume': 'fixture-td-volume'}}
-        op.backup_tool = Mock(DEFAULT_MIN_FREE_BYTES=10, TD_LIBRARY='/fixture/library', TD_LIBRARY_SHA256='abc')
-        op.backup_tool._output.return_value = 'abc  /fixture/library'
+        op.backup_tool = Mock(DEFAULT_MIN_FREE_BYTES=10)
         self.record = {'checked_at': int(time.time()), 'no_other_deployment': True,
                        'external_writers_fenced': True, 'reference': 'current approved window'}
         self.addCleanup(patch.stopall)
@@ -51,6 +50,8 @@ class SingleFinalRestoreTest(unittest.TestCase):
         op.backup_tool._dump_tdengine.assert_not_called()
         op.backup_tool._output_root.assert_called_once_with(op.private, 10)
         self.assertEqual(op.backup_tool._container.call_count, 2)
+        op.backup_tool.verify_tdengine_client_abi.assert_called_once_with(
+            '/usr/bin/docker', 'fixture-td', bridge.subprocess.run)
 
     def test_readiness_failure_never_stops_services(self):
         op = self.operation
@@ -62,7 +63,7 @@ class SingleFinalRestoreTest(unittest.TestCase):
 
     def test_incompatible_backup_client_never_stops_services(self):
         op = self.operation
-        op.backup_tool._output.return_value = 'different library'
+        op.backup_tool.verify_tdengine_client_abi.side_effect = RuntimeError('TDENGINE_CLIENT_ABI_MISMATCH')
         with self.assertRaisesRegex(RuntimeError, 'CLIENT_ABI_MISMATCH'):
             op.freeze()
         op.release.freeze.assert_not_called()

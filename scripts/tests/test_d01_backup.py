@@ -20,12 +20,13 @@ class FakeRunner:
     """Models only command results; it never invokes Docker, systemctl, or a database."""
 
     def __init__(self, *, active_after_dump=False, wrong_tdengine_mount=False, timeout_stage=None,
-                 copy_fails=False, cleanup_fails=False):
+                 copy_fails=False, cleanup_fails=False, tdengine_version="3.2.3.0"):
         self.active_after_dump = active_after_dump
         self.wrong_tdengine_mount = wrong_tdengine_mount
         self.timeout_stage = timeout_stage
         self.copy_fails = copy_fails
         self.cleanup_fails = cleanup_fails
+        self.tdengine_version = tdengine_version
         self.calls = []
         self.timeouts = []
         self.service_calls = 0
@@ -53,7 +54,7 @@ class FakeRunner:
             if template == "{{.Name}}":
                 return self.result(args, ("/" + name + "\n").encode())
             if template == "{{.Config.Image}}":
-                image = "mysql:8.0" if name == "mysql-db" else "tdengine/tdengine:3.2.3.0"
+                image = "mysql:8.0" if name == "mysql-db" else "tdengine/tdengine:" + self.tdengine_version
                 return self.result(args, (image + "\n").encode())
             if template == "{{.State.Running}}":
                 return self.result(args, b"true\n")
@@ -84,8 +85,9 @@ class FakeRunner:
             (Path(args[-1]) / "metadata.avro").write_bytes(b"tdengine export")
             return self.result(args)
         if args[1:3] == ["exec", "td-db"]:
-            if args[3] == 'sha256sum':
-                return self.result(args, (backup_tool.TD_LIBRARY_SHA256 + '  ' + backup_tool.TD_LIBRARY).encode())
+            if args[3:] == ["sha256sum", backup_tool.TD_LIBRARY]:
+                digest = backup_tool.TD_LIBRARY_SHA256S.get(self.tdengine_version, "0" * 64)
+                return self.result(args, (digest + "  " + backup_tool.TD_LIBRARY).encode())
             if self.cleanup_fails and 'd01-taos-cleanup' in args:
                 return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"cleanup failed")
             return self.result(args)
@@ -105,12 +107,19 @@ class TestD01Backup(unittest.TestCase):
         self.assertNotIn('sensitive-unexpected-output', (self.root / 'tdengine-diagnostic.json').read_text())
 
     def test_native_library_mismatch_rejects_before_copying_client_or_sending_credentials(self):
-        runner = FakeRunner()
-        with patch.object(backup_tool, '_output', return_value='different library'):
-            with self.assertRaisesRegex(backup_tool.BackupError, 'TDENGINE_CLIENT_ABI_MISMATCH'):
-                backup_tool._dump_tdengine(self.root / 'tdengine', {'tdengine_user': 'root',
-                    'tdengine_password': 'private-fixture'}, 'fake-docker', 'td-db', 'iot_telemetry', runner)
+        runner = FakeRunner(tdengine_version="3.3.0.1")
+        with self.assertRaisesRegex(backup_tool.BackupError, 'TDENGINE_CLIENT_ABI_MISMATCH'):
+            backup_tool._dump_tdengine(self.root / 'tdengine', {'tdengine_user': 'root',
+                'tdengine_password': 'private-fixture'}, 'fake-docker', 'td-db', 'iot_telemetry', runner)
         self.assertFalse(any(args[1] == 'cp' or payload for args, payload in runner.calls))
+
+    def test_3300_backup_uses_validated_library_and_existing_backup_contract(self):
+        runner = FakeRunner(tdengine_version="3.3.0.0")
+        output = self.create(runner)
+        manifest = backup_tool.validate(output)
+        self.assertEqual(manifest["sources"]["tdengine"]["image"], "tdengine/tdengine:3.3.0.0")
+        self.assertIn((["fake-docker", "exec", "td-db", "sha256sum", "/usr/lib/libtaos.so.1"], None),
+                      runner.calls)
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
