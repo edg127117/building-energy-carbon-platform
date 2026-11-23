@@ -298,9 +298,7 @@ class Maintenance:
         for engine, destination in (("mysql", "/var/lib/mysql"), ("tdengine", "/var/lib/taos")):
             tool._container("/usr/bin/docker", sources[engine + "_container"], sources[engine + "_volume"],
                             destination, subprocess.run)
-        library = tool._output(["/usr/bin/docker", "exec", sources["tdengine_container"],
-                                "sha256sum", tool.TD_LIBRARY], "TDENGINE_CLIENT_ABI_CHECK_FAILED", subprocess.run)
-        require(library == tool.TD_LIBRARY_SHA256 + "  " + tool.TD_LIBRARY, "TDENGINE_CLIENT_ABI_MISMATCH")
+        tool.verify_tdengine_client_abi("/usr/bin/docker", sources["tdengine_container"], subprocess.run)
 
     def freeze(self):
         single = single_final_restore(self.config)
