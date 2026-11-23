@@ -2,6 +2,7 @@ package com.platform.weather;
 
 import com.platform.framework.exception.BusinessException;
 import com.platform.weather.source.WeatherSourceModels.*;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import java.time.*;
 import java.util.*;
@@ -12,7 +13,14 @@ import static com.platform.weather.WeatherModels.*;
 public class WeatherQueryService {
     private final WeatherRepository repo;
     private final WeatherService access;
-    public WeatherQueryService(WeatherRepository repo,WeatherService access) { this.repo=repo;this.access=access; }
+    private final Clock clock;
+    @Autowired
+    public WeatherQueryService(WeatherRepository repo,WeatherService access) {
+        this(repo,access,Clock.systemUTC());
+    }
+    WeatherQueryService(WeatherRepository repo,WeatherService access,Clock clock) {
+        this.repo=repo;this.access=access;this.clock=clock;
+    }
     private Binding binding(String building,Instant at) { return repo.effective(building,at); }
     private static LocalDate day(Sample s) { return s.time().atZone(ZONE).toLocalDate(); }
     private static Dataset first(List<Dataset> values) { return values.isEmpty()?null:values.getFirst(); }
@@ -37,6 +45,37 @@ public class WeatherQueryService {
         if(b==null || !b.enabled())return new Overview(b,series(b,null,Product.CURRENT,now),forecast(b,now));
         Dataset current=first(repo.latest(b.id(),Source.OPEN_METEO,Product.CURRENT));
         return new Overview(b,series(b,current,Product.CURRENT,now),forecast(b,now));
+    }
+    public CurrentDayWeather currentDay(long user, Collection<String> roles, String building) {
+        access.reader(user,roles,building);
+        Instant now=clock.instant();
+        LocalDate date=now.atZone(ZONE).toLocalDate();
+        Binding location=binding(building,now);
+        if(location==null || !location.enabled()) {
+            return new CurrentDayWeather(date,series(location,null,Product.CURRENT,now),List.of());
+        }
+
+        Instant start=date.atStartOfDay(ZONE).toInstant();
+        var datasets=repo.publishedCurrent(location.id(),start,now);
+        Dataset latest=datasets.isEmpty()
+                ? repo.latest(location.id(),Source.OPEN_METEO,Product.CURRENT).stream()
+                    .filter(dataset->!dataset.fetchedAt().isAfter(now)).findFirst().orElse(null)
+                : datasets.getLast();
+        var hours=new CurrentTemperatureHour[24];
+        // MySQL 发布载荷已完成落盘校验。按样本时间归小时，同一时刻优先采用后抓取的有效值。
+        for(Dataset dataset:datasets) {
+            for(Sample sample:dataset.result().samples()) {
+                Instant observedAt=sample.time();
+                Double celsius=sample.values().get("temperature_2m");
+                if(celsius==null || !Double.isFinite(celsius) || observedAt.isBefore(start) || observedAt.isAfter(now)) continue;
+                int hour=observedAt.atZone(ZONE).getHour();
+                if(hours[hour]==null || !observedAt.isBefore(hours[hour].observedAt())) {
+                    hours[hour]=new CurrentTemperatureHour(date.atTime(hour,0).atZone(ZONE).toInstant(),observedAt,celsius);
+                }
+            }
+        }
+        return new CurrentDayWeather(date,series(location,latest,Product.CURRENT,now),
+                Arrays.stream(hours).filter(Objects::nonNull).toList());
     }
     WeatherSeries series(Binding b,Dataset d,Product p,Instant now) {
         if(b==null || !b.enabled())return new WeatherSeries(b,Source.OPEN_METEO,p,"NOT_CONFIGURED","NOT_CHECKED",null,null,null,List.of());

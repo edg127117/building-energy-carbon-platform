@@ -127,21 +127,51 @@ function retryChart(): void {
   void nextTick(syncChart)
 }
 
-function readChartTokens(): ChartTokens {
+const cssVarPattern = /^var\((--[\w-]+)\)$/
+
+function resolveCssVar(value: string, styles: CSSStyleDeclaration): string {
+  let current = value
+  for (let depth = 0; depth < 3; depth++) {
+    const match = cssVarPattern.exec(current.trim())
+    if (!match) break
+    const resolved = readToken(styles, match[1]!)
+    if (!resolved || resolved === current) break
+    current = resolved
+  }
+  return current
+}
+
+function resolveOptionTokens(value: unknown, styles: CSSStyleDeclaration): unknown {
+  if (typeof value === 'string') return resolveCssVar(value, styles)
+  if (Array.isArray(value)) return value.map((item) => resolveOptionTokens(item, styles))
+  if (isOptionRecord(value)) {
+    const resolved: OptionRecord = {}
+    for (const [key, entry] of Object.entries(value)) {
+      resolved[key] = resolveOptionTokens(entry, styles)
+    }
+    return resolved
+  }
+  return value
+}
+
+function readChartTokens(): { tokens: ChartTokens; styles: CSSStyleDeclaration | null } {
   const parent = chartElement.value?.parentElement
-  if (!parent) return { series: [] }
+  if (!parent) return { tokens: { series: [] }, styles: null }
 
   const styles = window.getComputedStyle(parent)
   return {
-    series: [1, 2, 3, 4]
-      .map((index) => readToken(styles, `--bec-chart-series-${index}`))
-      .filter((value): value is string => Boolean(value)),
-    textPrimary: readToken(styles, '--bec-color-text-primary'),
-    textSecondary: readToken(styles, '--bec-color-text-secondary'),
-    border: readToken(styles, '--bec-color-border'),
-    surface: readToken(styles, '--bec-color-surface'),
-    fontFamily: readToken(styles, '--bec-font-family-body'),
-    fontSize: readFontSize(styles, '--bec-chart-font-size'),
+    styles,
+    tokens: {
+      series: [1, 2, 3, 4]
+        .map((index) => readToken(styles, `--bec-chart-series-${index}`))
+        .filter((value): value is string => Boolean(value)),
+      textPrimary: readToken(styles, '--bec-color-text-primary'),
+      textSecondary: readToken(styles, '--bec-color-text-secondary'),
+      border: readToken(styles, '--bec-color-border'),
+      surface: readToken(styles, '--bec-color-surface'),
+      fontFamily: readToken(styles, '--bec-font-family-body'),
+      fontSize: readFontSize(styles, '--bec-chart-font-size'),
+    },
   }
 }
 
@@ -157,8 +187,10 @@ function readFontSize(styles: CSSStyleDeclaration, name: string): number | undef
 }
 
 function buildThemedOption(): ChartOption {
-  const source: OptionRecord = isOptionRecord(props.option) ? props.option : {}
-  const tokens = readChartTokens()
+  const rawSource: OptionRecord = isOptionRecord(props.option) ? props.option : {}
+  const { tokens, styles } = readChartTokens()
+  // 将配置中的 CSS 变量解析为真实颜色值，避免 ECharts/ZRender 无法解析 var(...) 导致色点或渐变回退。
+  const source: OptionRecord = styles ? resolveOptionTokens(rawSource, styles) as OptionRecord : rawSource
   const textStyle = tokenTextStyle(tokens, tokens.textPrimary)
   const result: OptionRecord = { ...source }
 

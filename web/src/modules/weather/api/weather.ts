@@ -1,5 +1,5 @@
 import { requestApi, TransportError } from '@/infrastructure/http/public'
-import type { Binding, BindingRequest, Building, Comparison, DailyWeather, EnergyRequest, FetchRequest, Job, Management, Overview, Page, Target, WeatherSeries } from '../models/weather'
+import type { Binding, BindingRequest, Building, Comparison, CurrentDayWeather, DailyWeather, EnergyRequest, FetchRequest, Job, Management, Overview, Page, Target, WeatherSeries } from '../models/weather'
 
 const root = '/v1/weather'
 const buildingPath = (building: string) => `${root}/buildings/${encodeURIComponent(building)}`
@@ -16,6 +16,7 @@ export const weatherApi = {
     throw new Error('BUILDING_LIST_LIMIT')
   },
   overview: (building: string, signal?: AbortSignal) => get<Overview>(`${buildingPath(building)}/overview`, signal),
+  currentDay: (building: string, signal?: AbortSignal) => get<CurrentDayWeather>(`${buildingPath(building)}/current-day`, signal),
   management: (building: string, signal?: AbortSignal) => get<Management>(`${buildingPath(building)}/management`, signal),
   targets: (building: string, signal?: AbortSignal) => get<Target[]>(`${buildingPath(building)}/energy-comparison/targets`, signal),
   hourly: (building: string, product: string, from: string, to: string, signal?: AbortSignal) => get<WeatherSeries[]>(`${buildingPath(building)}/hourly`, signal, { product, from, to }),

@@ -11,9 +11,9 @@ import static org.mockito.Mockito.*;
 class WeatherQueryServiceTest {
     private final WeatherRepository repo=mock(WeatherRepository.class);
     private final WeatherService access=mock(WeatherService.class);
-    private final WeatherQueryService query=new WeatherQueryService(repo,access);
     private final LocalDate day=LocalDate.of(2026,9,28);
     private final Instant now=day.atTime(12,0).atZone(ZONE).toInstant();
+    private final WeatherQueryService query=new WeatherQueryService(repo,access,Clock.fixed(now,ZONE));
     private final Binding binding=new Binding("b","building",1,"test",32,118,"101190101","CITY",Instant.EPOCH,null,true);
     private Dataset forecast(Source source,boolean complete,Instant fetched) {
         List<Sample> samples=new ArrayList<>();
@@ -54,5 +54,47 @@ class WeatherQueryServiceTest {
         assertThat(result.current().status()).isEqualTo("NOT_CONFIGURED");
         verify(repo).effective(eq("none"),any());
         verifyNoMoreInteractions(repo);
+    }
+    @Test void currentDayUsesLatestValidObservationInEachBeijingHour() {
+        Instant start=day.atStartOfDay(ZONE).toInstant();
+        when(repo.effective("building",now)).thenReturn(binding);
+        when(repo.publishedCurrent("b",start,now)).thenReturn(List.of(
+                current("previous-day",start.minusSeconds(1),20d,start),
+                current("early",start.plusSeconds(900),5d,start.plusSeconds(910)),
+                current("latest-in-hour",start.plusSeconds(2700),0d,start.plusSeconds(2710)),
+                current("delayed-old",start.plusSeconds(1800),9d,start.plusSeconds(2720)),
+                current("missing",start.plusSeconds(3000),null,start.plusSeconds(3010)),
+                current("just-observed",now,-1d,now),
+                current("future",now.plusSeconds(900),9d,now)));
+
+        var dayWeather=query.currentDay(1,List.of("BUILDING_OWNER"),"building");
+        assertThat(dayWeather.date()).isEqualTo(day);
+        assertThat(dayWeather.hours()).containsExactly(
+                new CurrentTemperatureHour(start,start.plusSeconds(2700),0d),
+                new CurrentTemperatureHour(now,now,-1d));
+        verify(access).reader(1,List.of("BUILDING_OWNER"),"building");
+        verify(repo,never()).head(any(),any(),any(),any());
+        verify(repo,never()).latest(any(),any(),any());
+    }
+    @Test void currentDayKeepsPreviousReadingForCardAcrossMidnightButLeavesNewDayEmpty() {
+        var previous=current("previous",day.minusDays(1).atTime(23,45).atZone(ZONE).toInstant(),7d,
+                day.minusDays(1).atTime(23,46).atZone(ZONE).toInstant());
+        when(repo.effective("building",now)).thenReturn(binding);
+        when(repo.latest("b",Source.OPEN_METEO,Product.CURRENT)).thenReturn(List.of(previous));
+
+        var dayWeather=query.currentDay(1,List.of(),"building");
+        assertThat(dayWeather.current().datasetId()).isEqualTo("previous");
+        assertThat(dayWeather.current().updateStatus()).isEqualTo("OVERDUE");
+        assertThat(dayWeather.hours()).isEmpty();
+    }
+    @Test void currentDayRejectsUnauthorizedBuildingBeforeReadingDatasets() {
+        doThrow(new com.platform.framework.exception.BusinessException(403,"denied")).when(access).reader(1,List.of(),"b");
+        assertThatThrownBy(()->query.currentDay(1,List.of(),"b")).isInstanceOf(com.platform.framework.exception.BusinessException.class);
+        verifyNoInteractions(repo);
+    }
+    private Dataset current(String id, Instant observedAt, Double celsius, Instant fetchedAt) {
+        var sample=new Sample(observedAt,celsius==null?Map.of():Map.of("temperature_2m",celsius),Map.of());
+        var payload=new FetchResult(Source.OPEN_METEO,Product.CURRENT,fetchedAt,null,null,null,List.of(sample),"test");
+        return new Dataset(id,"b",Source.OPEN_METEO,Product.CURRENT,fetchedAt,"PUBLISHED","unused",payload);
     }
 }

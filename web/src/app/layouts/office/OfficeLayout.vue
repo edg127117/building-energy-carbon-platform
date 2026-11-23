@@ -121,6 +121,29 @@ main { display: flex; flex-direction: column; gap: var(--bec-space-group); min-w
 .compact-tools { display: grid; gap: var(--bec-space-tight); }
 .compact-tools :deep(.el-button) { margin-left: 0; justify-content: flex-start; }
 .compact-username { overflow-wrap: anywhere; }
+@media (min-width: 1200px) and (min-height: 680px) {
+  .office-layout:has(> main[data-page-path="/operations/realtime/comfort"]) {
+    --bec-navigation-width: var(--bec-ref-comfort-navigation-width);
+    --bec-workspace-header-height: var(--bec-ref-comfort-header-height);
+  }
+  main[data-page-path="/operations/realtime/comfort"] {
+    overflow: hidden;
+    padding: var(--bec-ref-comfort-page-padding);
+  }
+}
+@media (min-width: 1200px) and (680px <= height <= 790px) {
+  .office-layout:has(> main[data-page-path="/operations/realtime/comfort"]) {
+    --bec-workspace-header-height: var(--bec-ref-comfort-header-height-compact);
+  }
+  .office-layout:has(> main[data-page-path="/operations/realtime/comfort"]) aside {
+    padding: var(--bec-ref-space-8) var(--bec-ref-space-6);
+  }
+  .office-layout:has(> main[data-page-path="/operations/realtime/comfort"]) :deep(.el-menu) {
+    --el-menu-item-height: var(--bec-ref-space-40);
+    --el-menu-sub-item-height: var(--bec-ref-space-32);
+  }
+  main[data-page-path="/operations/realtime/comfort"] { padding: var(--bec-ref-space-8); }
+}
 @media (max-width: 1200px) {
   .workspace-header :deep(.workspace-brand .company-logo),
   .workspace-header :deep(.workspace-brand .header-divider),

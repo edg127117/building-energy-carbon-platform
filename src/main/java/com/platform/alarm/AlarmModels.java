@@ -90,12 +90,14 @@ public final class AlarmModels {
     public record Event(String id, String buildingId, String category, String type, String ruleId, String objectId,
             String objectName, String spaceName, String period, String status, String severity,
             String description, long firstAt, long lastAt, Long recoveredAt, Long ackBy, Long ackAt,
-            Long silencedUntil, long ruleRevision, String evidence, String triggerEvidence, List<Log> logs,Long closedAt,Long closedBy) {
+            Long silencedUntil, long ruleRevision, String evidence, String triggerEvidence, List<Log> logs,
+            Long closedAt, Long closedBy, String spaceId, String objectType) {
         public Event(String id,String buildingId,String category,String type,String ruleId,String objectId,String objectName,
                 String spaceName,String period,String status,String severity,String description,long firstAt,long lastAt,
                 Long recoveredAt,Long ackBy,Long ackAt,Long silencedUntil,long ruleRevision,String evidence,String triggerEvidence,List<Log> logs) {
             this(id,buildingId,category,type,ruleId,objectId,objectName,spaceName,period,status,severity,description,firstAt,lastAt,
-                    recoveredAt,ackBy,ackAt,silencedUntil,ruleRevision,evidence,triggerEvidence,logs,null,null);
+                    recoveredAt,ackBy,ackAt,silencedUntil,ruleRevision,evidence,triggerEvidence,logs,null,null,null,
+                    category.equals("DEVICE") ? "DEVICE" : "BUILDING");
         }
     }
     public record Log(long at, Long actor, String action, String note) { }

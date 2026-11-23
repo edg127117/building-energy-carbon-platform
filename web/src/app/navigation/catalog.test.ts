@@ -80,6 +80,12 @@ describe('navigation authorization mapping', () => {
     ])).map(page => page.title)).toEqual(['数据质量冲突处置'])
   })
 
+  it('requires the comfort leaf under realtime monitoring', () => {
+    const path = '/operations/realtime/comfort'
+    expect(authorizedPages(tree('operations', 'realtime', [menu(path)])).map(page => page.path)).toEqual([path])
+    expect(authorizedPages(tree('operations', 'realtime', []), true).some(page => page.path === path)).toBe(false)
+  })
+
   it('does not render children of disabled or hidden directories', () => {
     expect(authorizedPages([menu('/configuration', { menuType: 'M', status: 0, children: [
       menu('/configuration/access', { menuType: 'M', children: [menu('/configuration/access/users')] }),

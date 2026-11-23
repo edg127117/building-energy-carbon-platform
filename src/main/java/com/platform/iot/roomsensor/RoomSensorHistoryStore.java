@@ -3,18 +3,23 @@ package com.platform.iot.roomsensor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.config.TdengineProperties;
+import com.platform.framework.exception.BusinessException;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /** 仅访问房间传感器独立超级表；重试使用队列冻结主键，读回确认后才能删除 MySQL 待投递项。 */
 @Repository
@@ -23,6 +28,12 @@ public class RoomSensorHistoryStore {
     // 技术主键可能在同毫秒时顺延；最近状态按实际接收时间选取。
     private static final String LATEST_BY_RECEIVED_AT = " ORDER BY received_at DESC,ts DESC LIMIT 1";
     static final int RANGE_SCAN_LIMIT = 25_000;
+
+    private static final int MAX_RANGE_ROWS = 250_000;
+    private static final RowMapper<DoorReading> DOOR_READING =
+            (rs, row) -> new DoorReading(rs.getLong("received_at"), rs.getBoolean("door_open"));
+    private static final RowMapper<RadarReading> RADAR_READING =
+            (rs, row) -> new RadarReading(rs.getLong("received_at"), rs.getInt("target_count"));
 
     private final JdbcTemplate td;
     private final String database;
@@ -68,9 +79,38 @@ public class RoomSensorHistoryStore {
 
     Optional<DoorReading> latestDoor(RoomSensorSource source, long asOf) {
         String sql = "SELECT received_at,door_open FROM " + database + ".st_door_observation"
-                + observationScope(source, asOf) + LATEST_BY_RECEIVED_AT;
+                + observationScope(source, asOf) + " AND door_open IS NOT NULL" + LATEST_BY_RECEIVED_AT;
         return td.query(sql, (rs, row) -> new DoorReading(rs.getLong("received_at"), rs.getBoolean("door_open")))
                 .stream().findFirst();
+    }
+
+    Map<String, DoorReading> recentDoors(List<RoomSensorStateBinding> bindings, long asOf) {
+        return doorReadings(bindings, asOf, true);
+    }
+
+    Map<String, DoorReading> lastDoors(List<RoomSensorStateBinding> bindings, long asOf) {
+        return doorReadings(bindings, asOf, false);
+    }
+
+    private Map<String, DoorReading> doorReadings(List<RoomSensorStateBinding> bindings, long asOf, boolean freshOnly) {
+        var readings = new HashMap<String, DoorReading>();
+        for (int first = 0; first < bindings.size(); first += 32) {
+            var batch = bindings.subList(first, Math.min(first + 32, bindings.size()));
+            // 每个来源独立按业务时间取一行，保留技术键顺延时与房间详情相同的判定。
+            String sql = IntStream.range(0, batch.size()).mapToObj(index -> {
+                var binding = batch.get(index);
+                long cutoff = freshOnly ? asOf - binding.freshnessSeconds() * 1000L + 1
+                        : asOf - RoomSensorWorker.RETENTION_MILLIS;
+                return "SELECT source_id,received_at,door_open FROM (SELECT source_id,received_at,door_open FROM "
+                        + database + ".st_door_observation" + observationScope(binding.source(), asOf)
+                        + " AND ts>=" + cutoff + " AND received_at>=" + cutoff + " AND door_open IS NOT NULL"
+                        + LATEST_BY_RECEIVED_AT + ") state" + index;
+            }).collect(Collectors.joining(" UNION ALL "));
+            td.query(sql, rs -> {
+                readings.put(rs.getString("source_id"), DOOR_READING.mapRow(rs, 0));
+            });
+        }
+        return readings;
     }
 
     Optional<RadarReading> latestRadar(RoomSensorSource source, long asOf) {
@@ -90,6 +130,42 @@ public class RoomSensorHistoryStore {
                 + " ORDER BY received_at DESC,ts DESC LIMIT " + (RANGE_SCAN_LIMIT + 1);
         return td.query(sql, (rs, row) -> new Observation(rs.getLong("received_at"),
                 radar ? rs.getInt("target_count") : null, radar ? null : rs.getBoolean("door_open")));
+    }
+
+    List<RadarReading> radarHistory(RoomSensorSource source, long from, long asOf) {
+        String sql = "SELECT received_at,target_count FROM " + database + ".st_radar_observation"
+                + observationScope(source, asOf) + " AND target_count>=0";
+        return range(sql, RADAR_READING, from);
+    }
+
+    List<DoorReading> doorHistory(RoomSensorSource source, long from, long asOf) {
+        String sql = "SELECT received_at,door_open FROM " + database + ".st_door_observation"
+                + observationScope(source, asOf) + " AND door_open IS NOT NULL";
+        return range(sql, DOOR_READING, from);
+    }
+
+    private <T> List<T> range(String sql, RowMapper<T> mapper, long from) {
+        // ts 只能作为扫描下界。顺延后的技术键可能晚于查询截止点。
+        var rows = td.query(sql + " AND ts>=" + from + " AND received_at>=" + from
+                + " ORDER BY received_at,ts LIMIT " + (MAX_RANGE_ROWS + 1), mapper);
+        if (rows.size() > MAX_RANGE_ROWS) {
+            throw new BusinessException(409, "ROOM_SENSOR_HISTORY_LIMIT", "房间传感器历史超过查询上限");
+        }
+        return rows;
+    }
+
+    Optional<DoorReading> lastClosedDoor(RoomSensorSource source, long asOf) {
+        String sql = "SELECT received_at,door_open FROM " + database + ".st_door_observation"
+                + observationScope(source, asOf) + " AND door_open=false" + LATEST_BY_RECEIVED_AT;
+        return td.query(sql, DOOR_READING).stream().findFirst();
+    }
+
+    Optional<DoorReading> openingAfterClose(RoomSensorSource source, long closedAt, long asOf) {
+        // 同毫秒出现相反状态时，不推断开门起点；后续明确的开启观测才进入计时。
+        String sql = "SELECT received_at,door_open FROM " + database + ".st_door_observation"
+                + observationScope(source, asOf) + " AND door_open=true AND ts>=" + closedAt
+                + " AND received_at>" + closedAt + " ORDER BY received_at,ts LIMIT 1";
+        return td.query(sql, DOOR_READING).stream().findFirst();
     }
 
     private static String observationScope(RoomSensorSource source, long asOf) {

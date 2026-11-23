@@ -2,6 +2,7 @@ package com.platform.hvac.asset.api;
 
 import com.platform.iot.roomsensor.RoomSensorReadings;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -160,7 +161,14 @@ public final class AssetManagementContracts {
             BigDecimal ratedCapacity,
             BigDecimal ratedPower,
             BigDecimal designCop,
-            String status) {
+            String status,
+            @Valid ContactInstallationUpdate contactInstallation) {
+    }
+
+    public record ContactInstallationUpdate(
+            @NotBlank @Size(max = 32) String sourceId,
+            @NotNull RoomSensorReadings.ContactKind kind,
+            @NotBlank @Size(max = 80) String location) {
     }
 
     public record IdentityView(
@@ -224,7 +232,8 @@ public final class AssetManagementContracts {
             PointSummary pointSummary,
             References references,
             List<String> allowedActions,
-            long updateTime) {
+            long updateTime,
+            RoomSensorReadings.ContactInstallation contactInstallation) {
     }
 
     public record PointUpdateRequest(

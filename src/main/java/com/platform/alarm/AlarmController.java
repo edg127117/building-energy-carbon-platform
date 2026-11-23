@@ -96,9 +96,9 @@ public class AlarmController {
             @RequestParam(defaultValue="1") int page, @RequestParam(defaultValue="20") int size,
             @RequestParam(required=false) String alarmType, @RequestParam(required=false) String state,
             @RequestParam(required=false) String keyword, @RequestParam(required=false) Long fromAt,
-            @RequestParam(required=false) Long toAt) {
+            @RequestParam(required=false) Long toAt, @RequestParam(required=false) String spaceId) {
         return Result.success(service.events(SecurityUser.userId(auth), SecurityUser.roles(auth), buildingId, history, type, page, size,
-                alarmType, state, keyword, fromAt, toAt));
+                alarmType, state, keyword, fromAt, toAt, spaceId));
     }
     @GetMapping("/events/{id}")
     public Result<Event> detail(Authentication auth, @PathVariable String buildingId, @PathVariable String id) {

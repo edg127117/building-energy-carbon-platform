@@ -82,6 +82,17 @@ public class DaikinControlAccess {
                 && !duties.hasDuty(user, BackendDuty.HVAC_DEVICE_CONTROL)) throw error(403, "FORBIDDEN");
     }
 
+    /** 只读核对入口所需的人员和设备授权；进入暖通页后仍按原流程核验实际可执行的动作。 */
+    public boolean hasControlEntry(long user, String buildingId, String equipmentId) {
+        if (!properties.isEnabled()) return false;
+        try {
+            requireControl(user, equipmentId);
+            return buildingId.equals(target(equipmentId).buildingId());
+        } catch (com.platform.framework.exception.BusinessException denied) {
+            return false;
+        }
+    }
+
     public Target target(String equipmentId) {
         if (testOpenControls()) return identity(resolve(equipmentId, false));
         return resolve(equipmentId, true);

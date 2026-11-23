@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   setOption: vi.fn(),
   resize: vi.fn(),
   dispose: vi.fn(),
+  markAreaComponent: {},
+  markLineComponent: {},
 }))
 
 vi.mock('echarts/core', () => ({
@@ -25,6 +27,8 @@ vi.mock('echarts/components', () => ({
   AriaComponent: {},
   GridComponent: {},
   LegendComponent: {},
+  MarkAreaComponent: mocks.markAreaComponent,
+  MarkLineComponent: mocks.markLineComponent,
   TooltipComponent: {},
 }))
 vi.mock('echarts/renderers', () => ({ SVGRenderer: {} }))
@@ -144,7 +148,9 @@ describe('ChartView', () => {
   it('registers the requested SVG chart modules and initializes only after a sized container exists', () => {
     const wrapper = mountChart()
 
-    expect(registeredModules).toHaveLength(9)
+    expect(registeredModules).toHaveLength(11)
+    expect(registeredModules).toContain(mocks.markAreaComponent)
+    expect(registeredModules).toContain(mocks.markLineComponent)
     expect(mocks.init).toHaveBeenCalledWith(
       wrapper.get('[data-test="chart-canvas"]').element,
       undefined,
@@ -252,5 +258,38 @@ describe('ChartView', () => {
     })
     expect(themeDisconnect).toHaveBeenCalledTimes(1)
     expect(mocks.dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves CSS custom property strings inside nested series and gradient options', () => {
+    const tokenOption: ChartOption = {
+      xAxis: { type: 'category', data: ['08:00'] },
+      yAxis: { type: 'value' },
+      series: [{
+        type: 'line',
+        data: [1],
+        lineStyle: { color: 'var(--bec-chart-series-2)' },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'var(--bec-chart-series-1)' },
+              { offset: 1, color: 'var(--bec-color-surface)' },
+            ],
+          },
+        },
+      }],
+    }
+    mountChart({ option: tokenOption })
+
+    const passed = mocks.setOption.mock.calls.at(-1)![0]
+    expect(passed.series[0].lineStyle.color).toBe('rgb(4, 5, 6)')
+    expect(passed.series[0].areaStyle.color.colorStops).toEqual([
+      { offset: 0, color: 'rgb(1, 2, 3)' },
+      { offset: 1, color: 'rgb(50, 51, 52)' },
+    ])
   })
 })

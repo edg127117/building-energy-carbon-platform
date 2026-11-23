@@ -35,7 +35,7 @@ public class RoomSensorRadarStateService {
                 .orElseGet(() -> new RadarState(null, null, null));
     }
 
-    private static RadarState project(RoomSensorHistoryStore.RadarReading reading, long asOf) {
+    static RadarState project(RoomSensorHistoryStore.RadarReading reading, long asOf) {
         Integer currentCount = asOf - reading.receivedAt() < FRESHNESS_MILLIS ? reading.targetCount() : null;
         return new RadarState(currentCount, reading.targetCount(), reading.receivedAt());
     }

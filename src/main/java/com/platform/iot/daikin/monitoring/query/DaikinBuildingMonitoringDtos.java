@@ -16,6 +16,13 @@ public final class DaikinBuildingMonitoringDtos {
                                 long total, long on, long off, long unknown,
                                 Map<String, Long> unknownReasons, Categories modes, Categories speeds) { }
 
+    public record RoomSetting<T>(T value, String status) { }
+
+    /** 开关全部不可用时 running 为 null；送风只采用确认运行且有固定风档观测的内机。 */
+    public record RoomSummary(int total, Integer running, int unknown, String status, Long lastObservedAt,
+                              RoomSetting<Double> setpoint, RoomSetting<String> fanSpeed, String airflowSpeed,
+                              boolean controlEntryAvailable) { }
+
     /**
      * coveragePercentage 是覆盖时长占当月已过去时长的百分比，仅作说明；percentage 只决定相对首名的条形长度。
      * 位置为当前正式档案，不做房间历史归因。

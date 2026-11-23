@@ -23,6 +23,10 @@ public class WeatherController {
     }
     @GetMapping("/buildings/{building}/overview")
     public Result<Overview> overview(Authentication a,@PathVariable String building) { return Result.success(query.overview(SecurityUser.userId(a),SecurityUser.roles(a),building)); }
+    @GetMapping("/buildings/{building}/current-day")
+    public Result<CurrentDayWeather> currentDay(Authentication a,@PathVariable String building) {
+        return Result.success(query.currentDay(SecurityUser.userId(a),SecurityUser.roles(a),building));
+    }
     @GetMapping("/buildings/{building}/management")
     public Result<ManagementView> management(Authentication a, @PathVariable String building) {
         return Result.success(service.management(SecurityUser.userId(a), SecurityUser.roles(a), building));

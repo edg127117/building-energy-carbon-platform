@@ -2,6 +2,15 @@ package com.platform.alarm;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.framework.exception.BusinessException;
+import com.platform.iot.comfort.ComfortPmvService;
+import com.platform.iot.comfort.ComfortPmvService.AlarmMeasurement;
+import com.platform.iot.comfort.ComfortQueryService;
+import com.platform.iot.comfort.ComfortQueryService.Space;
+import com.platform.iot.roomsensor.RoomSensorObservation;
+import com.platform.iot.roomsensor.RoomSensorRoomQueryService;
+import com.platform.iot.roomsensor.RoomSensorRoomQueryService.DoorAlarmReading;
+import org.springframework.test.util.AopTestUtils;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.platform.iot.collection.runtime.CollectionRuntimeStateService;
 import com.platform.iot.collection.model.entity.*;
 import com.platform.hvac.model.entity.BizPointAlias;
@@ -52,6 +61,8 @@ class AlarmChainTest {
         String migration = Files.readString(Path.of("src/env/init/V110__mysql_alarm_information.sql"));
         migration = migration.substring(0, migration.indexOf("-- 只补齐"));
         for (String sql : migration.split(";")) if (!sql.isBlank()) jdbc.execute(sql);
+        String roomAlarmMigration = Files.readString(Path.of("src/env/init/V127__mysql_comfort_alarm_scope.sql"));
+        for (String sql : roomAlarmMigration.split(";")) if (!sql.isBlank()) jdbc.execute(sql);
         jdbc.execute("CREATE TABLE biz_equipment_type(type_code VARCHAR(32),type_name VARCHAR(100),equip_category VARCHAR(64))");
         jdbc.update("INSERT INTO biz_equipment_type VALUES ('METER','电表','ELECTRIC_METER')");
         jdbc.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32),equip_name VARCHAR(100),building_id VARCHAR(32),space_id VARCHAR(32),type_code VARCHAR(32),equip_category VARCHAR(64),del_flag INT)");
@@ -82,6 +93,120 @@ class AlarmChainTest {
         factory.setProxyTargetClass(true);
         factory.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(ds), new AnnotationTransactionAttributeSource()));
         service = (AlarmService) factory.getProxy();
+    }
+
+    @Test
+    void roomAlarmsShareDeviceEventsAndRequireValidObservationsToRecover() {
+        var rooms = mock(ComfortQueryService.class);
+        var pmv = mock(ComfortPmvService.class);
+        var sensors = mock(RoomSensorRoomQueryService.class);
+        var source = new ComfortAlarmSource(rooms, pmv, sensors, new ObjectMapper());
+        AlarmService target = AopTestUtils.getTargetObject(service);
+        ReflectionTestUtils.setField(target, "comfort", source);
+        var b314 = new Space("S1", "B314", "A", "三层");
+        var b313 = new Space("S3", "B313", "A", "三层");
+        when(rooms.alarmSpaces("A")).thenReturn(List.of(b314, b313));
+        jdbc.update("UPDATE biz_space SET space_name='B314' WHERE space_id='S1'");
+        jdbc.update("UPDATE biz_space SET space_name='B313' WHERE space_id='S3'");
+        jdbc.update("INSERT INTO biz_equipment VALUES ('DOOR','S4 门磁','A','S1','S4','DOOR',0)");
+        when(sensors.matchesDoorBinding(any())).thenReturn(true);
+
+        var start = clock.instant();
+        long opened = start.toEpochMilli();
+        when(sensors.doorsForAlarm(eq("A"), eq("S1"), anyLong())).thenAnswer(
+                call -> List.of(new DoorAlarmReading("DOOR", "S4 门磁", opened - 1_000, opened, call.getArgument(2))));
+        var pmvReading = new java.util.concurrent.atomic.AtomicReference<BigDecimal>(new BigDecimal("0.51"));
+        when(pmv.readForAlarm(eq(rooms), eq(b314), anyLong())).thenAnswer(call -> pmvReading.get() == null
+                ? null : new AlarmMeasurement(pmvReading.get(), call.getArgument(2), "same-parameters"));
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).extracting(Event::type).containsExactly("OFFLINE");
+        clock.instant = start.plusSeconds(60);
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).hasSize(1);
+        clock.instant = start.plusSeconds(61);
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).extracting(Event::ruleId).contains("comfort-door-timeout");
+
+        for (int minute = 2; minute <= 29; minute++) {
+            clock.instant = start.plusSeconds(minute * 60L);
+            service.evaluate("A");
+        }
+        assertThat(roomEvents("S1")).hasSize(2);
+        clock.instant = start.plusSeconds(30 * 60);
+        service.evaluate("A");
+        service.evaluate("A");
+        var alarms = roomEvents("S1");
+        assertThat(alarms).hasSize(3).allMatch(event -> "S1".equals(event.spaceId()));
+        assertThat(alarms).extracting(Event::objectType).containsExactlyInAnyOrder("DEVICE", "DEVICE", "ROOM");
+        assertThat(alarms).filteredOn(event -> "comfort-pmv-limit".equals(event.ruleId()))
+                .singleElement().satisfies(event -> assertThat(event.severity()).isEqualTo("IMPORTANT"));
+        assertThat(alarms).filteredOn(event -> "comfort-door-timeout".equals(event.ruleId()))
+                .singleElement().satisfies(event -> assertThat(event.severity()).isEqualTo("GENERAL"));
+        assertThat(roomEvents("S3")).isEmpty();
+
+        long closed = clock.millis() + 1;
+        clock.instant = Instant.ofEpochMilli(closed);
+        service.doorClosed(new RoomSensorObservation("late", "source", "S4_DOOR", opened, opened, null,
+                "id", "DOOR", "A", "S1", "gateway", "mac", null, null, false));
+        assertThat(roomEvents("S1")).hasSize(3);
+        service.doorClosed(new RoomSensorObservation("close", "source", "S4_DOOR", closed, closed, null,
+                "id", "DOOR", "A", "S1", "gateway", "mac", null, null, false));
+        assertThat(roomEvents("S1")).hasSize(2);
+        when(sensors.doorsForAlarm(eq("A"), eq("S1"), anyLong())).thenReturn(
+                List.of(new DoorAlarmReading("DOOR", "S4 门磁", closed, null, closed)));
+        pmvReading.set(new BigDecimal("0.50"));
+        for (int minute = 31; minute <= 36; minute++) {
+            clock.instant = start.plusSeconds(minute * 60L);
+            service.evaluate("A");
+        }
+        pmvReading.set(null);
+        clock.instant = start.plusSeconds(37 * 60);
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).hasSize(2);
+        pmvReading.set(new BigDecimal("-0.50"));
+        for (int minute = 38; minute <= 47; minute++) {
+            clock.instant = start.plusSeconds(minute * 60L);
+            service.evaluate("A");
+        }
+        assertThat(roomEvents("S1")).hasSize(2);
+        clock.instant = start.plusSeconds(48 * 60);
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).extracting(Event::type).containsExactly("OFFLINE");
+        var history = service.events(1L, ADMIN, "A", true, "DEVICE", 1, 20).items();
+        assertThat(history).extracting(Event::ruleId).containsExactlyInAnyOrder("comfort-door-timeout", "comfort-pmv-limit");
+        for (var event : history) {
+            assertThat(service.detail(1L, ADMIN, "A", event.id()).logs())
+                    .extracting(Log::action).containsExactly("TRIGGERED", "RECOVERED");
+        }
+    }
+
+    @Test
+    void oneDoorClosingRecoversOnlyItsOwnRoomAlarm() {
+        var rooms = mock(ComfortQueryService.class);
+        var sensors = mock(RoomSensorRoomQueryService.class);
+        var source = new ComfortAlarmSource(rooms, mock(ComfortPmvService.class), sensors, new ObjectMapper());
+        AlarmService target = AopTestUtils.getTargetObject(service);
+        ReflectionTestUtils.setField(target, "comfort", source);
+        when(rooms.alarmSpaces("A")).thenReturn(List.of(new Space("S1", "A309", "A", "三层")));
+        jdbc.update("INSERT INTO biz_equipment VALUES ('EAST','东门','A','S1','S4','DOOR',0),('WEST','西门','A','S1','S4','DOOR',0)");
+        long now = clock.millis();
+        long opened = now - 61_000;
+        var east = new DoorAlarmReading("EAST", "东门", opened - 1_000, opened, now);
+        var west = new DoorAlarmReading("WEST", "西门", opened - 1_000, opened, now);
+        when(sensors.doorsForAlarm("A", "S1", now)).thenReturn(List.of(east, west));
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).filteredOn(event -> ComfortAlarmSource.DOOR_RULE.equals(event.ruleId()))
+                .extracting(Event::objectId).containsExactlyInAnyOrder("EAST", "WEST");
+        when(sensors.doorsForAlarm("A", "S1", now)).thenReturn(List.of(
+                new DoorAlarmReading("EAST", "东门", now, null, now), west));
+        service.evaluate("A");
+        assertThat(roomEvents("S1")).filteredOn(event -> ComfortAlarmSource.DOOR_RULE.equals(event.ruleId()))
+                .extracting(Event::objectId).containsExactly("WEST");
+    }
+
+    private List<Event> roomEvents(String spaceId) {
+        return service.events(1L, ADMIN, "A", false, "DEVICE", 1, 20,
+                null, "ACTIVE", null, null, null, spaceId).items();
     }
 
     void configureSource() {

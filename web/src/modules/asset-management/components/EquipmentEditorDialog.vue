@@ -4,7 +4,7 @@ import { ElAlert, ElButton, ElDialog, ElForm, ElFormItem, ElInput, ElInputNumber
 import { t } from '@/locales'
 import { listDeviceProducts, listEquipmentTypes, type DeviceProductListItem, type EquipmentTypeOption } from '@/modules/device-onboarding/public'
 import { isHvacEquipment } from './meter/meter-display'
-import { flattenSpaces, type AssetEquipmentDetail, type AssetEquipmentForm, type AssetSpace, type AssetSystemGroup } from '../models/assets'
+import { flattenSpaces, type AssetContactKind, type AssetEquipmentDetail, type AssetEquipmentForm, type AssetSpace, type AssetSystemGroup } from '../models/assets'
 
 const props = withDefaults(defineProps<{
   open: boolean
@@ -27,7 +27,12 @@ const form = reactive({
   ratedCapacity: undefined as number | undefined,
   ratedPower: undefined as number | undefined,
   designCop: undefined as number | undefined,
+  contactKind: undefined as AssetContactKind | undefined,
+  contactLocation: '',
 })
+const installation = computed(() => props.equipment?.contactInstallation)
+const contactInvalid = computed(() => Boolean(installation.value
+  && (form.contactKind || form.contactLocation.trim()) && (!form.contactKind || !form.contactLocation.trim())))
 const title = computed(() => t(props.equipment ? 'assetManagement.forms.editEquipment' : 'assetManagement.forms.createEquipment'))
 const spaces = computed(() => flattenSpaces(props.spaces))
 
@@ -44,6 +49,8 @@ watch(() => [props.open, props.equipment] as const, ([open]) => {
     ratedCapacity: props.equipment?.ratedCapacity ?? undefined,
     ratedPower: props.equipment?.ratedPower ?? undefined,
     designCop: props.equipment?.designCop ?? undefined,
+    contactKind: installation.value?.kind ?? undefined,
+    contactLocation: installation.value?.location ?? '',
   })
 }, { immediate: true })
 
@@ -94,7 +101,12 @@ function buildingChanged(buildingId: string | undefined) {
 
 function submit() {
   if (!props.equipment && (templateLoading.value || templateError.value || !equipmentTypes.value.some(type => type.typeCode === form.typeCode))) return
-  if (!form.buildingId || (!props.equipment && (!form.spaceId || !form.systemGroupId)) || !form.typeCode.trim() || !form.equipmentName.trim()) return
+  if (!form.buildingId || (!props.equipment && (!form.spaceId || !form.systemGroupId))
+    || !form.typeCode.trim() || !form.equipmentName.trim() || contactInvalid.value) return
+  const original = installation.value
+  const location = form.contactLocation.trim()
+  const contact = original && form.contactKind && location && (form.contactKind !== original.kind || location !== original.location)
+    ? { sourceId: original.sourceId, kind: form.contactKind, location } : undefined
   emit('save', {
     buildingId: form.buildingId,
     spaceId: form.spaceId ?? null,
@@ -108,6 +120,7 @@ function submit() {
     ratedPower: props.equipment?.ratedPower ?? null,
     designCop: props.equipment?.designCop ?? null,
     status: 'ACTIVE',
+    ...(contact ? { contactInstallation: contact } : {}),
   })
 }
 
@@ -144,6 +157,15 @@ function nullable(value: string): string | null { return value.trim() || null }
           <ElSelect v-model="form.systemGroupId" :disabled="Boolean(equipment)" class="wide-control"><ElOption v-for="item in systemGroups" :key="item.systemGroupId" :label="item.systemName" :value="item.systemGroupId" /></ElSelect>
         </ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.manufacturer')"><ElInput v-model="form.manufacturer" maxlength="100" /></ElFormItem>
+        <ElFormItem v-if="installation" :label="t('assetManagement.equipment.contactKind')" :required="Boolean(form.contactLocation.trim())">
+          <ElSelect v-model="form.contactKind" class="wide-control" :placeholder="t('common.missing')">
+            <ElOption :label="t('assetManagement.equipment.contactKinds.DOOR')" value="DOOR" />
+            <ElOption :label="t('assetManagement.equipment.contactKinds.WINDOW')" value="WINDOW" />
+          </ElSelect>
+        </ElFormItem>
+        <ElFormItem v-if="installation" :label="t('assetManagement.equipment.contactLocation')" :required="Boolean(form.contactKind)">
+          <ElInput v-model="form.contactLocation" maxlength="80" />
+        </ElFormItem>
         <ElFormItem v-if="equipment && isHvacEquipment(equipment)" :label="t('assetManagement.labels.ratedCapacity')"><ElInputNumber v-model="form.ratedCapacity" disabled class="wide-control" /></ElFormItem>
         <ElFormItem :label="t('assetManagement.labels.ratedPower')"><ElInputNumber v-model="form.ratedPower" disabled class="wide-control" /></ElFormItem>
         <ElFormItem v-if="equipment && isHvacEquipment(equipment)" :label="t('assetManagement.labels.designCop')"><ElInputNumber v-model="form.designCop" disabled class="wide-control" /></ElFormItem>
@@ -152,7 +174,7 @@ function nullable(value: string): string | null { return value.trim() || null }
       <ElAlert v-if="equipment" :title="t('assetManagement.associations.archiveHint')" type="info" :closable="false" />
       <ElAlert :title="t('assetManagement.forms.parametersReadOnly')" type="info" :closable="false" />
     </ElForm>
-    <template #footer><ElButton @click="emit('close')">{{ t('assetManagement.actions.cancel') }}</ElButton><ElButton type="primary" :loading="submitting" :disabled="!equipment && (templateLoading || templateError)" @click="submit">{{ t('assetManagement.actions.save') }}</ElButton></template>
+    <template #footer><ElButton @click="emit('close')">{{ t('assetManagement.actions.cancel') }}</ElButton><ElButton type="primary" :loading="submitting" :disabled="contactInvalid || (!equipment && (templateLoading || templateError))" @click="submit">{{ t('assetManagement.actions.save') }}</ElButton></template>
   </ElDialog>
 </template>
 

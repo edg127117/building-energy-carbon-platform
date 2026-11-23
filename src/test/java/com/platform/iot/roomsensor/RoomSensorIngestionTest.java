@@ -44,16 +44,18 @@ class RoomSensorIngestionTest {
                 + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false", "sa", "");
         mysql = new JdbcTemplate(ds);
         mysql.execute("CREATE TABLE biz_space(space_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32),del_flag INT)");
-        mysql.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32),space_id VARCHAR(32),del_flag INT)");
+        mysql.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32),space_id VARCHAR(32),del_flag INT,equip_name VARCHAR(100))");
         mysql.execute("CREATE TABLE biz_device_identity(identity_id VARCHAR(32) PRIMARY KEY,identity_type VARCHAR(20),identity_value VARCHAR(50),equip_id VARCHAR(32),building_id VARCHAR(32),expected_profile_code VARCHAR(50),status INT)");
         // H2 对参数化 JSON 字符串的存取语义不同；真实 MySQL JSON 类型由独立引擎验证覆盖。
         String ddl = new ClassPathResource("db/migration/mysql/V121__mysql_room_sensor_ingestion.sql")
                 .getContentAsString(StandardCharsets.UTF_8).replace("observation_json JSON", "observation_json LONGTEXT")
                 .replace(" COLLATE=utf8mb4_unicode_ci", "").split("-- 身份表历史安装")[0];
         new ResourceDatabasePopulator(new ByteArrayResource(ddl.getBytes(StandardCharsets.UTF_8))).execute(ds);
+        mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN contact_kind VARCHAR(8)");
+        mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN contact_location VARCHAR(80)");
         mysql.execute("ALTER TABLE biz_room_sensor_source ADD CONSTRAINT fk_room_sensor_identity FOREIGN KEY(identity_id) REFERENCES biz_device_identity(identity_id)");
         mysql.update("INSERT INTO biz_space VALUES ('room','building',0)");
-        mysql.update("INSERT INTO biz_equipment VALUES ('radar','building','room',0)");
+        mysql.update("INSERT INTO biz_equipment VALUES ('radar','building','room',0,'雷达')");
         mysql.update("INSERT INTO biz_device_identity VALUES ('identity','MAC','AC233FC2B716','radar','building','MSR01_RADAR',1)");
         mysql.update("INSERT INTO biz_room_sensor_source(source_id,identity_id,gateway_mac,topic,protocol,enabled) VALUES ('radarsource','identity','AC233FC2B716',?,'MSR01_RADAR',1)", TOPIC);
         communication = mock(CommunicationEvidenceRecorder.class);
@@ -273,7 +275,7 @@ class RoomSensorIngestionTest {
     }
 
     private void registerDoor() {
-        mysql.update("INSERT INTO biz_equipment VALUES ('door','building','room',0)");
+        mysql.update("INSERT INTO biz_equipment VALUES ('door','building','room',0,'门')");
         mysql.update("INSERT INTO biz_device_identity VALUES ('door-identity','MAC','C300008A3BAE','door','building','S4_DOOR',1)");
         mysql.update("INSERT INTO biz_room_sensor_source(source_id,identity_id,gateway_mac,topic,protocol,enabled) VALUES ('doorsource','door-identity','AC233FC2B716',?,'S4_DOOR',1)", DOOR_TOPIC);
     }

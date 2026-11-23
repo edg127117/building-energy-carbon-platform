@@ -401,6 +401,7 @@ function equipmentUpdate(form: AssetEquipmentForm): Omit<AssetEquipmentForm, 'ty
     ratedPower: form.ratedPower,
     designCop: form.designCop,
     status: form.status,
+    ...(form.contactInstallation ? { contactInstallation: form.contactInstallation } : {}),
   }
 }
 

@@ -61,8 +61,11 @@ export interface AlarmEvent {
   buildingId: string
   category: AlarmCategory
   type: AlarmType
+  ruleId?: string
   objectId: string
   objectName: string
+  objectType?: 'ROOM' | 'DEVICE' | 'BUILDING'
+  spaceId?: string | null
   spaceName: string | null
   period: string | null
   status: AlarmStatus

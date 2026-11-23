@@ -143,7 +143,10 @@ export type AssetEquipmentDetail = AssetEquipment & {
   parameterGovernanceStatus: string | null
   identities: AssetIdentity[]
   references: AssetReferences
+  contactInstallation?: { sourceId: string; kind: AssetContactKind | null; location: string | null } | null
 }
+
+export type AssetContactKind = 'DOOR' | 'WINDOW'
 
 export type AssetEquipmentForm = {
   buildingId: string
@@ -157,6 +160,7 @@ export type AssetEquipmentForm = {
   ratedPower: number | null
   designCop: number | null
   status: 'ACTIVE'
+  contactInstallation?: { sourceId: string; kind: AssetContactKind; location: string }
 }
 
 export type AssetPoint = {

@@ -163,11 +163,23 @@ public class WeatherRepository {
         if(live==null || !live.state().equals("RUNNING") || live.fence()!=j.fence() || live.leaseUntil()<System.currentTimeMillis())
             throw new IllegalStateException("LEASE_LOST");
     }
+    private Dataset mapDataset(ResultSet r, int row) throws SQLException {
+        return new Dataset(r.getString("id"),r.getString("binding_id"),
+                Source.valueOf(r.getString("source")),Product.valueOf(r.getString("product")),Instant.ofEpochMilli(r.getLong("fetched_at")),
+                r.getString("state"),r.getString("table_name"),codec.unpack(r.getBytes("payload"),FetchResult.class));
+    }
     public Dataset dataset(String id) {
         if(id==null)return null;
-        return one("SELECT * FROM biz_weather_dataset WHERE id=?",(r,n)->new Dataset(r.getString("id"),r.getString("binding_id"),
-                Source.valueOf(r.getString("source")),Product.valueOf(r.getString("product")),Instant.ofEpochMilli(r.getLong("fetched_at")),
-                r.getString("state"),r.getString("table_name"),codec.unpack(r.getBytes("payload"),FetchResult.class)),id);
+        return one("SELECT * FROM biz_weather_dataset WHERE id=?",this::mapDataset,id);
+    }
+    public List<Dataset> publishedCurrent(String bindingId, Instant from, Instant asOf) {
+        return jdbc.query("""
+                SELECT id,binding_id,source,product,fetched_at,state,table_name,payload
+                FROM biz_weather_dataset
+                WHERE binding_id=? AND source='OPEN_METEO' AND product='CURRENT'
+                  AND fetched_at>=? AND fetched_at<=? AND state='PUBLISHED'
+                ORDER BY fetched_at,id
+                """,this::mapDataset,bindingId,from.toEpochMilli(),asOf.toEpochMilli());
     }
     public Dataset prepare(Job j,FetchResult result) {
         return transaction(()-> {
