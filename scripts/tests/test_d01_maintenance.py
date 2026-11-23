@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import zipfile
 from unittest.mock import Mock, patch
@@ -119,6 +120,7 @@ class CredentialReuseTest(unittest.TestCase):
         values = {**credential_source.EXPECTED, "MYSQL_USER": "platform_app", "TDENGINE_USER": "platform_app"}
         for change, error in (({"MYSQL_PORT": "3306"}, "TARGET_MISMATCH"),
                               ({"AUDIT_ENVIRONMENT_MODE": "PROD"}, "TARGET_MISMATCH"),
+                              ({"TDENGINE_PORT": "16042"}, "TARGET_MISMATCH"),
                               ({"MYSQL_USER": "platform_migrator"}, "SEPARATE_MIGRATION"),
                               ({"TDENGINE_USER": "root"}, "NONROOT_TDENGINE"),
                               ({"MYSQL_MIGRATION_PASSWORD": "private"}, "ADMIN_CREDENTIAL_IN_RUNTIME")):
@@ -126,6 +128,13 @@ class CredentialReuseTest(unittest.TestCase):
             with patch.object(credential_source, "command", return_value="123"), patch.object(Path, "read_bytes", return_value=raw):
                 with self.assertRaisesRegex(RuntimeError, error):
                     credential_source.runtime_target()
+
+    def test_runtime_accepts_the_tdengine_3300_endpoint_container_and_volume_together(self):
+        values = {**credential_source.EXPECTED, **credential_source.TDENGINE_3300,
+                  "MYSQL_USER": "platform_app", "TDENGINE_USER": "platform_app"}
+        raw = b"\0".join((key + "=" + value).encode() for key, value in values.items())
+        with patch.object(credential_source, "command", return_value="123"), patch.object(Path, "read_bytes", return_value=raw):
+            self.assertEqual(credential_source.runtime_target(), ("123", values))
 
     def test_container_binding_and_volume_identity_fail_before_database_probe(self):
         item = {"Name": "/building-energy-carbon-test-mysql", "State": {"Running": True},
@@ -148,6 +157,11 @@ class CredentialReuseTest(unittest.TestCase):
         self.assertIsNone(opener.call_args.args[1].redirect_request(None, None, 302, None, None, "https://elsewhere"))
         request = opener.return_value.open.call_args.args[0]
         self.assertEqual(request.full_url, "http://127.0.0.1:16041/rest/sql")
+
+        with patch.object(credential_source.urllib.request, "build_opener") as opener:
+            opener.return_value.open.return_value = response
+            credential_source.td_query("private", "SHOW USERS", "16042")
+        self.assertEqual(opener.return_value.open.call_args.args[0].full_url, "http://127.0.0.1:16042/rest/sql")
 
     def test_failed_process_output_and_timeout_never_expose_secret(self):
         for result in (Mock(returncode=1, stdout=b"password=private", stderr=b"private"),):
@@ -179,7 +193,8 @@ class CredentialReuseTest(unittest.TestCase):
     def test_discovery_binds_same_mysql_source_and_detects_concurrent_service_change(self):
         values = {"mysql_migration_password": "migrate" * 4, "mysql_root_password": "mysql" * 4, "td_root_password": "td" * 8}
         with contextlib.ExitStack() as stack:
-            runtime = stack.enter_context(patch.object(credential_source, "runtime_target", return_value=("123", {})))
+            target = {**credential_source.EXPECTED, **credential_source.TDENGINE_3300}
+            runtime = stack.enter_context(patch.object(credential_source, "runtime_target", return_value=("123", target)))
             containers = stack.enter_context(patch.object(credential_source, "check_containers", return_value={"MYSQL": "a" * 64}))
             stack.enter_context(patch.object(credential_source, "administrator_values", return_value=values))
             stack.enter_context(patch.object(credential_source, "migration_probe", return_value="same-server"))
@@ -188,7 +203,7 @@ class CredentialReuseTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "SOURCE_IDENTITY_MISMATCH"):
                 credential_source.discover(b"jar")
             backup.return_value = "same-server"
-            runtime.side_effect = [("123", {}), ("456", {})]
+            runtime.side_effect = [("123", target), ("456", target)]
             with self.assertRaisesRegex(RuntimeError, "SERVICE_CHANGED"):
                 credential_source.discover(b"jar")
             runtime.side_effect = None
@@ -204,7 +219,8 @@ class CredentialReuseTest(unittest.TestCase):
 
     def test_application_only_discovery_passes_mode_to_probe_without_printing_credentials(self):
         values = {"mysql_migration_password": "migrate" * 4, "mysql_root_password": "mysql" * 4, "td_root_password": "td" * 8}
-        with patch.object(credential_source, "runtime_target"), patch.object(credential_source, "check_containers"), \
+        with patch.object(credential_source, "runtime_target", return_value=("123", credential_source.EXPECTED)), \
+                patch.object(credential_source, "check_containers"), \
                 patch.object(credential_source, "administrator_values", return_value=values), \
                 patch.object(credential_source, "migration_probe", return_value="same-mysql") as probe, \
                 patch.object(credential_source, "backup_mysql_probe", return_value="same-mysql"), \
@@ -495,9 +511,38 @@ class PrivilegeBoundaryTest(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "linux", "installer requires POSIX uid and filesystem semantics")
 class InstallerTest(unittest.TestCase):
+    def test_cutover_rechecks_exact_runtime_transition_and_preserves_other_controls(self):
+        state = {"target_schema": "123",
+                 "runtime_controls": {**dict.fromkeys(installer.RUNTIME_REQUIRED, ""),
+                                      **installer.TDENGINE_TARGET, **installer.TDENGINE_PRE_CUTOVER,
+                                      "AUDIT_ENVIRONMENT_MODE": "TEST", "SERVER_PORT": "18081",
+                                      "MYSQL_FLYWAY_ENABLED": "false", "TDENGINE_INITIALIZATION_ENABLED": "false"},
+                 "other_release": "/var/www/iot-platform/current", "other_link": "unchanged",
+                 "other_pid": "123", "other_reload": "unchanged"}
+        self.assertEqual(installer.TDENGINE_3300_TARGET, credential_source.TDENGINE_3300)
+        live = {**state["runtime_controls"], **installer.TDENGINE_3300_TARGET}
+        properties = {"ActiveState": "active", "ExecMainStartTimestampMonotonic": "1",
+                      "MainPID": "123", "ExecReload": "unchanged"}
+        with patch.object(installer, "run", side_effect=lambda *args: properties[args[-2]]), \
+                patch.object(Path, "resolve", side_effect=lambda: state["other_release"]), \
+                patch.object(installer.os, "readlink", return_value="unchanged"), \
+                patch.object(Path, "read_bytes", side_effect=lambda: b"\0".join(
+                    f"{key}={value}".encode() for key, value in live.items())):
+            with self.assertRaisesRegex(RuntimeError, "OLD_RUNTIME_CHANGED"):
+                installer.retry_baseline(state, time.time())
+            installer.retry_baseline(state, time.time(), accept_tdengine_3300_cutover=True)
+            live["TDENGINE_VOLUME_NAME"] = installer.TDENGINE_PRE_CUTOVER["TDENGINE_VOLUME_NAME"]
+            with self.assertRaisesRegex(RuntimeError, "OLD_RUNTIME_CHANGED"):
+                installer.retry_baseline(state, time.time(), accept_tdengine_3300_cutover=True)
+            live.update(installer.TDENGINE_3300_TARGET)
+            live["DAIKIN_CONTROL_ENABLED"] = "true"
+            with self.assertRaisesRegex(RuntimeError, "OLD_RUNTIME_CHANGED"):
+                installer.retry_baseline(state, time.time(), accept_tdengine_3300_cutover=True)
+
     def test_completed_record_is_archived_only_after_revocation_and_baseline_checks(self):
         for scenario in ("success", "frontend_successor", "backend_changed", "foreign_current",
-                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config", "source_mismatch", "completed85", "completed86", "completed87", "completed88", "completed88_application", "completed93", "completed93_application"):
+                         "active_grant", "failed", "credential", "timer", "baseline", "code", "config", "source_mismatch", "completed85", "completed86", "completed87", "completed88", "completed88_application", "completed93", "completed93_application",
+                         "cutover_ok", "cutover_unexpected_config", "cutover_extra_path"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
                 root = Path(directory)
                 for name, path in (("INSTALL", root / "tools"), ("DATA", root / "data"), ("BASE", root / "test"),
@@ -528,7 +573,10 @@ class InstallerTest(unittest.TestCase):
                 for name in config["code_sha256"]:
                     (installer.INSTALL / name).write_bytes(b"pinned")
                 source = "85" if scenario in ("source_mismatch", "completed85") else "86" if scenario == "completed86" else "87" if scenario == "completed87" else "88" if scenario in ("completed88", "completed88_application") else "93" if scenario in ("completed93", "completed93_application") else "84"
-                if scenario.startswith("completed"):
+                cutover = scenario.startswith("cutover")
+                if cutover:
+                    source = "123"
+                if scenario.startswith("completed") or cutover:
                     config["target_schema"] = source
                 if scenario.endswith("_application"):
                     config.update(source_schema=source, release_mode="APPLICATION_ONLY")
@@ -540,8 +588,11 @@ class InstallerTest(unittest.TestCase):
                 (private / "backup-evidence").write_bytes(b"old complete backup retained")
                 state = {"phase": "AWAITING_BUSINESS_ACCEPTANCE", "candidate_started": True,
                          "release": str(candidate), "jar_sha256": config["jar_sha256"], "config_hashes": {"config": "hash"}}
-                if scenario.startswith("completed"):
+                if scenario.startswith("completed") or cutover:
                     state["target_schema"] = source
+                if cutover:
+                    server_env = str(installer.BASE / "shared/server.env")
+                    state["config_hashes"].update({installer.S02_RUNTIME: "old-s02", server_env: "old-server"})
                 if scenario.endswith("_application"):
                     state.update(source_schema=source, release_mode="APPLICATION_ONLY")
                 (private / ("d01-" + old_release + ".json")).write_text(json.dumps(state))
@@ -558,23 +609,32 @@ class InstallerTest(unittest.TestCase):
                 baseline = stack.enter_context(patch.object(installer, "retry_baseline"))
                 if scenario == "baseline":
                     baseline.side_effect = RuntimeError("D01_OLD_BASELINE_CHANGED")
-                stack.enter_context(patch.object(installer, "retry_configuration",
-                    return_value={} if scenario == "config" else {"config": "hash"}))
+                current_hashes = {} if scenario == "config" else state["config_hashes"].copy()
+                if cutover:
+                    current_hashes.update({installer.S02_RUNTIME: "new-s02", server_env: "new-server"})
+                if scenario == "cutover_unexpected_config":
+                    current_hashes["config"] = "changed"
+                if scenario == "cutover_extra_path":
+                    current_hashes["extra-file"] = "added"
+                stack.enter_context(patch.object(installer, "retry_configuration", return_value=current_hashes))
                 calls = []
                 def run(*args):
                     calls.append(args)
                     return "active" if scenario == "timer" else "inactive" if "ActiveState" in args else "disabled"
                 stack.enter_context(patch.object(installer, "run", side_effect=run))
-                if scenario in ("success", "frontend_successor") or scenario.startswith("completed"):
-                    installer.retire_completed("d01-" + "b" * 12, source)
+                cutover_args = {"allow_application_update": cutover, "accept_tdengine_3300_cutover": cutover}
+                if scenario in ("success", "frontend_successor", "cutover_ok") or scenario.startswith("completed"):
+                    installer.retire_completed("d01-" + "b" * 12, source, **cutover_args)
                     self.assertTrue(baseline.call_args.kwargs["allow_other_restart"])
                     archives = list(installer.HISTORY.iterdir())
                     self.assertEqual(len(archives), 1)
                     self.assertEqual((archives[0] / "data/private/backup-evidence").read_bytes(), b"old complete backup retained")
+                    archived_state = archives[0] / "data/private" / ("d01-" + old_release + ".json")
+                    self.assertEqual(json.loads(archived_state.read_text()), state)
                     self.assertFalse(installer.INSTALL.exists())
                 else:
                     with self.assertRaises(RuntimeError):
-                        installer.retire_completed("d01-" + "b" * 12, source)
+                        installer.retire_completed("d01-" + "b" * 12, source, **cutover_args)
                     self.assertTrue((private / "backup-evidence").exists())
                     self.assertFalse(installer.HISTORY.exists())
                 self.assertFalse(any(verb in args for args in calls for verb in ("stop", "restart", "start")))
@@ -673,7 +733,8 @@ class InstallerTest(unittest.TestCase):
         for scenario in ("success", "active_grant", "frozen", "changed_code", "credentials_present", "late_prepare", "rename_failure",
                          "online_success", "online_frozen_field", "online_missing_field", "online_started", "online_missing_backup",
                          "online_old_artifact_changed", "online_new_collision", "online_same_release", "online_baseline_changed",
-                         "online_rename_failure", "online_future_event"):
+                         "online_rename_failure", "online_future_event", "history_retry", "history_same_package",
+                         "history_changed_commit", "history_tampered_artifact", "history_prepared_state"):
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
                 root = Path(directory)
                 base = root / "test"
@@ -712,7 +773,38 @@ class InstallerTest(unittest.TestCase):
                     (base / "incoming").mkdir()
                     (base / "incoming/d01-012345abcdef-authorized.tar.gz").write_text('published before later failure')
                 online = scenario.startswith('online_')
+                history_retry = scenario.startswith("history_")
                 kwargs = {}
+                if history_retry:
+                    release = "d01-012345abcdef"
+                    commit = release[4:] + "a" * 28
+                    old_release = base / "releases" / release
+                    (old_release / "web").mkdir(parents=True)
+                    (base / "incoming").mkdir()
+                    artifact = base / "incoming" / (release + "-authorized.tar.gz")
+                    artifact.write_bytes(b"old package")
+                    (old_release / "building-energy-carbon-platform.jar").write_bytes(b"candidate")
+                    (old_release / "web/index.html").write_bytes(b"web")
+                    config = json.loads((installer.INSTALL / "config.json").read_text())
+                    config.update(source_schema="123", target_schema="131", commit=commit,
+                                  archive_sha256=hashlib.sha256(b"old package").hexdigest(),
+                                  jar_sha256=hashlib.sha256(b"candidate").hexdigest(),
+                                  web_sha256=hashlib.sha256(b"web").hexdigest())
+                    (installer.INSTALL / "config.json").write_text(json.dumps(config))
+                    op = json.loads((private / "operation.json").read_text())
+                    op["failure_code"] = "RELEASE_EXISTING_MIGRATION_CHANGED"
+                    (private / "operation.json").write_text(json.dumps(op))
+                    kwargs = {"source_schema": "123", "target_schema": "131", "next_release": release,
+                              "next_commit": commit, "next_archive_sha": hashlib.sha256(b"repacked").hexdigest()}
+                    if scenario == "history_same_package":
+                        kwargs["next_archive_sha"] = config["archive_sha256"]
+                    if scenario == "history_changed_commit":
+                        kwargs["next_commit"] = commit[:-1] + "b"
+                    if scenario == "history_tampered_artifact":
+                        artifact.write_bytes(b"tampered")
+                    if scenario == "history_prepared_state":
+                        (private / ("d01-" + release + ".json")).write_text('{"phase":"PREPARED"}')
+                    stack.enter_context(patch.object(installer.pwd, "getpwnam", return_value=Mock(pw_uid=os.getuid())))
                 if online:
                     kwargs = {'online_backup': True, 'next_release': 'd01-abcdef012345'}
                     old_release = base / 'releases/d01-012345abcdef'
@@ -770,8 +862,8 @@ class InstallerTest(unittest.TestCase):
                             raise OSError('fixture move failure')
                         return original(path, target)
                     stack.enter_context(patch.object(Path, "rename", rename))
-                if scenario in ("success", "rename_failure", "online_success", "online_rename_failure"):
-                    if scenario in ("success", "online_success"):
+                if scenario in ("success", "rename_failure", "online_success", "online_rename_failure", "history_retry"):
+                    if scenario in ("success", "online_success", "history_retry"):
                         installer.retire_failed_prepare(**kwargs)
                     else:
                         with self.assertRaisesRegex(RuntimeError, "ARCHIVE_INCOMPLETE"):
@@ -784,6 +876,11 @@ class InstallerTest(unittest.TestCase):
                         self.assertEqual((archived[0] / 'data/private/online-backup/mysql.sql').read_bytes(), b'partial mysql backup')
                         self.assertEqual(artifact.read_bytes(), b'old package')
                         self.assertEqual((old_release / 'building-energy-carbon-platform.jar').read_bytes(), b'candidate')
+                    if history_retry:
+                        self.assertEqual((archived[0] / "staged-incoming.tar.gz").read_bytes(), b"old package")
+                        self.assertEqual((archived[0] / "staged-release/building-energy-carbon-platform.jar").read_bytes(), b"candidate")
+                        self.assertFalse(artifact.exists())
+                        self.assertFalse(old_release.exists())
                     self.assertTrue(all(not any(verb in args for verb in ("stop", "start", "restart"))
                                         for args, _ in commands.call_args_list))
                 else:
@@ -897,6 +994,31 @@ class InstallerTest(unittest.TestCase):
                                       replace_revoked_completed=True, authorization_reference=reference)
             retired.assert_not_called()
             credentials.assert_not_called()
+
+    def test_cutover_request_checks_live_credentials_before_archiving_any_records(self):
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            root = Path(directory)
+            bundle = root / "bundle"
+            bundle.write_bytes(b"verified fixture")
+            stack.enter_context(patch.object(installer, "INSTALL", root))
+            stack.enter_context(patch.object(installer.os, "geteuid", return_value=0))
+            stack.enter_context(patch.object(installer.sys.stdin, "isatty", return_value=True))
+            stack.enter_context(patch.dict(os.environ))
+            stack.enter_context(patch.object(installer, "bundle_files", return_value={
+                "release.tar.gz": b"fixture", "d01_credentials.py": b"fixture"}))
+            stack.enter_context(patch.object(installer, "package_manifest", return_value=({
+                "commit": "b" * 40, "expectedMigration": "131", "sourceMigration": "123"}, b"jar")))
+            retired = stack.enter_context(patch.object(installer, "retire_completed"))
+            credentials = stack.enter_context(patch.object(installer, "credentials",
+                side_effect=RuntimeError("D01_EXISTING_CREDENTIALS_NOT_READY")))
+            digest = hashlib.sha256(bundle.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(RuntimeError, "3300_COMPLETED_UPGRADE_REQUIRED"):
+                installer.install(bundle, digest, accept_tdengine_3300_cutover=True, authorization_reference="approved")
+            credentials.assert_not_called()
+            with self.assertRaisesRegex(RuntimeError, "EXISTING_CREDENTIALS_NOT_READY"):
+                installer.install(bundle, digest, replace_revoked_completed=True,
+                                  accept_tdengine_3300_cutover=True, authorization_reference="approved")
+            retired.assert_not_called()
 
     def test_failed_install_cleanup_preserves_preexisting_files(self):
         with tempfile.TemporaryDirectory() as directory:
