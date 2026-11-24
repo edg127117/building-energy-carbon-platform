@@ -315,6 +315,8 @@ class DeviceOnboardingServiceIntegrationTest {
                 1L,
                 ADMIN);
         assertThat(ignored.status()).isEqualTo("IGNORED");
+        assertThat(onboardingService.listPending(1, 20, null, "BTEST-DEVICE-003", null, ADMIN).items())
+                .singleElement().satisfies(item -> assertThat(item.allowedActions()).containsExactly("RESTORE"));
 
         DeviceOnboardingContracts.PendingDetailView restored = onboardingService.updatePendingStatus(
                 "BTEST-PENDING-3",
@@ -322,6 +324,8 @@ class DeviceOnboardingServiceIntegrationTest {
                 1L,
                 ADMIN);
         assertThat(restored.status()).isEqualTo("DISCOVERED");
+        assertThat(onboardingService.listPending(1, 20, null, "BTEST-DEVICE-003", null, ADMIN).items())
+                .singleElement().satisfies(item -> assertThat(item.allowedActions()).containsExactly("IGNORE", "BIND"));
         assertThatThrownBy(() -> onboardingService.pendingDetail(
                 "BTEST-PENDING-3", Set.of("ENERGY_MANAGER")))
                 .isInstanceOfSatisfying(BusinessException.class,

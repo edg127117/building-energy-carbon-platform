@@ -38,13 +38,15 @@ public final class DeviceOnboardingContracts {
             long firstSeenTime,
             long lastSeenTime,
             boolean sampleTruncated,
-            com.platform.iot.daikin.onboarding.DaikinPendingLocationView location) {
+            com.platform.iot.daikin.onboarding.DaikinPendingLocationView location,
+            @Schema(description = "待接入状态对应的操作")
+            List<String> allowedActions) {
         public PendingListItemView(String pendingId, String identityType, String maskedIdentityValue,
                                    String profileCode, int lastProfileVersion, String status,
                                    String identityStatus, long reportCount, long firstSeenTime,
                                    long lastSeenTime, boolean sampleTruncated) {
             this(pendingId, identityType, maskedIdentityValue, profileCode, lastProfileVersion,
-                    status, identityStatus, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null);
+                    status, identityStatus, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null, List.of());
         }
     }
 

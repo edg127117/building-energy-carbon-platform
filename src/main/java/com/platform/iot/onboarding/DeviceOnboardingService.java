@@ -991,7 +991,7 @@ public class DeviceOnboardingService {
                 pending.getPendingId(), pending.getIdentityType(), mask(pending.getIdentityValue()),
                 pending.getProfileCode(), pending.getLastProfileVersion(), pending.getStatus(), identityStatus,
                 pending.getReportCount(), epoch(pending.getFirstSeenTime()), epoch(pending.getLastSeenTime()),
-                Integer.valueOf(1).equals(pending.getSampleTruncated()));
+                Integer.valueOf(1).equals(pending.getSampleTruncated()), null, allowedActions(pending.getStatus()));
     }
 
     private DeviceOnboardingContracts.PendingDetailView toDetail(BizPendingDevice pending) {
@@ -1048,7 +1048,7 @@ public class DeviceOnboardingService {
         return value.substring(0, visible) + "****" + value.substring(value.length() - visible);
     }
 
-    private static List<String> allowedActions(String status) {
+    static List<String> allowedActions(String status) {
         return switch (status) {
             case "DISCOVERED" -> List.of("IGNORE", "BIND");
             case "IGNORED" -> List.of("RESTORE");

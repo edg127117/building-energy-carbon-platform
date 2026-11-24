@@ -110,7 +110,10 @@ class DaikinOnboardingIntegrationTest {
         String product = enabledProduct();
         int before = jdbc.queryForObject("SELECT COUNT(*) FROM biz_data_point", Integer.class);
         assertThat(scoped.list(4242L, OPS, 1, 20, null).items()).filteredOn(item -> item.pendingId().equals(pending))
-                .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("UNBOUND");
+                .singleElement().satisfies(item -> {
+                    assertThat(item.identityStatus()).isEqualTo("UNBOUND");
+                    assertThat(item.allowedActions()).containsExactly("IGNORE", "BIND");
+                });
         var application = scoped.apply(1L, ADMIN, pending, binding(product, "BLD001"), "DTEST-bind");
         assertThat(application.status()).isEqualTo("PENDING_REVIEW");
         assertThat(pendingMapper.selectById(pending).getBoundIdentityId()).isNull();
@@ -119,7 +122,10 @@ class DaikinOnboardingIntegrationTest {
         var connection = onboarding.connection(pending, ADMIN);
         assertThat(connection.identityStatus()).isEqualTo("INACTIVE");
         assertThat(scoped.list(4242L, OPS, 1, 20, null).items()).filteredOn(item -> item.pendingId().equals(pending))
-                .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("INACTIVE");
+                .singleElement().satisfies(item -> {
+                    assertThat(item.identityStatus()).isEqualTo("INACTIVE");
+                    assertThat(item.allowedActions()).isEmpty();
+                });
         assertThat(onboarding.listPending(1, 20, "BOUND", null, null, ADMIN).items())
                 .filteredOn(item -> item.pendingId().equals(pending))
                 .extracting(DeviceOnboardingContracts.PendingListItemView::identityStatus).containsExactly("INACTIVE");

@@ -102,7 +102,8 @@ public class ScopedDeviceOnboardingService {
                         p.getFirstSeenTime().atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
                         p.getLastSeenTime().atZone(ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli(),
                         Integer.valueOf(1).equals(p.getSampleTruncated()),
-                        pageLocations.get(p.getPendingId()))).toList());
+                        pageLocations.get(p.getPendingId()),
+                        DeviceOnboardingService.allowedActions(p.getStatus()))).toList());
     }
 
     @Transactional
