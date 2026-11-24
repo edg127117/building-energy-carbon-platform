@@ -8,9 +8,13 @@ export const routes: RouteRecordRaw[] = [
     meta: { titleKey: 'deviceOnboarding.products.title', mode: 'office', requiresPlatformAdmin: true },
   },
   {
-    path: '/operations/devices/pendingDevices',
-    name: 'operations-pending-devices',
+    path: '/configuration/ingestion/pendingDevices',
+    name: 'ingestion-pending-devices',
     component: () => import('./pages/PendingDevicePage.vue'),
     meta: { titleKey: 'deviceOnboarding.pending.title', mode: 'office' },
+  },
+  {
+    path: '/operations/devices/pendingDevices',
+    redirect: to => ({ path: '/configuration/ingestion/pendingDevices', query: to.query }),
   },
 ]

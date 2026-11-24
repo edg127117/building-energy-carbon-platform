@@ -47,7 +47,7 @@ import static com.platform.iot.onboarding.OnboardingErrors.*;
 @RequiredArgsConstructor
 public class ScopedDeviceOnboardingService {
     private static final Set<String> ADMIN = Set.of("PLATFORM_ADMIN");
-    private static final Set<String> MENU_PATHS = Set.of("/operations/devices/pendingDevices");
+    private static final Set<String> MENU_PATHS = Set.of("/configuration/ingestion/pendingDevices");
     private final BuildingScopeService buildingScope;
     private final SysMenuMapper menuMapper;
     private final DaikinDirectoryService directory;
@@ -204,6 +204,14 @@ public class ScopedDeviceOnboardingService {
     public DeviceOnboardingContracts.ConnectionView connection(Long userId, Set<String> roles, String pendingId) {
         requirePendingAccess(userId, roles, pendingId);
         return onboarding.connection(pendingId, ADMIN);
+    }
+
+    @Transactional
+    public DeviceOnboardingContracts.ConnectionView refreshEffective(Long userId, Set<String> roles, String pendingId) {
+        requirePendingAccess(userId, roles, pendingId);
+        var connection = onboarding.connection(pendingId, ADMIN);
+        if (connection.buildingId() != null) buildingScope.checkAccess(userId, roles, connection.buildingId());
+        return onboarding.refreshEffective(pendingId, ADMIN);
     }
 
     @Transactional

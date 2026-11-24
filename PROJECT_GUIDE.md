@@ -308,9 +308,11 @@ HTTP DTO 同时设置固定上限，配置可收紧限制，不能靠调大配�
 `GET /api/v1/device-onboarding/naming-rules` 提供启用的命名模板；页面按填写的前缀与产品后缀准备测点编码，
 单位沿用产品模板，命名合法性、已有点归属与重复编码由绑定事务重新校验。
 
-绑定后身份保持停用，激活需独立审批。`GET /api/v1/device-onboarding/pending/{pendingId}/connection`
-返回绑定的设备、产品与建筑，以及 `UNBOUND`、`INACTIVE`、`ACTIVE` 身份状态。
-其中 `configEffective` 只核对身份缓存与当前配置，不证明测点入库、设备在线或现场验收。
+标准绑定可按产品模板自动建点，测点类型支持 `ANALOG`、`DIGITAL` 和 `ACCUMULATE`。
+复用已有档案时，按设备编码生成测点编码，核对已有点语义和采集绑定后复用，发现冲突时由提交人处理。
+绑定申请可指定 `activateOnApprove=true`，经独立审核与执行，在同一事务内绑定并启用；仅绑定的身份仍需单独申请启用。
+`GET /api/v1/device-onboarding/pending/{pendingId}/connection` 返回绑定归属及 `UNBOUND`、`INACTIVE`、`ACTIVE` 身份状态。
+`configEffective` 核对运行时身份和所需测点别名快照。已绑定并启用时可通过对应的 `POST /pending/{pendingId}/refresh-effective` 重新加载和核对快照；该状态与正式读数及设备通讯证据分开。
 接入详情复用设备原始读数接口展示已存储值；没有记录时保持缺失状态，不使用发现样例冒充正式读数。
 
 ### 建筑档案接口
@@ -486,7 +488,9 @@ TDengine 的 `st_radar_observation`、`st_door_observation` 通过 [模块 DDL](
 
 ### 大金运维页面入口
 
-- 智慧运维 → 设备管理 → 待接入设备：`/operations/devices/pendingDevices`。V59 保留叶子菜单 ID 与角色授权并收口到规范父子树；厂家配置、凭据及产品模板继续留在配置侧。
+- 待接入设备的后端菜单授权落在配置平台 → 数据接入 → 待接入设备（`/configuration/ingestion/pendingDevices`），沿用原叶子 ID 和角色授权。
+  管理员通过 `GET /api/v1/device-onboarding/pending` 按 `sourceScope=ALL|DAIKIN|STANDARD` 过滤后分页，默认 `ALL`。
+  大金专属操作与非管理员的授权建筑范围查询沿用 `/api/v1/operations/device-onboarding`。
 - 智慧运维 → 实时监控 → 暖通空调监控：在既有入口增加厂家设备页签，保留冷站监测；按授权建筑展示设备名称/编码、当前状态及温度、状态变化、厂家运行统计与修订。台账接入分栏可跳转监测。
 - 实时报警、历史报警使用已有注册路径。对应报警叶子只允许对应异常列表，不扩展设备状态、温度或运行统计权限；原暖通监测授权及建筑范围继续生效。
 - 监测整页每十秒重读平台当前状态，温度与天气等数据保持分钟节奏；详情可见时每五秒续期只读快速关注并重读状态，隐藏、关闭或卸载停止相应读取。页面查询读取平台数据，厂家快速读取由受限的后台关注与控制完成跟踪任务合并执行，不能把浏览器轮询等同逐次厂家调用。历史与统计按游标翻页，不将一页当完整时段。温度缺口及质量禁止值不插值；厂家日/月/年统计、零值、失败与未完成周期独立展示，不跨版本求和或推断历史房间归属。

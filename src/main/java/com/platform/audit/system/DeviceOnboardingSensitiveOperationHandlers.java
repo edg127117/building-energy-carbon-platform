@@ -1,5 +1,6 @@
 package com.platform.audit.system;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.platform.audit.sensitive.NormalizedSensitiveCommand;
 import com.platform.audit.sensitive.SensitiveOperationContext;
@@ -101,7 +102,8 @@ class BindPendingDeviceHandler implements SensitiveOperationHandler {
                 support.canonical(normalized, "设备绑定命令无效"),
                 "buildingId=" + buildingId + ";pointMode="
                         + (normalized.autoCreatePoints() ? "AUTO" : "MANUAL")
-                        + ";pointCount=" + normalized.pointBindings().size());
+                        + ";pointCount=" + normalized.pointBindings().size()
+                        + ";activateOnApprove=" + normalized.activateOnApprove());
     }
 
     @Override
@@ -195,11 +197,13 @@ record BindCommand(
         String existingEquipmentId,
         DeviceOnboardingContracts.NewEquipmentRequest newEquipment,
         List<DeviceOnboardingContracts.PointBindingRequest> pointBindings,
-        boolean autoCreatePoints) {
+        boolean autoCreatePoints,
+        // 省略 false，确保上线前的仅绑定申请继续通过摘要校验。
+        @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean activateOnApprove) {
 
     DeviceOnboardingContracts.BindRequest request() {
         return new DeviceOnboardingContracts.BindRequest(productId, buildingId, spaceId, systemGroupId,
-                existingEquipmentId, newEquipment, pointBindings, autoCreatePoints);
+                existingEquipmentId, newEquipment, pointBindings, autoCreatePoints, activateOnApprove);
     }
 }
 
@@ -236,7 +240,7 @@ final class DeviceOnboardingCommandNormalization {
         }
         boolean autoCreatePoints = value.autoCreatePoints();
         if (value.pointBindings() == null || value.pointBindings().size() > MAX_POINT_BINDINGS
-                || (autoCreatePoints && (equipmentId != null || !value.pointBindings().isEmpty()))
+                || (autoCreatePoints && !value.pointBindings().isEmpty())
                 || (!autoCreatePoints && value.pointBindings().isEmpty())) {
             throw SystemSensitiveCommandSupport.invalid(message);
         }
@@ -254,7 +258,7 @@ final class DeviceOnboardingCommandNormalization {
                     SystemSensitiveCommandSupport.optionalText(point.dataType(), 20, message)));
         }
         return new BindCommand(pendingId, productId, buildingId, spaceId, systemGroupId,
-                equipmentId, equipment, List.copyOf(points), autoCreatePoints);
+                equipmentId, equipment, List.copyOf(points), autoCreatePoints, value.activateOnApprove());
     }
 
     private static DeviceOnboardingContracts.NewEquipmentRequest normalizeEquipment(

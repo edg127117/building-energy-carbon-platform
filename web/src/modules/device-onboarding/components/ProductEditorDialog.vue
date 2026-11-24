@@ -22,7 +22,7 @@ watch(() => [props.open, props.product] as const, ([open]) => {
     equipmentTypeCode: props.product?.equipmentTypeCode ?? '',
     expectedProfileCode: props.product?.expectedProfileCode ?? '',
     identityType: props.product?.identityType ?? '',
-    points: props.product?.points.map(point => ({ ...point })) ?? [emptyPoint(1)],
+    points: props.product?.points.map(point => ({ ...point, dataType: point.dataType ?? 'ANALOG' })) ?? [emptyPoint(1)],
   })
   validationKey.value = null
 }, { immediate: true })
@@ -45,6 +45,7 @@ function submit() {
       metricCode: point.metricCode.trim(),
       pointNameTemplate: point.pointNameTemplate.trim(),
       suffixCode: point.suffixCode.trim(),
+      dataType: point.dataType ?? 'ANALOG',
       unit: point.unit.trim(),
       minValue: point.minValue,
       maxValue: point.maxValue,
@@ -68,7 +69,7 @@ function validate(): string | null {
 }
 
 function emptyPoint(order: number): ProductPointTemplate {
-  return { metricCode: '', pointNameTemplate: '', suffixCode: '', unit: '', minValue: null, maxValue: null, forCalc: false, required: true, sortOrder: order, enabled: true }
+  return { metricCode: '', pointNameTemplate: '', suffixCode: '', dataType: 'ANALOG', unit: '', minValue: null, maxValue: null, forCalc: false, required: true, sortOrder: order, enabled: true }
 }
 
 function nullable(value: string): string | null { return value.trim() || null }
@@ -96,6 +97,13 @@ function nullable(value: string): string | null { return value.trim() || null }
             <ElFormItem :label="t('deviceOnboarding.labels.metricCode')" required><ElInput v-model="point.metricCode" maxlength="100" /></ElFormItem>
             <ElFormItem :label="t('deviceOnboarding.labels.pointNameTemplate')" required><ElInput v-model="point.pointNameTemplate" maxlength="100" /></ElFormItem>
             <ElFormItem :label="t('deviceOnboarding.labels.suffixCode')" required><ElInput v-model="point.suffixCode" maxlength="20" /></ElFormItem>
+            <ElFormItem :label="t('deviceOnboarding.labels.dataType')" required>
+              <ElSelect v-model="point.dataType" class="wide-control">
+                <ElOption value="ANALOG" :label="t('deviceOnboarding.dataType.analog')" />
+                <ElOption value="ACCUMULATE" :label="t('deviceOnboarding.dataType.accumulate')" />
+                <ElOption value="DIGITAL" :label="t('deviceOnboarding.dataType.digital')" />
+              </ElSelect>
+            </ElFormItem>
             <ElFormItem :label="t('deviceOnboarding.labels.unit')" required><ElInput v-model="point.unit" maxlength="20" /></ElFormItem>
             <ElFormItem :label="t('deviceOnboarding.labels.minValue')"><ElInputNumber v-model="point.minValue" class="wide-control" /></ElFormItem>
             <ElFormItem :label="t('deviceOnboarding.labels.maxValue')"><ElInputNumber v-model="point.maxValue" class="wide-control" /></ElFormItem>

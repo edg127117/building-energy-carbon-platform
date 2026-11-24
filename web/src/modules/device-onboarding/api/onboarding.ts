@@ -8,6 +8,7 @@ import type {
   PendingDevice,
   PendingDeviceDetail,
   PendingDeviceConnection,
+  PendingSourceScope,
   PointNamingRule,
   PendingStatusRequest,
   PendingBindRequest,
@@ -58,7 +59,7 @@ export function copyDeviceProduct(productId: string, data: { productCode: string
   return requestApi<DeviceProductDetail>({ method: 'post', url: `${productPath}/${encoded(productId)}/copy`, data })
 }
 
-export function listPendingDevices(params: { page: number; size: number; status?: string; identity?: string; profileCode?: string }) {
+export function listPendingDevices(params: { page: number; size: number; status?: string; identity?: string; profileCode?: string; sourceScope?: PendingSourceScope }) {
   return requestApi<OnboardingPage<PendingDevice>>({ method: 'get', url: `${onboardingPath}/pending`, params })
 }
 
@@ -68,6 +69,10 @@ export function getPendingDevice(pendingId: string) {
 
 export function getPendingDeviceConnection(pendingId: string) {
   return requestApi<PendingDeviceConnection>({ method: 'get', url: `${onboardingPath}/pending/${encoded(pendingId)}/connection` })
+}
+
+export function refreshPendingEffective(pendingId: string) {
+  return requestApi<PendingDeviceConnection>({ method: 'post', url: `${onboardingPath}/pending/${encoded(pendingId)}/refresh-effective` })
 }
 
 export function listPointNamingRules() {
@@ -88,6 +93,10 @@ export function getOperationsPendingDevice(pendingId: string) {
 
 export function getOperationsPendingConnection(pendingId: string) {
   return requestApi<PendingDeviceConnection>({ method: 'get', url: `${operationsPath}/pending/${encoded(pendingId)}/connection` })
+}
+
+export function refreshOperationsPendingEffective(pendingId: string) {
+  return requestApi<PendingDeviceConnection>({ method: 'post', url: `${operationsPath}/pending/${encoded(pendingId)}/refresh-effective` })
 }
 
 export function listOperationsCompatibleProducts(pendingId: string, params: { page: number; size: number }) {

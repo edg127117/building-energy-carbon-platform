@@ -35,6 +35,7 @@ export const routes: RouteRecordRaw[] = [
   { path: '/login', component: LoginPage, meta: { public: true } },
   { path: '/password-setup', component: PasswordSetupPage, meta: { public: true, titleKey: 'auth.passwordSetup.title' } },
   { path: '/systems', component: WorkspaceSelection },
+  { path: '/operations/devices/pendingDevices', redirect: to => ({ path: '/configuration/ingestion/pendingDevices', query: to.query }) },
   ...(['monitor', 'operations', 'configuration'] as const).map(system => ({
     path: '/' + system, component: system === 'monitor' ? MonitorLayout : OfficeLayout,
     meta: { system, mode: system === 'monitor' ? 'monitor' : 'office' },

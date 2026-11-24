@@ -5,7 +5,9 @@ import {
   getDeviceProduct,
   getPendingDevice,
   getPendingDeviceConnection,
+  refreshPendingEffective,
   getOperationsPendingConnection,
+  refreshOperationsPendingEffective,
   getOperationsPendingDevice,
   getOperationsCompatibleProduct,
   getOperationsBindingOptions,
@@ -45,6 +47,7 @@ import type {
   PendingDevice,
   PendingDeviceDetail,
   PendingDeviceConnection,
+  PendingSourceScope,
   PendingStatus,
   PointNamingRule,
   BindingProduct,
@@ -110,7 +113,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
   const productDetailLoading = ref(false)
   const productDetailError = ref<RequestState>(null)
 
-  const pendingQuery = ref({ page: 1, size: 20, status: undefined as string | undefined, identity: '', profileCode: '' })
+  const pendingQuery = ref({ page: 1, size: 20, status: undefined as string | undefined, identity: '', profileCode: '', sourceScope: undefined as PendingSourceScope | undefined })
   const pendingDevices = ref<OnboardingPage<PendingDevice>>(emptyPage())
   const pendingLoading = ref(false)
   const pendingError = ref<RequestState>(null)
@@ -441,6 +444,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
             status: pendingQuery.value.status,
             identity: trimmed(pendingQuery.value.identity),
             profileCode: trimmed(pendingQuery.value.profileCode),
+            sourceScope: pendingQuery.value.sourceScope,
           })
       if (owner === pendingGeneration) pendingDevices.value = page
       return page
@@ -516,6 +520,28 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     pendingConnection.value = null
     pendingConnectionLoading.value = false
     pendingConnectionError.value = null
+  }
+
+  async function refreshEffective(pendingId: string) {
+    const key = `pending:refresh-effective:${pendingId}`
+    if (running.value.has(key)) return null
+    running.value = new Set(running.value).add(key)
+    operationError.value = null
+    try {
+      const response = operations
+        ? await refreshOperationsPendingEffective(pendingId)
+        : await refreshPendingEffective(pendingId)
+      const value = operations ? { ...response, equipmentId: null } : response
+      if (selectedPending.value?.pendingId === pendingId) pendingConnection.value = value
+      return value
+    } catch (reason) {
+      operationError.value = requestState(reason)
+      throw reason
+    } finally {
+      const next = new Set(running.value)
+      next.delete(key)
+      running.value = next
+    }
   }
 
   async function loadNamingRules() {
@@ -746,6 +772,7 @@ export function useDeviceOnboarding(options: { operations?: boolean } = {}) {
     selectPending,
     loadPendingConnection,
     clearPendingConnection,
+    refreshEffective,
     loadNamingRules,
     changePendingStatus,
     submitBindingRequest,

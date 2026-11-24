@@ -20,6 +20,11 @@ const invalidCatalogSyncErrors = new Set([
   'DAIKIN_SYNC_INVALID_RESPONSE', 'DAIKIN_SYNC_RESPONSE_TOO_LARGE',
 ])
 const daikinProfiles = new Set(['DAIKIN_INDOOR_V2', 'DAIKIN_OUTDOOR_V2'])
+const pointDataTypes: Record<string, 'analog' | 'digital' | 'accumulate'> = {
+  ANALOG: 'analog',
+  DIGITAL: 'digital',
+  ACCUMULATE: 'accumulate',
+}
 
 /** 只解释后端状态，不将有历史读数推断为在线，也不把质量使用策略与采集策略混为一谈。 */
 export function readingStatusText(value: string): string {
@@ -51,4 +56,9 @@ export function syncJobResultText(errorCode: string | null): string {
 
 export function profileText(value: string): string {
   return t(`deviceOnboarding.profileName.${daikinProfiles.has(value) ? value : 'unknown'}`)
+}
+
+export function dataTypeText(value: string | null | undefined): string {
+  const key = pointDataTypes[value?.trim().toUpperCase() ?? ''] ?? 'analog'
+  return t(`deviceOnboarding.dataType.${key}`)
 }

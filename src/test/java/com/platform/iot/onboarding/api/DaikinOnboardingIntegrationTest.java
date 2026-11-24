@@ -35,7 +35,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 /** H2 软件验收：厂家清单为隔离输入，不连接真实 API、Broker 或 TDengine。 */
-@SpringBootTest
+@SpringBootTest(properties = "spring.datasource.url=jdbc:h2:mem:daikin_onboarding;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false")
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class DaikinOnboardingIntegrationTest {
@@ -64,7 +64,7 @@ class DaikinOnboardingIntegrationTest {
         jdbc.update("INSERT INTO sys_user(id,username,password,nickname,status,del_flag) VALUES (4242,'dtest_ops','unused','test',1,0)");
         jdbc.update("INSERT INTO sys_user_role(user_id,role_id) VALUES (4242,10)");
         jdbc.update("INSERT INTO sys_user_building(user_id,building_id) VALUES (4242,'BLD001')");
-        jdbc.update("INSERT INTO sys_menu(id,parent_id,menu_name,menu_type,path,visible,status,sort_order) VALUES (98765,0,'测试接入','C','/operations/devices/pendingDevices',1,1,1)");
+        jdbc.update("INSERT INTO sys_menu(id,parent_id,menu_name,menu_type,path,visible,status,sort_order) VALUES (98765,0,'测试接入','C','/configuration/ingestion/pendingDevices',1,1,1)");
         jdbc.update("INSERT INTO sys_role_menu(role_id,menu_id) VALUES (10,98765)");
         grant(1L, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
         grant(1L, BackendDuty.BACKOFFICE_CHANGE_REVIEWER);
@@ -118,7 +118,9 @@ class DaikinOnboardingIntegrationTest {
         assertThat(application.status()).isEqualTo("PENDING_REVIEW");
         assertThat(pendingMapper.selectById(pending).getBoundIdentityId()).isNull();
         changes.approve(1L, application.requestId(), "隔离测试审核");
-        assertThat(changes.execute(1L, application.requestId()).change().status().name()).isEqualTo("EXECUTED");
+        var executed = changes.execute(1L, application.requestId()).change();
+        assertThat(executed.status().name()).isEqualTo("EXECUTED");
+        assertThat(executed.commandJson()).doesNotContain("activateOnApprove");
         var connection = onboarding.connection(pending, ADMIN);
         assertThat(connection.identityStatus()).isEqualTo("INACTIVE");
         assertThat(scoped.list(4242L, OPS, 1, 20, null).items()).filteredOn(item -> item.pendingId().equals(pending))
@@ -145,6 +147,25 @@ class DaikinOnboardingIntegrationTest {
         assertThat(onboarding.connection(pending, ADMIN).configEffective()).isTrue();
         assertThatThrownBy(() -> scoped.requestIdentityStatus(4242L, OPS, pending, "ON", "DTEST-invalid"))
                 .isInstanceOf(BusinessException.class);
+    }
+
+    @Test
+    void approvesAndActivatesStateOnlyDaikinBindingThroughScopedEntry() {
+        String pending = discover("site1", "unit1", "BLD001");
+        var old = binding(enabledProduct(), "BLD001");
+        var bindAndActivate = new DeviceOnboardingContracts.TypedBindRequest(old.productId(), old.buildingId(),
+                old.spaceId(), old.systemGroupId(), old.existingEquipmentId(), old.newEquipment(), old.pointBindings(),
+                old.numericSourceId(), old.temperatureMode(), old.temperatureTemplateProductId(),
+                old.temperaturePlanDigest(), old.temperatureExistingPointIds(), true);
+        var application = scoped.apply(4242L, OPS, pending, bindAndActivate, "DTEST-bind-activate");
+        changes.approve(1L, application.requestId(), "隔离测试审核");
+        var executed = changes.execute(1L, application.requestId()).change();
+
+        assertThat(executed.status().name()).isEqualTo("EXECUTED");
+        assertThat(executed.commandJson()).contains("\"activateOnApprove\":true");
+        var connection = scoped.refreshEffective(4242L, OPS, pending);
+        assertThat(connection.identityStatus()).isEqualTo("ACTIVE");
+        assertThat(connection.configEffective()).isTrue();
     }
 
     @Test
@@ -227,6 +248,8 @@ class DaikinOnboardingIntegrationTest {
             assertThatThrownBy(() -> scoped.detail(4242L, OPS, denied)).isInstanceOfSatisfying(BusinessException.class,
                     e -> assertThat(e.getCode()).isEqualTo(403));
         }
+        assertThatThrownBy(() -> scoped.refreshEffective(4242L, OPS, other))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(403));
         assertThat(scoped.list(1L, ADMIN, 1, 20, null).total()).isEqualTo(3);
         jdbc.update("DELETE FROM sys_role_menu WHERE menu_id=98765");
         assertThatThrownBy(() -> scoped.detail(4242L, OPS, visible)).isInstanceOf(BusinessException.class);

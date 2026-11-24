@@ -27,10 +27,10 @@ public final class CacheConstants {
     public static final String TOKEN_BLACKLIST = PREFIX + "token:blacklist:";
 
     // ──────────── 菜单缓存 ────────────
-    /** 用户菜单树：iot:menu:v2:user:{userId} → JSON；版本隔离避免菜单迁移后读取旧层级。 */
-    public static final String MENU_USER = PREFIX + "menu:v2:user:";
-    /** 全量菜单树：iot:menu:v2:all → JSON（角色变更时刷新） */
-    public static final String MENU_ALL = PREFIX + "menu:v2:all";
+    /** 用户菜单树；版本隔离确保菜单迁移后的授权检查读取新层级。 */
+    public static final String MENU_USER = PREFIX + "menu:v3:user:";
+    /** 全量菜单树与用户菜单树使用同一版本。 */
+    public static final String MENU_ALL = PREFIX + "menu:v3:all";
 
     /** 用户可访问建筑ID集合(JSON)：iot:building-scope:user:{userId} */
     public static final String BUILDING_SCOPE_USER = PREFIX + "building-scope:user:";

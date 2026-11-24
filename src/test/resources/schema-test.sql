@@ -346,6 +346,7 @@ CREATE TABLE biz_product_point_template (
   point_name_template VARCHAR(100) NOT NULL,
   suffix_code VARCHAR(20),
   unit VARCHAR(20) NOT NULL,
+  data_type VARCHAR(32) NOT NULL DEFAULT 'ANALOG',
   min_value DECIMAL(12,4),
   max_value DECIMAL(12,4),
   for_calc TINYINT NOT NULL DEFAULT 0,

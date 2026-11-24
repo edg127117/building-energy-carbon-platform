@@ -6,6 +6,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.framework.web.PageResponse;
+import com.platform.iot.daikin.onboarding.DaikinPendingLocationService;
+import com.platform.iot.daikin.onboarding.DaikinPendingLocationView;
 import com.platform.hvac.mapper.BizDataPointMapper;
 import com.platform.hvac.mapper.BizDeviceIdentityMapper;
 import com.platform.hvac.mapper.BizEquipmentMapper;
@@ -37,6 +39,7 @@ import com.platform.iot.onboarding.mapper.BizProductPointTemplateMapper;
 import com.platform.iot.onboarding.model.entity.BizDeviceProduct;
 import com.platform.iot.onboarding.model.entity.BizPendingDevice;
 import com.platform.iot.onboarding.model.entity.BizProductPointTemplate;
+import com.platform.iot.quality.DataPointConfigSnapshotUnavailableException;
 import com.platform.iot.quality.MySqlDataPointConfigProvider;
 import com.platform.iot.quality.PointAliasKey;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +47,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.StringUtils;
 
@@ -52,12 +57,14 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.BooleanSupplier;
 
 import static com.platform.iot.onboarding.OnboardingErrors.*;
 
@@ -73,6 +80,7 @@ public class DeviceOnboardingService {
     private final com.platform.iot.daikin.onboarding.DaikinDirectoryService directoryService;
     private final com.platform.relation.RelationGovernanceGuard relationGuard;
     private final BizPendingDeviceMapper pendingMapper;
+    private final DaikinPendingLocationService daikinLocations;
     private final BizDeviceProductMapper productMapper;
     private final BizProductPointTemplateMapper templateMapper;
     private final BuildingMapper buildingMapper;
@@ -105,6 +113,12 @@ public class DeviceOnboardingService {
             String identity,
             String profileCode,
             Set<String> roles) {
+        return listPending(page, size, status, identity, profileCode, DeviceOnboardingContracts.PendingSourceScope.ALL, roles);
+    }
+
+    public PageResponse<DeviceOnboardingContracts.PendingListItemView> listPending(
+            int page, int size, String status, String identity, String profileCode,
+            DeviceOnboardingContracts.PendingSourceScope sourceScope, Set<String> roles) {
         requireAdmin(roles);
         validatePage(page, size);
         LambdaQueryWrapper<BizPendingDevice> query = new LambdaQueryWrapper<>();
@@ -117,12 +131,21 @@ public class DeviceOnboardingService {
         if (StringUtils.hasText(profileCode)) {
             query.eq(BizPendingDevice::getProfileCode, normalize(profileCode));
         }
+        switch (sourceScope) {
+            case DAIKIN -> query.eq(BizPendingDevice::getIdentityType, "DAIKIN_UNIT");
+            case STANDARD -> query.ne(BizPendingDevice::getIdentityType, "DAIKIN_UNIT");
+            case ALL -> { }
+        }
         query.orderByDesc(BizPendingDevice::getLastSeenTime)
                 .orderByAsc(BizPendingDevice::getPendingId);
         Page<BizPendingDevice> result = pendingMapper.selectPage(new Page<>(page, size), query);
         Map<String, String> identityStatuses = pendingIdentityStatuses(result.getRecords());
+        var locations = daikinLocations.forPendingIds(result.getRecords().stream()
+                .filter(pending -> "DAIKIN_UNIT".equals(pending.getIdentityType()))
+                .map(BizPendingDevice::getPendingId).toList());
         List<DeviceOnboardingContracts.PendingListItemView> items = result.getRecords().stream()
-                .map(pending -> toListItem(pending, identityStatuses.get(pending.getPendingId())))
+                .map(pending -> toListItem(pending, identityStatuses.get(pending.getPendingId()),
+                        locations.get(pending.getPendingId())))
                 .toList();
         return new PageResponse<>(result.getCurrent(), result.getSize(), result.getTotal(), items);
     }
@@ -194,7 +217,24 @@ public class DeviceOnboardingService {
     /** 读取绑定的真实归属；身份缓存生效与时序数据持久化分别提供证据。 */
     public DeviceOnboardingContracts.ConnectionView connection(String pendingId, Set<String> roles) {
         requireAdmin(roles);
+        return connection(requirePending(pendingId));
+    }
+
+    /** 已批准且已启用的设备仅重读运行时配置，重试不改变数据库中的身份状态。 */
+    public DeviceOnboardingContracts.ConnectionView refreshEffective(String pendingId, Set<String> roles) {
+        requireAdmin(roles);
         BizPendingDevice pending = requirePending(pendingId);
+        var current = connection(pending);
+        if (!"BOUND".equals(pending.getStatus()) || !"ACTIVE".equals(current.identityStatus())) {
+            throw error(409, STATE_CONFLICT, "只有已绑定且启用的设备可以重试同步");
+        }
+        if (current.configEffective()) return current;
+        refreshRuntime(() -> true);
+        return connection(requirePending(pendingId));
+    }
+
+    private DeviceOnboardingContracts.ConnectionView connection(BizPendingDevice pending) {
+        String pendingId = pending.getPendingId();
         if (!StringUtils.hasText(pending.getBoundIdentityId())) {
             return new DeviceOnboardingContracts.ConnectionView(pendingId, null, "UNBOUND", null, null, null, false);
         }
@@ -212,12 +252,14 @@ public class DeviceOnboardingService {
         try {
             DeviceIdentityKey key = new DeviceIdentityKey(identity.getIdentityType(), identity.getIdentityValue());
             var cached = identityProvider.find(key);
-            effective = active ? cached.filter(value -> identity.getIdentityId().equals(value.identityId())
+            boolean identityEffective = active
+                    ? cached.filter(value -> identity.getIdentityId().equals(value.identityId())
                     && equipment.getEquipId().equals(value.equipmentId())
                     && equipment.getBuildingId().equals(value.buildingId())
                     && identity.getExpectedProfileCode().equals(value.expectedProfileCode())).isPresent()
                     : identityProvider.isKnown(key) && cached.isEmpty();
-        } catch (DeviceIdentitySnapshotUnavailableException unavailable) {
+            effective = identityEffective && aliasesVisible(new IdentityChange(key, equipment.getBuildingId()));
+        } catch (DeviceIdentitySnapshotUnavailableException | DataPointConfigSnapshotUnavailableException unavailable) {
             effective = false;
         }
         return new DeviceOnboardingContracts.ConnectionView(pendingId, identity.getIdentityId(),
@@ -231,10 +273,17 @@ public class DeviceOnboardingService {
     public String resolveBindBuilding(
             String pendingId, DeviceOnboardingContracts.BindRequest request, Set<String> roles) {
         requireAdmin(roles);
-        requirePending(pendingId);
+        BizPendingDevice pending = requirePending(pendingId);
         String buildingId = validateOwnership(request);
         // 在创建审批申请前反馈可修正的前置配置问题；执行绑定仍重新校验，避免审批期间配置变化。
-        requireOnboardingDataSource(buildingId);
+        BizDataSource source = requireOnboardingDataSource(buildingId);
+        if (request.autoCreatePoints() && StringUtils.hasText(request.existingEquipmentId())) {
+            BizDeviceProduct product = requireCompatibleProduct(pending, request.productId());
+            BizEquipment equipment = equipmentMapper.selectById(request.existingEquipmentId());
+            validateEquipmentProduct(equipment, product);
+            requireUnboundEquipment(equipment, false);
+            automaticPointBindings(pending, equipment, enabledTemplates(product.getProductId()), source, true, false);
+        }
         return buildingId;
     }
 
@@ -294,8 +343,7 @@ public class DeviceOnboardingService {
     }
 
     /**
-     * 在独立 MySQL 事务内完成全套绑定，提交后再刷新并核验两份运行时快照。
-     * 缓存未生效不伪装成数据库回滚，响应通过 configEffective 明确标识待生效。
+     * 绑定与启用加入调用方的审批事务，只有数据库提交后才发布运行时快照。
      */
     public DeviceOnboardingContracts.BindResultView bind(
             String pendingId,
@@ -312,7 +360,7 @@ public class DeviceOnboardingService {
         if (result == null) {
             throw error(500, CONFIG_PENDING, "绑定事务未返回结果");
         }
-        boolean effective = refreshAndVerifyBinding(result);
+        boolean effective = refreshAfterCommit(() -> refreshAndVerifyBinding(result, request.activateOnApprove()));
         return new DeviceOnboardingContracts.BindResultView(
                 pendingId, result.identityId(), result.equipmentId(), result.pointIds(), "BOUND", effective);
     }
@@ -357,7 +405,8 @@ public class DeviceOnboardingService {
         }
         if (result == null) throw error(500, CONFIG_PENDING, "绑定事务未返回结果");
         return new DeviceOnboardingContracts.BindResultView(pendingId, result.identityId(), result.equipmentId(),
-                result.pointIds(), "BOUND", refreshAndVerifyBinding(result));
+                result.pointIds(), "BOUND",
+                refreshAfterCommit(() -> refreshAndVerifyBinding(result, request.activateOnApprove())));
     }
 
     private static boolean isTypedProduct(BizDeviceProduct product) {
@@ -379,19 +428,12 @@ public class DeviceOnboardingService {
         if (result == null) {
             throw error(500, CONFIG_PENDING, "身份启用事务未返回结果");
         }
-        identityProvider.refreshAll();
-        pointProvider.refreshAll();
-        boolean visible;
-        try {
-            visible = identityProvider.find(result.key()).isPresent()
-                    && aliasesVisible(result);
-        } catch (RuntimeException exception) {
-            visible = false;
-        }
-        if (!visible) {
+        boolean visible = refreshAfterCommit(() -> refreshRuntime(
+                () -> identityProvider.find(result.key()).isPresent() && aliasesVisible(result)));
+        if (!visible && !TransactionSynchronizationManager.isSynchronizationActive()) {
             throw error(503, CONFIG_PENDING, "身份已提交启用，但运行时配置尚未生效");
         }
-        return new DeviceOnboardingContracts.IdentityStatusView(identityId, "ACTIVE", true);
+        return new DeviceOnboardingContracts.IdentityStatusView(identityId, "ACTIVE", visible);
     }
 
     public DeviceOnboardingContracts.IdentityStatusView deactivate(
@@ -402,28 +444,17 @@ public class DeviceOnboardingService {
         if (result == null) {
             throw error(500, CONFIG_PENDING, "身份停用事务未返回结果");
         }
-        identityProvider.refreshAll();
-        boolean effective;
-        try {
-            effective = identityProvider.isKnown(result.key())
-                    && identityProvider.find(result.key()).isEmpty();
-        } catch (RuntimeException exception) {
-            effective = false;
-        }
-        if (!effective) {
+        boolean effective = refreshAfterCommit(() -> refreshRuntime(() -> identityProvider.isKnown(result.key())
+                && identityProvider.find(result.key()).isEmpty()));
+        if (!effective && !TransactionSynchronizationManager.isSynchronizationActive()) {
             throw error(503, CONFIG_PENDING, "身份已提交停用，但运行时配置尚未生效");
         }
-        return new DeviceOnboardingContracts.IdentityStatusView(identityId, "DISABLED", true);
+        return new DeviceOnboardingContracts.IdentityStatusView(identityId, "DISABLED", effective);
     }
 
     private BindTransactionResult doBind(
             String pendingId, DeviceOnboardingContracts.BindRequest request, Long operatorId, boolean typed) {
-        return doBind(pendingId, request, operatorId, typed, null);
-    }
-
-    private BindTransactionResult doBind(String pendingId, DeviceOnboardingContracts.BindRequest request,
-            Long operatorId, boolean typed, String numericSourceId) {
-        return doBind(pendingId, request, operatorId, typed, numericSourceId, null, pendingId);
+        return doBind(pendingId, request, operatorId, typed, null, null, pendingId);
     }
 
     private BindTransactionResult doBind(String pendingId, DeviceOnboardingContracts.BindRequest request,
@@ -444,15 +475,11 @@ public class DeviceOnboardingService {
                         temperatureRequest.temperaturePlanDigest(), false) : null;
         boolean stateOnly = temperatureRequest != null && "STATE_ONLY".equals(temperatureRequest.temperatureMode());
         if (stateOnly && !request.pointBindings().isEmpty()) throw error(400, VALIDATION_FAILED, "仅状态接入不能携带测点映射");
-        BizDeviceProduct product = productMapper.selectById(request.productId());
-        if (product == null || !"ENABLED".equals(product.getStatus())) {
-            throw error(409, VALIDATION_FAILED, "产品不存在或未启用");
-        }
-        if (!product.getIdentityType().equalsIgnoreCase(pending.getIdentityType())
-                || !product.getExpectedProfileCode().equalsIgnoreCase(pending.getProfileCode())) {
-            throw error(409, VALIDATION_FAILED, "产品身份类型或协议与待绑定设备不匹配");
-        }
+        BizDeviceProduct product = requireCompatibleProduct(pending, request.productId());
         validateOwnership(request);
+        if (!typed && "DAIKIN_UNIT".equals(pending.getIdentityType())) {
+            throw error(400, VALIDATION_FAILED, "厂家目录使用类型化绑定入口");
+        }
         if (typed) {
             directoryService.requireBinding(pendingId, request.buildingId(), product.getExpectedProfileCode());
             List<BizProductPointTemplate> typedTemplates = templates(product.getProductId());
@@ -465,13 +492,15 @@ public class DeviceOnboardingService {
                 throw error(400, VALIDATION_FAILED, "缺少产品必填温度测点映射");
             }
         } else if (request.autoCreatePoints()) {
-            if (request.newEquipment() == null || !request.pointBindings().isEmpty()) {
-                throw error(400, VALIDATION_FAILED, "自动建点只能用于新建设备，且不能混用人工测点映射");
+            if (!request.pointBindings().isEmpty()) {
+                throw error(400, VALIDATION_FAILED, "自动建点不能混用人工测点映射");
             }
-        } else if ("DAIKIN_UNIT".equals(pending.getIdentityType()) || request.pointBindings().isEmpty()) {
-            throw error(400, VALIDATION_FAILED, "数值绑定必须提供测点；厂家目录使用类型化绑定入口");
+        } else if (request.pointBindings().isEmpty()) {
+            throw error(400, VALIDATION_FAILED, "数值绑定必须提供测点");
         }
         BizEquipment equipment = resolveEquipment(request, product, typed);
+        boolean autoReuse = request.autoCreatePoints() && StringUtils.hasText(request.existingEquipmentId());
+        if (autoReuse) requireUnboundEquipment(equipment, true);
         if (typed && !identityMapper.selectList(new LambdaQueryWrapper<BizDeviceIdentity>()
                 .eq(BizDeviceIdentity::getEquipId, equipment.getEquipId())
                 .eq(BizDeviceIdentity::getIdentityType, "DAIKIN_UNIT").last("FOR UPDATE")).isEmpty()) {
@@ -489,7 +518,11 @@ public class DeviceOnboardingService {
             pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()),
                     request.pointBindings(), source, DAIKIN_SOURCE_SYSTEM);
         } else if (request.autoCreatePoints()) {
-            pointResult = bindAutomaticPoints(pending, equipment, enabledTemplates(product.getProductId()));
+            List<BizProductPointTemplate> templates = enabledTemplates(product.getProductId());
+            BizDataSource source = requireOnboardingDataSource(equipment.getBuildingId());
+            pointResult = bindPoints(pending, equipment, templates,
+                    automaticPointBindings(pending, equipment, templates, source, autoReuse, true),
+                    source, standardSourceSystem);
         } else {
             pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()), request.pointBindings());
         }
@@ -529,10 +562,23 @@ public class DeviceOnboardingService {
                             "metricCode", alias.metricCode(),
                             "pointId", alias.pointId()));
         }
+        if (request.activateOnApprove()) changeIdentityStatus(identity.getIdentityId(), 1, operatorId);
         return new BindTransactionResult(
                 identity.getIdentityId(), equipment.getEquipId(), pointResult.pointIds(),
                 new DeviceIdentityKey(identity.getIdentityType(), identity.getIdentityValue()),
                 pointResult.aliases());
+    }
+
+    private BizDeviceProduct requireCompatibleProduct(BizPendingDevice pending, String productId) {
+        BizDeviceProduct product = productMapper.selectById(productId);
+        if (product == null || !"ENABLED".equals(product.getStatus())) {
+            throw error(409, VALIDATION_FAILED, "产品不存在或未启用");
+        }
+        if (!product.getIdentityType().equalsIgnoreCase(pending.getIdentityType())
+                || !product.getExpectedProfileCode().equalsIgnoreCase(pending.getProfileCode())) {
+            throw error(409, VALIDATION_FAILED, "产品身份类型或协议与待绑定设备不匹配");
+        }
+        return product;
     }
 
     private String validateOwnership(DeviceOnboardingContracts.BindRequest request) {
@@ -572,9 +618,9 @@ public class DeviceOnboardingService {
     private BizEquipment resolveEquipment(
             DeviceOnboardingContracts.BindRequest request, BizDeviceProduct product, boolean typed) {
         if (StringUtils.hasText(request.existingEquipmentId())) {
-            BizEquipment equipment = typed ? equipmentMapper.selectOne(new LambdaQueryWrapper<BizEquipment>()
-                    .eq(BizEquipment::getEquipId, request.existingEquipmentId()).last("FOR UPDATE"))
-                    : equipmentMapper.selectById(request.existingEquipmentId());
+            // 同一档案的绑定申请在设备行上串行，即使各自锁的是不同待接入记录。
+            BizEquipment equipment = equipmentMapper.selectOne(new LambdaQueryWrapper<BizEquipment>()
+                    .eq(BizEquipment::getEquipId, request.existingEquipmentId()).last("FOR UPDATE"));
             if (equipment == null) {
                 throw error(404, NOT_FOUND, "目标设备不存在");
             }
@@ -583,14 +629,8 @@ public class DeviceOnboardingService {
                     || !request.systemGroupId().equals(equipment.getSystemGroupId())) {
                 throw error(400, VALIDATION_FAILED, "设备、空间、系统分组与建筑归属不一致");
             }
-            if (!product.getEquipmentTypeCode().equals(equipment.getTypeCode())) {
-                throw error(400, VALIDATION_FAILED, "设备类型与产品不一致");
-            }
-            if (equipment.getProductId() != null
-                    && !product.getProductId().equals(equipment.getProductId())) {
-                throw error(409, STATE_CONFLICT, "已有设备已关联其他产品版本");
-            }
-            if (typed && equipment.getProductId() == null) {
+            validateEquipmentProduct(equipment, product);
+            if ((typed || request.autoCreatePoints()) && equipment.getProductId() == null) {
                 equipment.setProductId(product.getProductId());
                 equipment.setUpdateTime(new Date());
                 equipmentMapper.updateById(equipment);
@@ -631,6 +671,16 @@ public class DeviceOnboardingService {
         throw error(409, DUPLICATE, "设备编码分配失败");
     }
 
+    private static void validateEquipmentProduct(BizEquipment equipment, BizDeviceProduct product) {
+        if (equipment == null) throw error(404, NOT_FOUND, "目标设备不存在");
+        if (!product.getEquipmentTypeCode().equals(equipment.getTypeCode())) {
+            throw error(400, VALIDATION_FAILED, "设备类型与产品不一致");
+        }
+        if (equipment.getProductId() != null && !product.getProductId().equals(equipment.getProductId())) {
+            throw error(409, STATE_CONFLICT, "已有设备已关联其他产品版本");
+        }
+    }
+
     private BizDeviceIdentity createDisabledIdentity(
             BizPendingDevice pending, BizDeviceProduct product, BizEquipment equipment) {
         Long existing = identityMapper.selectCount(new LambdaQueryWrapper<BizDeviceIdentity>()
@@ -662,29 +712,76 @@ public class DeviceOnboardingService {
         return bindPoints(pending, equipment, templates, requests, dataSource, standardSourceSystem);
     }
 
-    /**
-     * 新设备先由台账分配资产编码，再从已启用规则中确定唯一匹配项；规则缺失或歧义时拒绝，
-     * 不能由浏览器猜测现场测点编码。
-     */
-    private PointBindingResult bindAutomaticPoints(BizPendingDevice pending, BizEquipment equipment,
-            List<BizProductPointTemplate> templates) {
+    private void requireUnboundEquipment(BizEquipment equipment, boolean lock) {
+        // 停用身份仍占有正式采集绑定；执行时使用锁定读，避免读到等锁前的事务快照。
+        var identities = identityMapper.selectList(new LambdaQueryWrapper<BizDeviceIdentity>()
+                .select(BizDeviceIdentity::getIdentityId)
+                .eq(BizDeviceIdentity::getEquipId, equipment.getEquipId()).last(lock, "FOR UPDATE"));
+        if (!identities.isEmpty()) {
+            throw error(409, VALIDATION_FAILED, "已有设备已绑定采集身份，请检查目标档案");
+        }
+    }
+
+    /** 使用资产编码生成期望测点编码，复用时按精确编码核对已登记点及采集归属。 */
+    private List<DeviceOnboardingContracts.PointBindingRequest> automaticPointBindings(
+            BizPendingDevice pending, BizEquipment equipment, List<BizProductPointTemplate> templates,
+            BizDataSource source, boolean reuseExisting, boolean lock) {
+        List<BizPointNamingRule> rules = namingRuleMapper.selectList(
+                new LambdaQueryWrapper<BizPointNamingRule>().eq(BizPointNamingRule::getStatus, 1));
         List<DeviceOnboardingContracts.PointBindingRequest> requests = new ArrayList<>();
+        Set<String> pointCodes = new HashSet<>();
         for (BizProductPointTemplate template : templates) {
             String pointCode = equipment.getEquipCode() + "_" + template.getSuffixCode();
-            List<BizPointNamingRule> matches = namingRuleMapper.selectList(
-                    new LambdaQueryWrapper<BizPointNamingRule>().eq(BizPointNamingRule::getStatus, 1)).stream()
+            if (!pointCodes.add(pointCode.toUpperCase(Locale.ROOT))) {
+                throw error(409, AUTO_POINT_MAPPING_REQUIRED, "产品模板生成了重复的测点编码 " + pointCode);
+            }
+            List<BizPointNamingRule> matches = rules.stream()
                     .filter(rule -> namingValidator.matches(rule, pointCode))
                     .toList();
             if (matches.size() != 1) {
-                throw error(409, VALIDATION_FAILED,
+                throw error(409, AUTO_POINT_MAPPING_REQUIRED,
                         "设备编码没有唯一可用的测点命名规则，请由配置管理员核对设备类型和命名规则");
             }
             BizPointNamingRule rule = matches.getFirst();
-            requests.add(new DeviceOnboardingContracts.PointBindingRequest(
-                    template.getMetricCode(), null, pointCode, template.getPointNameTemplate(),
-                    rule.getRuleId(), rule.getFamilyCode(), rule.getComponentCode(), "ANALOG"));
+            BizDataPoint point = reuseExisting ? pointMapper.selectOne(new LambdaQueryWrapper<BizDataPoint>()
+                    .eq(BizDataPoint::getBuildingId, equipment.getBuildingId())
+                    .eq(BizDataPoint::getPointCode, pointCode).last(lock, "FOR UPDATE")) : null;
+            if (point == null) {
+                if (!lock) relationGuard.requireLegacyForStructuralCreate(equipment.getBuildingId());
+                requests.add(new DeviceOnboardingContracts.PointBindingRequest(
+                        template.getMetricCode(), null, pointCode, template.getPointNameTemplate(),
+                        rule.getRuleId(), rule.getFamilyCode(), rule.getComponentCode(), template.getDataType()));
+            } else {
+                validateAutomaticPoint(pending, equipment, template, point, rule, pointCode, source, lock);
+                requests.add(new DeviceOnboardingContracts.PointBindingRequest(
+                        template.getMetricCode(), point.getPointId(), null, null, null, null, null, null));
+            }
         }
-        return bindPoints(pending, equipment, templates, requests);
+        return requests;
+    }
+
+    private void validateAutomaticPoint(BizPendingDevice pending, BizEquipment equipment,
+            BizProductPointTemplate template, BizDataPoint point, BizPointNamingRule rule, String pointCode,
+            BizDataSource source, boolean lock) {
+        if (!pointCode.equals(point.getPointCode()) || !equipment.getEquipId().equals(point.getEquipId())
+                || !equipment.getSystemGroupId().equals(point.getSystemGroupId())
+                || !Objects.equals(template.getUnit(), point.getUnit())
+                || !Objects.equals(template.getSuffixCode(), point.getSuffixCode())
+                || !Objects.equals(template.getDataType(), point.getDataType())
+                || !Objects.equals(rule.getFamilyCode(), point.getFamilyCode())
+                || !Objects.equals(rule.getComponentCode(), point.getComponentCode())
+                || !"ONLINE".equalsIgnoreCase(point.getStatus())) {
+            throw error(409, AUTO_POINT_MAPPING_REQUIRED, "已有测点与自动建点规则冲突，请检查测点 " + pointCode);
+        }
+        String sourcePointCode = "%s:%s:%s".formatted(
+                pending.getIdentityType(), pending.getIdentityValue(), template.getMetricCode());
+        var aliases = aliasMapper.selectList(new LambdaQueryWrapper<BizPointAlias>()
+                .eq(BizPointAlias::getPointId, point.getPointId()).last(lock, "FOR UPDATE"));
+        if (aliases.stream().anyMatch(alias -> !(standardSourceSystem.equals(alias.getSourceSystem())
+                && source.getSourceId().equals(alias.getSourceId())
+                && sourcePointCode.equals(alias.getSourcePointCode()) && Integer.valueOf(1).equals(alias.getStatus())))) {
+            throw error(409, AUTO_POINT_MAPPING_REQUIRED, "已有测点存在其他采集绑定，请检查测点 " + pointCode);
+        }
     }
 
     private PointBindingResult bindPoints(BizPendingDevice pending, BizEquipment equipment,
@@ -788,7 +885,8 @@ public class DeviceOnboardingService {
             if (hasNewPointFields(request)) {
                 throw error(400, VALIDATION_FAILED, "已有测点映射不能同时提交新测点字段");
             }
-            BizDataPoint point = pointMapper.selectById(request.existingPointId());
+            BizDataPoint point = pointMapper.selectOne(new LambdaQueryWrapper<BizDataPoint>()
+                    .eq(BizDataPoint::getPointId, request.existingPointId()).last("FOR UPDATE"));
             validateExistingPoint(equipment, template, point);
             return point;
         }
@@ -891,16 +989,14 @@ public class DeviceOnboardingService {
 
     private boolean aliasesVisible(IdentityChange identity) {
         List<BizPointAlias> aliases = identityAliases(identity.key(), identity.buildingId());
-        if (aliases.isEmpty()) {
-            BizDeviceIdentity stored = identityMapper.selectOne(new LambdaQueryWrapper<BizDeviceIdentity>()
-                    .eq(BizDeviceIdentity::getIdentityType, identity.key().type())
-                    .eq(BizDeviceIdentity::getIdentityValue, identity.key().value()));
-            return stored != null && typedIdentityValid(stored);
-        }
-        return aliases.stream().allMatch(alias -> pointProvider.find(new PointAliasKey(
-                        alias.getBuildingId(), alias.getSourceSystem(), alias.getSourcePointCode()))
-                .map(config -> alias.getPointId().equals(config.pointId()))
-                .orElse(false));
+        if (aliases.isEmpty()) return "DAIKIN_UNIT".equals(identity.key().type());
+        return aliases.stream().allMatch(alias -> aliasVisible(
+                new PointAliasKey(alias.getBuildingId(), alias.getSourceSystem(), alias.getSourcePointCode()),
+                alias.getPointId()));
+    }
+
+    private boolean aliasVisible(PointAliasKey key, String pointId) {
+        return pointProvider.find(key).map(config -> pointId.equals(config.pointId())).orElse(false);
     }
 
     private boolean typedIdentityValid(BizDeviceIdentity identity) {
@@ -928,33 +1024,48 @@ public class DeviceOnboardingService {
 
     private List<BizPointAlias> identityAliases(DeviceIdentityKey key, String buildingId) {
         String prefix = "%s:%s:".formatted(key.type(), key.value());
+        String prefixPattern = prefix.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
         return aliasMapper.selectList(new LambdaQueryWrapper<BizPointAlias>()
                         .eq(BizPointAlias::getBuildingId, buildingId)
                         .in(BizPointAlias::getSourceSystem, standardSourceSystem, DAIKIN_SOURCE_SYSTEM)
-                        .eq(BizPointAlias::getStatus, 1)).stream()
+                        .eq(BizPointAlias::getStatus, 1)
+                        .apply("source_point_code LIKE {0} ESCAPE '!'", prefixPattern)).stream()
                 .filter(alias -> alias.getSourcePointCode().startsWith(prefix))
                 .toList();
     }
 
-    private boolean refreshAndVerifyBinding(BindTransactionResult result) {
-        identityProvider.refreshAll();
-        pointProvider.refreshAll();
+    private boolean refreshAndVerifyBinding(BindTransactionResult result, boolean active) {
+        return refreshRuntime(() -> {
+            var cached = identityProvider.find(result.identityKey());
+            boolean identityEffective = active
+                    ? cached.filter(binding -> result.identityId().equals(binding.identityId())
+                            && result.equipmentId().equals(binding.equipmentId())).isPresent()
+                    : identityProvider.isKnown(result.identityKey()) && cached.isEmpty();
+            return identityEffective && result.aliases().stream()
+                    .allMatch(alias -> aliasVisible(alias.key(), alias.pointId()));
+        });
+    }
+
+    private boolean refreshRuntime(BooleanSupplier verify) {
         try {
-            if (!identityProvider.isKnown(result.identityKey())
-                    || identityProvider.find(result.identityKey()).isPresent()) {
-                return false;
-            }
-            for (BoundAlias alias : result.aliases()) {
-                if (pointProvider.find(alias.key())
-                        .map(config -> alias.pointId().equals(config.pointId()))
-                        .orElse(false) == false) {
-                    return false;
-                }
-            }
-            return true;
-        } catch (RuntimeException exception) {
+            identityProvider.refreshAll();
+            pointProvider.refreshAll();
+            return verify.getAsBoolean();
+        } catch (RuntimeException unavailable) {
             return false;
         }
+    }
+
+    private boolean refreshAfterCommit(BooleanSupplier refresh) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) return refresh.getAsBoolean();
+        // 外层审批事务还可能回滚，运行时快照只能读取已提交的身份和别名。
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                refresh.getAsBoolean();
+            }
+        });
+        return false;
     }
 
     private List<BizProductPointTemplate> enabledTemplates(String productId) {
@@ -986,12 +1097,13 @@ public class DeviceOnboardingService {
                         && Integer.valueOf(0).equals(template.getForCalc()));
     }
 
-    private DeviceOnboardingContracts.PendingListItemView toListItem(BizPendingDevice pending, String identityStatus) {
+    private DeviceOnboardingContracts.PendingListItemView toListItem(BizPendingDevice pending, String identityStatus,
+            DaikinPendingLocationView location) {
         return new DeviceOnboardingContracts.PendingListItemView(
                 pending.getPendingId(), pending.getIdentityType(), mask(pending.getIdentityValue()),
                 pending.getProfileCode(), pending.getLastProfileVersion(), pending.getStatus(), identityStatus,
                 pending.getReportCount(), epoch(pending.getFirstSeenTime()), epoch(pending.getLastSeenTime()),
-                Integer.valueOf(1).equals(pending.getSampleTruncated()), null, allowedActions(pending.getStatus()));
+                Integer.valueOf(1).equals(pending.getSampleTruncated()), location, allowedActions(pending.getStatus()));
     }
 
     private DeviceOnboardingContracts.PendingDetailView toDetail(BizPendingDevice pending) {

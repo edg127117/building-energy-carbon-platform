@@ -58,6 +58,13 @@ public class DeviceOnboardingController {
         return Result.success(service.connection(pendingId, SecurityUser.roles(authentication)));
     }
 
+    @Operation(summary = "重试同步已启用设备的运行时配置")
+    @PostMapping("/pending/{pendingId}/refresh-effective")
+    public Result<DeviceOnboardingContracts.ConnectionView> refreshEffective(
+            @PathVariable String pendingId, Authentication authentication) {
+        return Result.success(service.refreshEffective(pendingId, SecurityUser.roles(authentication)));
+    }
+
     @Operation(summary = "分页查询待绑定设备；列表身份值脱敏")
     @GetMapping("/pending")
     public Result<PageResponse<DeviceOnboardingContracts.PendingListItemView>> pending(
@@ -66,9 +73,10 @@ public class DeviceOnboardingController {
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String identity,
             @RequestParam(required = false) String profileCode,
+            @RequestParam(defaultValue = "ALL") DeviceOnboardingContracts.PendingSourceScope sourceScope,
             Authentication authentication) {
         return Result.success(service.listPending(
-                page, size, status, identity, profileCode, SecurityUser.roles(authentication)));
+                page, size, status, identity, profileCode, sourceScope, SecurityUser.roles(authentication)));
     }
 
     @Operation(summary = "查询待绑定设备及规范化最新样例")

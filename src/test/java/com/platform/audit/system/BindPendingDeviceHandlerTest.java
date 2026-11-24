@@ -24,10 +24,16 @@ class BindPendingDeviceHandlerTest {
                 new SystemSensitiveCommandSupport(mapper), service);
         BindCommand command = new BindCommand(" pending-1 ", " product-1 ", " BLD001 ", " SPACE001 ",
                 " GROUP001 ", null, new DeviceOnboardingContracts.NewEquipmentRequest(" 新设备 ", null),
-                List.of(), true);
+                List.of(), true, false);
         when(service.resolveBindBuilding(eq("pending-1"), any(), any())).thenReturn("BLD001");
 
-        NormalizedSensitiveCommand normalized = handler.normalize(mapper.valueToTree(command));
+        com.fasterxml.jackson.databind.node.ObjectNode oldCommand = mapper.valueToTree(command);
+        assertThat(oldCommand.has("activateOnApprove")).isFalse();
+        NormalizedSensitiveCommand normalized = handler.normalize(oldCommand);
+        assertThat(handler.normalize(oldCommand.deepCopy().put("activateOnApprove", false)).canonicalJson())
+                .isEqualTo(normalized.canonicalJson());
+        assertThat(handler.normalize(oldCommand.deepCopy().put("activateOnApprove", true)).canonicalJson())
+                .contains("\"activateOnApprove\":true");
         BindCommand canonical = mapper.readValue(normalized.canonicalJson(), BindCommand.class);
 
         assertThat(normalized.impactSummary()).contains("pointMode=AUTO", "pointCount=0");
