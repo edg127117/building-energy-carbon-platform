@@ -16,11 +16,11 @@ function tree(system: 'operations' | 'configuration', group: string, leaves: Gra
 
 describe('navigation authorization mapping', () => {
   it('uses only canonical paths under their declared workspace hierarchy', () => {
-    expect(authorizedPages(tree('operations', 'devices', [
-      menu('/operations/devices/pendingDevices'),
-      menu('/operations/devices/businessDevices'),
-    ])).map(page => page.path)).toEqual([
-      '/operations/devices/pendingDevices',
+    expect(authorizedPages([
+      ...tree('configuration', 'ingestion', [menu('/configuration/ingestion/pendingDevices')]),
+      ...tree('operations', 'devices', [menu('/operations/devices/businessDevices')]),
+    ]).map(page => page.path)).toEqual([
+      '/configuration/ingestion/pendingDevices',
       '/operations/devices/businessDevices',
     ])
   })

@@ -39,7 +39,7 @@ class DaikinSyncAccessServiceTest {
         service = new DaikinSyncAccessService(jdbc, buildings, menus, duties, sync);
         var menu = new SysMenu();
         menu.setMenuType("C");
-        menu.setPath("/operations/devices/pendingDevices");
+        menu.setPath("/configuration/ingestion/pendingDevices");
         when(menus.selectVisibleMenusByUserId(7L)).thenReturn(List.of(menu));
         when(buildings.getAccessibleBuildingIds(7L, OPS)).thenReturn(Set.of("BLD001"));
     }

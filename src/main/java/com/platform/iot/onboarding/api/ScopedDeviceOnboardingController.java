@@ -91,6 +91,13 @@ public class ScopedDeviceOnboardingController {
     }
 
     @Operation(summary = "提交类型化设备绑定申请；不直接绑定或启用")
+    @PostMapping("/pending/{pendingId}/refresh-effective")
+    public Result<DeviceOnboardingContracts.ConnectionView> refreshEffective(Authentication authentication,
+            @PathVariable String pendingId) {
+        return Result.success(service.refreshEffective(
+                SecurityUser.userId(authentication), SecurityUser.roles(authentication), pendingId));
+    }
+
     @PostMapping("/pending/{pendingId}/binding-requests")
     public Result<ScopedDeviceOnboardingService.BindingApplication> apply(Authentication authentication,
             @PathVariable String pendingId, @Valid @RequestBody BindingRequest request) {

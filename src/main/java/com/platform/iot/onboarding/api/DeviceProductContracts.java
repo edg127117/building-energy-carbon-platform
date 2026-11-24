@@ -76,7 +76,14 @@ public final class DeviceProductContracts {
             @NotNull Boolean forCalc,
             @NotNull Boolean required,
             @NotNull Integer sortOrder,
-            @NotNull Boolean enabled) {
+            @NotNull Boolean enabled,
+            @Size(max = 20) String dataType) {
+        public PointTemplateRequest(String metricCode, String pointNameTemplate, String suffixCode, String unit,
+                BigDecimal minValue, BigDecimal maxValue, Boolean forCalc, Boolean required,
+                Integer sortOrder, Boolean enabled) {
+            this(metricCode, pointNameTemplate, suffixCode, unit, minValue, maxValue, forCalc, required,
+                    sortOrder, enabled, null);
+        }
     }
 
     @Schema(description = "产品列表项")
@@ -123,6 +130,7 @@ public final class DeviceProductContracts {
             boolean forCalc,
             boolean required,
             int sortOrder,
-            boolean enabled) {
+            boolean enabled,
+            String dataType) {
     }
 }

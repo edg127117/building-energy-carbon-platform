@@ -1,19 +1,33 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ElButton, ElInput } from '@/shared/ui'
-import { getDeviceProduct, getLatestHvacTemperatureBatchJob, getOperationsPendingConnection, getOperationsPendingDevice, listDeviceProducts, listOperationsPendingDevices, listPendingDevices, listPointNamingRules, previewHvacTemperatureBindings, submitOperationsBinding, submitOperationsIdentityStatus } from '../api/onboarding'
+import {
+  getDeviceProduct,
+  getLatestHvacTemperatureBatchJob,
+  getOperationsPendingConnection,
+  getOperationsPendingDevice,
+  getPendingDeviceConnection,
+  listDeviceProducts,
+  listPendingDevices,
+  listPointNamingRules,
+  previewHvacTemperatureBindings,
+  refreshPendingEffective,
+  submitOperationsBinding,
+  submitOperationsIdentityStatus,
+} from '../api/onboarding'
 import { createChangeRequest } from '@/modules/access-control/api/access-control'
 import { TransportError } from '@/infrastructure/http/public'
 import BindingDraftDialog from '../components/BindingDraftDialog.vue'
 import TemperatureBatchDialog from '../components/TemperatureBatchDialog.vue'
 import PendingDevicePage from './PendingDevicePage.vue'
+
 // 业务 API 在下方逐项模拟；共享组件的未模拟读取也必须在测试内失败，不能退回真实 HTTP。
 vi.mock('@/infrastructure/http/public', async importOriginal => {
   const actual = await importOriginal<typeof import('@/infrastructure/http/public')>()
   return { ...actual, requestApi: vi.fn().mockRejectedValue(new Error('离线测试不执行未模拟的 HTTP 请求')) }
 })
-const routeState = vi.hoisted(() => ({ view: 'general', profileCode: 'INDOOR', draftId: 'draft-1' }))
-vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState }), useRouter: () => ({ push: vi.fn(), replace: vi.fn() }) }))
+const routeState = vi.hoisted(() => ({ sourceScope: 'STANDARD' as string | undefined, profileCode: 'INDOOR' as string | undefined, draftId: 'draft-1' }))
+vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeState }), useRouter: () => ({ push: vi.fn(), replace: vi.fn().mockResolvedValue(undefined) }) }))
 vi.mock('@/modules/auth/public', async original => ({ ...(await original()), useSession: () => ({ user: { id: 1, roles: ['PLATFORM_ADMIN'] } }) }))
 vi.mock('../api/onboarding', async original => ({
   ...(await original()),
@@ -31,15 +45,19 @@ vi.mock('../api/onboarding', async original => ({
   listDeviceProducts: vi.fn(),
   getDeviceProduct: vi.fn(),
   listPointNamingRules: vi.fn().mockResolvedValue([]),
-  getPendingDevice: vi.fn().mockResolvedValue({ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', profileCode: 'V1', allowedActions: ['BIND'] }),
+  getPendingDevice: vi.fn().mockResolvedValue({ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', identityValue: 'SN001', profileCode: 'V1', allowedActions: ['BIND'] }),
   getPendingDeviceConnection: vi.fn().mockResolvedValue(null),
+  refreshPendingEffective: vi.fn(),
 }))
 vi.mock('@/modules/access-control/api/access-control', () => ({ getApprovalPolicy: vi.fn().mockResolvedValue({ environmentMode: 'TEST', selfApprovalAllowed: false }), listChangeRequests: vi.fn().mockResolvedValue({ page: 1, size: 10, total: 0, items: [] }), createChangeRequest: vi.fn(), newIdempotencyKey: () => 'test-key' }))
+
 describe('待接入范围筛选', () => {
   beforeEach(() => {
-    routeState.view = 'general'
+    routeState.sourceScope = 'STANDARD'
+    routeState.profileCode = 'INDOOR'
     vi.clearAllMocks()
     vi.mocked(listPointNamingRules).mockResolvedValue([])
+    vi.mocked(getPendingDeviceConnection).mockResolvedValue(null as never)
   })
 
   it('产品模板加载完成后显示实际绑定表单', async () => {
@@ -59,11 +77,10 @@ describe('待接入范围筛选', () => {
     await flushPromises()
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
     await flushPromises()
-    await wrapper.findAllComponents(ElButton).filter(button => button.text() === '准备绑定').at(-1)!.trigger('click')
+    await wrapper.findAllComponents(ElButton).filter(button => button.text() === '绑定').at(-1)!.trigger('click')
     await flushPromises()
 
     expect(wrapper.findComponent(BindingDraftDialog).props('open')).toBe(true)
-    expect(wrapper.text()).toContain('绑定前需要准备什么')
     wrapper.unmount()
   })
 
@@ -78,7 +95,7 @@ describe('待接入范围筛选', () => {
     await flushPromises()
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
     await flushPromises()
-    await wrapper.findAllComponents(ElButton).filter(button => button.text() === '准备绑定').at(-1)!.trigger('click')
+    await wrapper.findAllComponents(ElButton).filter(button => button.text() === '绑定').at(-1)!.trigger('click')
     await flushPromises()
 
     const form = wrapper.findComponent(BindingDraftDialog)
@@ -87,7 +104,7 @@ describe('待接入范围筛选', () => {
     wrapper.unmount()
   })
 
-  it('一般绑定排除厂家专用字段，并将数据源前置错误保留在表单', async () => {
+  it('一般绑定排除厂家专用字段、透传 activateOnApprove，并将数据源前置错误保留在表单', async () => {
     vi.mocked(listPendingDevices).mockResolvedValueOnce({ page: 1, size: 20, total: 1, items: [{ pendingId: 'D1', status: 'DISCOVERED', identityType: 'SN', allowedActions: [] }] } as never)
     vi.mocked(createChangeRequest).mockRejectedValueOnce(new TransportError('request', 409, undefined, 'ONBOARDING_SOURCE_REQUIRED'))
     const wrapper = mount(PendingDevicePage, { global: { stubs: { BindingDraftDialog: true } } })
@@ -95,40 +112,79 @@ describe('待接入范围筛选', () => {
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
     await flushPromises()
     const form = wrapper.findComponent(BindingDraftDialog)
-    form.vm.$emit('submit', { productId: 'P1', buildingId: 'B1', spaceId: 'S1', systemGroupId: 'G1', existingEquipmentId: 'E1', newEquipment: null, pointBindings: [{ metricCode: 'power', existingPointId: 'POINT1' }], numericSourceId: null })
+    form.vm.$emit('submit', { productId: 'P1', buildingId: 'B1', spaceId: 'S1', systemGroupId: 'G1', existingEquipmentId: 'E1', newEquipment: null, pointBindings: [{ metricCode: 'power', existingPointId: 'POINT1' }], activateOnApprove: true, numericSourceId: null })
     await flushPromises()
     expect(createChangeRequest).toHaveBeenCalled()
-    expect(JSON.stringify(vi.mocked(createChangeRequest).mock.calls.at(-1))).not.toContain('numericSourceId')
+    const callJson = JSON.stringify(vi.mocked(createChangeRequest).mock.calls.at(-1))
+    expect(callJson).not.toContain('numericSourceId')
+    expect(callJson).toContain('"activateOnApprove":true')
     expect(form.props('submitError')).toContain('还没有已启用的接入数据源')
     wrapper.unmount()
   })
-  it('身份查询和重置保留流程协议范围，显式查看全部才移除', async () => {
+
+  it('身份查询和重置保留流程协议范围，支持来源分段过滤并控制大金同步条显示', async () => {
     const wrapper = mount(PendingDevicePage)
     await flushPromises()
-    expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ profileCode: 'INDOOR' }))
+    expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ profileCode: 'INDOOR', sourceScope: 'STANDARD' }))
+    expect(wrapper.find('.sync-toolbar').exists()).toBe(false)
+
     const input = wrapper.find('.filter-bar').findComponent(ElInput)
     input.vm.$emit('update:modelValue', '  device-1  ')
     await wrapper.vm.$nextTick()
     await input.find('input').trigger('keyup.enter')
     await flushPromises()
-    expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ identity: 'device-1', profileCode: 'INDOOR', page: 1 }))
+    expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ identity: 'device-1', profileCode: 'INDOOR', sourceScope: 'STANDARD', page: 1 }))
+
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '清除筛选')!.trigger('click')
     await flushPromises()
     expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ identity: undefined, profileCode: 'INDOOR' }))
+
     await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看全部设备')!.trigger('click')
     await flushPromises()
     expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ profileCode: undefined }))
+
+    await wrapper.findAll('.segment-button').find(btn => btn.text() === '大金设备')!.trigger('click')
+    await flushPromises()
+    expect(listPendingDevices).toHaveBeenLastCalledWith(expect.objectContaining({ sourceScope: 'DAIKIN' }))
+    expect(wrapper.find('.sync-toolbar').exists()).toBe(true)
     wrapper.unmount()
   })
 
-  it('待接入列表显示身份状态，批量启用只允许选择已停用身份', async () => {
-    routeState.view = 'daikin'
+  it('缓存待生效时在详情抽屉提供免审批重试同步', async () => {
+    vi.mocked(listPendingDevices).mockResolvedValueOnce({
+      page: 1, size: 20, total: 1,
+      items: [{ pendingId: 'D1', status: 'BOUND', identityType: 'SN', identityStatus: 'ACTIVE', profileCode: 'V1', allowedActions: [] }],
+    } as never)
+    vi.mocked(getPendingDeviceConnection).mockResolvedValueOnce({
+      pendingId: 'D1', identityId: 'ID-1', identityStatus: 'ACTIVE', equipmentId: 'EQ-1', buildingId: 'B1', productId: 'P1', configEffective: false,
+    })
+    vi.mocked(refreshPendingEffective).mockResolvedValueOnce({
+      pendingId: 'D1', identityId: 'ID-1', identityStatus: 'ACTIVE', equipmentId: 'EQ-1', buildingId: 'B1', productId: 'P1', configEffective: true,
+    })
+
+    const wrapper = mount(PendingDevicePage, { global: { stubs: { BindingDraftDialog: true } } })
+    await flushPromises()
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('待缓存生效')
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '重试同步')!.trigger('click')
+    await flushPromises()
+
+    expect(refreshPendingEffective).toHaveBeenCalledWith('D1')
+    expect(wrapper.text()).toContain('已生效')
+    wrapper.unmount()
+  })
+
+  it('待接入列表显示身份状态，大金筛选下批量启用只允许选择已停用身份', async () => {
+    routeState.sourceScope = 'DAIKIN'
+    routeState.profileCode = undefined
     const rows = ['D1', 'D2', 'D3'].map((pendingId, index) => ({
       pendingId, status: 'BOUND', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
       identityStatus: pendingId === 'D2' ? 'ACTIVE' : 'INACTIVE',
       maskedIdentityValue: '****', location: { roomCode: `B303-${index + 1}` },
     }))
-    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 3, items: rows } as never)
+    vi.mocked(listPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 3, items: rows } as never)
     vi.mocked(getOperationsPendingConnection).mockImplementation(async pendingId => ({
       pendingId, identityId: pendingId, identityStatus: pendingId === 'D2' ? 'ACTIVE' : 'INACTIVE',
     }) as Awaited<ReturnType<typeof getOperationsPendingConnection>>)
@@ -170,12 +226,13 @@ describe('待接入范围筛选', () => {
   })
 
   it('提交前身份已在别处启用时重新核对并跳过', async () => {
-    routeState.view = 'daikin'
+    routeState.sourceScope = 'DAIKIN'
+    routeState.profileCode = undefined
     const rows = ['D1', 'D2'].map(pendingId => ({
       pendingId, status: 'BOUND', identityStatus: 'INACTIVE', identityType: 'DAIKIN_UNIT',
       profileCode: 'DAIKIN_INDOOR_V2', maskedIdentityValue: '****',
     }))
-    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 2, items: rows } as never)
+    vi.mocked(listPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 2, items: rows } as never)
     vi.mocked(getOperationsPendingConnection).mockImplementation(async pendingId => ({
       pendingId, identityId: pendingId, identityStatus: pendingId === 'D2' ? 'ACTIVE' : 'INACTIVE',
     }) as Awaited<ReturnType<typeof getOperationsPendingConnection>>)
@@ -195,13 +252,14 @@ describe('待接入范围筛选', () => {
   })
 
   it('打开温度补齐时恢复当前设备最近的持久任务', async () => {
-    routeState.view = 'daikin'
+    routeState.sourceScope = 'DAIKIN'
+    routeState.profileCode = undefined
     const row = {
       pendingId: 'D1', status: 'BOUND', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
       identityStatus: 'ACTIVE', maskedIdentityValue: '****', lastProfileVersion: 2, reportCount: 1,
       firstSeenTime: 0, lastSeenTime: 0, sampleTruncated: false,
     }
-    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 1, items: [row] } as never)
+    vi.mocked(listPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 1, items: [row] } as never)
     vi.mocked(getLatestHvacTemperatureBatchJob).mockResolvedValue({
       jobId: 'JOB-1', items: [{ pendingId: 'D1', requestId: 'R1', configurationStatus: 'PENDING_REVIEW', message: null, samplingStatus: 'WAITING_CONFIGURATION' }],
     } as never)
@@ -217,7 +275,8 @@ describe('待接入范围筛选', () => {
   })
 
   it('大金新设备只提交服务端预览返回的温度摘要和来源', async () => {
-    routeState.view = 'daikin'
+    routeState.sourceScope = 'DAIKIN'
+    routeState.profileCode = undefined
     const row = {
       pendingId: 'D1', status: 'DISCOVERED', identityType: 'DAIKIN_UNIT', profileCode: 'DAIKIN_INDOOR_V2',
       identityStatus: 'UNBOUND', maskedIdentityValue: '****', lastProfileVersion: 2, reportCount: 1,
@@ -228,7 +287,7 @@ describe('待接入范围筛选', () => {
       newEquipment: { equipmentName: '大金内机-B303', manufacturer: '大金' }, pointBindings: [], autoCreatePoints: false,
       numericSourceId: null, temperatureMode: 'AUTO' as const, temperatureExistingPointIds: null,
     }
-    vi.mocked(listOperationsPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 1, items: [row] } as never)
+    vi.mocked(listPendingDevices).mockResolvedValue({ page: 1, size: 20, total: 1, items: [row] } as never)
     vi.mocked(getOperationsPendingDevice).mockResolvedValue({
       pending: { ...row, identityValue: 'site/unit', boundIdentityId: null, latestEventTime: 0, latestTimeSource: null, latestMetrics: {}, allowedActions: ['BIND'] },
       directory: { pendingId: 'D1', sourceId: 'SRC', siteId: 'SITE', controllerId: 'CTRL', kind: 'INDOOR', unitId: 'UNIT', siteName: null, deviceName: null, equipmentId: null, buildingId: 'B1', missing: false, observedAt: '2026-09-25T00:00:00Z' },

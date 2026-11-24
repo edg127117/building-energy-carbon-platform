@@ -1,5 +1,6 @@
 package com.platform.iot.onboarding.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
@@ -14,7 +15,9 @@ public final class DeviceOnboardingContracts {
     private DeviceOnboardingContracts() {
     }
 
-    @Schema(description = "绑定归属与身份缓存状态；不代表测点数据已经入库")
+    public enum PendingSourceScope { ALL, DAIKIN, STANDARD }
+
+    @Schema(description = "绑定归属与身份、测点别名缓存状态；不代表测点数据已经入库")
     public record ConnectionView(String pendingId, String identityId, String identityStatus,
             String equipmentId, String buildingId, String productId, boolean configEffective) {
     }
@@ -38,13 +41,15 @@ public final class DeviceOnboardingContracts {
             long firstSeenTime,
             long lastSeenTime,
             boolean sampleTruncated,
-            com.platform.iot.daikin.onboarding.DaikinPendingLocationView location) {
+            com.platform.iot.daikin.onboarding.DaikinPendingLocationView location,
+            @Schema(description = "待接入状态对应的操作")
+            List<String> allowedActions) {
         public PendingListItemView(String pendingId, String identityType, String maskedIdentityValue,
                                    String profileCode, int lastProfileVersion, String status,
                                    String identityStatus, long reportCount, long firstSeenTime,
                                    long lastSeenTime, boolean sampleTruncated) {
             this(pendingId, identityType, maskedIdentityValue, profileCode, lastProfileVersion,
-                    status, identityStatus, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null);
+                    status, identityStatus, reportCount, firstSeenTime, lastSeenTime, sampleTruncated, null, List.of());
         }
     }
 
@@ -82,9 +87,16 @@ public final class DeviceOnboardingContracts {
             String existingEquipmentId,
             @Valid NewEquipmentRequest newEquipment,
             List<@Valid PointBindingRequest> pointBindings,
-            boolean autoCreatePoints) {
+            boolean autoCreatePoints, boolean activateOnApprove) {
         public BindRequest {
             pointBindings = pointBindings == null ? List.of() : List.copyOf(pointBindings);
+        }
+
+        public BindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
+                String existingEquipmentId, NewEquipmentRequest newEquipment,
+                List<PointBindingRequest> pointBindings, boolean autoCreatePoints) {
+            this(productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment,
+                    pointBindings, autoCreatePoints, false);
         }
 
         public BindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
@@ -101,10 +113,21 @@ public final class DeviceOnboardingContracts {
             @NotBlank String systemGroupId, String existingEquipmentId, @Valid NewEquipmentRequest newEquipment,
             List<@Valid PointBindingRequest> pointBindings, String numericSourceId,
             String temperatureMode, String temperatureTemplateProductId, String temperaturePlanDigest,
-            java.util.Map<String, String> temperatureExistingPointIds) {
+            java.util.Map<String, String> temperatureExistingPointIds,
+            // 旧大金申请的摘要直接使用这个嵌套对象，省略 false 才能保持原命令字节。
+            @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean activateOnApprove) {
         public TypedBindRequest {
             pointBindings = pointBindings == null ? List.of() : List.copyOf(pointBindings);
             temperatureExistingPointIds = temperatureExistingPointIds == null ? java.util.Map.of() : java.util.Map.copyOf(temperatureExistingPointIds);
+        }
+
+        public TypedBindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
+                String existingEquipmentId, NewEquipmentRequest newEquipment, List<PointBindingRequest> pointBindings,
+                String numericSourceId, String temperatureMode, String temperatureTemplateProductId,
+                String temperaturePlanDigest, java.util.Map<String, String> temperatureExistingPointIds) {
+            this(productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment, pointBindings,
+                    numericSourceId, temperatureMode, temperatureTemplateProductId, temperaturePlanDigest,
+                    temperatureExistingPointIds, false);
         }
 
         public TypedBindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
@@ -121,7 +144,7 @@ public final class DeviceOnboardingContracts {
 
         public BindRequest asBinding() {
             return new BindRequest(productId, buildingId, spaceId, systemGroupId,
-                    existingEquipmentId, newEquipment, pointBindings, false);
+                    existingEquipmentId, newEquipment, pointBindings, false, activateOnApprove);
         }
     }
 
@@ -143,7 +166,7 @@ public final class DeviceOnboardingContracts {
             @Size(max = 20) String dataType) {
     }
 
-    @Schema(description = "绑定完成结果；身份仍保持停用")
+    @Schema(description = "绑定完成结果；是否启用由已批准的绑定命令决定")
     public record BindResultView(
             String pendingId,
             String identityId,

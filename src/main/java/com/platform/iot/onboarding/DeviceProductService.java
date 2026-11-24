@@ -263,6 +263,16 @@ public class DeviceProductService {
         return toDetail(product);
     }
 
+    private static final Set<String> POINT_DATA_TYPES = Set.of("ANALOG", "DIGITAL", "ACCUMULATE");
+
+    private static String pointDataType(String value) {
+        String dataType = value == null ? "ANALOG" : normalize(value);
+        if (!POINT_DATA_TYPES.contains(dataType)) {
+            throw error(400, VALIDATION_FAILED, "测点类型必须为 ANALOG、DIGITAL 或 ACCUMULATE");
+        }
+        return dataType;
+    }
+
     private void replaceTemplates(
             String productId, List<DeviceProductContracts.PointTemplateRequest> requests) {
         templateMapper.delete(new LambdaQueryWrapper<BizProductPointTemplate>()
@@ -275,6 +285,7 @@ public class DeviceProductService {
             point.setPointNameTemplate(request.pointNameTemplate().trim());
             point.setSuffixCode(request.suffixCode().trim());
             point.setUnit(request.unit().trim());
+            point.setDataType(pointDataType(request.dataType()));
             point.setMinValue(request.minValue());
             point.setMaxValue(request.maxValue());
             point.setForCalc(request.forCalc() ? 1 : 0);
@@ -319,7 +330,7 @@ public class DeviceProductService {
         for (DeviceProductContracts.PointTemplateRequest point : points) {
             if (!Set.of("roomTemp", "temperature").contains(point.metricCode().trim())
                     || !"°C".equals(point.unit().trim())
-                    || Boolean.TRUE.equals(point.forCalc())) {
+                    || Boolean.TRUE.equals(point.forCalc()) || !"ANALOG".equals(pointDataType(point.dataType()))) {
                 throw error(400, VALIDATION_FAILED, "大金内机温度模板仅支持 roomTemp/temperature、°C 且不参与计算");
             }
         }
@@ -331,7 +342,8 @@ public class DeviceProductService {
         }
         for (BizProductPointTemplate point : points) {
             if (!Set.of("roomTemp", "temperature").contains(point.getMetricCode())
-                    || !"°C".equals(point.getUnit()) || !Integer.valueOf(0).equals(point.getForCalc())) {
+                    || !"°C".equals(point.getUnit()) || !Integer.valueOf(0).equals(point.getForCalc())
+                    || !"ANALOG".equals(pointDataType(point.getDataType()))) {
                 throw error(409, VALIDATION_FAILED, "大金内机温度模板配置无效");
             }
         }
@@ -369,7 +381,7 @@ public class DeviceProductService {
                         point.getSuffixCode(), point.getUnit(), point.getMinValue(), point.getMaxValue(),
                         Integer.valueOf(1).equals(point.getForCalc()),
                         Integer.valueOf(1).equals(point.getRequiredFlag()),
-                        point.getSortOrder(), Integer.valueOf(1).equals(point.getStatus())))
+                        point.getSortOrder(), Integer.valueOf(1).equals(point.getStatus()), pointDataType(point.getDataType())))
                 .toList();
         List<String> allowed = new ArrayList<>();
         allowed.add("COPY");

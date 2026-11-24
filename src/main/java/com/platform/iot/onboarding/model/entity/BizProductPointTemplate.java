@@ -30,6 +30,7 @@ public class BizProductPointTemplate implements Serializable {
     private String pointNameTemplate;
     private String suffixCode;
     private String unit;
+    private String dataType;
     private BigDecimal minValue;
     private BigDecimal maxValue;
     private Integer forCalc;

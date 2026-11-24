@@ -10,11 +10,15 @@ export type OnboardingPage<T> = {
   items: T[]
 }
 
+export type PointDataType = 'ANALOG' | 'DIGITAL' | 'ACCUMULATE'
+export type PendingSourceScope = 'ALL' | 'STANDARD' | 'DAIKIN'
+
 export type ProductPointTemplate = {
   templatePointId?: string
   metricCode: string
   pointNameTemplate: string
   suffixCode: string
+  dataType?: PointDataType
   unit: string
   minValue: number | null
   maxValue: number | null
@@ -199,6 +203,7 @@ export type PendingBindRequest = {
   newEquipment?: { equipmentName: string; manufacturer: string | null } | null
   pointBindings: PointBinding[]
   autoCreatePoints?: boolean
+  activateOnApprove?: boolean
   numericSourceId?: string | null
   temperatureMode?: TemperatureBindingMode | null
   temperatureTemplateProductId?: string | null

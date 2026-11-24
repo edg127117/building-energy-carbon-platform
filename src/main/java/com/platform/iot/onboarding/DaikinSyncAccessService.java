@@ -21,7 +21,7 @@ import java.util.Set;
  */
 @Service
 public class DaikinSyncAccessService {
-    private static final Set<String> MENUS = Set.of("/operations/devices/pendingDevices");
+    private static final Set<String> MENUS = Set.of("/configuration/ingestion/pendingDevices");
     private final JdbcTemplate jdbc;
     private final BuildingScopeService buildings;
     private final SysMenuMapper menus;

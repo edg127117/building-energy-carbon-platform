@@ -51,7 +51,8 @@ public class BindTypedPendingDeviceHandler implements SensitiveOperationHandler 
                 optionalText(binding.numericSourceId(), 32, message),
                 optionalText(binding.temperatureMode(), 20, message),
                 optionalText(binding.temperatureTemplateProductId(), 32, message),
-                optionalText(binding.temperaturePlanDigest(), 100, message), binding.temperatureExistingPointIds());
+                optionalText(binding.temperaturePlanDigest(), 100, message), binding.temperatureExistingPointIds(),
+                binding.activateOnApprove());
         String building = service.resolveTypedBindBuilding(pendingId, normalized,
                 DeviceOnboardingSensitiveOperationHandlers.PLATFORM_ADMIN);
         int pointCount = points.size();
@@ -63,7 +64,8 @@ public class BindTypedPendingDeviceHandler implements SensitiveOperationHandler 
         }
         return new NormalizedSensitiveCommand(building, "PENDING_DEVICE", pendingId,
                 support.canonical(new Command(pendingId, normalized), message),
-                "buildingId=" + building + ";bindingType=TYPED_STATE;pointCount=" + pointCount);
+                "buildingId=" + building + ";bindingType=TYPED_STATE;pointCount=" + pointCount
+                        + ";activateOnApprove=" + normalized.activateOnApprove());
     }
 
     @Override

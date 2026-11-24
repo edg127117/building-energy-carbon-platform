@@ -100,7 +100,7 @@ class LegacyHvacRetirementAndMenuGovernanceContractTest {
 
         assertThat(application).contains("INGESTION_SOURCE_SYSTEM:MQTT_STANDARD_V1");
         assertThat(ingestion).contains("ingestion.source-system:MQTT_STANDARD_V1");
-        assertThat(cache).contains("menu:v2:user:", "menu:v2:all");
+        assertThat(cache).contains("menu:v3:user:", "menu:v3:all");
         assertThat(tdengine).doesNotContain(
                 "INDICATOR_WCR_COP_B1",
                 "INDICATOR_TOWER_EFF_B1",

@@ -65,6 +65,7 @@ class FlywayMigrationConfigurationTest {
                 "V12__device_identity.sql",
                 "V130__mysql_comfort_emission_factor_history.sql",
                 "V131__mysql_room_sensor_contact_installation.sql",
+                "V132__mysql_standard_device_onboarding.sql",
                 "V13__device_onboarding_discovery.sql",
                 "V14__device_onboarding_binding.sql",
                 "V15__mysql_asset_management_menu.sql",
