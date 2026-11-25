@@ -19,7 +19,7 @@ const invalidCatalogSyncErrors = new Set([
   'DAIKIN_SYNC_CATALOG_INVALID', 'DAIKIN_SYNC_INVALID_REQUEST',
   'DAIKIN_SYNC_INVALID_RESPONSE', 'DAIKIN_SYNC_RESPONSE_TOO_LARGE',
 ])
-const daikinProfiles = new Set(['DAIKIN_INDOOR_V2', 'DAIKIN_OUTDOOR_V2'])
+const knownProfiles = new Set(['DAIKIN_INDOOR_V2', 'DAIKIN_OUTDOOR_V2', 'MSR01_RADAR', 'S4_DOOR'])
 const pointDataTypes: Record<string, 'analog' | 'digital' | 'accumulate'> = {
   ANALOG: 'analog',
   DIGITAL: 'digital',
@@ -54,8 +54,12 @@ export function syncJobResultText(errorCode: string | null): string {
   return t('deviceOnboarding.syncJobResult.unknown')
 }
 
+export function isKnownProfile(value: string): boolean {
+  return knownProfiles.has(value)
+}
+
 export function profileText(value: string): string {
-  return t(`deviceOnboarding.profileName.${daikinProfiles.has(value) ? value : 'unknown'}`)
+  return t(`deviceOnboarding.profileName.${knownProfiles.has(value) ? value : 'unknown'}`)
 }
 
 export function dataTypeText(value: string | null | undefined): string {

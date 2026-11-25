@@ -199,11 +199,20 @@ record BindCommand(
         List<DeviceOnboardingContracts.PointBindingRequest> pointBindings,
         boolean autoCreatePoints,
         // 省略 false，确保上线前的仅绑定申请继续通过摘要校验。
-        @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean activateOnApprove) {
+        @JsonInclude(JsonInclude.Include.NON_DEFAULT) boolean activateOnApprove,
+        @JsonInclude(JsonInclude.Include.NON_NULL) String gatewayMac) {
+
+    BindCommand(String pendingId, String productId, String buildingId, String spaceId, String systemGroupId,
+            String existingEquipmentId, DeviceOnboardingContracts.NewEquipmentRequest newEquipment,
+            List<DeviceOnboardingContracts.PointBindingRequest> pointBindings, boolean autoCreatePoints,
+            boolean activateOnApprove) {
+        this(pendingId, productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment,
+                pointBindings, autoCreatePoints, activateOnApprove, null);
+    }
 
     DeviceOnboardingContracts.BindRequest request() {
         return new DeviceOnboardingContracts.BindRequest(productId, buildingId, spaceId, systemGroupId,
-                existingEquipmentId, newEquipment, pointBindings, autoCreatePoints, activateOnApprove);
+                existingEquipmentId, newEquipment, pointBindings, autoCreatePoints, activateOnApprove, gatewayMac);
     }
 }
 
@@ -257,8 +266,13 @@ final class DeviceOnboardingCommandNormalization {
                     SystemSensitiveCommandSupport.optionalText(point.componentCode(), 20, message),
                     SystemSensitiveCommandSupport.optionalText(point.dataType(), 20, message)));
         }
+        String gatewayMac = SystemSensitiveCommandSupport.optionalText(value.gatewayMac(), 12, message);
+        if (gatewayMac != null) {
+            gatewayMac = gatewayMac.toUpperCase(java.util.Locale.ROOT);
+            if (!gatewayMac.matches("[0-9A-F]{12}")) throw SystemSensitiveCommandSupport.invalid(message);
+        }
         return new BindCommand(pendingId, productId, buildingId, spaceId, systemGroupId,
-                equipmentId, equipment, List.copyOf(points), autoCreatePoints, value.activateOnApprove());
+                equipmentId, equipment, List.copyOf(points), autoCreatePoints, value.activateOnApprove(), gatewayMac);
     }
 
     private static DeviceOnboardingContracts.NewEquipmentRequest normalizeEquipment(

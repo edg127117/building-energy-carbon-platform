@@ -19,6 +19,14 @@ public record PendingDeviceDiscovery(
         long eventTime,
         String timeSource,
         String metricsJson,
-        boolean sampleTruncated
+        boolean sampleTruncated,
+        String gatewayMac,
+        String topic
 ) {
+    public PendingDeviceDiscovery(String pendingId, DeviceIdentityKey identity, String profileCode,
+            int profileVersion, LocalDateTime seenAt, long eventTime, String timeSource,
+            String metricsJson, boolean sampleTruncated) {
+        this(pendingId, identity, profileCode, profileVersion, seenAt, eventTime, timeSource,
+                metricsJson, sampleTruncated, null, null);
+    }
 }

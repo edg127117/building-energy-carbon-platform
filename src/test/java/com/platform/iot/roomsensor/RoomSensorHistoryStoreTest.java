@@ -67,6 +67,21 @@ class RoomSensorHistoryStoreTest {
                 org.mockito.ArgumentMatchers.<RowMapper<RoomSensorHistoryStore.RadarReading>>any());
     }
 
+    @Test void cutoverReadsEachObservationOnceAndTheNewReadingWinsAtTheSameReceiptTime() {
+        var source = new RoomSensorSource("source", "MSR01_RADAR", "/radar", "AC233FC2B716", "AC233FC2B716",
+                "identity", "equipment", "building", "room", 0, "point", 1001L, false);
+        when(td.query(contains("st_radar_observation"), org.mockito.ArgumentMatchers.<RowMapper<RoomSensorHistoryStore.RadarReading>>any()))
+                .thenReturn(List.of(new RoomSensorHistoryStore.RadarReading(1000, 1)));
+        when(td.query(contains("st_raw_event"), org.mockito.ArgumentMatchers.<RowMapper<RoomSensorHistoryStore.RadarReading>>any()))
+                .thenReturn(List.of(new RoomSensorHistoryStore.RadarReading(1000, 2)));
+        assertThat(store().latestRadar(source, 1000)).contains(new RoomSensorHistoryStore.RadarReading(1000, 2));
+        var sql = ArgumentCaptor.forClass(String.class);
+        verify(td, times(2)).query(sql.capture(), org.mockito.ArgumentMatchers.<RowMapper<RoomSensorHistoryStore.RadarReading>>any());
+        assertThat(sql.getAllValues().get(0)).contains("AND ts<1001");
+        assertThat(sql.getAllValues().get(1)).contains("CAST(val AS INT) AS target_count",
+                "WHERE point_id='point' AND ts>=1001", "room_scope=", "room_received_at<=1000");
+    }
+
     private RoomSensorHistoryStore store() {
         var properties = new TdengineProperties(); properties.setDatabase("iot_telemetry");
         return new RoomSensorHistoryStore(td, properties, mapper);

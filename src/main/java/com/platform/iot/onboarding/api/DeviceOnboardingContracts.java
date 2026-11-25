@@ -43,7 +43,20 @@ public final class DeviceOnboardingContracts {
             boolean sampleTruncated,
             com.platform.iot.daikin.onboarding.DaikinPendingLocationView location,
             @Schema(description = "待接入状态对应的操作")
-            List<String> allowedActions) {
+            List<String> allowedActions,
+            String gatewayMac,
+            String gatewayEquipmentName,
+            String suggestedBuildingId,
+            String suggestedSpaceId) {
+        public PendingListItemView(String pendingId, String identityType, String maskedIdentityValue,
+                String profileCode, int lastProfileVersion, String status, String identityStatus, long reportCount,
+                long firstSeenTime, long lastSeenTime, boolean sampleTruncated,
+                com.platform.iot.daikin.onboarding.DaikinPendingLocationView location, List<String> allowedActions) {
+            this(pendingId, identityType, maskedIdentityValue, profileCode, lastProfileVersion, status, identityStatus,
+                    reportCount, firstSeenTime, lastSeenTime, sampleTruncated, location, allowedActions,
+                    null, null, null, null);
+        }
+
         public PendingListItemView(String pendingId, String identityType, String maskedIdentityValue,
                                    String profileCode, int lastProfileVersion, String status,
                                    String identityStatus, long reportCount, long firstSeenTime,
@@ -69,7 +82,19 @@ public final class DeviceOnboardingContracts {
             String latestTimeSource,
             JsonNode latestMetrics,
             boolean sampleTruncated,
-            List<String> allowedActions) {
+            List<String> allowedActions,
+            String gatewayMac,
+            String gatewayEquipmentName,
+            String suggestedBuildingId,
+            String suggestedSpaceId) {
+        public PendingDetailView(String pendingId, String identityType, String identityValue, String profileCode,
+                int lastProfileVersion, String status, String boundIdentityId, long reportCount, long firstSeenTime,
+                long lastSeenTime, long latestEventTime, String latestTimeSource, JsonNode latestMetrics,
+                boolean sampleTruncated, List<String> allowedActions) {
+            this(pendingId, identityType, identityValue, profileCode, lastProfileVersion, status, boundIdentityId,
+                    reportCount, firstSeenTime, lastSeenTime, latestEventTime, latestTimeSource, latestMetrics,
+                    sampleTruncated, allowedActions, null, null, null, null);
+        }
     }
 
     @Schema(description = "忽略或恢复待绑定状态")
@@ -87,9 +112,17 @@ public final class DeviceOnboardingContracts {
             String existingEquipmentId,
             @Valid NewEquipmentRequest newEquipment,
             List<@Valid PointBindingRequest> pointBindings,
-            boolean autoCreatePoints, boolean activateOnApprove) {
+            boolean autoCreatePoints, boolean activateOnApprove,
+            @Size(max = 12) String gatewayMac) {
         public BindRequest {
             pointBindings = pointBindings == null ? List.of() : List.copyOf(pointBindings);
+        }
+
+        public BindRequest(String productId, String buildingId, String spaceId, String systemGroupId,
+                String existingEquipmentId, NewEquipmentRequest newEquipment,
+                List<PointBindingRequest> pointBindings, boolean autoCreatePoints, boolean activateOnApprove) {
+            this(productId, buildingId, spaceId, systemGroupId, existingEquipmentId, newEquipment,
+                    pointBindings, autoCreatePoints, activateOnApprove, null);
         }
 
         public BindRequest(String productId, String buildingId, String spaceId, String systemGroupId,

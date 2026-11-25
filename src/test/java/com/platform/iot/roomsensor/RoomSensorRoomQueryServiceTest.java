@@ -51,7 +51,8 @@ class RoomSensorRoomQueryServiceTest {
         mysql.execute("""
                 CREATE TABLE biz_room_sensor_source(source_id VARCHAR(32),protocol VARCHAR(32),topic VARCHAR(32),
                     gateway_mac VARCHAR(32),freshness_seconds INT,identity_id VARCHAR(32),enabled INT,
-                    contact_kind VARCHAR(8),contact_location VARCHAR(80))
+                    contact_kind VARCHAR(8),contact_location VARCHAR(80),
+                    unified_point_id VARCHAR(32),first_unified_storage_ts BIGINT,shadow_write INT DEFAULT 0)
                 """);
         mysql.update("INSERT INTO biz_space VALUES (?,?, 'ROOM',0),('r313',?,'ROOM',0)", ROOM, BUILDING, BUILDING);
         bind("radar", "MSR01_RADAR", ROOM);
@@ -296,7 +297,7 @@ class RoomSensorRoomQueryServiceTest {
     private void bind(String id, String protocol, String room) {
         mysql.update("INSERT INTO biz_equipment VALUES (?,?,?,0,?)", "eq-" + id, BUILDING, room, id);
         mysql.update("INSERT INTO biz_device_identity VALUES (?,?,?,'MAC','ABC123456789',?,1)", "id-" + id, "eq-" + id, BUILDING, protocol);
-        mysql.update("INSERT INTO biz_room_sensor_source VALUES (?,?,'topic','ABC000456789',300,?,1,NULL,NULL)", id, protocol, "id-" + id);
+        mysql.update("INSERT INTO biz_room_sensor_source (source_id,protocol,topic,gateway_mac,freshness_seconds,identity_id,enabled,contact_kind,contact_location) VALUES (?,?,'topic','ABC000456789',300,?,1,NULL,NULL)", id, protocol, "id-" + id);
     }
 
     private void radar(String time, int count, long offset, String room) {

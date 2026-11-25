@@ -9,6 +9,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Locale;
 
 /** 从可信网关报文提取观测值和通讯证据。CA00、CA02 只更新通讯证据。 */
@@ -24,33 +26,61 @@ public class RoomSensorParser {
         private static final Parsed EMPTY = new Parsed(List.of(), false);
     }
 
+    record Frame(String gatewayMac, String protocol, Map<String, Parsed> devices) {
+        private static final Frame EMPTY = new Frame("", "", Map.of());
+    }
+
     public Parsed parse(RoomSensorSource source, byte[] payload) throws IOException {
+        Frame frame = decode(payload);
+        if (!source.protocol().equals(frame.protocol()) || !source.gatewayMac().equals(frame.gatewayMac()))
+            return Parsed.EMPTY;
+        return frame.devices().getOrDefault(source.deviceMac(), Parsed.EMPTY);
+    }
+
+    Frame decode(byte[] payload) throws IOException {
         JsonNode root = mapper.readTree(payload);
-        if (root == null || root.isNull()) return Parsed.EMPTY;
-        if ("MSR01_RADAR".equals(source.protocol())) {
-            if (!root.isObject() || !source.gatewayMac().equals(mac(root.path("mac")))
-                    || !source.deviceMac().equals(source.gatewayMac())) return Parsed.EMPTY;
+        if (root == null) return Frame.EMPTY;
+        if (root.isObject()) {
+            String gateway = mac(root.path("mac"));
             JsonNode radar = root.path("radar");
             Integer count = unsigned(radar.path("num"), Integer.MAX_VALUE);
             Integer seq = unsigned(root.path("sn"), 65535);
-            if (!"coord".equals(radar.path("type").asText()) || count == null || seq == null) return Parsed.EMPTY;
-            return new Parsed(List.of(new Value(time(root), count, seq, null)), true);
+            if (!validMac(gateway) || !"coord".equals(radar.path("type").asText()) || count == null || seq == null)
+                return Frame.EMPTY;
+            return new Frame(gateway, "MSR01_RADAR",
+                    Map.of(gateway, new Parsed(List.of(new Value(time(root), count, seq, null)), true)));
         }
-        if (!"S4_DOOR".equals(source.protocol()) || !root.isArray()) return Parsed.EMPTY;
-        // 网关首帧证明来源；子设备 MAC 另外核对，不能把其它房间 BLE 广播归入当前房间。
-        if (root.isEmpty() || !"Gateway".equals(root.get(0).path("type").asText())
-                || !source.gatewayMac().equals(mac(root.get(0).path("mac")))) return Parsed.EMPTY;
-        List<Value> values = new ArrayList<>();
-        boolean doorContact = false;
+        if (!root.isArray() || root.isEmpty() || !"Gateway".equals(root.get(0).path("type").asText()))
+            return Frame.EMPTY;
+        String gateway = mac(root.get(0).path("mac"));
+        if (!validMac(gateway)) return Frame.EMPTY;
+        Map<String, List<Value>> observations = new LinkedHashMap<>();
         for (int i = 1; i < root.size(); i++) {
             JsonNode item = root.get(i);
-            if (!source.deviceMac().equals(mac(item.path("mac")))) continue;
-            DoorFrame frame = doorFrame(item.path("rawData").asText(), source.deviceMac());
+            String child = mac(item.path("mac"));
+            if (!validMac(child) || child.equals(gateway)) continue;
+            DoorFrame frame = doorFrame(item.path("rawData").asText(), child);
             if (frame == null) continue;
-            doorContact = true;
+            List<Value> values = observations.computeIfAbsent(child, ignored -> new ArrayList<>());
             if (frame.open() != null) values.add(new Value(time(item), null, null, frame.open()));
         }
-        return new Parsed(List.copyOf(values), doorContact);
+        Map<String, Parsed> devices = new LinkedHashMap<>();
+        observations.forEach((child, values) -> devices.put(child, new Parsed(List.copyOf(values), true)));
+        return new Frame(gateway, "S4_DOOR", devices);
+    }
+
+    static String topic(String protocol, String gatewayMac) {
+        return "/MSR01/" + gatewayMac.toLowerCase(Locale.ROOT)
+                + ("MSR01_RADAR".equals(protocol) ? "/radar" : "/status");
+    }
+
+    /** 这两个协议的身份由原生主题和网关帧确立，标准报文不能声明其归属。 */
+    public static boolean isNativeProfile(String profile) {
+        return "MSR01_RADAR".equalsIgnoreCase(profile) || "S4_DOOR".equalsIgnoreCase(profile);
+    }
+
+    private static boolean validMac(String value) {
+        return value.matches("[0-9A-F]{12}");
     }
 
     private static String mac(JsonNode node) {

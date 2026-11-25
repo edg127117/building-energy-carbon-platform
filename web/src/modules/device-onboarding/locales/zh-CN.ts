@@ -135,6 +135,8 @@ export default {
     sourceFilterStandard: '标准设备',
     sourceFilterDaikin: '大金设备',
     identityStatus: '身份状态',
+    bluetoothGateway: '所属蓝牙网关',
+    gatewayMac: '网关物理地址',
     configEffective: '运行缓存',
     cacheConsistent: '与数据库一致',
     cacheInconsistent: '尚未一致',
@@ -287,6 +289,8 @@ export default {
   profileName: {
     DAIKIN_INDOOR_V2: '大金室内机 2.0',
     DAIKIN_OUTDOOR_V2: '大金室外机 2.0',
+    MSR01_RADAR: '人数雷达',
+    S4_DOOR: '门磁传感器',
     unknown: '其他接入协议',
   },
   messages: {
@@ -405,5 +409,6 @@ export default {
     temperatureTemplate: '人工模式请选择兼容温度模板。',
     temperatureNumericSource: '人工模式请选择同建筑、已启用的温度数值来源。',
     temperaturePreview: '请先生成仍有效的温度测点预览；预览阻塞或已过期时不能提交。',
+    doorGatewayRequired: '请先完成所属蓝牙网关的房间绑定后再绑定门磁。',
   },
 } as const

@@ -42,6 +42,8 @@ public class BizPendingDevice implements Serializable {
     /** DISCOVERED、BOUND、IGNORED；上报更新不得改变该状态。 */
     private String status;
     private String boundIdentityId;
+    private String discoveryGatewayMac;
+    private String discoveryTopic;
     private LocalDateTime createTime;
     private LocalDateTime updateTime;
 }

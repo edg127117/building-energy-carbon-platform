@@ -135,11 +135,18 @@ const temperatureManual = computed(() => temperatureEnabled.value && form.temper
 const legacyPointBindingsAllowed = computed(() => !temperatureEnabled.value)
 const canAutoCreatePoints = computed(() => props.pending?.identityType !== 'DAIKIN_UNIT' && productPoints.value.length > 0)
 const automaticPointCreation = computed(() => canAutoCreatePoints.value && !manualPointOverride.value)
+const isRadarSensor = computed(() => props.pending?.profileCode === 'MSR01_RADAR')
+const isDoorSensor = computed(() => props.pending?.profileCode === 'S4_DOOR')
+const doorGatewayBound = computed(() => isDoorSensor.value && Boolean(props.pending?.suggestedBuildingId && props.pending?.suggestedSpaceId))
+const doorGatewayMissing = computed(() => isDoorSensor.value && !doorGatewayBound.value)
+const doorGatewayLabel = computed(() => props.pending?.gatewayEquipmentName || props.pending?.gatewayMac || t('common.missing'))
 const singleProductAutoMatched = computed(() => props.productTotal === 1 && Boolean(props.product && form.productId === props.product.productId))
-const singleBuildingAutoMatched = computed(() => buildingOptions.value.length === 1 && Boolean(form.buildingId))
+const buildingAutoSummary = computed(() => (doorGatewayBound.value || buildingOptions.value.length === 1) && Boolean(form.buildingId))
+const spaceAutoSummary = computed(() => doorGatewayBound.value && Boolean(form.spaceId))
 const singleSystemAutoMatched = computed(() => scopeSystems.value.length === 1 && Boolean(form.systemGroupId))
-const hasAutoSummary = computed(() => singleProductAutoMatched.value || singleBuildingAutoMatched.value || singleSystemAutoMatched.value)
+const hasAutoSummary = computed(() => singleProductAutoMatched.value || buildingAutoSummary.value || spaceAutoSummary.value || singleSystemAutoMatched.value || isDoorSensor.value)
 const selectedBuildingLabel = computed(() => buildingOptions.value.find(item => item.value === form.buildingId)?.label ?? '')
+const selectedSpaceLabel = computed(() => scopeSpaces.value.find(item => item.spaceId === form.spaceId)?.spaceName ?? '')
 const selectedSystemLabel = computed(() => scopeSystems.value.find(item => item.systemGroupId === form.systemGroupId)?.systemName ?? '')
 const requiresNumericSource = computed(() => temperatureManual.value
   || (props.allowEmptyPoints && !temperatureEnabled.value && hasIncludedPoints.value && !automaticPointCreation.value))
@@ -155,7 +162,13 @@ const temperatureMappingPoints = ref<TemperaturePlanView['points']>([])
 const buildingOptions = computed(() => props.bindingOptions
   ? [{ label: props.bindingOptions.buildingName, value: props.bindingOptions.buildingId }]
   : assets.buildingOptions.value)
-const scopeSpaces = computed(() => props.bindingOptions?.spaces ?? flattenSpaces(assets.scopeSpaces.value))
+const scopeSpaces = computed(() => {
+  if (props.bindingOptions) return props.bindingOptions.spaces
+  const spaces = flattenSpaces(assets.scopeSpaces.value)
+  return isRadarSensor.value
+    ? spaces.filter(space => space.spaceType?.trim().toUpperCase() === 'ROOM')
+    : spaces
+})
 const scopeSystems = computed(() => props.bindingOptions?.systems ?? assets.scopeSystemGroups.value)
 const equipmentOptions = computed(() => props.bindingOptions?.equipment ?? assets.equipment.value.items)
 const selectedPoints = computed<AssetPoint[]>(() => {
@@ -175,7 +188,14 @@ watch(() => props.open, async open => {
   try {
     if (!props.bindingOptions) {
       await assets.ensureBuildingOptions()
-      if (!form.buildingId && buildingOptions.value.length === 1) {
+      if (doorGatewayBound.value && props.pending?.suggestedBuildingId) {
+        form.buildingId = props.pending.suggestedBuildingId
+        await changeBuilding(form.buildingId)
+        if (props.pending.suggestedSpaceId) {
+          form.spaceId = props.pending.suggestedSpaceId
+          await changeScope()
+        }
+      } else if (!form.buildingId && buildingOptions.value.length === 1) {
         form.buildingId = buildingOptions.value[0]!.value
         await changeBuilding(form.buildingId)
       }
@@ -407,6 +427,7 @@ function bindingRequest(): PendingBindRequest {
     pointBindings,
     autoCreatePoints: automaticPointCreation.value,
     activateOnApprove: form.activateOnApprove,
+    ...(isDoorSensor.value && props.pending?.gatewayMac ? { gatewayMac: props.pending.gatewayMac } : {}),
     numericSourceId: requiresNumericSource.value ? form.numericSourceId ?? null : null,
     temperatureMode: temperatureEnabled.value ? form.temperatureMode : undefined,
     temperatureTemplateProductId: temperatureManual.value ? form.temperatureTemplateProductId ?? null : undefined,
@@ -427,6 +448,7 @@ function temperatureSelection(): TemperaturePlanSelection {
 }
 
 function validate(requireTemperaturePlan: boolean): string | null {
+  if (doorGatewayMissing.value) return 'validation.doorGatewayRequired'
   if (!form.productId || !props.product) return 'validation.bindingProduct'
   if (!form.buildingId || !form.spaceId || !form.systemGroupId) return 'validation.bindingScope'
   if (batchMode.value && props.batchRows.some(row => !row.location?.roomSpaceId || !row.location.roomCode)) return 'validation.batchLocation'
@@ -484,14 +506,23 @@ function joinPointCode(prefix: string, suffix: string): string {
 <template>
   <ElDialog :model-value="open" :title="t('deviceOnboarding.pending.binding')" width="min(760px, 94vw)" @update:model-value="emit('close')">
     <ElForm label-position="top" class="binding-form" @submit.prevent="submit">
+      <ElAlert v-if="doorGatewayMissing" :title="t('deviceOnboarding.validation.doorGatewayRequired')" type="warning" show-icon :closable="false" />
       <div v-if="hasAutoSummary" class="auto-summary">
         <div v-if="singleProductAutoMatched" class="summary-item">
           <span>{{ t('deviceOnboarding.labels.productName') }}</span>
           <strong>{{ product?.productName }}</strong>
         </div>
-        <div v-if="singleBuildingAutoMatched" class="summary-item">
+        <div v-if="isDoorSensor" class="summary-item">
+          <span>{{ t('deviceOnboarding.labels.bluetoothGateway') }}</span>
+          <strong>{{ doorGatewayLabel }}</strong>
+        </div>
+        <div v-if="buildingAutoSummary" class="summary-item">
           <span>{{ t('deviceOnboarding.labels.building') }}</span>
           <strong>{{ selectedBuildingLabel }}</strong>
+        </div>
+        <div v-if="spaceAutoSummary" class="summary-item">
+          <span>{{ t('deviceOnboarding.labels.space') }}</span>
+          <strong>{{ selectedSpaceLabel }}</strong>
         </div>
         <div v-if="singleSystemAutoMatched" class="summary-item">
           <span>{{ t('deviceOnboarding.labels.systemGroup') }}</span>
@@ -506,13 +537,13 @@ function joinPointCode(prefix: string, suffix: string): string {
           </ElSelect>
           <ElPagination v-if="productTotal > productSize" size="small" layout="total, prev, next" :current-page="productPage" :page-size="productSize" :total="productTotal" @current-change="page => emit('product-page-change', page)" />
         </ElFormItem>
-        <ElFormItem v-if="!singleBuildingAutoMatched" :label="t('deviceOnboarding.labels.building')" required>
-          <ElSelect v-model="form.buildingId" class="wide-control" :disabled="Boolean(bindingOptions)" @change="changeBuilding">
+        <ElFormItem v-if="!buildingAutoSummary" :label="t('deviceOnboarding.labels.building')" required>
+          <ElSelect v-model="form.buildingId" class="wide-control" :disabled="Boolean(bindingOptions) || doorGatewayBound" @change="changeBuilding">
             <ElOption v-for="item in buildingOptions" :key="item.value" :label="item.label" :value="item.value" />
           </ElSelect>
         </ElFormItem>
-        <ElFormItem v-if="!batchMode" :label="t('deviceOnboarding.labels.space')" required>
-          <ElSelect v-model="form.spaceId" class="wide-control" @change="changeScope">
+        <ElFormItem v-if="!batchMode && !spaceAutoSummary" :label="t('deviceOnboarding.labels.space')" required>
+          <ElSelect v-model="form.spaceId" class="wide-control" :disabled="doorGatewayBound" @change="changeScope">
             <ElOption v-for="item in scopeSpaces" :key="item.spaceId" :label="item.spaceName" :value="item.spaceId" />
           </ElSelect>
         </ElFormItem>
@@ -672,7 +703,7 @@ function joinPointCode(prefix: string, suffix: string): string {
         <ElCheckbox v-model="form.activateOnApprove">{{ t('deviceOnboarding.labels.activateOnApprove') }}</ElCheckbox>
         <div class="footer-actions">
           <ElButton @click="emit('close')">{{ t('deviceOnboarding.actions.cancel') }}</ElButton>
-          <ElButton type="primary" :loading="submitting" @click="submit">{{ t(form.activateOnApprove ? 'deviceOnboarding.actions.submitBindingAndActivate' : 'deviceOnboarding.actions.submitBinding') }}</ElButton>
+          <ElButton type="primary" :disabled="doorGatewayMissing" :loading="submitting" @click="submit">{{ t(form.activateOnApprove ? 'deviceOnboarding.actions.submitBindingAndActivate' : 'deviceOnboarding.actions.submitBinding') }}</ElButton>
         </div>
       </div>
     </template>

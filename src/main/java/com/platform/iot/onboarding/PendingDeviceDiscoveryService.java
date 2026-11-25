@@ -43,6 +43,16 @@ public class PendingDeviceDiscoveryService {
     public boolean discover(
             StandardTelemetryMessage message,
             long localReceivedTime) {
+        return discover(message, localReceivedTime, null, null);
+    }
+
+    /** 原生房间报文的可信接收主题和网关随样例一起冻结，普通标准遥测不带该上下文。 */
+    public boolean discoverRoomSensor(StandardTelemetryMessage message, long localReceivedTime,
+            String gatewayMac, String topic) {
+        return discover(message, localReceivedTime, Objects.requireNonNull(gatewayMac), Objects.requireNonNull(topic));
+    }
+
+    private boolean discover(StandardTelemetryMessage message, long localReceivedTime, String gatewayMac, String topic) {
         if (localReceivedTime <= 0) {
             throw new IllegalArgumentException("localReceivedTime 必须大于 0");
         }
@@ -57,7 +67,7 @@ public class PendingDeviceDiscoveryService {
                 message.eventTime(),
                 message.timeSource(),
                 sample.json(),
-                sample.truncated());
+                sample.truncated(), gatewayMac, topic);
         retryTemplate.execute(context -> {
             repository.upsertDiscovery(discovery);
             return null;

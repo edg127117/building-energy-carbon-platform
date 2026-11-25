@@ -29,11 +29,16 @@ class BindPendingDeviceHandlerTest {
 
         com.fasterxml.jackson.databind.node.ObjectNode oldCommand = mapper.valueToTree(command);
         assertThat(oldCommand.has("activateOnApprove")).isFalse();
+        assertThat(oldCommand.has("gatewayMac")).isFalse();
         NormalizedSensitiveCommand normalized = handler.normalize(oldCommand);
         assertThat(handler.normalize(oldCommand.deepCopy().put("activateOnApprove", false)).canonicalJson())
                 .isEqualTo(normalized.canonicalJson());
         assertThat(handler.normalize(oldCommand.deepCopy().put("activateOnApprove", true)).canonicalJson())
                 .contains("\"activateOnApprove\":true");
+        assertThat(handler.normalize(oldCommand.deepCopy().putNull("gatewayMac")).canonicalJson())
+                .isEqualTo(normalized.canonicalJson());
+        var door = handler.normalize(oldCommand.deepCopy().put("gatewayMac", "a123b456c789"));
+        assertThat(door.canonicalJson()).contains("\"gatewayMac\":\"A123B456C789\"");
         BindCommand canonical = mapper.readValue(normalized.canonicalJson(), BindCommand.class);
 
         assertThat(normalized.impactSummary()).contains("pointMode=AUTO", "pointCount=0");

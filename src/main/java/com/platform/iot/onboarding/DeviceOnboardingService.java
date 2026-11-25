@@ -103,6 +103,9 @@ public class DeviceOnboardingService {
     private final TransactionTemplate transactionTemplate;
     private final com.platform.iot.temperature.TemperaturePlanService temperaturePlans;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private RoomSensorOnboarding roomSensors;
+
     @Value("${ingestion.standard-source-system:MQTT_STANDARD_V1}")
     private String standardSourceSystem;
 
@@ -275,6 +278,11 @@ public class DeviceOnboardingService {
         requireAdmin(roles);
         BizPendingDevice pending = requirePending(pendingId);
         String buildingId = validateOwnership(request);
+        if (RoomSensorOnboarding.isRoomSensor(pending.getProfileCode()) || request.gatewayMac() != null) {
+            roomSensors.validate(pending, request, false);
+            var product = requireCompatibleProduct(pending, request.productId());
+            roomSensors.validateTemplate(pending.getProfileCode(), enabledTemplates(product.getProductId()));
+        }
         // 在创建审批申请前反馈可修正的前置配置问题；执行绑定仍重新校验，避免审批期间配置变化。
         BizDataSource source = requireOnboardingDataSource(buildingId);
         if (request.autoCreatePoints() && StringUtils.hasText(request.existingEquipmentId())) {
@@ -477,6 +485,11 @@ public class DeviceOnboardingService {
         if (stateOnly && !request.pointBindings().isEmpty()) throw error(400, VALIDATION_FAILED, "仅状态接入不能携带测点映射");
         BizDeviceProduct product = requireCompatibleProduct(pending, request.productId());
         validateOwnership(request);
+        boolean roomSensor = RoomSensorOnboarding.isRoomSensor(pending.getProfileCode());
+        if (roomSensor || request.gatewayMac() != null) {
+            roomSensors.validate(pending, request, true);
+            roomSensors.validateTemplate(pending.getProfileCode(), enabledTemplates(product.getProductId()));
+        }
         if (!typed && "DAIKIN_UNIT".equals(pending.getIdentityType())) {
             throw error(400, VALIDATION_FAILED, "厂家目录使用类型化绑定入口");
         }
@@ -500,7 +513,8 @@ public class DeviceOnboardingService {
         }
         BizEquipment equipment = resolveEquipment(request, product, typed);
         boolean autoReuse = request.autoCreatePoints() && StringUtils.hasText(request.existingEquipmentId());
-        if (autoReuse) requireUnboundEquipment(equipment, true);
+        if (autoReuse || (roomSensor && StringUtils.hasText(request.existingEquipmentId())))
+            requireUnboundEquipment(equipment, true);
         if (typed && !identityMapper.selectList(new LambdaQueryWrapper<BizDeviceIdentity>()
                 .eq(BizDeviceIdentity::getEquipId, equipment.getEquipId())
                 .eq(BizDeviceIdentity::getIdentityType, "DAIKIN_UNIT").last("FOR UPDATE")).isEmpty()) {
@@ -525,6 +539,11 @@ public class DeviceOnboardingService {
                     source, standardSourceSystem);
         } else {
             pointResult = bindPoints(pending, equipment, enabledTemplates(product.getProductId()), request.pointBindings());
+        }
+        if (roomSensor) {
+            String pointId = pointResult.pointIds().getFirst();
+            roomSensors.validatePoint(pending.getProfileCode(), pointMapper.selectById(pointId));
+            roomSensors.bind(pending, identity.getIdentityId(), pointId);
         }
         if (pendingMapper.updateStatus(pendingId, "DISCOVERED", "BOUND", identity.getIdentityId()) != 1) {
             throw error(409, STATE_CONFLICT, "待绑定状态已被其他操作修改");
@@ -1099,21 +1118,30 @@ public class DeviceOnboardingService {
 
     private DeviceOnboardingContracts.PendingListItemView toListItem(BizPendingDevice pending, String identityStatus,
             DaikinPendingLocationView location) {
+        var gateway = gatewayHint(pending);
         return new DeviceOnboardingContracts.PendingListItemView(
                 pending.getPendingId(), pending.getIdentityType(), mask(pending.getIdentityValue()),
                 pending.getProfileCode(), pending.getLastProfileVersion(), pending.getStatus(), identityStatus,
                 pending.getReportCount(), epoch(pending.getFirstSeenTime()), epoch(pending.getLastSeenTime()),
-                Integer.valueOf(1).equals(pending.getSampleTruncated()), location, allowedActions(pending.getStatus()));
+                Integer.valueOf(1).equals(pending.getSampleTruncated()), location, allowedActions(pending.getStatus()),
+                gateway.mac(), gateway.equipmentName(), gateway.buildingId(), gateway.spaceId());
     }
 
     private DeviceOnboardingContracts.PendingDetailView toDetail(BizPendingDevice pending) {
+        var gateway = gatewayHint(pending);
         return new DeviceOnboardingContracts.PendingDetailView(
                 pending.getPendingId(), pending.getIdentityType(), pending.getIdentityValue(),
                 pending.getProfileCode(), pending.getLastProfileVersion(), pending.getStatus(),
                 pending.getBoundIdentityId(), pending.getReportCount(), epoch(pending.getFirstSeenTime()),
                 epoch(pending.getLastSeenTime()), epoch(pending.getLatestEventTime()),
                 pending.getLatestTimeSource(), parseMetrics(pending.getLatestMetricsJson()),
-                Integer.valueOf(1).equals(pending.getSampleTruncated()), allowedActions(pending.getStatus()));
+                Integer.valueOf(1).equals(pending.getSampleTruncated()), allowedActions(pending.getStatus()),
+                gateway.mac(), gateway.equipmentName(), gateway.buildingId(), gateway.spaceId());
+    }
+
+    private RoomSensorOnboarding.GatewayHint gatewayHint(BizPendingDevice pending) {
+        return pending.getDiscoveryGatewayMac() == null
+                ? RoomSensorOnboarding.GatewayHint.EMPTY : roomSensors.hint(pending);
     }
 
     private JsonNode parseMetrics(String json) {

@@ -72,6 +72,11 @@ export type PendingDevice = {
   lastSeenTime: number
   sampleTruncated: boolean
   location?: DaikinPendingLocation | null
+  gatewayMac?: string | null
+  gatewayEquipmentName?: string | null
+  suggestedBuildingId?: string | null
+  suggestedSpaceId?: string | null
+  allowedActions?: string[]
 }
 
 export type DaikinPendingLocation = {
@@ -204,6 +209,7 @@ export type PendingBindRequest = {
   pointBindings: PointBinding[]
   autoCreatePoints?: boolean
   activateOnApprove?: boolean
+  gatewayMac?: string | null
   numericSourceId?: string | null
   temperatureMode?: TemperatureBindingMode | null
   temperatureTemplateProductId?: string | null

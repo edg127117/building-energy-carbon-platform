@@ -29,7 +29,7 @@ import {
 import { formatDateTime, formatNumber } from '@/shared/utils/format'
 import { t } from '@/locales'
 import { requestErrorCode, requestErrorMessage } from '@/shared/utils/request-error'
-import { identityTypeText, profileText, readingReasonText, readingStatusText, syncJobResultText, syncJobStatusText } from '../models/reading-labels'
+import { identityTypeText, isKnownProfile, profileText, readingReasonText, readingStatusText, syncJobResultText, syncJobStatusText } from '../models/reading-labels'
 import { ChangeRequestControl, newIdempotencyKey, useSensitiveChange } from '@/modules/access-control/public'
 import { useEquipmentReadings } from '@/modules/asset-management/public'
 import { useSession } from '@/modules/auth/public'
@@ -407,6 +407,7 @@ async function submitBindingDraft(request: PendingBindRequest) {
       pointBindings: request.pointBindings,
       autoCreatePoints: request.autoCreatePoints,
       ...(request.activateOnApprove ? { activateOnApprove: true } : {}),
+      ...(request.gatewayMac ? { gatewayMac: request.gatewayMac } : {}),
     }
     const change = await sensitiveChange.start(
       'BIND_PENDING_DEVICE',
@@ -779,7 +780,7 @@ function can(value: unknown, action: string) {
 function asPending(value: unknown): PendingDevice { return value as PendingDevice }
 
 function rowProfileLabel(row: Pick<PendingDevice, 'identityType' | 'profileCode'>) {
-  return row.identityType === 'DAIKIN_UNIT' ? profileText(row.profileCode) : row.profileCode
+  return isKnownProfile(row.profileCode) ? profileText(row.profileCode) : row.profileCode
 }
 
 async function loadDaikinSyncMeta() {
@@ -943,13 +944,14 @@ onMounted(() => {
         <div class="drawer-heading">
           <div>
             <h2>{{ isDetailDaikin ? (operationsManagement.selectedDirectory.value?.deviceName || t('deviceOnboarding.pending.daikinDevice')) : selectedPending.identityValue }}</h2>
-            <p>{{ isDetailDaikin ? profileText(selectedPending.profileCode) : selectedPending.profileCode }}</p>
+            <p>{{ rowProfileLabel(selectedPending) }}</p>
           </div>
           <PendingStatusTag :status="selectedPending.status" />
         </div>
 
         <ElDescriptions :column="2" border>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.identityType')">{{ identityTypeText(selectedPending.identityType) }}</ElDescriptionsItem>
+          <ElDescriptionsItem v-if="selectedPending.profileCode === 'S4_DOOR' || selectedPending.gatewayEquipmentName" :label="t('deviceOnboarding.labels.bluetoothGateway')">{{ selectedPending.gatewayEquipmentName || t('common.missing') }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.profileVersion')">{{ formatNumber(selectedPending.lastProfileVersion) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.reportCount')">{{ formatNumber(selectedPending.reportCount) }}</ElDescriptionsItem>
           <ElDescriptionsItem :label="t('deviceOnboarding.labels.firstSeen')">{{ formatDateTime(selectedPending.firstSeenTime) }}</ElDescriptionsItem>
@@ -993,6 +995,7 @@ onMounted(() => {
           <summary>{{ t('deviceOnboarding.pending.latestSample') }}</summary>
           <ElDescriptions :column="1" border class="technical-list">
             <ElDescriptionsItem :label="t('deviceOnboarding.labels.identity')"><CopyableValue :value="selectedPending.identityValue" /></ElDescriptionsItem>
+            <ElDescriptionsItem v-if="selectedPending.gatewayMac" :label="t('deviceOnboarding.labels.gatewayMac')"><CopyableValue :value="selectedPending.gatewayMac" /></ElDescriptionsItem>
             <ElDescriptionsItem v-if="isDetailDaikin && operationsManagement.selectedDirectory.value" :label="t('deviceOnboarding.labels.syncSourceId')"><CopyableValue :value="operationsManagement.selectedDirectory.value.sourceId" /></ElDescriptionsItem>
             <ElDescriptionsItem v-if="isDetailDaikin && operationsManagement.selectedDirectory.value" :label="t('deviceOnboarding.labels.controllerId')"><CopyableValue :value="operationsManagement.selectedDirectory.value.controllerId" /></ElDescriptionsItem>
           </ElDescriptions>

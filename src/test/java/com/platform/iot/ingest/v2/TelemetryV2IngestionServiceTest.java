@@ -31,6 +31,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class TelemetryV2IngestionServiceTest {
@@ -72,6 +73,15 @@ class TelemetryV2IngestionServiceTest {
                 failureMapper, new AckModeResolver(), new SimpleMeterRegistry(),
                 "platform/telemetry/v2/ack/adapter",journal);
         when(identityProvider.find(any())).thenReturn(Optional.of(binding()));
+    }
+
+    @Test
+    void nativeRoomProfilesAreRejectedBeforeStandardIdentityDiscovery() {
+        var message = message("native", BigDecimal.ONE, "S4_DOOR");
+        var result = service.ingest(message, 1_785_398_400_500L);
+        assertThat(result.status()).isEqualTo(ReceiptStatus.PLATFORM_REJECTED);
+        verify(identityProvider, never()).find(any());
+        verifyNoInteractions(unknownDeviceHandler);
     }
 
     @Test
@@ -208,7 +218,11 @@ class TelemetryV2IngestionServiceTest {
     }
 
     private TelemetryV2Message message(String canonicalId, BigDecimal value) {
-        return new TelemetryV2Message("2.0", "P1", 1,
+        return message(canonicalId, value, "P1");
+    }
+
+    private TelemetryV2Message message(String canonicalId, BigDecimal value, String profile) {
+        return new TelemetryV2Message("2.0", profile, 1,
                 new DeviceIdentityKey("MAC", "ABC"), canonicalId,
                 null, null, null, null, 1_785_398_400_000L,
                 null, null, null, null, "ADAPTER_GENERATED",

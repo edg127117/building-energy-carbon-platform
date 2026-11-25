@@ -9,6 +9,7 @@ import com.platform.iot.ingest.HvacIngestionResult;
 import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.ingest.HvacIngestionService;
 import com.platform.iot.quality.DataPointConfigProvider;
+import com.platform.iot.roomsensor.RoomSensorParser;
 import com.platform.iot.quality.PointAliasKey;
 import com.platform.iot.quality.PointRuntimeConfig;
 import lombok.extern.slf4j.Slf4j;
@@ -243,6 +244,8 @@ public class StandardTelemetryIngestionService {
                 ||!("DEVICE_REPORTED".equals(message.timeSource())||"SERVER_RECEIVED".equals(message.timeSource()))
                 ||message.seq()!=null&&message.seq()<0)
             return "标准报文结构、版本或时间字段无效";
+        if (RoomSensorParser.isNativeProfile(message.profileCode()))
+            return "房间传感器必须通过已登记的原生 MQTT 来源上报";
         return null;
     }
 
