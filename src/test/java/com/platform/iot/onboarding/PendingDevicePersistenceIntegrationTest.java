@@ -58,6 +58,26 @@ class PendingDevicePersistenceIntegrationTest {
     }
 
     @Test
+    void roomDiscoveryKeepsFirstGatewayAndIgnoresTheOtherGatewayAndStandardReport() {
+        var mac = new DeviceIdentityKey("MAC", "C00000000001");
+        String first = "AC0000000001";
+        String topic = "/MSR01/ac0000000001/status";
+        var seen = LocalDateTime.of(2026, 11, 25, 12, 0);
+        repository.upsertDiscovery(new PendingDeviceDiscovery("room-pending", mac, "S4_DOOR", 1,
+                seen, 1795579200000L, "SERVER_RECEIVED", "[]", false, first, topic));
+        repository.upsertDiscovery(new PendingDeviceDiscovery("other-pending", mac, "S4_DOOR", 1,
+                seen.plusSeconds(1), 1795579201000L, "SERVER_RECEIVED", "[]", false,
+                "AC0000000002", "/MSR01/ac0000000002/status"));
+        repository.upsertDiscovery(new PendingDeviceDiscovery("standard-pending", mac, "METER", 1,
+                seen.plusSeconds(2), 1795579202000L, "SERVER_RECEIVED", "[]", false));
+        var pending = mapper.selectById("room-pending");
+        assertThat(pending.getDiscoveryGatewayMac()).isEqualTo(first);
+        assertThat(pending.getDiscoveryTopic()).isEqualTo(topic);
+        assertThat(pending.getProfileCode()).isEqualTo("S4_DOOR");
+        assertThat(pending.getReportCount()).isEqualTo(1);
+    }
+
+    @Test
     void productAndPointTemplateTablesEnforceBusinessUniqueKeys() {
         BizDeviceProduct product = product("PRODUCT_A", "PRODUCT_CODE_A");
         productMapper.insert(product);

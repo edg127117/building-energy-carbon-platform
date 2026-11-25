@@ -1,5 +1,6 @@
 package com.platform.iot.ingest.v2;
 
+import com.platform.iot.roomsensor.RoomSensorParser;
 import com.platform.iot.identity.DeviceIdentityBinding;
 import com.platform.iot.identity.DeviceIdentityProvider;
 import com.platform.iot.identity.DeviceIdentitySnapshotUnavailableException;
@@ -372,6 +373,8 @@ public class TelemetryV2IngestionService {
                 || "NONE".equals(message.dedupMode()))) {
             return "V2 报文结构、版本、身份或时间字段无效";
         }
+        if (RoomSensorParser.isNativeProfile(message.profileCode()))
+            return "房间传感器必须通过已登记的原生 MQTT 来源上报";
         for(var metric:message.metrics()) {
             if(metric==null||!hasText(metric.code())||metric.value()==null||!hasText(metric.unit())||!hasText(metric.sourceField()))
                 return "V2 指标内容缺失";

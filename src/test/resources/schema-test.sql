@@ -379,6 +379,8 @@ CREATE TABLE biz_pending_device (
   sample_truncated TINYINT NOT NULL DEFAULT 0,
   status VARCHAR(20) NOT NULL DEFAULT 'DISCOVERED',
   bound_identity_id VARCHAR(32),
+  discovery_gateway_mac VARCHAR(12),
+  discovery_topic VARCHAR(200),
   create_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
   update_time TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP NOT NULL,
   CONSTRAINT uk_pending_device_identity UNIQUE (identity_type, identity_value),

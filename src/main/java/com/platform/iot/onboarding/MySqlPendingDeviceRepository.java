@@ -44,10 +44,9 @@ public class MySqlPendingDeviceRepository implements PendingDeviceRepository {
         pending.setLatestTimeSource(discovery.timeSource());
         pending.setLatestMetricsJson(discovery.metricsJson());
         pending.setSampleTruncated(discovery.sampleTruncated() ? 1 : 0);
-        int affected = mapper.upsertDiscovery(pending);
-        if (affected < 1) {
-            throw new IllegalStateException("待绑定设备发现写入未影响任何记录");
-        }
+        pending.setDiscoveryGatewayMac(discovery.gatewayMac());
+        pending.setDiscoveryTopic(discovery.topic());
+        mapper.upsertDiscovery(pending);
     }
 
     @Override

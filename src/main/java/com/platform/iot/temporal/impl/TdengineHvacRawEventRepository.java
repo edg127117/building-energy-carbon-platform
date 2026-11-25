@@ -99,6 +99,34 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
         });
     }
 
+    /** 房间观测的持久队列已经冻结独立主键；复用标准测点子表，逐条核对原值和归属快照。 */
+    public void writeRoomObservation(RawTelemetryEvent event, String scope, String snapshot, Boolean doorOpen) {
+        String stable = safeIdentifier(properties.getDatabase()) + "." + safeIdentifier(properties.getStRawEvent());
+        String read = "SELECT * FROM " + stable + " WHERE LOWER(point_id)=" + quote(codec.key(event.pointId()))
+                + " AND ts=" + event.eventTime() + " LIMIT 2";
+        var existing = template.queryForList(read);
+        if (existing.isEmpty()) {
+            // 同一超级表中的独立房间子表允许按模块留存，不会删除复用测点的旧标准遥测。
+            String table = safeIdentifier(properties.getDatabase()) + ".rsraw_" + codec.key(event.pointId());
+            ensureChildTable(event, table);
+            template.execute("INSERT INTO " + table + " (ts,received_time,val,data_quality,late_flag,source_system,"
+                    + "source_point_code,source_device_id,room_scope,room_snapshot,room_received_at,room_door_open) VALUES ("
+                    + event.eventTime() + "," + event.receivedTime() + "," + formatDouble(event.value()) + ",0,0,"
+                    + quote(event.sourceSystem()) + "," + quote(event.sourcePointCode()) + ","
+                    + quote(event.sourceDeviceId()) + "," + quote(scope) + "," + quote(snapshot) + ","
+                    + event.receivedTime() + "," + (doorOpen == null ? "NULL" : doorOpen) + ")");
+            existing = template.queryForList(read);
+        }
+        if (existing.size() != 1 || !scope.equals(nullableText(existing.getFirst(), "room_scope"))
+                || !snapshot.equals(nullableText(existing.getFirst(), "room_snapshot"))
+                || !codec.hash(event).equals(codec.hash(mapEvent(existing.getFirst())))
+                || event.receivedTime() != timestamp(existing.getFirst(), "received_time").getTime()
+                || event.receivedTime() != number(existing.getFirst(), "room_received_at").longValue()
+                || !java.util.Objects.equals(doorOpen, existing.getFirst().get("room_door_open"))) {
+            throw new IllegalStateException("TDengine room observation differs from frozen intent");
+        }
+    }
+
     private RawTelemetryEvent original(RawTelemetryEvent event) {
         // 超级表查询同时接管历史自定义子表，不能只检查约定名称而制造第二份原始事实。
         String stable = safeIdentifier(properties.getDatabase()) + "." + safeIdentifier(properties.getStRawEvent());
@@ -407,9 +435,11 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
         if (limit < 1 || limit > 500) throw new IllegalArgumentException("Invalid retention point page");
         String stable = safeIdentifier(properties.getDatabase()) + "."
                 + safeIdentifier(properties.getStRawEvent());
-        String cursor = afterTableName == null ? "" : " WHERE tbname>" + quote(afterTableName);
+        String cursor = afterTableName == null ? "" : " AND tbname>" + quote(afterTableName);
+        // 房间专用子表由自身保留周期清理，普通原始事件清理不推进它们的水位。
         List<Map<String, Object>> rows = template.queryForList(
-                "SELECT DISTINCT tbname,point_id FROM " + stable + cursor + " ORDER BY tbname LIMIT " + limit);
+                "SELECT DISTINCT tbname,point_id FROM " + stable + " WHERE tbname NOT LIKE 'rsraw_%'"
+                        + cursor + " ORDER BY tbname LIMIT " + limit);
         return rows.stream().map(row -> {
             String tableName = safeIdentifier(text(row, "tbname"));
             String pointId = text(row, "point_id");
@@ -555,6 +585,7 @@ public class TdengineHvacRawEventRepository implements HvacRawEventRepository {
 
     private String text(Map<String, Object> row, String key) {
         Object value = value(row, key);
+        if (value instanceof byte[] bytes) return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
         return value == null ? null : value.toString();
     }
 

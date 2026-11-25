@@ -6,6 +6,7 @@ import {
   getLatestHvacTemperatureBatchJob,
   getOperationsPendingConnection,
   getOperationsPendingDevice,
+  getPendingDevice,
   getPendingDeviceConnection,
   listDeviceProducts,
   listPendingDevices,
@@ -312,6 +313,47 @@ describe('待接入范围筛选', () => {
       temperatureMode: 'AUTO', temperaturePlanDigest: 'digest-1', numericSourceId: 'SOURCE-1',
     }), expect.any(String))
     expect(vi.mocked(submitOperationsBinding).mock.calls.at(-1)?.[1]).not.toHaveProperty('temperatureTemplateProductId')
+    wrapper.unmount()
+  })
+
+  it('雷达与门磁在列表与详情中以中文协议名展示，提交门磁绑定时透传 gatewayMac', async () => {
+    routeState.sourceScope = 'STANDARD'
+    routeState.profileCode = undefined
+    const doorRow = {
+      pendingId: 'D-DOOR', status: 'DISCOVERED', identityType: 'MAC', profileCode: 'S4_DOOR',
+      identityStatus: 'UNBOUND', maskedIdentityValue: '****3BAE', lastProfileVersion: 1, reportCount: 3,
+      firstSeenTime: 0, lastSeenTime: 0, sampleTruncated: false, gatewayMac: 'AC233FC2B716', gatewayEquipmentName: 'B314人数雷达',
+      suggestedBuildingId: 'B1', suggestedSpaceId: 'S1', allowedActions: ['BIND'],
+    }
+    const radarRow = {
+      pendingId: 'D-RADAR', status: 'DISCOVERED', identityType: 'MAC', profileCode: 'MSR01_RADAR',
+      identityStatus: 'UNBOUND', maskedIdentityValue: '****B716', lastProfileVersion: 1, reportCount: 5,
+      firstSeenTime: 0, lastSeenTime: 0, sampleTruncated: false, allowedActions: ['BIND'],
+    }
+    vi.mocked(listPendingDevices).mockResolvedValueOnce({ page: 1, size: 20, total: 2, items: [doorRow, radarRow] } as never)
+    vi.mocked(getPendingDevice).mockResolvedValueOnce({
+      ...doorRow, identityValue: 'C300008A3BAE', boundIdentityId: null, latestEventTime: 0, latestTimeSource: null, latestMetrics: {},
+    } as never)
+    vi.mocked(createChangeRequest).mockResolvedValueOnce({ requestId: 'REQ-DOOR', status: 'PENDING_REVIEW' } as never)
+
+    const wrapper = mount(PendingDevicePage, { global: { stubs: { BindingDraftDialog: true } } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('门磁传感器')
+    expect(wrapper.text()).toContain('人数雷达')
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '查看详情')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('所属蓝牙网关')
+    expect(wrapper.text()).toContain('B314人数雷达')
+
+    const form = wrapper.findComponent(BindingDraftDialog)
+    form.vm.$emit('submit', {
+      productId: 'P-DOOR', buildingId: 'B1', spaceId: 'S1', systemGroupId: 'G1', existingEquipmentId: null,
+      newEquipment: { equipmentName: 'B314-门磁传感器', manufacturer: null }, pointBindings: [], autoCreatePoints: true,
+      activateOnApprove: true, gatewayMac: 'AC233FC2B716', numericSourceId: null,
+    })
+    await flushPromises()
+    expect(JSON.stringify(vi.mocked(createChangeRequest).mock.calls.at(-1))).toContain('"gatewayMac":"AC233FC2B716"')
     wrapper.unmount()
   })
 })

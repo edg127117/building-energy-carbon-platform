@@ -12,6 +12,7 @@ record RoomSensorStateBinding(RoomSensorSource source, int freshnessSeconds, Str
                               RoomSensorReadings.ContactKind contactKind, String contactLocation) {
     private static final String ACTIVE_BINDINGS = """
                 SELECT s.source_id,s.protocol,s.topic,s.gateway_mac,s.freshness_seconds,s.contact_kind,s.contact_location,
+                       s.unified_point_id,s.first_unified_storage_ts,s.shadow_write,
                        i.identity_value,i.identity_id,i.expected_profile_code,e.equip_id,e.equip_name,e.building_id,e.space_id
                 FROM biz_room_sensor_source s
                 JOIN biz_device_identity i ON i.identity_id=s.identity_id AND i.status=1 AND i.identity_type='MAC'
@@ -56,7 +57,9 @@ record RoomSensorStateBinding(RoomSensorSource source, int freshnessSeconds, Str
             var source = new RoomSensorSource(rs.getString("source_id"), protocol, rs.getString("topic"),
                     rs.getString("gateway_mac").toUpperCase(Locale.ROOT),
                     rs.getString("identity_value").toUpperCase(Locale.ROOT), rs.getString("identity_id"),
-                    rs.getString("equip_id"), rs.getString("building_id"), rs.getString("space_id"), 0);
+                    rs.getString("equip_id"), rs.getString("building_id"), rs.getString("space_id"), 0,
+                    rs.getString("unified_point_id"), rs.getObject("first_unified_storage_ts", Long.class),
+                    rs.getBoolean("shadow_write"));
             String kind = rs.getString("contact_kind");
             return new RoomSensorStateBinding(source, rs.getInt("freshness_seconds"), rs.getString("equip_name"),
                     kind == null ? null : RoomSensorReadings.ContactKind.valueOf(kind), rs.getString("contact_location"));

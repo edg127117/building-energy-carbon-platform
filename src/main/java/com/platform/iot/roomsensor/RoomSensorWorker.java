@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
 @ConditionalOnProperty(name = "room-sensor.enabled", havingValue = "true")
 public class RoomSensorWorker {
     private static final Logger log = LoggerFactory.getLogger(RoomSensorWorker.class);
-    static final long RETENTION_MILLIS = TimeUnit.DAYS.toMillis(7);
+    static final long RETENTION_MILLIS = TimeUnit.DAYS.toMillis(30);
     private final JdbcTemplate mysql;
     private final TransactionTemplate tx;
     private final ObjectMapper mapper;
@@ -108,7 +108,7 @@ public class RoomSensorWorker {
             history.deleteBefore(cutoff);
         } catch (RuntimeException failure) {
             meters.counter("iot.room_sensor.worker", "outcome", "cleanup_failed").increment();
-            log.warn("房间传感器7天清理未完成，等待下轮重试: {}", failure.getClass().getSimpleName());
+            log.warn("房间传感器历史清理未完成，等待下轮重试: {}", failure.getClass().getSimpleName());
         }
     }
 }

@@ -40,7 +40,7 @@ public interface BizPendingDeviceMapper extends BaseMapper<BizPendingDevice> {
             @Param("identityId") String identityId);
 
     /**
-     * 按身份组合唯一键记录一次未知设备发现。
+     * 按身份组合唯一键记录一次未知设备发现。其它网关转发同一子设备时保留首个发现来源。
      *
      * <p>冲突分支分别保留最早首次时间和最晚最近时间，并以最近时间判定最新样例；乱序到达
      * 只累加计数且不会覆盖较新的协议或样例。计数到达 BIGINT 上限后保持上限值。故意不更新 {@code status} 与
@@ -50,46 +50,52 @@ public interface BizPendingDeviceMapper extends BaseMapper<BizPendingDevice> {
             INSERT INTO biz_pending_device (
                 pending_id, identity_type, identity_value, profile_code, last_profile_version,
                 first_seen_time, last_seen_time, report_count, latest_event_time, latest_time_source,
-                latest_metrics_json, sample_truncated, status, bound_identity_id, create_time, update_time
+                latest_metrics_json, sample_truncated, status, bound_identity_id,
+                discovery_gateway_mac, discovery_topic, create_time, update_time
             ) VALUES (
                 #{pending.pendingId}, #{pending.identityType}, #{pending.identityValue},
                 #{pending.profileCode}, #{pending.lastProfileVersion}, #{pending.firstSeenTime},
                 #{pending.lastSeenTime}, 1, #{pending.latestEventTime}, #{pending.latestTimeSource},
                 #{pending.latestMetricsJson}, #{pending.sampleTruncated}, 'DISCOVERED', NULL,
-                CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
+                #{pending.discoveryGatewayMac}, #{pending.discoveryTopic}, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
             )
             ON DUPLICATE KEY UPDATE
-                first_seen_time = LEAST(first_seen_time, VALUES(first_seen_time)),
-                profile_code = CASE
-                    WHEN VALUES(last_seen_time) >= last_seen_time THEN VALUES(profile_code)
-                    ELSE profile_code
-                END,
-                last_profile_version = CASE
-                    WHEN VALUES(last_seen_time) >= last_seen_time THEN VALUES(last_profile_version)
-                    ELSE last_profile_version
-                END,
-                last_seen_time = GREATEST(last_seen_time, VALUES(last_seen_time)),
-                report_count = CASE
-                    WHEN report_count < 9223372036854775807 THEN report_count + 1
-                    ELSE report_count
-                END,
-                latest_event_time = CASE
-                    WHEN VALUES(last_seen_time) >= last_seen_time THEN VALUES(latest_event_time)
-                    ELSE latest_event_time
-                END,
-                latest_time_source = CASE
-                    WHEN VALUES(last_seen_time) >= last_seen_time THEN VALUES(latest_time_source)
-                    ELSE latest_time_source
-                END,
-                latest_metrics_json = CASE
-                    WHEN VALUES(last_seen_time) >= last_seen_time THEN VALUES(latest_metrics_json)
-                    ELSE latest_metrics_json
-                END,
-                sample_truncated = CASE
-                    WHEN VALUES(last_seen_time) >= last_seen_time THEN VALUES(sample_truncated)
-                    ELSE sample_truncated
-                END,
-                update_time = CURRENT_TIMESTAMP(3)
+                first_seen_time = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    THEN LEAST(first_seen_time, #{pending.firstSeenTime}) ELSE first_seen_time END,
+                profile_code = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    AND #{pending.lastSeenTime} >= last_seen_time
+                    THEN #{pending.profileCode} ELSE profile_code END,
+                last_profile_version = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    AND #{pending.lastSeenTime} >= last_seen_time
+                    THEN #{pending.lastProfileVersion} ELSE last_profile_version END,
+                latest_event_time = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    AND #{pending.lastSeenTime} >= last_seen_time
+                    THEN #{pending.latestEventTime} ELSE latest_event_time END,
+                latest_time_source = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    AND #{pending.lastSeenTime} >= last_seen_time
+                    THEN #{pending.latestTimeSource} ELSE latest_time_source END,
+                latest_metrics_json = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    AND #{pending.lastSeenTime} >= last_seen_time
+                    THEN #{pending.latestMetricsJson} ELSE latest_metrics_json END,
+                sample_truncated = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    AND #{pending.lastSeenTime} >= last_seen_time
+                    THEN #{pending.sampleTruncated} ELSE sample_truncated END,
+                report_count = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '') AND report_count < 9223372036854775807
+                    THEN report_count + 1 ELSE report_count END,
+                update_time = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    THEN CURRENT_TIMESTAMP(3) ELSE update_time END,
+                last_seen_time = CASE WHEN COALESCE(discovery_gateway_mac, '')=COALESCE(#{pending.discoveryGatewayMac}, '')
+                    AND COALESCE(discovery_topic, '')=COALESCE(#{pending.discoveryTopic}, '')
+                    THEN GREATEST(last_seen_time, #{pending.lastSeenTime}) ELSE last_seen_time END
             """)
     int upsertDiscovery(@Param("pending") BizPendingDevice pending);
 

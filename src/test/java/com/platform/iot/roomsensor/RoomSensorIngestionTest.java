@@ -43,7 +43,7 @@ class RoomSensorIngestionTest {
         var ds = new DriverManagerDataSource("jdbc:h2:mem:room-" + UUID.randomUUID()
                 + ";MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_UPPER=false", "sa", "");
         mysql = new JdbcTemplate(ds);
-        mysql.execute("CREATE TABLE biz_space(space_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32),del_flag INT)");
+        mysql.execute("CREATE TABLE biz_space(space_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32),del_flag INT,space_type VARCHAR(12) DEFAULT 'ROOM')");
         mysql.execute("CREATE TABLE biz_equipment(equip_id VARCHAR(32) PRIMARY KEY,building_id VARCHAR(32),space_id VARCHAR(32),del_flag INT,equip_name VARCHAR(100))");
         mysql.execute("CREATE TABLE biz_device_identity(identity_id VARCHAR(32) PRIMARY KEY,identity_type VARCHAR(20),identity_value VARCHAR(50),equip_id VARCHAR(32),building_id VARCHAR(32),expected_profile_code VARCHAR(50),status INT)");
         // H2 对参数化 JSON 字符串的存取语义不同；真实 MySQL JSON 类型由独立引擎验证覆盖。
@@ -51,22 +51,80 @@ class RoomSensorIngestionTest {
                 .getContentAsString(StandardCharsets.UTF_8).replace("observation_json JSON", "observation_json LONGTEXT")
                 .replace(" COLLATE=utf8mb4_unicode_ci", "").split("-- 身份表历史安装")[0];
         new ResourceDatabasePopulator(new ByteArrayResource(ddl.getBytes(StandardCharsets.UTF_8))).execute(ds);
+        mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN unified_point_id VARCHAR(32)");
+        mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN first_unified_storage_ts BIGINT");
+        mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN shadow_write INT NOT NULL DEFAULT 0");
         mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN contact_kind VARCHAR(8)");
         mysql.execute("ALTER TABLE biz_room_sensor_source ADD COLUMN contact_location VARCHAR(80)");
         mysql.execute("ALTER TABLE biz_room_sensor_source ADD CONSTRAINT fk_room_sensor_identity FOREIGN KEY(identity_id) REFERENCES biz_device_identity(identity_id)");
-        mysql.update("INSERT INTO biz_space VALUES ('room','building',0)");
+        mysql.update("INSERT INTO biz_space (space_id,building_id,del_flag) VALUES ('room','building',0)");
         mysql.update("INSERT INTO biz_equipment VALUES ('radar','building','room',0,'雷达')");
         mysql.update("INSERT INTO biz_device_identity VALUES ('identity','MAC','AC233FC2B716','radar','building','MSR01_RADAR',1)");
         mysql.update("INSERT INTO biz_room_sensor_source(source_id,identity_id,gateway_mac,topic,protocol,enabled) VALUES ('radarsource','identity','AC233FC2B716',?,'MSR01_RADAR',1)", TOPIC);
         communication = mock(CommunicationEvidenceRecorder.class);
-        ingestor = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communication);
+        ingestor = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communication::roomSensor);
         history = mock(RoomSensorHistoryStore.class);
         worker = new RoomSensorWorker(mysql, mapper, history, meters);
     }
 
+    @Test void discoversOnlyAValidUnknownChildFromMatchingNonRetainedStatusTopic() {
+        var discovery = mock(com.platform.iot.onboarding.PendingDeviceDiscoveryService.class);
+        var entry = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters,
+                communication::roomSensor, discovery);
+        byte[] door = ("""
+                [{"type":"Gateway","mac":"AC233FC2B716"},{"mac":"C300008A3BAE","rawData":"%s"}]
+                """).formatted(OPEN_FRAME).getBytes(StandardCharsets.UTF_8);
+        entry.accept(DOOR_TOPIC, door, 1000, true);
+        entry.accept("/MSR01/002233fc2b71/status", door, 1000, false);
+        verifyNoInteractions(discovery);
+        entry.accept(DOOR_TOPIC, door, 1000, false);
+        verify(discovery).discoverRoomSensor(argThat(message ->
+                        "S4_DOOR".equals(message.profileCode()) && "C300008A3BAE".equals(message.deviceIdentity().value())
+                        && "doorOpen".equals(message.metrics().getFirst().code())),
+                eq(1000L), eq("AC233FC2B716"), eq(DOOR_TOPIC));
+        assertThat(mysql.queryForObject("SELECT COUNT(*) FROM biz_room_sensor_ingest_pending", Integer.class)).isZero();
+    }
+
+    @Test void unifiedObservationFreezesTheApprovedPointAndRetainsDistinctSameMillisecondSamples() throws Exception {
+        mysql.execute("ALTER TABLE biz_equipment ADD COLUMN equip_code VARCHAR(32) DEFAULT 'RADAR1'");
+        mysql.execute("""
+                CREATE TABLE biz_data_point(point_id VARCHAR(32),point_code VARCHAR(100),system_group_id VARCHAR(32),
+                    family_code VARCHAR(20),component_code VARCHAR(20),suffix_code VARCHAR(20),equip_id VARCHAR(32),
+                    building_id VARCHAR(32),del_flag INT,is_for_calc INT,status VARCHAR(20),data_type VARCHAR(20),unit VARCHAR(20))
+                """);
+        mysql.execute("CREATE TABLE biz_data_source(source_id VARCHAR(32),building_id VARCHAR(32),status VARCHAR(20))");
+        mysql.execute("""
+                CREATE TABLE biz_point_alias(point_id VARCHAR(32),building_id VARCHAR(32),status INT,source_id VARCHAR(32),
+                    source_system VARCHAR(50),source_point_code VARCHAR(100))
+                """);
+        mysql.update("""
+                INSERT INTO biz_data_point VALUES('point','RADAR1_count','group','RADAR_SENSOR','MAIN','count',
+                  'radar','building',0,0,'ONLINE','ANALOG','人')
+                """);
+        mysql.update("INSERT INTO biz_data_source VALUES('source','building','ENABLED')");
+        mysql.update("INSERT INTO biz_point_alias VALUES('point','building',1,'source','MQTT_STANDARD_V1','MAC:AC233FC2B716:targetCount')");
+        mysql.update("UPDATE biz_room_sensor_source SET unified_point_id='point',first_unified_storage_ts=0");
+
+        ingestor.accept(TOPIC, RADAR, 1000, false);
+        ingestor.accept(TOPIC, RADAR, 1000, false);
+
+        var json = mysql.queryForList("SELECT observation_json FROM biz_room_sensor_ingest_pending ORDER BY storage_ts", String.class);
+        assertThat(json).hasSize(2);
+        var first = mapper.readValue(json.getFirst(), RoomSensorObservation.class);
+        var second = mapper.readValue(json.getLast(), RoomSensorObservation.class);
+        assertThat(first.unifiedOnly()).isTrue();
+        assertThat(first.unifiedEvent().pointId()).isEqualTo("point");
+        assertThat(first.unifiedEvent().sourceSystem()).isEqualTo("MQTT_ROOM_SENSOR");
+        assertThat(first.unifiedEvent().value()).isEqualTo(2);
+        assertThat(first.deviceSeq()).isEqualTo(65535);
+        assertThat(second.unifiedEvent().eventTime()).isEqualTo(1001);
+        assertThat(second.receivedAt()).isEqualTo(1000);
+        assertThat(second.scope()).isEqualTo(first.scope());
+    }
+
     @Test void everyValidObservationCommitsOnlyProjectionAndAllocatesDistinctKeysAcrossRestart() throws Exception {
         ingestor.accept(TOPIC, RADAR, 1000, false);
-        new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communication).accept(TOPIC, RADAR, 1000, false);
+        new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communication::roomSensor).accept(TOPIC, RADAR, 1000, false);
         var rows = mysql.queryForList("SELECT * FROM biz_room_sensor_ingest_pending ORDER BY storage_ts");
         assertThat(rows).hasSize(2);
         assertThat(rows.get(0).get("storage_ts")).isEqualTo(1000L);

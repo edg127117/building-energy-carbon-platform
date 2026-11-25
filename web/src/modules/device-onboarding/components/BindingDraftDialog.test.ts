@@ -6,7 +6,7 @@ import BindingDraftDialog from './BindingDraftDialog.vue'
 
 const assets = {
   buildingOptions: ref<Array<{ label: string; value: string }>>([]),
-  scopeSpaces: ref<Array<{ spaceId: string; parentSpaceId: string | null; spaceName: string; children: never[] }>>([]),
+  scopeSpaces: ref<Array<{ spaceId: string; parentSpaceId: string | null; spaceName: string; spaceType?: string | null; children: never[] }>>([]),
   scopeSystemGroups: ref<Array<{ systemGroupId: string; systemName: string }>>([]),
   points: ref([]),
   equipment: ref({ page: 1, size: 100, total: 0, items: [] as Array<{ equipmentId: string; equipmentName: string }> }),
@@ -270,6 +270,115 @@ describe('绑定准备弹窗', () => {
     expect(wrapper.text()).toContain('温度测点接入')
     expect(wrapper.text()).not.toContain('测点映射')
     expect(wrapper.findAllComponents(ElRadioGroup)).toHaveLength(1)
+    wrapper.unmount()
+  })
+
+  it('门磁已关联已绑定房间的蓝牙网关时自动锁定同建筑同房间并透传 gatewayMac', async () => {
+    assets.buildingOptions.value = [
+      { label: '研发楼 A 座', value: 'B1' },
+      { label: '研发楼 B 座', value: 'B2' },
+    ]
+    assets.scopeSpaces.value = [
+      { spaceId: 'S1', parentSpaceId: null, spaceName: 'B314', children: [] },
+      { spaceId: 'S2', parentSpaceId: null, spaceName: 'B315', children: [] },
+    ]
+    assets.scopeSystemGroups.value = [{ systemGroupId: 'G1', systemName: '房间环境传感器' }]
+    const doorProduct = {
+      ...product,
+      productId: 'P-DOOR',
+      productCode: 'S4_DOOR_V1',
+      productName: '门磁传感器',
+      expectedProfileCode: 'S4_DOOR',
+      identityType: 'MAC',
+      points: [{ metricCode: 'door_open', pointNameTemplate: '门状态', suffixCode: 'DOOR', dataType: 'DIGITAL' as const, unit: '-', minValue: null, maxValue: null, forCalc: false, required: true, sortOrder: 0, enabled: true }],
+    }
+    const doorPending = {
+      ...pending,
+      pendingId: 'D-DOOR',
+      identityType: 'MAC',
+      identityValue: 'C300008A3BAE',
+      profileCode: 'S4_DOOR',
+      gatewayMac: 'AC233FC2B716',
+      gatewayEquipmentName: 'B314人数雷达',
+      suggestedBuildingId: 'B1',
+      suggestedSpaceId: 'S1',
+    }
+    const wrapper = mount(BindingDraftDialog, {
+      props: { open: true, pending: doorPending, product: doorProduct, products: [doorProduct], productTotal: 1 },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('所属蓝牙网关')
+    expect(wrapper.text()).toContain('B314人数雷达')
+    expect(wrapper.text()).toContain('研发楼 A 座')
+    expect(wrapper.text()).toContain('B314')
+    expect(wrapper.findAllComponents(ElSelect)).toHaveLength(0)
+
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '提交绑定并启用')!.trigger('click')
+    expect(wrapper.emitted('submit')?.at(-1)?.[0]).toEqual(expect.objectContaining({
+      productId: 'P-DOOR',
+      buildingId: 'B1',
+      spaceId: 'S1',
+      systemGroupId: 'G1',
+      gatewayMac: 'AC233FC2B716',
+      activateOnApprove: true,
+      autoCreatePoints: true,
+    }))
+    wrapper.unmount()
+  })
+
+  it('门磁所属蓝牙网关尚未绑定房间时提示并阻止提交', async () => {
+    const doorProduct = { ...product, productId: 'P-DOOR', productName: '门磁传感器', expectedProfileCode: 'S4_DOOR', identityType: 'MAC' }
+    const doorPending = {
+      ...pending,
+      pendingId: 'D-DOOR-2',
+      identityType: 'MAC',
+      profileCode: 'S4_DOOR',
+      gatewayMac: 'AC233FC2B716',
+      gatewayEquipmentName: null,
+      suggestedBuildingId: null,
+      suggestedSpaceId: null,
+    }
+    const wrapper = mount(BindingDraftDialog, {
+      props: { open: true, pending: doorPending, product: doorProduct, products: [doorProduct], productTotal: 1 },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('请先完成所属蓝牙网关的房间绑定后再绑定门磁。')
+    const submitBtn = wrapper.findAllComponents(ElButton).find(button => button.text() === '提交绑定并启用')!
+    expect(submitBtn.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('雷达绑定空间下拉框按 spaceType=ROOM 只显示房间，过滤楼层', async () => {
+    assets.buildingOptions.value = [{ label: '研发楼 A 座', value: 'B1' }]
+    assets.scopeSpaces.value = [
+      { spaceId: 'F3', parentSpaceId: null, spaceName: '三层', spaceType: 'FLOOR', children: [] },
+      { spaceId: 'R314', parentSpaceId: 'F3', spaceName: 'B314', spaceType: 'ROOM', children: [] },
+    ]
+    assets.scopeSystemGroups.value = [{ systemGroupId: 'G1', systemName: '房间环境传感器' }]
+    const radarProduct = {
+      ...product,
+      productId: 'P-RADAR',
+      productCode: 'MSR01_RADAR_V1',
+      productName: '人数雷达',
+      expectedProfileCode: 'MSR01_RADAR',
+      identityType: 'MAC',
+    }
+    const radarPending = {
+      ...pending,
+      pendingId: 'D-RADAR',
+      identityType: 'MAC',
+      profileCode: 'MSR01_RADAR',
+    }
+    const wrapper = mount(BindingDraftDialog, {
+      props: { open: true, pending: radarPending, product: radarProduct, products: [radarProduct], productTotal: 1 },
+    })
+    await flushPromises()
+
+    const options = wrapper.findAllComponents({ name: 'ElOption' }).map(option => option.props('label'))
+    expect(options).toEqual(['B314'])
+    expect(options).not.toContain('三层')
     wrapper.unmount()
   })
 })
