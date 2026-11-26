@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { applyProductContract, emptyProtocolConfiguration, parseProtocolExportPackage, validateProtocolConfiguration } from './protocol-configuration'
+import {
+  applyProductContract,
+  emptyProtocolConfiguration,
+  isIntervalParameterMapping,
+  normalizeProtocolConfiguration,
+  parsePreviewErrorTarget,
+  parseProtocolExportPackage,
+  serializeProtocolConfigurationForSave,
+  validateProtocolConfiguration,
+  validateProtocolDraft,
+} from './protocol-configuration'
 import type { DeviceProductDetail } from '@/modules/device-onboarding/public'
 
 const product = {
@@ -11,20 +21,82 @@ const product = {
 } as DeviceProductDetail
 
 describe('协议草稿与产品模板约束', () => {
-  it('选择产品后固定协议、身份、目标单位和必需性', () => {
-    const form = { ...emptyProtocolConfiguration(), mappings: [{ sourcePath: '/t', metricCode: 'temperature', sourceUnit: '℃', targetUnit: 'K', scale: '1', offset: '0', required: false, enabled: true, sortOrder: 0 }] }
-    expect(applyProductContract(form, product)).toMatchObject({
-      productId: 'P1', profileCode: 'V1', identityType: 'SN', mappings: [{ targetUnit: '℃', required: true }],
+  it('选择产品后固定协议、身份、目标单位和必需性，并保留周期量参数映射', () => {
+    const intervalStart = {
+      valueType: 'INTERVAL_START' as const,
+      sourcePath: '/windowStart',
+      metricCode: '__interval_start',
+      sourceUnit: 'ms',
+      targetUnit: 'ms',
+      scale: '1',
+      offset: '0',
+      required: true,
+      enabled: true,
+      sortOrder: 10,
+    }
+    const form = {
+      ...emptyProtocolConfiguration(),
+      mappings: [
+        { sourcePath: '/t', metricCode: 'temperature', sourceUnit: '℃', targetUnit: 'K', scale: '1', offset: '0', required: false, enabled: true, sortOrder: 0 },
+        intervalStart,
+      ],
+    }
+    const applied = applyProductContract(form, product)
+    expect(isIntervalParameterMapping(intervalStart)).toBe(true)
+    expect(applied).toMatchObject({
+      productId: 'P1',
+      profileCode: 'V1',
+      identityType: 'SN',
+      mappings: [{ metricCode: 'temperature', targetUnit: '℃', required: true }, intervalStart],
     })
+    expect(validateProtocolConfiguration({ ...applied, name: '周期量电表', sourceTopic: 'raw/up', identityPath: '/sn' }, product)).toBeNull()
   })
 
-  it('缺少产品必需测点或单位不一致时阻止保存和预览', () => {
+  it('归一化后端允许为空的草稿字段，并在保存时将空倍率与偏移序列化为 null', () => {
+    const normalized = normalizeProtocolConfiguration({
+      name: '空字段草稿',
+      productId: 'P1',
+      profileCode: 'V1',
+      sourceTopic: null,
+      identityType: 'SN',
+      identityPath: null,
+      discriminatorPath: null,
+      discriminatorValue: null,
+      timestampPath: null,
+      mappings: [
+        { metricCode: 'temperature', sourcePath: '/t', sourceUnit: null, targetUnit: '℃', scale: null, offset: null, required: true, enabled: true, sortOrder: 0 },
+      ],
+    })
+    expect(normalized.sourceTopic).toBe('')
+    expect(normalized.identityPath).toBe('')
+    expect(normalized.mappings[0]).toMatchObject({ sourceUnit: '', scale: '', offset: '' })
+    const serialized = serializeProtocolConfigurationForSave(normalized)
+    expect(serialized.mappings[0].scale).toBeNull()
+    expect(serialized.mappings[0].offset).toBeNull()
+  })
+
+  it('草稿暂存校验允许仅填名称和产品，Topic/身份路径/映射可后补', () => {
+    const partial = applyProductContract({ ...emptyProtocolConfiguration(), name: '半成品协议' }, product)
+    expect(validateProtocolDraft(partial, product)).toBeNull()
+    expect(validateProtocolDraft({ ...partial, name: '   ' }, product)).toBe('draftNameRequired')
+    expect(validateProtocolDraft({ ...partial, discriminatorPath: '/type', discriminatorValue: null }, product)).toBe('discriminator')
+  })
+
+  it('完整校验在缺少必需测点或单位不一致时阻断发布准备', () => {
     const form = { ...emptyProtocolConfiguration(), name: '测试', productId: 'P1', profileCode: 'V1', identityType: 'SN', sourceTopic: 'raw/up', identityPath: '/sn' }
     expect(validateProtocolConfiguration(form, product)).toBe('mappingRequired')
     form.mappings = [{ sourcePath: '/h', metricCode: 'humidity', sourceUnit: '%', targetUnit: '%', scale: '1', offset: '0', required: false, enabled: true, sortOrder: 0 }]
     expect(validateProtocolConfiguration(form, product)).toBe('missingRequiredMetric')
     form.mappings = [{ sourcePath: '/t', metricCode: 'temperature', sourceUnit: '℃', targetUnit: 'K', scale: '1', offset: '0', required: true, enabled: true, sortOrder: 0 }]
     expect(validateProtocolConfiguration(form, product)).toBe('mappingContract')
+  })
+
+  it('解析后端试解析错误路径到顶层字段、映射行或 JSON Pointer', () => {
+    expect(parsePreviewErrorTarget('sourceTopic')).toEqual({ kind: 'field', field: 'sourceTopic' })
+    expect(parsePreviewErrorTarget('mappings.temperature')).toEqual({ kind: 'mapping', metricCode: 'temperature', field: null })
+    expect(parsePreviewErrorTarget('mappings.temperature.sourceUnit')).toEqual({ kind: 'mapping', metricCode: 'temperature', field: 'sourceUnit' })
+    expect(parsePreviewErrorTarget('/data/temp')).toEqual({ kind: 'pointer', pointer: '/data/temp' })
+    expect(parsePreviewErrorTarget('')).toEqual({ kind: 'unknown', raw: '' })
   })
 })
 

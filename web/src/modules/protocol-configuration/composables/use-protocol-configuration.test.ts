@@ -1,18 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useProtocolConfiguration } from './use-protocol-configuration'
 import { emptyProtocolConfiguration } from '../models/protocol-configuration'
-import { createProtocolConfiguration, getProtocolConfiguration, inspectProtocolSample, listProtocolConfigurations, previewProtocolConfiguration } from '../api/protocol-configuration'
+import {
+  createProtocolConfiguration,
+  deleteProtocolConfiguration,
+  getProtocolConfiguration,
+  inspectProtocolSample,
+  listProtocolConfigurations,
+  previewProtocolConfiguration,
+} from '../api/protocol-configuration'
 import { TransportError } from '@/infrastructure/http/public'
 
 vi.mock('../api/protocol-configuration', () => ({
-  createProtocolConfiguration: vi.fn(), getProtocolConfiguration: vi.fn(), inspectProtocolSample: vi.fn(),
-  listProtocolConfigurations: vi.fn(), previewProtocolConfiguration: vi.fn(), updateProtocolConfiguration: vi.fn(),
+  createProtocolConfiguration: vi.fn(),
+  deleteProtocolConfiguration: vi.fn(),
+  getProtocolConfiguration: vi.fn(),
+  inspectProtocolSample: vi.fn(),
+  listProtocolConfigurations: vi.fn(),
+  previewProtocolConfiguration: vi.fn(),
+  updateProtocolConfiguration: vi.fn(),
 }))
 
 const deferred = <T>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 
 describe('协议配置异步状态', () => {
   beforeEach(() => vi.clearAllMocks())
+
   it('通过深链接加载详情时保留并行返回的草稿名称列表', async () => {
     const detail = { id: 'D1', revision: 1, status: 'DRAFT' as const, configuration: { ...emptyProtocolConfiguration(), name: '外机电表接入' }, updatedAt: 1 }
     const pending = deferred<{ page: number; size: number; total: number; items: typeof detail[] }>()
@@ -26,6 +39,31 @@ describe('协议配置异步状态', () => {
     expect(state.draft.value?.id).toBe('D1')
     expect(state.drafts.value.items[0]?.configuration.name).toBe('外机电表接入')
   })
+
+  it('支持按关键词和产品筛选草稿，并透传分页条件', async () => {
+    vi.mocked(listProtocolConfigurations).mockResolvedValue({ page: 1, size: 20, total: 0, items: [] })
+    const state = useProtocolConfiguration()
+    await state.loadDrafts(1, { keyword: ' 雷达 ', productId: 'P-RADAR' })
+    expect(listProtocolConfigurations).toHaveBeenCalledWith({ page: 1, size: 20, keyword: '雷达', productId: 'P-RADAR' })
+  })
+
+  it('删除当前草稿后重置编辑态并刷新列表，遇到已冻结引用返回明确中文提示', async () => {
+    const detail = { id: 'D1', revision: 1, status: 'DRAFT' as const, configuration: { ...emptyProtocolConfiguration(), name: '待删草稿' }, updatedAt: 1 }
+    vi.mocked(getProtocolConfiguration).mockResolvedValueOnce(detail)
+    vi.mocked(deleteProtocolConfiguration).mockResolvedValueOnce(null)
+    vi.mocked(listProtocolConfigurations).mockResolvedValueOnce({ page: 1, size: 20, total: 0, items: [] })
+    const state = useProtocolConfiguration()
+    await state.selectDraft('D1')
+    await state.deleteDraft('D1')
+    expect(deleteProtocolConfiguration).toHaveBeenCalledWith('D1')
+    expect(state.draft.value).toBeNull()
+    expect(state.form.value.name).toBe('')
+
+    vi.mocked(deleteProtocolConfiguration).mockRejectedValueOnce(new TransportError('request', 409, undefined, 'PROTOCOL_DRAFT_REFERENCED'))
+    await expect(state.deleteDraft('D2')).rejects.toBeInstanceOf(TransportError)
+    expect(state.error.value).toContain('冻结版本')
+  })
+
   it('忽略迟到的字段识别响应', async () => {
     const first = deferred<{ fields: Array<{ path: string; type: 'NUMBER'; value: string }> }>()
     vi.mocked(inspectProtocolSample).mockReturnValueOnce(first.promise).mockResolvedValueOnce({ fields: [{ path: '/new', type: 'NUMBER', value: '2' }] })
@@ -96,5 +134,39 @@ describe('协议配置异步状态', () => {
     await request
     expect(state.draft.value?.revision).toBe(1)
     expect(state.form.value.name).toBe('继续编辑')
+  })
+
+  it('读取含空单位、空倍率与偏移的草稿时归一化为空字符串，不抛错且可继续编辑保存', async () => {
+    const partialFromBackend = {
+      id: 'D-PARTIAL',
+      revision: 1,
+      status: 'DRAFT' as const,
+      updatedAt: 100,
+      configuration: {
+        ...emptyProtocolConfiguration(),
+        name: '半成品草稿',
+        sourceTopic: null as unknown as string,
+        identityPath: null as unknown as string,
+        mappings: [
+          {
+            metricCode: 'power',
+            sourcePath: '/power',
+            sourceUnit: null as unknown as string,
+            targetUnit: 'kW',
+            scale: null as unknown as string,
+            offset: null as unknown as string,
+            required: true,
+            enabled: true,
+            sortOrder: 0,
+          },
+        ],
+      },
+    }
+    vi.mocked(getProtocolConfiguration).mockResolvedValueOnce(partialFromBackend)
+    const state = useProtocolConfiguration()
+    await state.selectDraft('D-PARTIAL')
+    expect(state.form.value.sourceTopic).toBe('')
+    expect(state.form.value.identityPath).toBe('')
+    expect(state.form.value.mappings[0]).toMatchObject({ sourceUnit: '', scale: '', offset: '' })
   })
 })

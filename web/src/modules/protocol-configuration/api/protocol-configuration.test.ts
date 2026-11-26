@@ -1,17 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { requestApi } from '@/infrastructure/http/public'
 import {
-  previewProtocolPublication, previewProtocolRollback, getProtocolDeploymentDetail,
   createProtocolConfiguration,
+  deleteProtocolConfiguration,
   freezeProtocolVersion,
+  getProtocolDeploymentDetail,
   importProtocolVersions,
   inspectProtocolSample,
   listProtocolConfigurations,
   listProtocolDeploymentHistory,
   listProtocolPublicationTargets,
   listProtocolVersions,
+  previewDraftProtocolPublication,
   previewProtocolConfiguration,
+  previewProtocolPublication,
+  previewProtocolRollback,
   registerProtocolPublicationTarget,
+  requestDraftProtocolPublication,
   requestProtocolPublication,
   requestProtocolRollback,
   updateProtocolConfiguration,
@@ -24,21 +29,36 @@ describe('协议配置接口契约', () => {
   beforeEach(() => { vi.clearAllMocks(); vi.mocked(requestApi).mockResolvedValue({} as never) })
 
   it('只读发布预览与历史详情不调用创建审批接口', async () => {
+    await previewDraftProtocolPublication({ draftId: 'D1', revision: 2, targetId: 'T1', expectedSequence: 3 })
     await previewProtocolPublication({ targetId: 'T1', expectedSequence: 3, versionIds: ['V1'] })
     await previewProtocolRollback({ targetId: 'T1', expectedSequence: 3, historicalSequence: 1 })
     await getProtocolDeploymentDetail('target/1', 2)
     expect(vi.mocked(requestApi).mock.calls).toEqual([
+      [{ method: 'post', url: '/v1/protocol-deployments/draft-preview', data: { draftId: 'D1', revision: 2, targetId: 'T1', expectedSequence: 3 } }],
       [{ method: 'post', url: '/v1/protocol-deployments/preview', data: { targetId: 'T1', expectedSequence: 3, versionIds: ['V1'] } }],
       [{ method: 'post', url: '/v1/protocol-deployments/rollback-preview', data: { targetId: 'T1', expectedSequence: 3, historicalSequence: 1 } }],
       [{ method: 'get', url: '/v1/protocol-deployments/targets/target%2F1/history/2' }],
     ])
   })
 
-  it('使用 items 分页契约并编码草稿标识', async () => {
-    await listProtocolConfigurations({ page: 2, size: 20 })
+  it('使用 items 分页与筛选契约并编码草稿标识', async () => {
+    await listProtocolConfigurations({ page: 2, size: 20, keyword: '电表', productId: 'P1' })
     await updateProtocolConfiguration('draft/1', 3, emptyProtocolConfiguration())
-    expect(requestApi).toHaveBeenNthCalledWith(1, { method: 'get', url: '/v1/protocol-configurations', params: { page: 2, size: 20 } })
-    expect(requestApi).toHaveBeenNthCalledWith(2, { method: 'put', url: '/v1/protocol-configurations/draft%2F1', data: { revision: 3, configuration: emptyProtocolConfiguration() } })
+    await deleteProtocolConfiguration('draft/1')
+    expect(requestApi).toHaveBeenNthCalledWith(1, {
+      method: 'get',
+      url: '/v1/protocol-configurations',
+      params: { page: 2, size: 20, keyword: '电表', productId: 'P1' },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(2, {
+      method: 'put',
+      url: '/v1/protocol-configurations/draft%2F1',
+      data: { revision: 3, configuration: emptyProtocolConfiguration() },
+    })
+    expect(requestApi).toHaveBeenNthCalledWith(3, {
+      method: 'delete',
+      url: '/v1/protocol-configurations/draft%2F1',
+    })
   })
 
   it('保存体不包含样例，样例只进入检查和预览请求', async () => {
@@ -51,12 +71,13 @@ describe('协议配置接口契约', () => {
     expect(requestApi).toHaveBeenNthCalledWith(3, { method: 'post', url: '/v1/protocol-configurations/preview', data: { configuration, samplePayload: '{"sn":"A"}', receivedTime: 1234 } })
   })
 
-  it('严格使用发布、回退和目标状态契约', async () => {
+  it('严格使用草稿一步发布及旧发布、回退与目标状态契约', async () => {
     await listProtocolPublicationTargets()
     await registerProtocolPublicationTarget({ name: 'adapter-a', outputVersion: 'V2', allowedTopics: ['raw/a'] })
     await freezeProtocolVersion('draft/1', 4)
     await listProtocolVersions()
     await listProtocolDeploymentHistory('target/1')
+    await requestDraftProtocolPublication({ draftId: 'D1', revision: 4, targetId: 'T1', expectedSequence: 2, idempotencyKey: 'draft-publish-key' })
     await requestProtocolPublication({ targetId: 'T1', expectedSequence: 2, versionIds: ['V1', 'V2'], idempotencyKey: 'publish-key' })
     await requestProtocolRollback({ targetId: 'T1', historicalSequence: 1, expectedSequence: 2, idempotencyKey: 'rollback-key' })
     expect(vi.mocked(requestApi).mock.calls).toEqual([
@@ -65,6 +86,7 @@ describe('协议配置接口契约', () => {
       [{ method: 'post', url: '/v1/protocol-deployments/versions/draft%2F1', data: { revision: 4 } }],
       [{ method: 'get', url: '/v1/protocol-deployments/versions' }],
       [{ method: 'get', url: '/v1/protocol-deployments/targets/target%2F1/history' }],
+      [{ method: 'post', url: '/v1/protocol-deployments/draft-publish-requests', data: { draftId: 'D1', revision: 4, targetId: 'T1', expectedSequence: 2, idempotencyKey: 'draft-publish-key' } }],
       [{ method: 'post', url: '/v1/protocol-deployments/requests', data: { targetId: 'T1', expectedSequence: 2, versionIds: ['V1', 'V2'], idempotencyKey: 'publish-key' } }],
       [{ method: 'post', url: '/v1/protocol-deployments/rollback-requests', data: { targetId: 'T1', historicalSequence: 1, expectedSequence: 2, idempotencyKey: 'rollback-key' } }],
     ])
@@ -73,7 +95,8 @@ describe('协议配置接口契约', () => {
   it('迁移接口保留原始配置 JSON 并提交完整产品绑定', async () => {
     await importProtocolVersions({ snapshotJson: '{"schemaVersion":1}', archiveJson: null, productBindings: { P1: 'PRODUCT-1' } })
     expect(requestApi).toHaveBeenCalledWith({
-      method: 'post', url: '/v1/protocol-deployments/import',
+      method: 'post',
+      url: '/v1/protocol-deployments/import',
       data: { snapshotJson: '{"schemaVersion":1}', archiveJson: null, productBindings: { P1: 'PRODUCT-1' } },
     })
   })
