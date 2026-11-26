@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -26,10 +27,11 @@ import static org.mockito.Mockito.mock;
 /** 装配验证使用内存 MySQL 替身和 TDengine Mock，不建立真实外部连接。 */
 class RoomSensorConfigurationTest {
     private final ApplicationContextRunner context = new ApplicationContextRunner()
-            .withUserConfiguration(Scheduling.class, RoomSensorSchedulingConfig.class, RoomSensorIngestor.class,
+            .withUserConfiguration(Scheduling.class, RoomSensorSchedulingConfig.class, RoomSensorQueueScheduler.class, RoomSensorIngestor.class,
                     RoomSensorParser.class, RoomSensorWorker.class, RoomSensorHistoryStore.class, RoomSensorCommunicationQueue.class,
                     RoomSensorDoorStateService.class, RoomSensorRadarStateService.class)
             .withBean(ObjectMapper.class, ObjectMapper::new)
+            .withBean("taskScheduler", ThreadPoolTaskScheduler.class, ThreadPoolTaskScheduler::new)
             .withBean(MeterRegistry.class, SimpleMeterRegistry::new)
             .withBean(CommunicationEvidenceRecorder.class, () -> mock(CommunicationEvidenceRecorder.class))
             .withBean(DeviceCommunicationService.class, () -> mock(DeviceCommunicationService.class))
@@ -51,16 +53,18 @@ class RoomSensorConfigurationTest {
                 .doesNotHaveBean(RoomSensorDoorStateService.class)
                 .doesNotHaveBean(RoomSensorRadarStateService.class)
                 .doesNotHaveBean(RoomSensorCommunicationQueue.class)
+                .doesNotHaveBean(RoomSensorQueueScheduler.class)
                 .doesNotHaveBean("roomSensorTaskScheduler"));
     }
 
     @Test void enabledModuleUsesDedicatedSchedulerAndExplicitDataSources() {
-        context.withPropertyValues("room-sensor.enabled=true", "room-sensor.flush-delay-ms=3600000",
+        context.withPropertyValues("room-sensor.enabled=true",
                 "room-sensor.cleanup-delay-ms=3600000").run(app -> assertThat(app).hasNotFailed()
                 .hasSingleBean(RoomSensorIngestor.class).hasSingleBean(RoomSensorWorker.class)
                 .hasSingleBean(RoomSensorHistoryStore.class).hasSingleBean(RoomSensorDoorStateService.class)
                 .hasSingleBean(RoomSensorRadarStateService.class)
                 .hasSingleBean(RoomSensorCommunicationQueue.class)
+                .hasSingleBean(RoomSensorQueueScheduler.class)
                 .hasBean("roomSensorTaskScheduler"));
     }
 
