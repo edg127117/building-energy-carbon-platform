@@ -25,6 +25,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -44,6 +45,13 @@ public class SensitiveChangeService {
     private final AuditGovernanceProperties properties;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+
+    /** 在调用方的提交事务中锁定已有申请，让重试按最新审批状态决定是否继续送审。 */
+    public Optional<SensitiveChangeRecord> findOwnRequestForSubmission(long userId, String idempotencyKey) {
+        dutyService.requireDuty(userId, BackendDuty.BACKOFFICE_CHANGE_SUBMITTER);
+        return repository.findByIdempotency(userId, idempotencyKey)
+                .map(existing -> require(existing.requestId(), true));
+    }
 
     @Transactional(rollbackFor = Exception.class)
     public SensitiveChangeRecord createDraft(long userId, String operationCode, JsonNode command,

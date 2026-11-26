@@ -14,9 +14,9 @@ public final class ProtocolContracts {
             @NotBlank @Size(max=100) String name,
             @NotBlank @Size(max=32) String productId,
             @NotBlank @Pattern(regexp="[A-Z0-9_]{1,50}") String profileCode,
-            @NotBlank @Size(max=200) String sourceTopic,
+            @Size(max=200) String sourceTopic,
             @NotBlank @Size(max=20) String identityType,
-            @NotBlank @Size(max=200) String identityPath,
+            @Size(max=200) String identityPath,
             @Size(max=200) String discriminatorPath,
             @Size(max=50) String discriminatorValue,
             @Size(max=200) String timestampPath,
@@ -27,7 +27,10 @@ public final class ProtocolContracts {
             @Size(max=200) String retransmittedAtPath,
             @Size(max=50) String maxAckMode,
             @Size(max=50) String correlationPolicy,
-            @NotEmpty @Size(max=128) List<@NotNull @Valid Mapping> mappings) {
+            @Size(max=128) List<@NotNull @Valid Mapping> mappings) {
+        public Configuration {
+            if (mappings == null) mappings = List.of();
+        }
 
         /** 兼容未认识可靠性字段的旧客户端；缺省值由运行时适配器按旧规则处理。 */
         public Configuration(String name,String productId,String profileCode,String sourceTopic,String identityType,
@@ -39,12 +42,12 @@ public final class ProtocolContracts {
     }
 
     public record Mapping(
-            @NotBlank @Size(max=200) String sourcePath,
+            @Size(max=200) String sourcePath,
             @NotBlank @Size(max=100) String metricCode,
-            @NotBlank @Size(max=20) String sourceUnit,
-            @NotBlank @Size(max=20) String targetUnit,
-            @NotNull @Digits(integer=11,fraction=9) @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal scale,
-            @NotNull @Digits(integer=11,fraction=9) @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal offset,
+            @Size(max=20) String sourceUnit,
+            @Size(max=20) String targetUnit,
+            @Digits(integer=11,fraction=9) @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal scale,
+            @Digits(integer=11,fraction=9) @JsonFormat(shape=JsonFormat.Shape.STRING) BigDecimal offset,
             @NotNull Boolean required,
             @NotNull Boolean enabled,
             @NotNull @Min(0) @Max(10000) Integer sortOrder,
@@ -57,13 +60,13 @@ public final class ProtocolContracts {
     }
 
     public record UpdateRequest(@NotNull @Min(1) Long revision,
-                                @NotNull @Valid Configuration configuration) {}
+                                @NotNull Configuration configuration) {}
     public record Detail(String id, long revision, String status,
                          Configuration configuration, long updatedAt) {}
     public record InspectRequest(@NotBlank @Size(max=65536) String samplePayload) {}
     public record Field(String path, String type, String value) {}
     public record Inspection(List<Field> fields) {}
-    public record PreviewRequest(@NotNull @Valid Configuration configuration,
+    public record PreviewRequest(@NotNull Configuration configuration,
                                  @NotBlank @Size(max=65536) String samplePayload,
                                  @NotNull @Min(1000000000000L) @Max(9999999999999L) Long receivedTime) {}
     public record PreviewError(String code, String path, String message) {}

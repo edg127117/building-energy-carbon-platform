@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.audit.sensitive.SensitiveChangeService;
 import com.platform.audit.sensitive.SensitiveChangeRecord;
 import com.platform.framework.common.Result;
+import com.platform.iot.protocol.ProtocolDraftPublicationService;
 import com.platform.iot.protocol.ProtocolPublicationService;
 import com.platform.security.SecurityUser;
 import io.swagger.v3.oas.annotations.Operation;
@@ -22,10 +23,12 @@ import static com.platform.iot.protocol.api.ProtocolPublicationContracts.*;
 /** 发布入口创建公共审批申请；目标凭据仅首次登记返回，状态接口不返回凭据摘要。 */
 public class ProtocolPublicationController {
     private final ProtocolPublicationService service;
+    private final ProtocolDraftPublicationService draftPublication;
     private final SensitiveChangeService changes;
     private final ObjectMapper mapper;
-    public ProtocolPublicationController(ProtocolPublicationService service,SensitiveChangeService changes,ObjectMapper mapper) {
-        this.service=service;this.changes=changes;this.mapper=mapper;
+    public ProtocolPublicationController(ProtocolPublicationService service,ProtocolDraftPublicationService draftPublication,
+                                         SensitiveChangeService changes,ObjectMapper mapper) {
+        this.service=service;this.draftPublication=draftPublication;this.changes=changes;this.mapper=mapper;
     }
     @GetMapping("/targets") @Operation(summary="读取适配器目标及联系状态")
     public Result<List<TargetView>> targets(Authentication auth){return Result.success(service.targets(SecurityUser.roles(auth)));}
@@ -43,6 +46,14 @@ public class ProtocolPublicationController {
     public Result<DeploymentDetail> historyDetail(@PathVariable String targetId,@PathVariable long sequence,Authentication auth){return Result.success(service.deployment(targetId,sequence,SecurityUser.roles(auth)));}
     @PostMapping("/preview") @Operation(summary="只读计算普通发布后的完整集合及变化")
     public Result<PublicationPreview> preview(@Valid @RequestBody PreviewRequest request,Authentication auth){return Result.success(service.preview(request,SecurityUser.roles(auth)));}
+    @PostMapping("/draft-preview") @Operation(summary="只读计算草稿发布后的完整集合及变化")
+    public Result<PublicationPreview> draftPreview(@Valid @RequestBody DraftPreviewRequest request,Authentication auth){
+        return Result.success(service.draftPreview(request,SecurityUser.roles(auth)));
+    }
+    @PostMapping("/draft-publish-requests") @Operation(summary="冻结当前草稿修订并提交发布审核")
+    public Result<SensitiveChangeRecord> draftPublish(@Valid @RequestBody DraftPublishRequest request,Authentication auth){
+        return Result.success(draftPublication.submit(SecurityUser.userId(auth),SecurityUser.roles(auth),request));
+    }
     @PostMapping("/rollback-preview") @Operation(summary="只读计算历史回退后的完整集合及变化")
     public Result<PublicationPreview> rollbackPreview(@Valid @RequestBody RollbackPreviewRequest request,Authentication auth){return Result.success(service.rollbackPreview(request,SecurityUser.roles(auth)));}
     @PostMapping("/requests") @Operation(summary="为完整目标集合建立审批申请")

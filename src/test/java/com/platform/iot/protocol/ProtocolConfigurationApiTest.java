@@ -2,6 +2,7 @@ package com.platform.iot.protocol;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.context.jdbc.SqlConfig;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
+import java.util.List;
 import java.util.UUID;
 import static org.assertj.core.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
@@ -24,7 +26,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Transactional
-class ProtocolConfigurationApiTest {
+public class ProtocolConfigurationApiTest {
+    private static final ObjectMapper JSON = new ObjectMapper();
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
     @Autowired JdbcTemplate jdbc;
@@ -85,6 +88,114 @@ class ProtocolConfigurationApiTest {
         assertThat(stored).doesNotContain("test-only-meter","samplePayload");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_onboarding_audit_log WHERE object_id=?",Integer.class,id)).isEqualTo(2);
     }
+    @Test
+    void savesIncompleteDraftAndUpdatesAStartedMapping() throws Exception {
+        var config = configuration();
+        config.remove(List.of("sourceTopic", "identityPath", "mappings"));
+        config.putNull("mappings");
+        var created = postOk("", config);
+        String id = created.path("id").asText();
+        assertThat(created.path("configuration").path("mappings")).isEmpty();
+
+        var mapping = config.putArray("mappings").addObject().put("metricCode", "VOLTAGE")
+                .put("enabled", true).put("required", true).put("sortOrder", 0);
+        var update = mapper.createObjectNode().put("revision", 1);
+        update.set("configuration", config);
+        mvc.perform(put(BASE + "/" + id).header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(update.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.revision").value(2));
+        mapping.put("sourceUnit", "V");
+        update.put("revision", 2);
+        mvc.perform(put(BASE + "/" + id).header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content(update.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.configuration.mappings[0].sourceUnit").value("V"));
+    }
+
+    @Test
+    void previewLocatesConfigurationInputsAndMissingRequiredMapping() throws Exception {
+        var noTopic = configuration();
+        noTopic.remove("sourceTopic");
+        assertPreviewError(noTopic, "sourceTopic");
+        assertPreviewError(configuration().put("sourceTopic", "device/+/up"), "sourceTopic");
+        var noIdentity = configuration();
+        noIdentity.remove("identityPath");
+        assertPreviewError(noIdentity, "identityPath");
+
+        for (String field : List.of("sourcePath", "sourceUnit", "targetUnit", "scale", "offset")) {
+            var config = configuration();
+            ((ObjectNode) config.path("mappings").get(0)).remove(field);
+            assertPreviewError(config, "mappings.VOLTAGE." + field);
+        }
+        var invalidScale = configuration();
+        ((ObjectNode) invalidScale.path("mappings").get(0)).put("scale", "0.1234567891");
+        assertPreviewError(invalidScale, "mappings.VOLTAGE.scale");
+        var noVoltage = configuration();
+        ((ArrayNode) noVoltage.path("mappings")).remove(0);
+        assertPreviewError(noVoltage, "mappings.VOLTAGE");
+    }
+
+    private void assertPreviewError(ObjectNode config, String path) throws Exception {
+        var result = postOk("/preview", preview(config, SAMPLE));
+        assertThat(result.path("success").asBoolean()).isFalse();
+        assertThat(result.path("errors").get(0).path("path").asText()).isEqualTo(path);
+    }
+
+    @Test
+    @Sql(statements = {
+        "CREATE ALIAS IF NOT EXISTS JSON_EXTRACT FOR 'com.platform.iot.protocol.ProtocolConfigurationApiTest.extractJson'",
+        "CREATE ALIAS IF NOT EXISTS JSON_UNQUOTE FOR 'com.platform.iot.protocol.ProtocolConfigurationApiTest.unquoteJson'",
+        "CREATE ALIAS IF NOT EXISTS JSON_QUOTE FOR 'com.platform.iot.protocol.ProtocolConfigurationApiTest.quoteJson'",
+        "CREATE ALIAS IF NOT EXISTS JSON_CONTAINS FOR 'com.platform.iot.protocol.ProtocolConfigurationApiTest.containsJson'"
+    }, config = @SqlConfig(transactionMode = SqlConfig.TransactionMode.ISOLATED))
+    void filtersBeforePagingAndDeletesOnlyUnfrozenDrafts() throws Exception {
+        var first = postOk("", configuration().put("name", "Meter % One"));
+        var second = postOk("", configuration().put("name", "Meter % Two"));
+        postOk("", configuration().put("name", "Meter three"));
+        mvc.perform(get(BASE).param("keyword", "mEtEr %").param("productId", product).param("size", "1")
+                        .param("page", "2").header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(2))
+                .andExpect(jsonPath("$.data.items.length()").value(1));
+        mvc.perform(get(BASE).param("keyword", "test_meter").param("productId", product + "x")
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(0));
+        mvc.perform(get(BASE).param("keyword", "test_meter").param("productId", product)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.total").value(3));
+
+        String removed = first.path("id").asText();
+        mvc.perform(delete(BASE + "/" + removed).header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk());
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_onboarding_audit_log WHERE object_id=? AND action_type='PROTOCOL_DRAFT_DELETE'",
+                Integer.class, removed)).isEqualTo(1);
+        mvc.perform(delete(BASE + "/" + removed).header("Authorization", "Bearer " + token))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.errorCode").value("PROTOCOL_NOT_FOUND"));
+
+        String frozen = second.path("id").asText();
+        jdbc.update("UPDATE biz_device_product SET status='ENABLED' WHERE product_id=?", product);
+        mvc.perform(post("/v1/protocol-deployments/versions/" + frozen).header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"revision\":1}"))
+                .andExpect(status().isOk());
+        mvc.perform(delete(BASE + "/" + frozen).header("Authorization", "Bearer " + token))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("PROTOCOL_DRAFT_REFERENCED"));
+    }
+
+    // H2 仅在此测试中补齐查询使用的 MySQL JSON 函数。
+    public static String extractJson(String json, String path) throws Exception {
+        return JSON.readTree(json).path(path.substring(2)).toString();
+    }
+
+    public static String unquoteJson(String json) throws Exception {
+        return JSON.readTree(json).asText();
+    }
+
+    public static String quoteJson(String value) throws Exception {
+        return JSON.writeValueAsString(value);
+    }
+
+    public static int containsJson(String json, String value, String path) throws Exception {
+        return JSON.readTree(json).path(path.substring(2)).equals(JSON.readTree(value)) ? 1 : 0;
+    }
+
     @Test
     void previewsSevenValuesWithoutCreatingDraftOrDevice() throws Exception {
         long drafts=jdbc.queryForObject("SELECT COUNT(*) FROM biz_protocol_draft",Long.class);

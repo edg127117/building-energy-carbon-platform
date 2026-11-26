@@ -1,22 +1,39 @@
 import { ref } from 'vue'
-import { requestErrorMessage, requestErrorStatus } from '@/shared/utils/request-error'
+import { requestErrorCode, requestErrorMessage, requestErrorStatus } from '@/shared/utils/request-error'
 import messages from '../locales/zh-CN'
 import {
   createProtocolConfiguration,
+  deleteProtocolConfiguration,
   getProtocolConfiguration,
   inspectProtocolSample,
   listProtocolConfigurations,
   previewProtocolConfiguration,
   updateProtocolConfiguration,
 } from '../api/protocol-configuration'
-import { emptyProtocolConfiguration, type InspectedField, type ProtocolConfiguration, type ProtocolConfigurationDetail, type ProtocolConfigurationPage, type ProtocolPreview } from '../models/protocol-configuration'
+import {
+  emptyProtocolConfiguration,
+  normalizeProtocolConfiguration,
+  serializeProtocolConfigurationForSave,
+  type InspectedField,
+  type ProtocolConfiguration,
+  type ProtocolConfigurationDetail,
+  type ProtocolConfigurationPage,
+  type ProtocolPreview,
+} from '../models/protocol-configuration'
+
+export type DraftListFilters = { keyword?: string; productId?: string }
 
 const emptyPage = (): ProtocolConfigurationPage => ({ page: 1, size: 20, total: 0, items: [] })
+const normalizeDetail = (detail: ProtocolConfigurationDetail): ProtocolConfigurationDetail => ({
+  ...detail,
+  configuration: normalizeProtocolConfiguration(detail.configuration),
+})
 // Vue 会递归代理表单内的映射数组；通过 JSON 契约快照剥离代理后再交给请求层，避免响应式对象进入传输边界。
-const clone = (value: ProtocolConfiguration): ProtocolConfiguration => JSON.parse(JSON.stringify(value)) as ProtocolConfiguration
+const cloneNormalized = (value: ProtocolConfiguration): ProtocolConfiguration =>
+  normalizeProtocolConfiguration(JSON.parse(JSON.stringify(value)) as ProtocolConfiguration)
 
 /**
- * 协议编辑器只保存后端草稿，不持久化样例。检查与预览使用请求代次隔离迟到响应，配置变化后由页面立即清除旧预览。
+ * 协议编辑器只保存后端草稿，不持久化样例。检查、预览与列表查询均使用请求代次隔离迟到响应。
  */
 export function useProtocolConfiguration() {
   const drafts = ref(emptyPage())
@@ -28,23 +45,41 @@ export function useProtocolConfiguration() {
   const inspecting = ref(false)
   const previewing = ref(false)
   const saving = ref(false)
+  const deleting = ref(false)
   const error = ref<string | null>(null)
+  const activeFilters = ref<{ keyword: string; productId: string }>({ keyword: '', productId: '' })
   let loadGeneration = 0
   let listGeneration = 0
   let inspectGeneration = 0
   let previewGeneration = 0
   let editGeneration = 0
 
-  async function loadDrafts(page = 1) {
+  async function loadDrafts(page = 1, filters?: DraftListFilters) {
+    if (filters !== undefined) {
+      activeFilters.value = {
+        keyword: filters.keyword?.trim() ?? '',
+        productId: filters.productId?.trim() ?? '',
+      }
+    }
     const owner = ++loadGeneration
     // 返回指定草稿时列表和详情并行加载；详情不能丢弃列表中的显示名称。
     const listOwner = ++listGeneration
     loading.value = true
     error.value = null
     try {
-      const result = await listProtocolConfigurations({ page, size: drafts.value.size })
-      if (listOwner === listGeneration) drafts.value = result
-      return result
+      const params: { page: number; size: number; keyword?: string; productId?: string } = {
+        page,
+        size: drafts.value.size,
+      }
+      if (activeFilters.value.keyword) params.keyword = activeFilters.value.keyword
+      if (activeFilters.value.productId) params.productId = activeFilters.value.productId
+      const result = await listProtocolConfigurations(params)
+      const normalizedPage: ProtocolConfigurationPage = {
+        ...result,
+        items: result.items.map(normalizeDetail),
+      }
+      if (listOwner === listGeneration) drafts.value = normalizedPage
+      return normalizedPage
     } catch (reason) {
       if (owner === loadGeneration) error.value = protocolRequestErrorMessage(reason)
       throw reason
@@ -65,10 +100,10 @@ export function useProtocolConfiguration() {
     preview.value = null
     error.value = null
     try {
-      const detail = await getProtocolConfiguration(id)
+      const detail = normalizeDetail(await getProtocolConfiguration(id))
       if (owner === loadGeneration && editOwner === editGeneration) {
         draft.value = detail
-        form.value = clone(detail.configuration)
+        form.value = cloneNormalized(detail.configuration)
         fields.value = []
         preview.value = null
       }
@@ -129,7 +164,8 @@ export function useProtocolConfiguration() {
     previewing.value = true
     error.value = null
     try {
-      const result = await previewProtocolConfiguration(clone(form.value), samplePayload, receivedTime)
+      const payload = serializeProtocolConfigurationForSave(form.value)
+      const result = await previewProtocolConfiguration(payload, samplePayload, receivedTime)
       if (owner === previewGeneration) preview.value = result
       return result
     } catch (reason) {
@@ -143,16 +179,20 @@ export function useProtocolConfiguration() {
   async function save() {
     if (saving.value) return
     const owner = editGeneration
-    const snapshot = clone(form.value)
+    const normalizedSnapshot = cloneNormalized(form.value)
+    const wirePayload = serializeProtocolConfigurationForSave(normalizedSnapshot)
     saving.value = true
     error.value = null
     try {
-      const detail = draft.value
-        ? await updateProtocolConfiguration(draft.value.id, draft.value.revision, snapshot)
-        : await createProtocolConfiguration(snapshot)
+      const rawDetail = draft.value
+        ? await updateProtocolConfiguration(draft.value.id, draft.value.revision, wirePayload)
+        : await createProtocolConfiguration(wirePayload)
       if (owner !== editGeneration) return
+      const detail = normalizeDetail(rawDetail)
       draft.value = detail
-      if (JSON.stringify(form.value) === JSON.stringify(snapshot)) form.value = clone(detail.configuration)
+      if (JSON.stringify(cloneNormalized(form.value)) === JSON.stringify(normalizedSnapshot)) {
+        form.value = cloneNormalized(detail.configuration)
+      }
       await loadDrafts(drafts.value.page)
       return detail
     } catch (reason) {
@@ -163,10 +203,53 @@ export function useProtocolConfiguration() {
     }
   }
 
-  return { drafts, draft, form, fields, preview, loading, inspecting, previewing, saving, error, loadDrafts, selectDraft, newDraft, invalidatePreview, invalidateInspection, inspect, runPreview, save }
+  async function deleteDraft(id: string) {
+    if (deleting.value) return
+    deleting.value = true
+    error.value = null
+    try {
+      await deleteProtocolConfiguration(id)
+      const isCurrent = draft.value?.id === id
+      if (isCurrent) newDraft()
+      const remainingOnPage = drafts.value.items.filter(item => item.id !== id).length
+      const nextPage = remainingOnPage === 0 && drafts.value.page > 1 ? drafts.value.page - 1 : drafts.value.page
+      await loadDrafts(nextPage)
+    } catch (reason) {
+      error.value = protocolRequestErrorMessage(reason)
+      throw reason
+    } finally {
+      deleting.value = false
+    }
+  }
+
+  return {
+    drafts,
+    draft,
+    form,
+    fields,
+    preview,
+    loading,
+    inspecting,
+    previewing,
+    saving,
+    deleting,
+    error,
+    activeFilters,
+    loadDrafts,
+    selectDraft,
+    newDraft,
+    invalidatePreview,
+    invalidateInspection,
+    inspect,
+    runPreview,
+    save,
+    deleteDraft,
+  }
 }
 
 function protocolRequestErrorMessage(reason: unknown): string {
+  const code = requestErrorCode(reason)
+  if (code === 'PROTOCOL_DRAFT_REFERENCED') return messages.errors.draftReferenced
   const status = requestErrorStatus(reason)
   if (status === 409) return messages.errors.conflict
   if (status === 429) return messages.errors.rateLimited

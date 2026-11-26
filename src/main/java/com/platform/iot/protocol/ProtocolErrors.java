@@ -8,6 +8,22 @@ public final class ProtocolErrors {
     public static BusinessException invalid(String message) {
         return new BusinessException(400, "PROTOCOL_VALIDATION_FAILED", message);
     }
+    static ConfigurationError invalid(String path, String message) {
+        return new ConfigurationError(path, message);
+    }
+    static final class ConfigurationError extends BusinessException {
+        private final String path;
+
+        ConfigurationError(String path, String message) {
+            super(400, "PROTOCOL_VALIDATION_FAILED", message);
+            this.path = path;
+        }
+
+        String path() { return path; }
+    }
+    public static BusinessException draftReferenced() {
+        return new BusinessException(409, "PROTOCOL_DRAFT_REFERENCED", "该草稿已生成冻结版本，不可删除");
+    }
     public static BusinessException conflict() {
         return new BusinessException(409, "PROTOCOL_REVISION_CONFLICT", "草稿已被更新，请重新读取后编辑");
     }

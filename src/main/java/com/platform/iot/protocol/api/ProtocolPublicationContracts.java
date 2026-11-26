@@ -1,5 +1,6 @@
 package com.platform.iot.protocol.api;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.validation.constraints.*;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +24,11 @@ public final class ProtocolPublicationContracts {
             @Min(0) long expectedSequence,@NotBlank @Size(max=100) String idempotencyKey) {}
     public record PreviewRequest(@NotBlank String targetId,@Min(0) long expectedSequence,
             @NotEmpty @Size(max=100) List<@NotBlank String> versionIds) {}
+    public record DraftPreviewRequest(@NotBlank String draftId, @NotNull @Min(1) Long revision,
+            @NotBlank String targetId, @NotNull @Min(0) Long expectedSequence) {}
+    public record DraftPublishRequest(@NotBlank String draftId, @NotNull @Min(1) Long revision,
+            @NotBlank String targetId, @NotNull @Min(0) Long expectedSequence,
+            @NotBlank @Size(max=100) String idempotencyKey) {}
     public record RollbackPreviewRequest(@NotBlank String targetId,@Min(0) long expectedSequence,
             @Min(1) long historicalSequence) {}
     public enum ChangeType {ADDED,REPLACED,RETAINED,REMOVED}
@@ -35,10 +41,21 @@ public final class ProtocolPublicationContracts {
             String status,String errorCode,long createdAt,long loadedAt) {}
     public record DeploymentDetail(String targetId,long sequence,String digest,String approvalId,
             String status,String errorCode,long createdAt,long loadedAt,List<VersionSummary> versions) {}
+    public record DraftReference(String draftId, long revision) {}
+
     public record FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,
-            List<String> versionIds,boolean rollback) {
+            List<String> versionIds,boolean rollback,
+            @JsonInclude(JsonInclude.Include.NON_NULL) DraftReference draftReference) {
+        public FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,List<String> versionIds,
+                             boolean rollback) {
+            this(targetId,expectedSequence,digest,contentJson,versionIds,rollback,null);
+        }
         public FrozenCommand(String targetId,long expectedSequence,String digest,String contentJson,List<String> versionIds) {
-            this(targetId,expectedSequence,digest,contentJson,versionIds,false);
+            this(targetId,expectedSequence,digest,contentJson,versionIds,false,null);
+        }
+
+        public FrozenCommand withDraftReference(DraftReference reference) {
+            return new FrozenCommand(targetId, expectedSequence, digest, contentJson, versionIds, rollback, reference);
         }
     }
     public record ImportRequest(@NotBlank @Size(max=1048576) String snapshotJson,

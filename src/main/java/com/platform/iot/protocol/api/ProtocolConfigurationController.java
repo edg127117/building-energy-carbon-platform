@@ -38,8 +38,9 @@ public class ProtocolConfigurationController {
     @GetMapping
     @Operation(summary="分页读取尚未生效的协议草稿")
     public Result<PageResponse<Detail>> list(@RequestParam(defaultValue="1") int page,
-            @RequestParam(defaultValue="20") int size,Authentication auth) {
-        return Result.success(drafts.list(page,size,SecurityUser.roles(auth)));
+            @RequestParam(defaultValue="20") int size,@RequestParam(required=false) String keyword,
+            @RequestParam(required=false) String productId,Authentication auth) {
+        return Result.success(drafts.list(page,size,keyword,productId,SecurityUser.roles(auth)));
     }
     @GetMapping("/{id}")
     @Operation(summary="读取协议草稿")
@@ -48,13 +49,19 @@ public class ProtocolConfigurationController {
     }
     @PostMapping
     @Operation(summary="保存协议草稿，不启用解析规则")
-    public Result<Detail> create(@Valid @RequestBody Configuration config,Authentication auth) {
+    public Result<Detail> create(@RequestBody Configuration config,Authentication auth) {
         return Result.success(drafts.create(config,SecurityUser.userId(auth),SecurityUser.roles(auth)));
     }
     @PutMapping("/{id}")
     @Operation(summary="按预期修订号更新协议草稿")
     public Result<Detail> update(@PathVariable String id,@Valid @RequestBody UpdateRequest request,Authentication auth) {
         return Result.success(drafts.update(id,request,SecurityUser.userId(auth),SecurityUser.roles(auth)));
+    }
+    @DeleteMapping("/{id}")
+    @Operation(summary="删除未生成冻结版本的协议草稿")
+    public Result<Void> delete(@PathVariable String id,Authentication auth) {
+        drafts.delete(id,SecurityUser.userId(auth),SecurityUser.roles(auth));
+        return Result.success(null);
     }
     @PostMapping("/inspect")
     @Operation(summary="检查临时 JSON 样例并返回可选择字段")

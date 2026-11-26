@@ -262,12 +262,14 @@ TDengine 按测点分桶计算原始值平均数并保留桶内最差质量等�
 
 ### 协议配置与预览
 
-接入页面显示为“设备报文接入”，使用规范路由 `/configuration/ingestion/protocols`，按产品、映射、解析检查、发布加载、设备接入分阶段操作。
+“设备报文接入”使用规范路由 `/configuration/ingestion/protocols`，依次完成基础配置与产品、报文映射与试解析、发布与加载状态。草稿可分段暂存、搜索和删除，已冻结版本关联的草稿保留。
 产品名称和设备类型字典为默认展示，原编码与校验值留在技术详情；样例仍不保存。
 `POST /api/v1/protocol-deployments/preview` 与 `/rollback-preview` 复用正式发布校验，只计算集合变化，不创建审批或部署；
 `GET /api/v1/protocol-deployments/targets/{targetId}/history/{sequence}` 返回历史发布的不可变规则清单。
 发布预览比较目标最新期望集合，不能据此判断运行中已加载集合；提交及执行仍重新校验目标序号和冻结内容。
-交互及验收边界见[设备报文接入优化设计](docs/designs/2026-09-17-device-onboarding-ux-design.md)。
+`/draft-preview` 只计算草稿发布差异，`/draft-publish-requests` 在同一事务内冻结修订并提交独立审核。
+发布页按本次审批单编号核对适配器回执，确认加载后提供待接入设备入口。
+交互及验收边界见[设备报文接入优化设计](docs/designs/2026-11-26-protocol-configuration-optimization-design.md)。
 
 普通目标发布按 `profileCode` 新增或更新选中版本，自动保留该目标已有的其他协议。
 适配器仍接收完整快照；只有显式历史回退才恢复旧的完整集合，可能移除后来新增的协议。

@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.http.MediaType;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -45,7 +46,11 @@ class ProtocolPublicationTest {
         jdbc.update("DELETE FROM sys_user_backend_duty WHERE user_id IN (1,2)");
         grant(1,"BACKOFFICE_CHANGE_SUBMITTER");grant(1,"BACKOFFICE_CHANGE_REVIEWER");grant(2,"BACKOFFICE_CHANGE_REVIEWER");
         adminToken=login("admin","123456");
-        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("test-admin",null,List.of(new SimpleGrantedAuthority("ROLE_PLATFORM_ADMIN"))));
+        authenticateAdmin();
+    }
+    private void authenticateAdmin() {
+        SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken(
+                "test-admin", null, List.of(new SimpleGrantedAuthority("ROLE_PLATFORM_ADMIN"))));
     }
     @AfterEach void clear(){SecurityContextHolder.clearContext();}
     private void grant(long user,String duty){jdbc.update("INSERT INTO sys_user_backend_duty(assignment_id,user_id,duty_key,status,effective_at,created_by,created_at) VALUES(?,?,?,'ACTIVE',?,1,?)",UUID.randomUUID().toString().replace("-",""),user,duty,Timestamp.valueOf(LocalDateTime.now().minusMinutes(1)),Timestamp.valueOf(LocalDateTime.now()));}
@@ -91,6 +96,46 @@ class ProtocolPublicationTest {
         service.pull(v1.target().targetId(),1,"V1");
         assertThatThrownBy(()->command(v1,version,0)).isInstanceOf(BusinessException.class);
     }
+    @Test void previewsAndSubmitsDraftThenReusesApprovalAfterTargetSequenceAdvances() throws Exception {
+        var target = target();
+        String targetId = target.target().targetId();
+        service.pull(targetId, 1, "V1");
+        var draft = drafts.create(config("INITIAL"), 1L, ProtocolPublicationService.ADMIN);
+        var request = mapper.valueToTree(new DraftPublishRequest(draft.id(), draft.revision(), targetId, 0L, "one-step"));
+        var previewRequest = mapper.valueToTree(new DraftPreviewRequest(draft.id(), draft.revision(), targetId, 0L));
+        long approvals = jdbc.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request", Long.class);
+
+        mvc.perform(post("/v1/protocol-deployments/draft-preview").header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON).content(previewRequest.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.changes[0].changeType").value("ADDED"))
+                .andExpect(jsonPath("$.data.changes[0].afterVersion.versionId").value("DRAFT_PREVIEW"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sys_sensitive_change_request", Long.class)).isEqualTo(approvals);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_protocol_version WHERE draft_id=?", Long.class, draft.id())).isZero();
+
+        String body = mvc.perform(post("/v1/protocol-deployments/draft-publish-requests")
+                        .header("Authorization", "Bearer " + adminToken).contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("PENDING_REVIEW"))
+                .andReturn().getResponse().getContentAsString();
+        String approvalId = mapper.readTree(body).path("data").path("requestId").asText();
+        authenticateAdmin();
+        changes.approve(2, approvalId, "独立测试审核");
+        changes.execute(2, approvalId);
+        var envelope = service.pull(targetId, 1, "V1");
+        assertThat(envelope.sequence()).isEqualTo(1);
+        service.receipt(targetId, new Receipt(envelope.sequence(), envelope.digest(), "LOADED", null));
+
+        mvc.perform(post("/v1/protocol-deployments/draft-publish-requests")
+                        .header("Authorization", "Bearer " + adminToken).contentType(MediaType.APPLICATION_JSON).content(request.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.status").value("EXECUTED"))
+                .andExpect(jsonPath("$.data.requestId").value(approvalId));
+        var different = new DraftPublishRequest(draft.id(), draft.revision(), targetId, 1L, "one-step");
+        mvc.perform(post("/v1/protocol-deployments/draft-publish-requests")
+                        .header("Authorization", "Bearer " + adminToken).contentType(MediaType.APPLICATION_JSON)
+                        .content(mapper.writeValueAsString(different)))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.errorCode").value("BACKOFFICE_REQUEST_CONFLICT"));
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM biz_protocol_version WHERE draft_id=?", Long.class, draft.id())).isEqualTo(1);
+    }
+
     @Test void publicationRequiresContactAndApprovalThenExactReceiptAndRollback() {
         var t=target();var v=version("INDOOR");String id=t.target().targetId();
         assertThatThrownBy(()->command(t,v,0)).isInstanceOf(BusinessException.class);
@@ -127,6 +172,10 @@ class ProtocolPublicationTest {
         jdbc.update("INSERT INTO biz_product_point_template(template_point_id,product_id,metric_code,point_name_template,suffix_code,unit,required_flag,status) VALUES(?,?, 'POWER','功率','P','kW',1,1)",UUID.randomUUID().toString().replace("-",""),product);
         var c=new Configuration("外机",product,"OUTDOOR","device/raw/publication","SN","/SN","/param/ID1/M","339",null,config("339").mappings());
         var draft=drafts.create(c,1L,ProtocolPublicationService.ADMIN);
+        var draftPreview = service.draftPreview(new DraftPreviewRequest(draft.id(), draft.revision(), targetId, 1L),
+                ProtocolPublicationService.ADMIN);
+        assertThat(draftPreview.changes()).extracting(ProfileChange::changeType).containsExactly(ChangeType.ADDED, ChangeType.RETAINED);
+        assertThat(draftPreview.changes().getFirst().afterVersion().versionId()).isEqualTo("DRAFT_PREVIEW");
         var outdoor=service.freeze(draft.id(),draft.revision(),1,ProtocolPublicationService.ADMIN);
         var added=command(t,outdoor,1);
         assertThat(added.versionIds()).containsExactlyInAnyOrder(indoor.versionId(),outdoor.versionId());
