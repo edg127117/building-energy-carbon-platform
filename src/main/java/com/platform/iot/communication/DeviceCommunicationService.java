@@ -273,29 +273,41 @@ public class DeviceCommunicationService {
     }
     private Target ensure(Scope s,Policy p,long now) {
         var old=targets(s.identity());
+        boolean monitored=s.eligible()&&p.monitored();
         if(old.isEmpty()) {
             jdbc.update("""
                 INSERT INTO biz_device_comm_target(identity_id,equip_id,building_id,source_key,scope_token,scope_profile,scope_product,scope_identity,identity_updated,
                   monitored,monitoring_since,period_seconds,policy_revision,mapping_revision,state,reason,last_contact_at,last_evidence_at,evidence_key,negative_at,good_count,alarm_open,report_delayed,revision)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'UNKNOWN','WAITING_INITIAL_CONTACT',0,0,'',0,0,0,0,1)
-                """,s.identity(),s.equipment(),s.building(),s.source(),s.token(),s.profile(),s.product(),s.identityValue(),s.updated(),s.eligible()&&p.monitored(),now,p.periodSeconds(),p.revision(),s.mappingRevision());
+                """,s.identity(),s.equipment(),s.building(),s.source(),s.token(),s.profile(),s.product(),s.identityValue(),s.updated(),monitored,now,p.periodSeconds(),p.revision(),s.mappingRevision());
         } else if(!s.token().equals(old.getFirst().token())) {
             jdbc.update("""
                 UPDATE biz_device_comm_target SET equip_id=?,building_id=?,source_key=?,scope_token=?,scope_profile=?,scope_product=?,scope_identity=?,identity_updated=?,
                   monitored=?,monitoring_since=?,period_seconds=?,policy_revision=?,mapping_revision=?,state='UNKNOWN',reason='WAITING_INITIAL_CONTACT',
                   last_contact_at=0,last_evidence_at=0,evidence_key='',negative_at=0,good_count=0,alarm_open=0,report_delayed=0,gateway_key=NULL,gateway_revision=gateway_revision+1,revision=revision+1 WHERE identity_id=?
-                """,s.equipment(),s.building(),s.source(),s.token(),s.profile(),s.product(),s.identityValue(),s.updated(),s.eligible()&&p.monitored(),now,p.periodSeconds(),p.revision(),s.mappingRevision(),s.identity());
+                """,s.equipment(),s.building(),s.source(),s.token(),s.profile(),s.product(),s.identityValue(),s.updated(),monitored,now,p.periodSeconds(),p.revision(),s.mappingRevision(),s.identity());
         } else {
-            if(!old.getFirst().monitored() && s.eligible() && p.monitored()) {
+            Target current=old.getFirst();
+            if(current.monitored()==monitored && current.periodSeconds()==p.periodSeconds() && current.policyRevision()==p.revision()) {
+                return current;
+            }
+            if(!current.monitored() && monitored) {
                 // 重新纳入监测重新等待首包，不用维护前的旧读数制造刚启用即离线。
                 jdbc.update("UPDATE biz_device_comm_target SET monitoring_since=?,last_contact_at=0,negative_at=0,good_count=0,alarm_open=0,state='UNKNOWN',reason='WAITING_INITIAL_CONTACT',report_delayed=0 WHERE identity_id=?",now,s.identity());
             }
-            jdbc.update("UPDATE biz_device_comm_target SET monitored=?,period_seconds=?,policy_revision=? WHERE identity_id=?",s.eligible()&&p.monitored(),p.periodSeconds(),p.revision(),s.identity());
+            jdbc.update("UPDATE biz_device_comm_target SET monitored=?,period_seconds=?,policy_revision=? WHERE identity_id=?",monitored,p.periodSeconds(),p.revision(),s.identity());
         }
         return targets(s.identity()).getFirst();
     }
     private List<Target> targets(String id) {
-        return jdbc.query("SELECT * FROM biz_device_comm_target WHERE identity_id=?",(rs,n)->new Target(rs.getString("scope_token"),rs.getLong("monitoring_since"),rs.getLong("last_contact_at"),rs.getLong("last_evidence_at"),rs.getString("evidence_key"),rs.getLong("negative_at"),rs.getInt("good_count"),rs.getBoolean("alarm_open"),rs.getString("state"),rs.getString("gateway_key"),rs.getBoolean("monitored")),id);
+        return jdbc.query("""
+                SELECT scope_token,monitoring_since,last_contact_at,last_evidence_at,evidence_key,negative_at,
+                    good_count,alarm_open,state,gateway_key,monitored,period_seconds,policy_revision
+                FROM biz_device_comm_target WHERE identity_id=?
+                """,(rs,n)->new Target(rs.getString("scope_token"),rs.getLong("monitoring_since"),
+                rs.getLong("last_contact_at"),rs.getLong("last_evidence_at"),rs.getString("evidence_key"),
+                rs.getLong("negative_at"),rs.getInt("good_count"),rs.getBoolean("alarm_open"),rs.getString("state"),
+                rs.getString("gateway_key"),rs.getBoolean("monitored"),rs.getInt("period_seconds"),rs.getLong("policy_revision")),id);
     }
     private View waiting(Scope scope,Policy p) { return scope.eligible()&&p.monitored()?new View(true,"UNKNOWN","WAITING_INITIAL_CONTACT",scope.source(),null,"DEVICE",false,false,null,p.revision()):View.unmonitored(); }
     private View evaluate(Scope s,Policy p,Target t,long now) {
@@ -336,5 +348,6 @@ public class DeviceCommunicationService {
     private static BusinessException conflict(){return new BusinessException(409,"COMMUNICATION_REVISION_CONFLICT","通讯策略已变更，请重新读取");}
     private static void admin(Set<String> roles){if(roles==null||!roles.contains("PLATFORM_ADMIN"))throw new BusinessException(403,"ASSET_FORBIDDEN","仅平台管理员可维护通讯策略");}
     private record Scope(String identity,String equipment,String building,String profile,String product,String source,String token,boolean eligible,String identityValue,java.sql.Timestamp updated,int mappingRevision) { }
-    private record Target(String token,long since,long lastContact,long lastEvidenceAt,String evidenceKey,long negativeAt,int goodCount,boolean alarm,String state,String gateway,boolean monitored) { }
+    private record Target(String token,long since,long lastContact,long lastEvidenceAt,String evidenceKey,long negativeAt,
+            int goodCount,boolean alarm,String state,String gateway,boolean monitored,int periodSeconds,long policyRevision) { }
 }

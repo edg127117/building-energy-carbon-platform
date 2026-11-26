@@ -2,7 +2,7 @@ package com.platform.iot.roomsensor;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.platform.iot.communication.CommunicationEvidenceRecorder;
+import com.platform.iot.communication.RoomSensorCommunicationQueue;
 import com.platform.iot.identity.DeviceIdentityKey;
 import com.platform.iot.ingest.standard.StandardMetric;
 import com.platform.iot.ingest.standard.StandardTelemetryMessage;
@@ -37,29 +37,29 @@ public class RoomSensorIngestor {
     private final RoomSensorParser parser;
     private final ObjectMapper mapper;
     private final MeterRegistry meters;
-    private final BiConsumer<RoomSensorSource, Long> recordCommunication;
+    private final BiConsumer<RoomSensorSource, Long> enqueueCommunication;
     private final PendingDeviceDiscoveryService discovery;
 
     @Autowired
     public RoomSensorIngestor(@Qualifier("mysqlJdbcTemplate") JdbcTemplate mysql,
-            RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters, CommunicationEvidenceRecorder communication,
+            RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters, RoomSensorCommunicationQueue communication,
             ObjectProvider<PendingDeviceDiscoveryService> discovery) {
-        this(mysql, parser, mapper, meters, communication::roomSensor, discovery.getIfAvailable());
+        this(mysql, parser, mapper, meters, communication::enqueue, discovery.getIfAvailable());
     }
 
     RoomSensorIngestor(JdbcTemplate mysql, RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters,
-            BiConsumer<RoomSensorSource, Long> recordCommunication) {
-        this(mysql, parser, mapper, meters, recordCommunication, null);
+            BiConsumer<RoomSensorSource, Long> enqueueCommunication) {
+        this(mysql, parser, mapper, meters, enqueueCommunication, null);
     }
 
     RoomSensorIngestor(JdbcTemplate mysql, RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters,
-            BiConsumer<RoomSensorSource, Long> recordCommunication, PendingDeviceDiscoveryService discovery) {
+            BiConsumer<RoomSensorSource, Long> enqueueCommunication, PendingDeviceDiscoveryService discovery) {
         this.discovery = discovery;
         this.mysql = mysql;
         this.parser = parser;
         this.mapper = mapper;
         this.meters = meters;
-        this.recordCommunication = recordCommunication;
+        this.enqueueCommunication = enqueueCommunication;
         tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(mysql.getDataSource())));
     }
 
@@ -137,10 +137,10 @@ public class RoomSensorIngestor {
                 if (!values.isEmpty()) mysql.update(
                         "UPDATE biz_room_sensor_source SET last_storage_ts=? WHERE source_id=?", storageTs, source.sourceId());
             }
+            // ACK 前同时提交观测和通讯证据，证据写入失败时整条报文可重投。
+            communicatingSources.forEach(source -> enqueueCommunication.accept(source, receivedAt));
             return total;
         });
-        // 先提交房间观测，再记录通讯证据，避免与通讯状态机的身份锁逆序。
-        communicatingSources.forEach(source -> recordCommunication.accept(source, receivedAt));
         if (discovery != null) frame.devices().forEach((mac, parsed) -> {
             if (!matched.contains(mac) && !parsed.values().isEmpty()) discover(frame, mac, parsed.values().getLast(), receivedAt, topic);
         });

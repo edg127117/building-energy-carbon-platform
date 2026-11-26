@@ -4,7 +4,6 @@ import com.platform.iot.identity.*;
 import com.platform.iot.ingest.standard.*;
 import com.platform.iot.reliability.AckMode;
 import com.platform.iot.reliability.CorrelationPolicy;
-import com.platform.iot.roomsensor.RoomSensorSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import java.util.List;
@@ -37,12 +36,9 @@ class CommunicationEvidenceRecorderTest {
         var service=mock(DeviceCommunicationService.class);
         var recorder=new CommunicationEvidenceRecorder(service,mock(JdbcTemplate.class));
         recorder.beginMqtt(false,System.currentTimeMillis());
-        var door = new RoomSensorSource("S", "S4_DOOR", "/door/status", "G", "M", "I1", "E1", "B1", "R1", 0L);
-        var radar = new RoomSensorSource("S2", "MSR01_RADAR", "/radar", "G", "G", "I2", "E2", "B1", "R1", 0L);
         try {
             recorder.standard(null, null, 0);
-            recorder.roomSensor(door, System.currentTimeMillis());
-            recorder.roomSensor(radar, System.currentTimeMillis());
+            assertThat(recorder.isFreshMqttDelivery()).isFalse();
         } finally {
             recorder.endMqtt();
         }

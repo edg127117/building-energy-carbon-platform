@@ -5,7 +5,6 @@ import com.platform.iot.communication.CommunicationModels.GatewayRequest;
 import com.platform.iot.communication.CommunicationModels.PolicyRequest;
 import com.platform.iot.communication.CommunicationModels.Signal;
 import com.platform.iot.communication.CommunicationModels.View;
-import com.platform.iot.roomsensor.RoomSensorSource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
@@ -135,10 +134,9 @@ class DeviceCommunicationServiceTest {
         assertThat(target("I1", "state")).isEqualTo("UNKNOWN");
         assertThat(targetLong("I1", "alarm_open")).isZero();
 
-        var recorder = new CommunicationEvidenceRecorder(service, jdbc);
-        var radar = new RoomSensorSource("S1", "MSR01_RADAR", "/radar", "M1", "M1", "I1", "E1", "B1", "R1", 0L);
         long receivedAt = clock.millis();
-        recorder.roomSensor(radar, receivedAt);
+        assertThat(service.observe(new Signal("I1", "E1", "B1", "MQTT", "radar:first",
+                receivedAt, receivedAt, false, "LIVE_TELEMETRY", null, "MSR01_RADAR"))).isTrue();
         assertView(service.equipment("E1", "B1"), "ONLINE", "LIVE_TELEMETRY", false, false);
         assertThat(service.equipment("E1", "B1").nextDeadline()).isEqualTo(receivedAt + 60_000);
 
@@ -163,7 +161,8 @@ class DeviceCommunicationServiceTest {
         assertView(service.equipment("E1", "B1"), "OFFLINE", "DEVICE_TIMEOUT", false, true);
         assertThat(target("I1", "state")).isEqualTo("OFFLINE");
 
-        recorder.roomSensor(radar, clock.millis());
+        assertThat(service.observe(new Signal("I1", "E1", "B1", "MQTT", "radar:recovery",
+                clock.millis(), clock.millis(), false, "LIVE_TELEMETRY", null, "MSR01_RADAR"))).isTrue();
         assertView(service.equipment("E1", "B1"), "ONLINE", "LIVE_TELEMETRY", false, true);
         assertThat(targetLong("I1", "report_delayed")).isZero();
         service.savePolicy("DEFAULT", new PolicyRequest(60, false, "暂停通讯监测", 1), 7L, ADMIN);
