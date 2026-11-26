@@ -2,11 +2,15 @@ package com.platform.iot.protocol;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.adapter.parser.IntervalMappings;
+import com.platform.adapter.profile.ProtocolFieldMapping;
 import com.platform.framework.exception.BusinessException;
 import com.platform.framework.web.PageResponse;
 import com.platform.iot.onboarding.DeviceProductService;
 import com.platform.iot.onboarding.OnboardingAuditService;
 import com.platform.iot.protocol.api.ProtocolContracts.*;
+import jakarta.validation.Path;
+import jakarta.validation.Validator;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.util.*;
@@ -18,26 +22,53 @@ public class ProtocolDraftService {
     private final DeviceProductService products;
     private final OnboardingAuditService audit;
     private final ObjectMapper mapper;
+    private final Validator validator;
     public ProtocolDraftService(ProtocolDraftRepository repository, DeviceProductService products,
-                                OnboardingAuditService audit, ObjectMapper mapper) {
-        this.repository=repository; this.products=products; this.audit=audit; this.mapper=mapper;
+                                OnboardingAuditService audit, ObjectMapper mapper, Validator validator) {
+        this.repository=repository; this.products=products; this.audit=audit; this.mapper=mapper; this.validator=validator;
     }
     public static void requireAdmin(Set<String> roles) {
         if (roles==null || !roles.contains("PLATFORM_ADMIN"))
             throw new BusinessException(403,"PROTOCOL_FORBIDDEN","仅平台管理员可维护协议配置");
     }
-    public PageResponse<Detail> list(int page,int size,Set<String> roles) {
+    @Transactional(readOnly = true)
+    public PageResponse<Detail> list(int page,int size,String keyword,String productId,Set<String> roles) {
         requireAdmin(roles);
         if(page<1 || size<1 || size>100) throw ProtocolErrors.invalid("页码必须大于零，每页最多100条");
-        return new PageResponse<>(page,size,repository.count(),repository.list(size,((long)page-1)*size).stream().map(this::view).toList());
+        var result = repository.list(has(keyword) ? keyword.strip() : null, has(productId) ? productId : null,
+                size, ((long) page - 1) * size);
+        return new PageResponse<>(page, size, result.total(), result.rows().stream().map(this::view).toList());
     }
     public Detail detail(String id,Set<String> roles) {
         requireAdmin(roles);
-        return view(repository.find(id).orElseThrow(ProtocolErrors::notFound));
+        return view(requireDraft(id, false));
     }
+
+    // 删除和冻结都必须持有这条草稿的行锁，直到版本或删除事务结束。
+    Detail detailForUpdate(String id, Set<String> roles) {
+        requireAdmin(roles);
+        return view(requireDraft(id, true));
+    }
+
+    @Transactional
+    public void delete(String id, long operator, Set<String> roles) {
+        requireAdmin(roles);
+        var row = requireDraft(id, true);
+        if (repository.hasFrozenVersions(id)) throw ProtocolErrors.draftReferenced();
+        repository.delete(id);
+        audit.record(operator, null, "PROTOCOL_DRAFT_DELETE", "PROTOCOL_DRAFT", id,
+                Map.of("revision", row.revision()), Map.of());
+    }
+
+    private ProtocolDraftRepository.Row requireDraft(String id, boolean lock) {
+        return repository.find(id, lock).orElseThrow(ProtocolErrors::notFound);
+    }
+
     @Transactional
     public Detail create(Configuration config,Long operator,Set<String> roles) {
-        validate(config,roles);
+        requireAdmin(roles);
+        validateShape(config);
+        validate(config, roles, false);
         var row=new ProtocolDraftRepository.Row(UUID.randomUUID().toString().replace("-",""),1,encode(config),System.currentTimeMillis());
         repository.insert(row,operator);
         audit.record(operator,null,"PROTOCOL_DRAFT_CREATE","PROTOCOL_DRAFT",row.id(),Map.of(),Map.of("revision",1));
@@ -45,9 +76,11 @@ public class ProtocolDraftService {
     }
     @Transactional
     public Detail update(String id,UpdateRequest request,Long operator,Set<String> roles) {
-        var existing=repository.find(id).orElseThrow(ProtocolErrors::notFound);
+        requireAdmin(roles);
+        var existing = requireDraft(id, false);
         // 旧客户端不会回传新增运行元数据；未传字段沿用已保存值，避免普通编辑静默降级运行契约。
         Configuration config=request.configuration();
+        validateShape(config);
         var previous=view(existing).configuration();
         config=new Configuration(config.name(),config.productId(),config.profileCode(),config.sourceTopic(),config.identityType(),config.identityPath(),
                 config.discriminatorPath(),config.discriminatorValue(),config.timestampPath(),
@@ -56,10 +89,10 @@ public class ProtocolDraftService {
                 preserve(config.retransmittedAtPath(),previous.retransmittedAtPath()),preserve(config.maxAckMode(),previous.maxAckMode()),
                 preserve(config.correlationPolicy(),previous.correlationPolicy()),config.mappings().stream().map(m->{
                     if(m.valueType()!=null)return m;
-                    var prior=previous.mappings().stream().filter(p->p.metricCode().equals(m.metricCode())&&p.sourcePath().equals(m.sourcePath())).findFirst().orElse(null);
+                    var prior=previous.mappings().stream().filter(p->p.metricCode().equals(m.metricCode())&&Objects.equals(p.sourcePath(),m.sourcePath())).findFirst().orElse(null);
                     return prior==null?m:new Mapping(m.sourcePath(),m.metricCode(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder(),prior.valueType());
                 }).toList());
-        validate(config,roles);
+        validate(config, roles, false);
         if(existing.revision()!=request.revision() || existing.revision()==Long.MAX_VALUE) throw ProtocolErrors.conflict();
         var next=new ProtocolDraftRepository.Row(id,existing.revision()+1,encode(config),System.currentTimeMillis());
         if(repository.update(next,request.revision(),operator)!=1) throw ProtocolErrors.conflict();
@@ -67,44 +100,133 @@ public class ProtocolDraftService {
                 Map.of("revision",existing.revision()),Map.of("revision",next.revision()));
         return view(next);
     }
-    public void validate(Configuration c,Set<String> roles) {
+    public void validate(Configuration configuration, Set<String> roles) {
         requireAdmin(roles);
-        if(c.sourceTopic().contains("+") || c.sourceTopic().contains("#") || c.sourceTopic().chars().anyMatch(Character::isISOControl)
-                || !c.sourceTopic().equals(c.sourceTopic().trim())) throw ProtocolErrors.invalid("Topic 必须是无通配符的精确主题");
-        pointer(c.identityPath());
-        for(String path:new String[]{c.timestampPath(),c.seqPath(),c.messageIdPath(),c.bootIdPath(),c.batchIdPath(),c.retransmittedAtPath()})
-            if(has(path)) pointer(path);
-        if(has(c.discriminatorPath())!=has(c.discriminatorValue())) throw ProtocolErrors.invalid("判别路径与取值必须同时填写");
-        if(has(c.discriminatorPath())) pointer(c.discriminatorPath());
-        var product=products.detail(c.productId(),roles);
-        if(!product.expectedProfileCode().equals(c.profileCode()) || !product.identityType().equals(c.identityType()))
-            throw ProtocolErrors.invalid("协议编码和身份类型必须与关联产品一致");
-        Set<String> paths=new HashSet<>(), codes=new HashSet<>(), active=new HashSet<>();
-        var points=new HashMap<String,com.platform.iot.onboarding.api.DeviceProductContracts.PointTemplateView>();
-        product.points().stream().filter(p->p.enabled()).forEach(p->points.put(p.metricCode(),p));
-        for(var m:c.mappings()) {
-            pointer(m.sourcePath());
-            if(!paths.add(m.sourcePath()) || !codes.add(m.metricCode())) throw ProtocolErrors.invalid("字段路径或指标编码重复");
-            if(com.platform.adapter.parser.IntervalMappings.parameter(m.valueType())) {if(m.enabled())active.add(m.metricCode());continue;}
-            var point=points.get(m.metricCode());
-            if(point==null || !point.unit().equals(m.targetUnit())) throw ProtocolErrors.invalid("映射指标及目标单位必须与产品启用测点一致");
-            if(m.enabled()) {
-                active.add(m.metricCode());
-                // 周期量允许拆分报文，必需计量输入由任务配对判断；普通遥测仍保持整包必需规则。
-                if(point.required() && !m.required() && "DECIMAL".equals(m.effectiveValueType())) throw ProtocolErrors.invalid("产品必需测点不可配置为可选");
+        validate(configuration, roles, true);
+    }
+
+    void validatePreview(Configuration configuration, Set<String> roles) {
+        requireAdmin(roles);
+        validateShape(configuration);
+        validate(configuration, roles, true);
+    }
+
+    private void validateShape(Configuration configuration) {
+        validator.validate(configuration).stream()
+                .min(Comparator.comparing(violation -> violation.getPropertyPath().toString()))
+                .ifPresent(violation -> {
+                    String path = configurationPath(violation.getPropertyPath(), configuration);
+                    String message = switch (violation.getConstraintDescriptor().getAnnotation().annotationType().getSimpleName()) {
+                        case "Digits" -> "系数或偏移量最多支持 11 位整数和 9 位小数";
+                        case "NotBlank", "NotNull" -> "请填写该配置项";
+                        case "Size" -> "字数或条数超过配置上限";
+                        default -> "配置项格式无效";
+                    };
+                    throw ProtocolErrors.invalid(path, message);
+                });
+    }
+
+    private static String configurationPath(Path path, Configuration configuration) {
+        if (!path.toString().startsWith("mappings")) return path.toString();
+        for (Path.Node node : path) {
+            Integer index = node.getIndex();
+            if (index == null) continue;
+            var mapping = configuration.mappings().get(index);
+            if (mapping == null || !has(mapping.metricCode())) return "mappings";
+            String row = "mappings." + mapping.metricCode();
+            return node.getName().startsWith("<") ? row : row + "." + node.getName();
+        }
+        return "mappings";
+    }
+
+    private void validate(Configuration c, Set<String> roles, boolean complete) {
+        if (complete || c.sourceTopic() != null && !c.sourceTopic().isEmpty()) {
+            String topic = c.sourceTopic();
+            if (!has(topic) || topic.contains("+") || topic.contains("#") || !topic.equals(topic.strip())
+                    || topic.chars().anyMatch(Character::isISOControl)) {
+                throw ProtocolErrors.invalid("sourceTopic", "请填写无通配符的精确 Topic");
             }
         }
-        if(active.isEmpty()) throw ProtocolErrors.invalid("至少启用一个测点映射");
-        try {com.platform.adapter.parser.IntervalMappings.validate(c.mappings().stream().map(m->new com.platform.adapter.profile.ProtocolFieldMapping(
-                m.metricCode(),"DRAFT",m.sourcePath(),m.metricCode(),m.effectiveValueType(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList());}
-        catch(IllegalArgumentException ex){throw ProtocolErrors.invalid(ex.getMessage());}
-        if(points.values().stream().anyMatch(p->p.required() && !active.contains(p.metricCode())))
-            throw ProtocolErrors.invalid("请映射产品的全部必需测点");
+        if (complete || has(c.identityPath())) pointer("identityPath", c.identityPath());
+        optionalPointer("timestampPath", c.timestampPath());
+        optionalPointer("seqPath", c.seqPath());
+        optionalPointer("messageIdPath", c.messageIdPath());
+        optionalPointer("bootIdPath", c.bootIdPath());
+        optionalPointer("batchIdPath", c.batchIdPath());
+        optionalPointer("retransmittedAtPath", c.retransmittedAtPath());
+        if (has(c.discriminatorPath()) != has(c.discriminatorValue())) {
+            throw ProtocolErrors.invalid(has(c.discriminatorPath()) ? "discriminatorValue" : "discriminatorPath",
+                    "判别路径与取值必须同时填写");
+        }
+        optionalPointer("discriminatorPath", c.discriminatorPath());
+
+        var product = products.detail(c.productId(), roles);
+        if (!product.expectedProfileCode().equals(c.profileCode())) {
+            throw ProtocolErrors.invalid("profileCode", "协议编码必须与关联产品一致");
+        }
+        if (!product.identityType().equals(c.identityType())) {
+            throw ProtocolErrors.invalid("identityType", "身份类型必须与关联产品一致");
+        }
+        var points = new LinkedHashMap<String,com.platform.iot.onboarding.api.DeviceProductContracts.PointTemplateView>();
+        product.points().stream().filter(p -> p.enabled()).forEach(p -> points.put(p.metricCode(), p));
+        Set<String> paths = new HashSet<>(), codes = new HashSet<>(), active = new HashSet<>();
+        for (var mapping : c.mappings()) {
+            String row = "mappings." + mapping.metricCode();
+            boolean enabled = Boolean.TRUE.equals(mapping.enabled());
+            validateMapping(mapping, row, complete && enabled, paths, codes);
+            if (!IntervalMappings.parameter(mapping.valueType())) {
+                var point = points.get(mapping.metricCode());
+                if (point == null) throw ProtocolErrors.invalid(row, "映射指标必须对应产品启用测点");
+                if (has(mapping.targetUnit()) && !point.unit().equals(mapping.targetUnit())) {
+                    throw ProtocolErrors.invalid(row + ".targetUnit", "目标单位必须与产品启用测点一致");
+                }
+                // 周期量可拆分报文，由任务配对判断必需输入，普通遥测沿用整包必需规则。
+                if (complete && enabled && point.required() && !mapping.required() && "DECIMAL".equals(mapping.effectiveValueType())) {
+                    throw ProtocolErrors.invalid(row, "产品必需测点不可配置为可选");
+                }
+            }
+            if (enabled) active.add(mapping.metricCode());
+        }
+        if (!complete) return;
+        if (active.isEmpty()) throw ProtocolErrors.invalid("mappings", "至少启用一个测点映射");
+        for (var point : points.values()) {
+            if (point.required() && !active.contains(point.metricCode())) {
+                throw ProtocolErrors.invalid("mappings." + point.metricCode(), "请映射产品的全部必需测点");
+            }
+        }
+        try {
+            IntervalMappings.validate(c.mappings().stream().filter(Mapping::enabled).map(m -> new ProtocolFieldMapping(
+                    m.metricCode(), "DRAFT", m.sourcePath(), m.metricCode(), m.effectiveValueType(), m.sourceUnit(),
+                    m.targetUnit(), m.scale(), m.offset(), m.required(), true, m.sortOrder())).toList());
+        } catch (IllegalArgumentException ex) {
+            throw ProtocolErrors.invalid("mappings", ex.getMessage());
+        }
     }
+
+    private static void validateMapping(Mapping mapping, String row, boolean complete, Set<String> paths, Set<String> codes) {
+        if (!codes.add(mapping.metricCode())) throw ProtocolErrors.invalid(row, "指标编码重复");
+        if (complete || has(mapping.sourcePath())) {
+            pointer(row + ".sourcePath", mapping.sourcePath());
+            if (!paths.add(mapping.sourcePath())) throw ProtocolErrors.invalid(row + ".sourcePath", "字段路径重复");
+        }
+        if (!complete) return;
+        if (!has(mapping.sourceUnit())) throw ProtocolErrors.invalid(row + ".sourceUnit", "请确认原始单位");
+        if (!has(mapping.targetUnit())) throw ProtocolErrors.invalid(row + ".targetUnit", "请填写目标单位");
+        if (mapping.scale() == null) throw ProtocolErrors.invalid(row + ".scale", "请填写换算系数");
+        if (mapping.offset() == null) throw ProtocolErrors.invalid(row + ".offset", "请填写换算偏移量");
+    }
+
     static boolean has(String value) { return value!=null && !value.isBlank(); }
-    static void pointer(String value) {
-        if(value==null || !value.startsWith("/") || value.chars().anyMatch(Character::isISOControl)
-                || value.matches(".*~(?![01]).*")) throw ProtocolErrors.invalid("字段路径必须是正确转义的 JSON Pointer");
+
+    private static void optionalPointer(String field, String value) {
+        if (has(value)) pointer(field, value);
+    }
+
+    private static void pointer(String field, String value) {
+        if (value==null || !value.startsWith("/") || value.chars().anyMatch(Character::isISOControl)
+                || value.matches(".*~(?![01]).*")) {
+            throw ProtocolErrors.invalid(field, "请填写正确转义的 JSON Pointer 路径");
+        }
     }
     private static String preserve(String current,String previous) { return current==null?previous:current; }
     private String encode(Configuration config) {

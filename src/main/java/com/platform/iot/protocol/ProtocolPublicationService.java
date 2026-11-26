@@ -10,6 +10,7 @@ import com.platform.audit.sensitive.*;
 import com.platform.framework.exception.BusinessException;
 import com.platform.iot.onboarding.OnboardingAuditService;
 import com.platform.iot.protocol.api.ProtocolContracts.Configuration;
+import com.platform.iot.protocol.api.ProtocolContracts.Detail;
 import com.platform.iot.protocol.api.ProtocolPublicationContracts.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -23,6 +24,8 @@ import java.util.*;
 @Service
 public class ProtocolPublicationService {
     static final Set<String> ADMIN=Set.of("PLATFORM_ADMIN");
+    private static final String DRAFT_PREVIEW = "DRAFT_PREVIEW";
+
     private final ProtocolPublicationRepository repository;
     private final ProtocolDraftService drafts;
     private final OnboardingAuditService audit;
@@ -55,15 +58,17 @@ public class ProtocolPublicationService {
     }
     @Transactional
     public VersionView freeze(String draftId,long revision,long actor,Set<String> roles) {
-        ProtocolDraftService.requireAdmin(roles);
-        var draft=drafts.detail(draftId,roles);
-        if(draft.revision()!=revision) throw ProtocolErrors.conflict();
-        drafts.validate(draft.configuration(),roles);
-        String productHash=productHash(draft.configuration());
-        var old=repository.frozen(draftId,revision);
-        if(old.isPresent()) return versionView(old.get());
-        String content=json(draft.configuration());
-        var version=new ProtocolPublicationRepository.Version(id(),draftId,revision,content,null,productHash,sha(content),System.currentTimeMillis());
+        return freezeLockedDraft(drafts.detailForUpdate(draftId, roles), revision, actor, roles);
+    }
+
+    VersionView freezeLockedDraft(Detail draft, long revision, long actor, Set<String> roles) {
+        validateRevision(draft, revision, roles);
+        String productHash = productHash(draft.configuration(), true);
+        var old = repository.frozen(draft.id(), revision);
+        if (old.isPresent()) return versionView(old.get());
+        String content = json(draft.configuration());
+        var version = new ProtocolPublicationRepository.Version(id(), draft.id(), revision, content, null,
+                productHash, sha(content), System.currentTimeMillis());
         repository.insertVersion(version);
         audit.record(actor,null,"FREEZE_PROTOCOL_VERSION","PROTOCOL_VERSION",version.id(),Map.of(),Map.of("draftRevision",revision,"digest",version.digest()));
         return versionView(version);
@@ -88,7 +93,7 @@ public class ProtocolPublicationService {
                     p.seqPath(),p.messageIdPath(),p.bootIdPath(),p.batchIdPath(),p.retransmittedAtPath(),p.maxAckMode(),p.correlationPolicy(),mappings);
             drafts.validate(c,roles);
             String key=id();String entryJson=json(entry);
-            var version=new ProtocolPublicationRepository.Version(key,key,p.profileVersion(),json(c),entryJson,productHash(c),sha(entryJson),System.currentTimeMillis());
+            var version=new ProtocolPublicationRepository.Version(key,key,p.profileVersion(),json(c),entryJson,productHash(c,true),sha(entryJson),System.currentTimeMillis());
             repository.insertVersion(version);result.add(versionView(version));
         }
         if(request.archiveJson()!=null&&!request.archiveJson().isBlank()) {
@@ -123,34 +128,71 @@ public class ProtocolPublicationService {
         var command=rollback(new RollbackRequest(request.targetId(),request.historicalSequence(),request.expectedSequence(),"rollback-preview"),roles);
         return publicationPreview(command,currentVersionIds(command.targetId(),command.expectedSequence()));
     }
+    @Transactional(readOnly = true)
+    public PublicationPreview draftPreview(DraftPreviewRequest request, Set<String> roles) {
+        Detail draft = drafts.detail(request.draftId(), roles);
+        validateRevision(draft, request.revision(), roles);
+        var target = target(request.targetId(), false);
+        requireReady(target, request.expectedSequence());
+        var current = currentVersionIds(target.id(), target.sequence()).stream().map(this::version).toList();
+        var frozen = repository.frozen(draft.id(), draft.revision());
+        // 用与正式版本等长的内部标识校验快照，显示用占位符不进入正式发布命令。
+        var candidate = frozen.orElseGet(() -> {
+            String previewId = UUID.nameUUIDFromBytes((draft.id() + ":" + draft.revision())
+                    .getBytes(StandardCharsets.UTF_8)).toString().replace("-", "");
+            return new ProtocolPublicationRepository.Version(previewId, draft.id(), draft.revision(),
+                    json(draft.configuration()), null, productHash(draft.configuration(), false), null, 0);
+        });
+        var merged = mergeVersions(current, List.of(candidate));
+        String content = snapshotContent(target, merged, false);
+        var summaries = merged.stream()
+                .map(version -> versionSummary(version, frozen.isEmpty() && version == candidate ? DRAFT_PREVIEW : version.id()))
+                .toList();
+        return publicationPreview(target.id(), target.sequence(), sha(content),
+                current.stream().map(this::versionSummary).toList(), summaries);
+    }
+
     public FrozenCommand prepare(PublishRequest request,Set<String> roles) {
         ProtocolDraftService.requireAdmin(roles);
-        var target=target(request.targetId(),false);
-        requireReady(target,request.expectedSequence());
-        var ids=request.versionIds().stream().sorted().toList();
-        if(ids.size()!=new HashSet<>(ids).size()) throw ProtocolErrors.invalid("协议版本重复");
-        // 普通发布按协议编码更新，未选择的现有协议必须保留；删减仅能通过显式历史回退。
-        Map<String,String> merged=new TreeMap<>();
-        repository.deployment(target.id(),target.sequence()).ifPresent(current -> {
-            for(String versionId:readIds(current.versions())) {
-                var version=repository.version(versionId).orElseThrow(ProtocolErrors::notFound);
-                merged.put(read(version.json(),Configuration.class).profileCode(),versionId);
-            }
-        });
-        Set<String> selectedCodes=new HashSet<>();
-        for(String versionId:ids) {
-            String code=entry(versionId).profile().profileCode();
-            if(!selectedCodes.add(code)) throw ProtocolErrors.invalid("同一协议只能选择一个版本");
-            merged.put(code,versionId);
-        }
-        ids=merged.values().stream().sorted().toList();
-        if(ids.size()>100) throw ProtocolErrors.invalid("完整配置集合最多包含100个协议");
-        var entries=ids.stream().map(this::entry).toList();
-        Snapshot snapshot=new Snapshot(1,target.output(),entries);
-        validateSnapshot(target,snapshot);
-        String content=json(snapshot);
-        return new FrozenCommand(target.id(),target.sequence(),sha(content),content,ids);
+        var target = target(request.targetId(), false);
+        requireReady(target, request.expectedSequence());
+        var ids = request.versionIds();
+        if (ids.size() != new HashSet<>(ids).size()) throw ProtocolErrors.invalid("协议版本重复");
+        var current = currentVersionIds(target.id(), target.sequence()).stream().map(this::version).toList();
+        var merged = mergeVersions(current, ids.stream().map(this::version).toList());
+        String content = snapshotContent(target, merged, true);
+        return new FrozenCommand(target.id(), target.sequence(), sha(content), content,
+                merged.stream().map(ProtocolPublicationRepository.Version::id).toList());
     }
+
+    private List<ProtocolPublicationRepository.Version> mergeVersions(List<ProtocolPublicationRepository.Version> current,
+                                                                    List<ProtocolPublicationRepository.Version> selected) {
+        // 普通发布按协议编码更新当前序号的完整集合，删减只通过历史回退。
+        var merged = new HashMap<String, ProtocolPublicationRepository.Version>();
+        current.forEach(version -> merged.put(read(version.json(), Configuration.class).profileCode(), version));
+        Set<String> selectedCodes = new HashSet<>();
+        for (var version : selected) {
+            String code = read(version.json(), Configuration.class).profileCode();
+            if (!selectedCodes.add(code)) throw ProtocolErrors.invalid("同一协议只能选择一个版本");
+            merged.put(code, version);
+        }
+        if (merged.size() > 100) throw ProtocolErrors.invalid("完整配置集合最多包含100个协议");
+        return merged.values().stream().sorted(Comparator.comparing(ProtocolPublicationRepository.Version::id)).toList();
+    }
+
+    private String snapshotContent(ProtocolPublicationRepository.Target target,
+                                   List<ProtocolPublicationRepository.Version> versions, boolean lockProducts) {
+        var entries = versions.stream().map(version -> entry(version, lockProducts)).toList();
+        Snapshot snapshot = new Snapshot(1, target.output(), entries);
+        validateSnapshot(target, snapshot);
+        return json(snapshot);
+    }
+
+    private void validateRevision(Detail draft, long revision, Set<String> roles) {
+        if (draft.revision() != revision) throw ProtocolErrors.conflict();
+        drafts.validate(draft.configuration(), roles);
+    }
+
     public FrozenCommand rollback(RollbackRequest request,Set<String> roles) {
         ProtocolDraftService.requireAdmin(roles);
         var target=target(request.targetId(),false);
@@ -165,6 +207,7 @@ public class ProtocolPublicationService {
     /** 审批处理器重新规范化冻结命令，禁止从通用审批入口提交任意未经约束的快照。 */
     public FrozenCommand validateCommand(FrozenCommand command) {
         if(command.rollback()) {
+            if (command.draftReference() != null) throw ProtocolErrors.invalid("历史回退不能关联发布草稿");
             var target=target(command.targetId(),false);
             requireReady(target,command.expectedSequence());
             // 回退只接受本目标曾加载的完整历史快照，不能借回退标记提交任意删减集合。
@@ -177,7 +220,13 @@ public class ProtocolPublicationService {
         var expected=prepare(new PublishRequest(command.targetId(),command.expectedSequence(),command.versionIds(),"validation"),ADMIN);
         if(!Objects.equals(command.digest(),expected.digest())||!Objects.equals(command.contentJson(),expected.contentJson()))
             throw ProtocolErrors.invalid("审批内容与冻结协议版本不一致");
-        return expected;
+        var reference = command.draftReference();
+        if (reference == null) return expected;
+        var selected = repository.frozen(reference.draftId(), reference.revision()).orElseThrow(ProtocolErrors::notFound);
+        if (!expected.versionIds().contains(selected.id())) {
+            throw ProtocolErrors.invalid("审批内容与草稿修订不一致");
+        }
+        return expected.withDraftReference(reference);
     }
     @Transactional
     public void execute(FrozenCommand command,SensitiveOperationContext context) {
@@ -218,14 +267,21 @@ public class ProtocolPublicationService {
         repository.receipt(target.id(),receipt.sequence(),receipt.status(),error,"LOADED".equals(receipt.status())?now:0);
         repository.seen(target.id(),now);
     }
-    private String productHash(Configuration configuration) {
-        return sha(json(repository.productContract(configuration.productId())));
+    private String productHash(Configuration configuration, boolean lock) {
+        return sha(json(repository.productContract(configuration.productId(), lock)));
+    }
+    private ProtocolPublicationRepository.Version version(String id) {
+        return repository.version(id).orElseThrow(ProtocolErrors::notFound);
     }
     private Entry entry(String id) {
-        var version=repository.version(id).orElseThrow(ProtocolErrors::notFound);
+        return entry(version(id), true);
+    }
+    private Entry entry(ProtocolPublicationRepository.Version version, boolean lockProduct) {
         Configuration c=read(version.json(),Configuration.class);
         drafts.validate(c,ADMIN);
-        if(!version.productHash().equals(productHash(c))) throw ProtocolErrors.invalid("关联产品已变更，请重新冻结协议版本");
+        if (!version.productHash().equals(productHash(c, lockProduct))) {
+            throw ProtocolErrors.invalid("关联产品已变更，请重新保存草稿并冻结新修订");
+        }
         repository.validateBindings(c.productId(),c.profileCode(),c.mappings().stream().filter(m->m.enabled()&&!com.platform.adapter.parser.IntervalMappings.parameter(m.valueType())).map(m->m.metricCode()).toList(),sourceSystem);
         if(version.entryJson()!=null) return read(version.entryJson(),Entry.class);
         if(version.revision()>Integer.MAX_VALUE) throw ProtocolErrors.invalid("协议修订号超限");
@@ -260,8 +316,12 @@ public class ProtocolPublicationService {
         return new DeploymentView(d.target(),d.sequence(),d.digest(),d.approval(),status,d.error(),d.created(),d.loaded());
     }
     private PublicationPreview publicationPreview(FrozenCommand command,List<String> currentIds) {
-        var current=versionSummaries(currentIds);
-        var target=versionSummaries(command.versionIds());
+        return publicationPreview(command.targetId(), command.expectedSequence(), command.digest(),
+                versionSummaries(currentIds), versionSummaries(command.versionIds()));
+    }
+
+    private PublicationPreview publicationPreview(String targetId, long sequence, String digest,
+            List<VersionSummary> current, List<VersionSummary> target) {
         Map<String,VersionSummary> before=new TreeMap<>();
         Map<String,VersionSummary> after=new TreeMap<>();
         current.forEach(version->before.put(version.profileCode(),version));
@@ -273,7 +333,7 @@ public class ProtocolPublicationService {
                     oldVersion.versionId().equals(newVersion.versionId())?ChangeType.RETAINED:ChangeType.REPLACED;
             return new ProfileChange(code,type,oldVersion,newVersion);
         }).toList();
-        return new PublicationPreview(command.targetId(),command.expectedSequence(),command.digest(),current,target,changes);
+        return new PublicationPreview(targetId, sequence, digest, List.copyOf(before.values()), List.copyOf(after.values()), changes);
     }
     private List<String> currentVersionIds(String targetId,long sequence) {
         if(sequence==0) return List.of();
@@ -284,12 +344,17 @@ public class ProtocolPublicationService {
                 .sorted(Comparator.comparing(VersionSummary::profileCode)).toList();
     }
     private VersionSummary versionSummary(String versionId) {
-        var version=repository.version(versionId).orElseThrow(ProtocolErrors::notFound);
+        return versionSummary(version(versionId));
+    }
+    private VersionSummary versionSummary(ProtocolPublicationRepository.Version version) {
+        return versionSummary(version, version.id());
+    }
+    private VersionSummary versionSummary(ProtocolPublicationRepository.Version version, String displayId) {
         var configuration=read(version.json(),Configuration.class);
         int mappingCount=version.entryJson()==null
                 ?(int)configuration.mappings().stream().filter(mapping->mapping.enabled()).count()
                 :read(version.entryJson(),Entry.class).mappings().size();
-        return new VersionSummary(version.id(),configuration.name(),configuration.profileCode(),version.revision(),mappingCount);
+        return new VersionSummary(displayId,configuration.name(),configuration.profileCode(),version.revision(),mappingCount);
     }
     private VersionView versionView(ProtocolPublicationRepository.Version v) {return new VersionView(v.id(),v.draftId(),v.revision(),v.digest(),read(v.json(),Configuration.class),v.created());}
     private String safeError(String code) {return code!=null&&code.matches("[A-Z0-9_]{1,80}")?code:"LOAD_FAILED";}

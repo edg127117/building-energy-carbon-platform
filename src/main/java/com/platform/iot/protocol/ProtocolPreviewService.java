@@ -42,7 +42,11 @@ public class ProtocolPreviewService {
         return new Inspection(List.copyOf(fields));
     }
     public Preview preview(PreviewRequest request,Set<String> roles) {
-        drafts.validate(request.configuration(),roles);
+        try {
+            drafts.validatePreview(request.configuration(), roles);
+        } catch (ProtocolErrors.ConfigurationError error) {
+            return failure(error.getErrorCode(), error.path(), error.getMessage());
+        }
         JsonNode root=read(request.samplePayload());
         collect(root,"",new ArrayList<>());
         var c=request.configuration();
@@ -54,19 +58,19 @@ public class ProtocolPreviewService {
         var profile=new ProtocolProfile("PREVIEW",c.profileCode(),1,c.sourceTopic(),c.identityType(),c.identityPath(),
                 c.discriminatorPath(),c.discriminatorValue(),c.timestampPath(),c.seqPath(),c.messageIdPath(),c.bootIdPath(),
                 c.batchIdPath(),c.retransmittedAtPath(),c.maxAckMode(),c.correlationPolicy(),true);
-        var mappings=c.mappings().stream().map(m->new ProtocolFieldMapping("PREVIEW:"+m.metricCode(), "PREVIEW",m.sourcePath(),m.metricCode(),
+        var mappings=c.mappings().stream().filter(Mapping::enabled).map(m->new ProtocolFieldMapping("PREVIEW:"+m.metricCode(), "PREVIEW",m.sourcePath(),m.metricCode(),
                 m.effectiveValueType(),m.sourceUnit(),m.targetUnit(),m.scale(),m.offset(),m.required(),m.enabled(),m.sortOrder())).toList();
         try {
             // 预览与发布共用静态能力校验，不能仅因样例可解析就宣称缺少关联字段的ACK能力有效。
             com.platform.adapter.publication.SnapshotValidator.validate(new com.platform.adapter.publication.ProtocolSnapshotContracts.Snapshot(1,"V2",
-                    List.of(new com.platform.adapter.publication.ProtocolSnapshotContracts.Entry(profile,mappings.stream().filter(ProtocolFieldMapping::enabled).toList()))),"V2");
+                    List.of(new com.platform.adapter.publication.ProtocolSnapshotContracts.Entry(profile,mappings))),"V2");
             var parsed=parser.adapt(c.sourceTopic(),request.samplePayload().getBytes(StandardCharsets.UTF_8),request.receivedTime(),profile,mappings);
             var values=new HashMap<String,String>();
             parsed.metrics().forEach(m->values.put(m.code(),m.value().toPlainString()));
             if(parsed.electricityInterval()!=null)for(var m:c.mappings()) {
+                if (!m.enabled() || !com.platform.adapter.parser.IntervalMappings.interval(m.valueType())) continue;
                 var raw=root.at(m.sourcePath());
-                if(com.platform.adapter.parser.IntervalMappings.interval(m.valueType())&&raw.isNumber())
-                    values.put(m.metricCode(),raw.decimalValue().multiply(m.scale()).add(m.offset()).toPlainString());
+                if (raw.isNumber()) values.put(m.metricCode(),raw.decimalValue().multiply(m.scale()).add(m.offset()).toPlainString());
             }
             var result=c.mappings().stream().filter(Mapping::enabled).sorted(Comparator.comparingInt(Mapping::sortOrder))
                     .map(m->{var raw=root.at(m.sourcePath()); var value=values.get(m.metricCode());

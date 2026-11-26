@@ -37,9 +37,9 @@ public class ProtocolPublicationRepository {
     public Optional<Deployment> deployment(String target,long sequence) {return jdbc.query("SELECT * FROM biz_protocol_deployment WHERE target_id=? AND sequence_no=?",DEPLOYMENT,target,sequence).stream().findFirst();}
     public List<Deployment> deployments(String target) {return jdbc.query("SELECT * FROM biz_protocol_deployment WHERE target_id=? ORDER BY sequence_no DESC LIMIT 100",DEPLOYMENT,target);}
     public void receipt(String target,long sequence,String status,String error,long now) {jdbc.update("UPDATE biz_protocol_deployment SET load_status=?,error_code=?,loaded_at=? WHERE target_id=? AND sequence_no=?",status,error,now,target,sequence);}
-    /** 发布事务锁定产品，使用数据库当前契约避免其他Mapper会话缓存隐藏已批准产品的变更。 */
-    public List<?> productContract(String productId) {
-        var product=jdbc.queryForList("SELECT product_id,expected_profile_code,identity_type,equipment_type_code,status FROM biz_device_product WHERE product_id=? FOR UPDATE",productId);
+    /** 提交时锁住产品，预览只读契约。两者均绕过 Mapper 会话缓存读取当前产品定义。 */
+    public List<?> productContract(String productId, boolean lock) {
+        var product=jdbc.queryForList("SELECT product_id,expected_profile_code,identity_type,equipment_type_code,status FROM biz_device_product WHERE product_id=?" + (lock ? " FOR UPDATE" : ""),productId);
         if(product.size()!=1||!"ENABLED".equals(product.getFirst().get("status"))) throw ProtocolErrors.invalid("发布协议必须关联已批准启用的产品");
         var points=jdbc.queryForList("SELECT metric_code,unit,required_flag,status FROM biz_product_point_template WHERE product_id=? ORDER BY template_point_id",productId);
         return List.of(product,points);
