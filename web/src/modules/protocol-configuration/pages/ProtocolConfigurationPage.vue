@@ -867,9 +867,8 @@ onMounted(() => {
       </div>
     </fieldset>
 
-    <!-- 步骤 3：发布与加载状态 -->
+    <!-- 顶部入口也使用该组件的适配器弹层，只由组件隐藏发布卡片。 -->
     <ProtocolPublicationPanel
-      v-show="step === 2"
       ref="publicationPanel"
       :active="step === 2"
       :freeze-ready="!dirty && management.preview.value?.success === true"

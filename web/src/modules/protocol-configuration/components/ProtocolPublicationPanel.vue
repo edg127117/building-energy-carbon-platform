@@ -665,7 +665,7 @@ defineExpose({ freezeCurrentDraft, openOperationsDrawer, refresh })
 
 <template>
   <div class="publication-stage">
-    <ElCard shadow="never" class="publication-panel">
+    <ElCard v-show="active !== false" shadow="never" class="publication-panel">
       <template #header>
         <div class="panel-heading">
           <div>
@@ -1096,7 +1096,8 @@ defineExpose({ freezeCurrentDraft, openOperationsDrawer, refresh })
 </template>
 
 <style scoped>
-.publication-stage, .publication-panel, .section-block, .drawer-section, .technical-content {
+.publication-stage { display: contents; }
+.publication-panel, .section-block, .drawer-section, .technical-content {
   display: grid;
   gap: var(--bec-space-group);
   min-width: 0;

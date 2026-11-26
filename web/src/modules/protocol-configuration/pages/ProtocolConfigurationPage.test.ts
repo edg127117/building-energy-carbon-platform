@@ -111,6 +111,20 @@ describe('协议配置 3 步向导页面', () => {
     }))
   })
 
+  it('在第一步打开适配器抽屉及登记弹窗时保持发布卡片隐藏', async () => {
+    expect(wrapper.get('.publication-panel').isVisible()).toBe(false)
+    await wrapper.findAllComponents(ElButton).find(button => button.text() === '适配器与历史')!.trigger('click')
+    await flushPromises()
+
+    const drawer = wrapper.get('[role="dialog"][aria-label="适配器与发布历史管理"]')
+    expect(drawer.isVisible()).toBe(true)
+    await drawer.findAll('button').find(button => button.text() === '登记适配器目标')!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[role="dialog"][aria-label="登记适配器目标"]').isVisible()).toBe(true)
+    expect(wrapper.get('.publication-panel').isVisible()).toBe(false)
+  })
+
   it('步骤 2 同屏提取字段、配置映射并按试解析错误路径高亮定位到对应测点行', async () => {
     const api = await import('../api/protocol-configuration')
     vi.mocked(api.previewProtocolConfiguration).mockResolvedValue({
