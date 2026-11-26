@@ -6,8 +6,6 @@ import com.platform.iot.temporal.model.RawTelemetryEvent;
 import com.platform.iot.daikin.model.DaikinDeviceObservation;
 import com.platform.iot.daikin.model.DaikinFieldValue;
 import com.platform.iot.daikin.monitoring.DaikinMonitoringTargets;
-import com.platform.iot.roomsensor.RoomSensorSource;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -50,14 +48,7 @@ public class CommunicationEvidenceRecorder {
             safe(new Signal((String)identities.getFirst().get("identity_id"),event.equipId(),event.buildingId(),"MQTT","LEGACY:"+event.eventTime(),event.eventTime(),event.receivedTime(),false,"LIVE_TELEMETRY",null,(String)identities.getFirst().get("expected_profile_code")));
         } catch(RuntimeException failed) { log.warn("通讯证据身份查询失败 equipmentId={} cause={}",event.equipId(),failed.getClass().getSimpleName()); }
     }
-    /** 房间传感器设备时间原样归档，通讯超时使用 MQTT 回调接收时刻。 */
-    public void roomSensor(RoomSensorSource source, long receivedAt) {
-        if (Boolean.FALSE.equals(LIVE.get())) return;
-        String protocol = source.protocol();
-        if (!"S4_DOOR".equals(protocol) && !"MSR01_RADAR".equals(protocol)) return;
-        safe(new Signal(source.identityId(), source.equipId(), source.buildingId(), "MQTT",
-                protocol + ":" + receivedAt, receivedAt, receivedAt, false, "LIVE_TELEMETRY", null, protocol));
-    }
+    boolean isFreshMqttDelivery() { return !Boolean.FALSE.equals(LIVE.get()); }
     /** 继承单点先校验正式别名/设备身份，量程错误仍可证明通讯；不接受未归属载荷续租。 */
     public void legacyEnvelope(java.util.Map<String,Object> payload,long received,String sourceSystem) {
         if(Boolean.FALSE.equals(LIVE.get())||payload==null)return;
@@ -99,13 +90,17 @@ public class CommunicationEvidenceRecorder {
                 "DAIKIN:"+target.mappingVersion()+":"+round,observation.observedAt().toEpochMilli(),System.currentTimeMillis(),offline,offline?"DEVICE_REPORTED_OFFLINE":"LIVE_POLL",target.mappingVersion(),target.profileCode()));
     }
     private void safe(Signal signal) {
-        try { if(communication.observe(signal))evidenceFailures.remove(signal.source()); }
+        try { if(communication.observe(signal))evidenceWriteSucceeded(signal.source()); }
         catch(RuntimeException failure){
-            // 连接正常不等于状态存储正常；只有后续成功保存的新证据才解除故障锁存。
-            evidenceFailures.put(signal.source(),true);
-            try { communication.sourceHealth(signal.source(),"FAILED",System.currentTimeMillis()); }
-            catch(RuntimeException healthUnavailable){log.warn("通讯故障租约暂不可写 source={}",signal.source());}
+            evidenceWriteFailed(signal.source());
             log.warn("通讯证据暂不可用 identityId={} cause={}",signal.identityId(),failure.getClass().getSimpleName());
         }
+    }
+    void evidenceWriteSucceeded(String source) { evidenceFailures.remove(source); }
+    void evidenceWriteFailed(String source) {
+        // 连接正常不等于状态存储正常；只有后续成功保存的新证据才解除故障锁存。
+        evidenceFailures.put(source,true);
+        try { communication.sourceHealth(source,"FAILED",System.currentTimeMillis()); }
+        catch(RuntimeException healthUnavailable){log.warn("通讯故障租约暂不可写 source={}",source);}
     }
 }

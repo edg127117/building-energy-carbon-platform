@@ -2,12 +2,15 @@ package com.platform.iot.roomsensor;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.platform.iot.communication.CommunicationEvidenceRecorder;
+import com.platform.iot.communication.DeviceCommunicationService;
+import com.platform.iot.communication.RoomSensorCommunicationQueue;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
@@ -29,7 +32,9 @@ class RoomSensorIngestionTest {
     private RoomSensorIngestor ingestor;
     private RoomSensorHistoryStore history;
     private RoomSensorWorker worker;
-    private CommunicationEvidenceRecorder communication;
+    private CommunicationEvidenceRecorder recorder;
+    private DeviceCommunicationService communication;
+    private RoomSensorCommunicationQueue communicationQueue;
     private static final String TOPIC = "/MSR01/ac233fc2b716/radar";
     private static final String DOOR_TOPIC = "/MSR01/ac233fc2b716/status";
     private static final String INFO_FRAME = "0201060FFF3906CA02623331342D6486FA83C9";
@@ -61,8 +66,13 @@ class RoomSensorIngestionTest {
         mysql.update("INSERT INTO biz_equipment VALUES ('radar','building','room',0,'雷达')");
         mysql.update("INSERT INTO biz_device_identity VALUES ('identity','MAC','AC233FC2B716','radar','building','MSR01_RADAR',1)");
         mysql.update("INSERT INTO biz_room_sensor_source(source_id,identity_id,gateway_mac,topic,protocol,enabled) VALUES ('radarsource','identity','AC233FC2B716',?,'MSR01_RADAR',1)", TOPIC);
-        communication = mock(CommunicationEvidenceRecorder.class);
-        ingestor = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communication::roomSensor);
+        String commDdl = new ClassPathResource("db/migration/mysql/V134__mysql_room_sensor_communication_queue.sql")
+                .getContentAsString(StandardCharsets.UTF_8).replace(" COLLATE=utf8mb4_unicode_ci", "");
+        new ResourceDatabasePopulator(new ByteArrayResource(commDdl.getBytes(StandardCharsets.UTF_8))).execute(ds);
+        communication = mock(DeviceCommunicationService.class);
+        recorder = new CommunicationEvidenceRecorder(communication, mysql);
+        communicationQueue = new RoomSensorCommunicationQueue(mysql, new DataSourceTransactionManager(ds), communication, recorder);
+        ingestor = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communicationQueue::enqueue);
         history = mock(RoomSensorHistoryStore.class);
         worker = new RoomSensorWorker(mysql, mapper, history, meters);
     }
@@ -70,7 +80,7 @@ class RoomSensorIngestionTest {
     @Test void discoversOnlyAValidUnknownChildFromMatchingNonRetainedStatusTopic() {
         var discovery = mock(com.platform.iot.onboarding.PendingDeviceDiscoveryService.class);
         var entry = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters,
-                communication::roomSensor, discovery);
+                communicationQueue::enqueue, discovery);
         byte[] door = ("""
                 [{"type":"Gateway","mac":"AC233FC2B716"},{"mac":"C300008A3BAE","rawData":"%s"}]
                 """).formatted(OPEN_FRAME).getBytes(StandardCharsets.UTF_8);
@@ -124,7 +134,7 @@ class RoomSensorIngestionTest {
 
     @Test void everyValidObservationCommitsOnlyProjectionAndAllocatesDistinctKeysAcrossRestart() throws Exception {
         ingestor.accept(TOPIC, RADAR, 1000, false);
-        new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communication::roomSensor).accept(TOPIC, RADAR, 1000, false);
+        new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters, communicationQueue::enqueue).accept(TOPIC, RADAR, 1000, false);
         var rows = mysql.queryForList("SELECT * FROM biz_room_sensor_ingest_pending ORDER BY storage_ts");
         assertThat(rows).hasSize(2);
         assertThat(rows.get(0).get("storage_ts")).isEqualTo(1000L);
@@ -153,7 +163,7 @@ class RoomSensorIngestionTest {
         mysql.update("UPDATE biz_space SET del_flag=1");
         ingestor.accept(TOPIC, RADAR, 1000, false);
         assertThat(pendingCount()).isZero();
-        verifyNoInteractions(communication);
+        assertThat(communicationTimes()).isEmpty();
     }
 
     @Test void failedProjectionInsertRollsBackSourceClockAndCanRetry() {
@@ -161,10 +171,68 @@ class RoomSensorIngestionTest {
         assertThatThrownBy(() -> ingestor.accept(TOPIC, RADAR, 1000, false)).isInstanceOf(RuntimeException.class);
         assertThat(pendingCount()).isZero();
         assertThat(mysql.queryForObject("SELECT last_storage_ts FROM biz_room_sensor_source", Long.class)).isZero();
-        verifyNoInteractions(communication);
+        assertThat(communicationTimes()).isEmpty();
         ingestor.accept(TOPIC, RADAR, 1001, false);
         assertThat(pendingCount()).isEqualTo(1);
-        verify(communication).roomSensor(argThat(source -> source.identityId().equals("identity")), eq(1001L));
+        assertThat(communicationTimes()).containsExactly(1001L);
+    }
+
+    @Test void failedCommunicationInsertAlsoRollsBackObservationAndSourceClock() {
+        mysql.execute("ALTER TABLE biz_room_sensor_comm_pending ADD CONSTRAINT injected_comm_failure CHECK(received_at<>1000)");
+        assertThatThrownBy(() -> ingestor.accept(TOPIC, RADAR, 1000, false)).isInstanceOf(RuntimeException.class);
+        assertThat(pendingCount()).isZero();
+        assertThat(communicationTimes()).isEmpty();
+        assertThat(mysql.queryForObject("SELECT last_storage_ts FROM biz_room_sensor_source", Long.class)).isZero();
+    }
+
+    @Test void brokerRedeliveryKeepsObservationWithoutRenewingCommunication() {
+        recorder.beginMqtt(false, 1000);
+        try {
+            ingestor.accept(TOPIC, RADAR, 1000, false);
+        } finally {
+            recorder.endMqtt();
+        }
+        assertThat(pendingCount()).isOne();
+        assertThat(communicationTimes()).isEmpty();
+    }
+
+    @Test void batchFailureRollsBackStateAndRestartAppliesBothContactsInReceiveOrder() {
+        ingestor.accept(TOPIC, RADAR, 1000, false);
+        ingestor.accept(TOPIC, RADAR, 1001, false);
+        verifyNoInteractions(communication);
+        mysql.execute("CREATE TABLE applied_contact(received_at BIGINT PRIMARY KEY)");
+        when(communication.observe(any())).thenAnswer(call -> {
+            com.platform.iot.communication.CommunicationModels.Signal signal = call.getArgument(0);
+            if (signal.receivedAt() == 1001) throw new IllegalStateException("state unavailable");
+            mysql.update("INSERT INTO applied_contact VALUES (?)", signal.receivedAt());
+            return true;
+        });
+        recorder.mqttReady(true);
+        communicationQueue.flush();
+        assertThat(recorder.mqttHealthy(System.currentTimeMillis(), 45_000)).isFalse();
+        assertThat(mysql.queryForList("SELECT received_at FROM applied_contact", Long.class)).isEmpty();
+        assertThat(communicationTimes()).containsExactly(1000L, 1001L);
+
+        doAnswer(call -> {
+            com.platform.iot.communication.CommunicationModels.Signal signal = call.getArgument(0);
+            mysql.update("INSERT INTO applied_contact VALUES (?)", signal.receivedAt());
+            return true;
+        }).when(communication).observe(any());
+        clearInvocations(communication);
+        new RoomSensorCommunicationQueue(mysql, new DataSourceTransactionManager(mysql.getDataSource()), communication, recorder).flush();
+        var ordered = inOrder(communication);
+        ordered.verify(communication).observe(argThat(signal -> signal.receivedAt() == 1000
+                && signal.identityId().equals("identity") && signal.equipmentId().equals("radar")
+                && signal.buildingId().equals("building") && signal.profileCode().equals("MSR01_RADAR")));
+        ordered.verify(communication).observe(argThat(signal -> signal.receivedAt() == 1001));
+        assertThat(communicationTimes()).isEmpty();
+        assertThat(mysql.queryForList("SELECT received_at FROM applied_contact ORDER BY received_at", Long.class))
+                .containsExactly(1000L, 1001L);
+        assertThat(recorder.mqttHealthy(System.currentTimeMillis(), 45_000)).isTrue();
+    }
+
+    private List<Long> communicationTimes() {
+        return mysql.queryForList("SELECT received_at FROM biz_room_sensor_comm_pending ORDER BY received_at", Long.class);
     }
 
     @Test void onlyValidRadarObservationUpdatesCommunicationAndZeroIsAValidCount() throws Exception {
@@ -175,12 +243,12 @@ class RoomSensorIngestionTest {
         var radar = (com.fasterxml.jackson.databind.node.ObjectNode) valid.path("radar");
         radar.put("num", -1);
         ingestor.accept(TOPIC, mapper.writeValueAsBytes(valid), 1001, false);
-        verifyNoInteractions(communication);
+        assertThat(communicationTimes()).isEmpty();
         assertThat(pendingCount()).isZero();
 
         radar.put("num", 0);
         ingestor.accept(TOPIC, mapper.writeValueAsBytes(valid), 1002, false);
-        verify(communication).roomSensor(argThat(source -> source.identityId().equals("identity")), eq(1002L));
+        assertThat(communicationTimes()).containsExactly(1002L);
         var saved = mapper.readValue(mysql.queryForObject("SELECT observation_json FROM biz_room_sensor_ingest_pending", String.class),
                 RoomSensorObservation.class);
         assertThat(saved.targetCount()).isZero();
@@ -244,12 +312,12 @@ class RoomSensorIngestionTest {
         ingestor.accept(DOOR_TOPIC, door("AC233FC2B716", "C300008A3BAE", INFO_FRAME), 1000, true);
         ingestor.accept(DOOR_TOPIC, door("AC233FC2B716", "C300008A3BB9", INFO_FRAME), 1001, false);
         ingestor.accept(DOOR_TOPIC, door("AC233FC2B712", "C300008A3BAE", INFO_FRAME), 1002, false);
-        verifyNoInteractions(communication);
+        assertThat(communicationTimes()).isEmpty();
         ingestor.accept(DOOR_TOPIC, door("AC233FC2B716", "C300008A3BAE", INFO_FRAME), 1003, false);
-        verify(communication).roomSensor(argThat(source -> source.identityId().equals("door-identity")), eq(1003L));
+        assertThat(communicationTimes()).containsExactly(1003L);
         assertThat(pendingCount()).isZero();
         ingestor.accept(DOOR_TOPIC, door("AC233FC2B716", "C300008A3BAE", OPEN_FRAME), 1004, false);
-        verify(communication).roomSensor(argThat(source -> source.identityId().equals("door-identity")), eq(1004L));
+        assertThat(communicationTimes()).containsExactly(1003L, 1004L);
         assertThat(pendingCount()).isOne();
     }
 

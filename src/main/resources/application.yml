@@ -368,5 +368,5 @@ telemetry-conflicts:
 room-sensor:
   enabled: ${ROOM_SENSOR_ENABLED:false}
   legacy-history-enabled: ${ROOM_SENSOR_LEGACY_HISTORY_ENABLED:true}
-  flush-delay-ms: ${ROOM_SENSOR_FLUSH_DELAY_MS:1000}
+  flush-delay-ms: ${ROOM_SENSOR_FLUSH_DELAY_MS:250}
   cleanup-delay-ms: ${ROOM_SENSOR_CLEANUP_DELAY_MS:60000}

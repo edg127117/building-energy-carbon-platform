@@ -13,6 +13,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.Objects;
@@ -44,6 +45,8 @@ public class RoomSensorWorker {
         this.meters = meters;
         this.events = events;
         tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(mysql.getDataSource())));
+        // 领取时锁住所选待办，避免在等待 TDengine 时用间隙锁挡住新报文入队。
+        tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
     @Scheduled(fixedDelayString = "${room-sensor.flush-delay-ms:1000}", scheduler = "roomSensorTaskScheduler")
