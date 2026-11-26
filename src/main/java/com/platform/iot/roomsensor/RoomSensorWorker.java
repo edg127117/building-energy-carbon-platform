@@ -2,6 +2,7 @@ package com.platform.iot.roomsensor;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.platform.iot.roomsensor.RoomSensorQueueScheduler.DrainResult;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,31 +50,37 @@ public class RoomSensorWorker {
         tx.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
 
-    @Scheduled(fixedDelayString = "${room-sensor.flush-delay-ms:1000}", scheduler = "roomSensorTaskScheduler")
-    public void flush() {
+    public DrainResult flush() {
         try {
             for (int i = 0; i < 100; i++) {
-                if (!flushOne(System.currentTimeMillis())) break;
+                DrainResult result = flushNext(System.currentTimeMillis());
+                if (result != DrainResult.MORE_WORK) return result;
             }
+            return DrainResult.MORE_WORK;
         } catch (RuntimeException failure) {
             meters.counter("iot.room_sensor.worker", "outcome", "queue_unavailable").increment();
             log.warn("房间传感器队列暂不可用，等待下轮重试: {}", failure.getClass().getSimpleName());
+            return DrainResult.RETRY_LATER;
         }
     }
 
     boolean flushOne(long now) {
-        return Boolean.TRUE.equals(tx.execute(status -> {
+        return flushNext(now) == DrainResult.MORE_WORK;
+    }
+
+    private DrainResult flushNext(long now) {
+        return tx.execute(status -> {
             var rows = mysql.queryForList("""
                     SELECT event_id,observation_json,received_at,attempts FROM biz_room_sensor_ingest_pending
                     WHERE next_attempt_at<=? ORDER BY next_attempt_at,received_at LIMIT 1 FOR UPDATE SKIP LOCKED
                     """, now);
-            if (rows.isEmpty()) return false;
+            if (rows.isEmpty()) return DrainResult.IDLE;
             var row = rows.getFirst();
             String id = row.get("event_id").toString();
             if (((Number) row.get("received_at")).longValue() < now - RETENTION_MILLIS) {
                 mysql.update("DELETE FROM biz_room_sensor_ingest_pending WHERE event_id=?", id);
                 meters.counter("iot.room_sensor.worker", "outcome", "expired").increment();
-                return true;
+                return DrainResult.MORE_WORK;
             }
             RoomSensorObservation observation;
             try {
@@ -89,15 +96,15 @@ public class RoomSensorWorker {
                 // 不记录载荷或数据库原始错误；待投递行保留用于重启恢复及定位。
                 log.warn("房间传感器历史写入未确认: eventId={}, failure={}", id, failure.getClass().getSimpleName());
                 // TDengine 故障时结束本轮，避免对每条积压都等待网络超时并长期阻塞清理。
-                return false;
+                return DrainResult.RETRY_LATER;
             }
             mysql.update("DELETE FROM biz_room_sensor_ingest_pending WHERE event_id=?", id);
             meters.counter("iot.room_sensor.observations", "stage", "stored").increment();
             if ("S4_DOOR".equals(observation.protocol()) && Boolean.FALSE.equals(observation.doorOpen())) {
                 events.publishEvent(new ConfirmedDoorClosure(observation));
             }
-            return true;
-        }));
+            return DrainResult.MORE_WORK;
+        });
     }
 
     public record ConfirmedDoorClosure(RoomSensorObservation observation) { }

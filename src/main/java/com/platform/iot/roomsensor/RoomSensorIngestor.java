@@ -27,6 +27,7 @@ import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 
 /** MQTT 厂家适配入口；只在可信绑定下将裁剪后的观测提交 MySQL，随后由后台投递 TDengine。 */
 @Service
@@ -37,14 +38,15 @@ public class RoomSensorIngestor {
     private final RoomSensorParser parser;
     private final ObjectMapper mapper;
     private final MeterRegistry meters;
-    private final BiConsumer<RoomSensorSource, Long> enqueueCommunication;
+    private final BiFunction<RoomSensorSource, Long, Boolean> enqueueCommunication;
     private final PendingDeviceDiscoveryService discovery;
+    private final RoomSensorQueueScheduler queueScheduler;
 
     @Autowired
     public RoomSensorIngestor(@Qualifier("mysqlJdbcTemplate") JdbcTemplate mysql,
             RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters, RoomSensorCommunicationQueue communication,
-            ObjectProvider<PendingDeviceDiscoveryService> discovery) {
-        this(mysql, parser, mapper, meters, communication::enqueue, discovery.getIfAvailable());
+            ObjectProvider<PendingDeviceDiscoveryService> discovery, RoomSensorQueueScheduler queueScheduler) {
+        this(mysql, parser, mapper, meters, communication::enqueue, discovery.getIfAvailable(), queueScheduler);
     }
 
     RoomSensorIngestor(JdbcTemplate mysql, RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters,
@@ -54,12 +56,22 @@ public class RoomSensorIngestor {
 
     RoomSensorIngestor(JdbcTemplate mysql, RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters,
             BiConsumer<RoomSensorSource, Long> enqueueCommunication, PendingDeviceDiscoveryService discovery) {
+        this(mysql, parser, mapper, meters, (source, at) -> {
+            enqueueCommunication.accept(source, at);
+            return false;
+        }, discovery, null);
+    }
+
+    RoomSensorIngestor(JdbcTemplate mysql, RoomSensorParser parser, ObjectMapper mapper, MeterRegistry meters,
+            BiFunction<RoomSensorSource, Long, Boolean> enqueueCommunication, PendingDeviceDiscoveryService discovery,
+            RoomSensorQueueScheduler queueScheduler) {
         this.discovery = discovery;
         this.mysql = mysql;
         this.parser = parser;
         this.mapper = mapper;
         this.meters = meters;
         this.enqueueCommunication = enqueueCommunication;
+        this.queueScheduler = queueScheduler;
         tx = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(mysql.getDataSource())));
     }
 
@@ -138,7 +150,11 @@ public class RoomSensorIngestor {
                         "UPDATE biz_room_sensor_source SET last_storage_ts=? WHERE source_id=?", storageTs, source.sourceId());
             }
             // ACK 前同时提交观测和通讯证据，证据写入失败时整条报文可重投。
-            communicatingSources.forEach(source -> enqueueCommunication.accept(source, receivedAt));
+            boolean communicationEnqueued = false;
+            for (RoomSensorSource source : communicatingSources) {
+                communicationEnqueued |= enqueueCommunication.apply(source, receivedAt);
+            }
+            if (queueScheduler != null) queueScheduler.wakeAfterCommit(total > 0, communicationEnqueued);
             return total;
         });
         if (discovery != null) frame.devices().forEach((mac, parsed) -> {

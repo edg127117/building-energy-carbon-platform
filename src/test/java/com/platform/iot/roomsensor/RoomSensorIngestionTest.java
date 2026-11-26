@@ -321,6 +321,24 @@ class RoomSensorIngestionTest {
         assertThat(pendingCount()).isOne();
     }
 
+    @Test void notifiesOnlyTheQueueThatActuallyReceivedData() {
+        registerDoor();
+        var scheduler = mock(RoomSensorQueueScheduler.class);
+        var entry = new RoomSensorIngestor(mysql, new RoomSensorParser(mapper), mapper, meters,
+                communicationQueue::enqueue, null, scheduler);
+        entry.accept(DOOR_TOPIC, door("AC233FC2B716", "C300008A3BAE", INFO_FRAME), 1000, false);
+        verify(scheduler).wakeAfterCommit(false, true);
+        entry.accept(DOOR_TOPIC, door("AC233FC2B716", "C300008A3BAE", OPEN_FRAME), 1001, false);
+        verify(scheduler).wakeAfterCommit(true, true);
+        recorder.beginMqtt(false, 1002);
+        try {
+            entry.accept(TOPIC, RADAR, 1002, false);
+        } finally {
+            recorder.endMqtt();
+        }
+        verify(scheduler).wakeAfterCommit(true, false);
+    }
+
     @Test void doorStateExpiresIndependentlyAndKeepsLastObservationWithinBinding() {
         registerDoor();
         var service = new RoomSensorDoorStateService(mysql, history);
